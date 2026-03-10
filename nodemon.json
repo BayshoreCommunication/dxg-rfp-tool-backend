@@ -1,10 +1,19 @@
 {
-  "watch": ["src", "config", "routes", "controller", "modal"],
+  "watch": [
+    ".",
+    "config",
+    "routes",
+    "controller",
+    "modal",
+    "middleware",
+    "utils",
+    "scripts"
+  ],
   "ext": "ts,json",
-  "ignore": ["src/**/*.spec.ts", "node_modules"],
+  "ignore": ["node_modules", "dist", ".git", ".env", "**/*.spec.ts"],
   "exec": "ts-node server.ts",
+  "delay": 1000,
   "env": {
     "NODE_ENV": "development"
   }
 }
-

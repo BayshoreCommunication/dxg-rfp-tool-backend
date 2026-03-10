@@ -4,16 +4,22 @@ import express, { Application, NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
 import morgan from "morgan";
 import connectDB from "./config/db";
-import authRoutes from "./routes/auth";
-import userRoutes from "./routes/users";
+import authRoutes from "./routes/authRoute";
+import proposalRoutes from "./routes/proposalsRoute";
+import userRoutes from "./routes/usersRoute";
 import { getUploadsDir } from "./utils/paths";
-
 
 // Load environment variables
 dotenv.config();
 
+console.log("Loaded SMTP_MAIL:", process.env.SMTP_MAIL ? "***" : "UNDEFINED");
+console.log(
+  "Loaded SMTP_PASSWORD:",
+  process.env.SMTP_PASSWORD ? "***" : "UNDEFINED",
+);
+
 const app: Application = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8000;
 
 // Middleware
 app.use(cors());
@@ -45,7 +51,7 @@ try {
 } catch (error) {
   console.warn(
     "Warning: Could not set up static file serving for uploads:",
-    error
+    error,
   );
 }
 
@@ -53,7 +59,7 @@ try {
 app.get("/", (_req: Request, res: Response) => {
   res.json({
     success: true,
-    message: "Yunlai Porcelain Art Co. API is running!",
+    message: "DXG RFP Tool - API is running!",
     version: "1.0.0",
     timestamp: new Date().toISOString(),
   });
@@ -88,7 +94,8 @@ app.use("/api/auth", authRoutes);
 // User management routes
 app.use("/api/users", userRoutes);
 
-
+// Proposal routes
+app.use("/api/proposals", proposalRoutes);
 
 // 404 Handler
 app.use((_req: Request, res: Response) => {

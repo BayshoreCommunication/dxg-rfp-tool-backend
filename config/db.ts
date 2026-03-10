@@ -21,10 +21,10 @@ const connectDB = async (): Promise<void> => {
   connectionPromise = (async () => {
     try {
       // Support both variable names for flexibility
-      const mongoURI = process.env.MONGODB_URI || process.env.MONGO_URI;
+      const mongoURI = process.env.MONGODB_URL || process.env.MONGO_URL;
 
       if (!mongoURI) {
-        throw new Error("MONGODB_URI environment variable is not defined");
+        throw new Error("MONGODB_URL environment variable is not defined");
       }
 
       console.log("🔄 Attempting to connect to MongoDB...");

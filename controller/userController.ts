@@ -1,6 +1,6 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
-import User from "../modal/user";
+import User from "../modal/userModel";
 
 // Get all users
 export const getUsers = async (
