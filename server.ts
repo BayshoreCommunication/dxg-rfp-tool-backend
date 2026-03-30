@@ -5,7 +5,11 @@ import mongoose from "mongoose";
 import morgan from "morgan";
 import connectDB from "./config/db";
 import authRoutes from "./routes/authRoute";
+import dashboardRoutes from "./routes/dashboardRoute";
+import emailRoutes from "./routes/emailRoute";
+import extractRoutes from "./routes/extractRoute";
 import proposalRoutes from "./routes/proposalsRoute";
+import settingsRoutes from "./routes/settingsRoute";
 import userRoutes from "./routes/usersRoute";
 import { getUploadsDir } from "./utils/paths";
 
@@ -96,6 +100,18 @@ app.use("/api/users", userRoutes);
 
 // Proposal routes
 app.use("/api/proposals", proposalRoutes);
+
+// Email campaign routes
+app.use("/api/emails", emailRoutes);
+
+// Document extraction / AI auto-fill route
+app.use("/api/extract-proposal", extractRoutes);
+
+// Settings routes
+app.use("/api/settings", settingsRoutes);
+
+// Dashboard routes
+app.use("/api/dashboard", dashboardRoutes);
 
 // 404 Handler
 app.use((_req: Request, res: Response) => {

@@ -4,31 +4,23 @@ import {
   deleteProposal,
   getAllProposals,
   getProposalById,
+  incrementProposalViews,
   updateProposal,
+  updateProposalMeta,
   updateProposalStatus,
 } from "../controller/proposalsController";
 import { authenticate } from "../middleware/auth";
 
 const router = Router();
 
-/* ─── Public routes ─── */
-// POST — submit a new proposal (public so clients without accounts can submit)
-router.post("/", createProposal);
-
-/* ─── Protected routes (require auth) ─── */
-// GET all proposals with filtering, search, pagination
+/* Protected routes (require auth) */
+router.post("/", authenticate, createProposal);
 router.get("/", authenticate, getAllProposals);
-
-// GET single proposal
 router.get("/:id", authenticate, getProposalById);
-
-// PUT — full/partial update
 router.put("/:id", authenticate, updateProposal);
-
-// PATCH — status-only update (e.g. approve/reject)
 router.patch("/:id/status", authenticate, updateProposalStatus);
-
-// DELETE
+router.patch("/:id/meta", authenticate, updateProposalMeta);
+router.patch("/:id/views", authenticate, incrementProposalViews);
 router.delete("/:id", authenticate, deleteProposal);
 
 export default router;

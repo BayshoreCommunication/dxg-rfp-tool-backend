@@ -7,7 +7,7 @@ import Proposal from "../modal/proposalsModel";
    Get all proposals (with optional filters)
 ───────────────────────────────────────── */
 export const getAllProposals = async (
-  req: Request,
+  req: AuthRequest,
   res: Response
 ): Promise<void> => {
   try {
@@ -22,6 +22,11 @@ export const getAllProposals = async (
 
     const filter: Record<string, any> = {};
 
+    // Restrict to authenticated user's proposals
+    if (req.user?.userId) {
+      filter.userId = req.user.userId;
+    }
+
     // Filter by status
     if (status && typeof status === "string") {
       filter.status = status;
@@ -31,11 +36,11 @@ export const getAllProposals = async (
     if (search && typeof search === "string") {
       const regex = new RegExp(search, "i");
       filter.$or = [
-        { eventName: regex },
-        { contactFirstName: regex },
-        { contactLastName: regex },
-        { contactEmail: regex },
-        { contactOrganization: regex },
+        { "event.eventName": regex },
+        { "contact.contactFirstName": regex },
+        { "contact.contactLastName": regex },
+        { "contact.contactEmail": regex },
+        { "contact.contactOrganization": regex },
       ];
     }
 
@@ -48,7 +53,7 @@ export const getAllProposals = async (
 
     const [proposals, total] = await Promise.all([
       Proposal.find(filter)
-        .populate("createdBy", "name email")
+        .populate("userId", "name email")
         .sort(sort)
         .skip(skip)
         .limit(limitNum),
@@ -81,16 +86,16 @@ export const getAllProposals = async (
    Get single proposal by ID
 ───────────────────────────────────────── */
 export const getProposalById = async (
-  req: Request,
+  req: AuthRequest,
   res: Response
 ): Promise<void> => {
   try {
     const { id } = req.params;
 
-    const proposal = await Proposal.findById(id).populate(
-      "createdBy",
-      "name email"
-    );
+    const proposal = await Proposal.findOne({
+      _id: id,
+      userId: req.user?.userId,
+    }).populate("userId", "name email");
 
     if (!proposal) {
       res.status(404).json({
@@ -127,7 +132,7 @@ export const createProposal = async (
 
     // Attach the authenticated user if available
     if (req.user?.userId) {
-      body.createdBy = req.user.userId;
+      body.userId = req.user.userId;
     }
 
     const proposal = new Proposal(body);
@@ -177,13 +182,13 @@ export const updateProposal = async (
     // Prevent overwriting immutable fields
     delete updates._id;
     delete updates.createdAt;
-    delete updates.createdBy;
+    delete updates.userId;
 
-    const proposal = await Proposal.findByIdAndUpdate(
-      id,
+    const proposal = await Proposal.findOneAndUpdate(
+      { _id: id, userId: req.user?.userId },
       { $set: updates },
       { new: true, runValidators: true }
-    ).populate("createdBy", "name email");
+    ).populate("userId", "name email");
 
     if (!proposal) {
       res.status(404).json({
@@ -242,8 +247,8 @@ export const updateProposalStatus = async (
       return;
     }
 
-    const proposal = await Proposal.findByIdAndUpdate(
-      id,
+    const proposal = await Proposal.findOneAndUpdate(
+      { _id: id, userId: req.user?.userId },
       { status },
       { new: true }
     );
@@ -272,6 +277,96 @@ export const updateProposalStatus = async (
    DELETE /api/proposals/:id
    Delete a proposal
 ───────────────────────────────────────── */
+export const updateProposalMeta = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const {
+      isActive,
+      isFavorite,
+      isAccepted,
+      isOpen,
+      viewsCount,
+    } = req.body;
+
+    const updates: Record<string, any> = {};
+    if (typeof isActive === "boolean") updates.isActive = isActive;
+    if (typeof isFavorite === "boolean") updates.isFavorite = isFavorite;
+    if (typeof isAccepted === "boolean") updates.isAccepted = isAccepted;
+    if (typeof isOpen === "boolean") updates.isOpen = isOpen;
+    if (typeof viewsCount === "number" && viewsCount >= 0) {
+      updates.viewsCount = viewsCount;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      res.status(400).json({
+        success: false,
+        message:
+          "No valid fields provided. Use isActive, isFavorite, isAccepted, isOpen, or viewsCount.",
+      });
+      return;
+    }
+
+    const proposal = await Proposal.findOneAndUpdate(
+      { _id: id, userId: req.user?.userId },
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    if (!proposal) {
+      res.status(404).json({ success: false, message: "Proposal not found" });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Proposal metadata updated",
+      data: proposal,
+    });
+  } catch (error) {
+    console.error("Update proposal meta error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating proposal metadata",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+export const incrementProposalViews = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const proposal = await Proposal.findOneAndUpdate(
+      { _id: id, userId: req.user?.userId },
+      { $inc: { viewsCount: 1 } },
+      { new: true }
+    );
+
+    if (!proposal) {
+      res.status(404).json({ success: false, message: "Proposal not found" });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Proposal views incremented",
+      data: proposal,
+    });
+  } catch (error) {
+    console.error("Increment proposal views error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error incrementing proposal views",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
 export const deleteProposal = async (
   req: AuthRequest,
   res: Response
@@ -279,7 +374,10 @@ export const deleteProposal = async (
   try {
     const { id } = req.params;
 
-    const proposal = await Proposal.findByIdAndDelete(id);
+    const proposal = await Proposal.findOneAndDelete({
+      _id: id,
+      userId: req.user?.userId,
+    });
 
     if (!proposal) {
       res.status(404).json({

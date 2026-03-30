@@ -33,8 +33,10 @@ export const sendSignupOtp = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // Spam check — don't allow re-registration
-    const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Spam check - don't allow re-registration
+    const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
       res.status(409).json({
         success: false,
@@ -44,27 +46,34 @@ export const sendSignupOtp = async (req: Request, res: Response): Promise<void> 
     }
 
     // Invalidate any existing OTPs for this email/type
-    await Otp.deleteMany({ email: email.toLowerCase().trim(), type: "signup" });
+    await Otp.deleteMany({ email: normalizedEmail, type: "signup" });
 
     const otp = generateOtp();
     await Otp.create({
-      email: email.toLowerCase().trim(),
+      email: normalizedEmail,
       otp,
       type: "signup",
     });
 
-    await sendSignupOtpEmail(email, otp);
+    try {
+      await sendSignupOtpEmail(normalizedEmail, otp);
+    } catch (sendError) {
+      // Roll back OTP when delivery fails to avoid stale codes.
+      await Otp.deleteMany({ email: normalizedEmail, type: "signup" });
+      throw sendError;
+    }
 
     res.status(200).json({
       success: true,
       message: "Verification code sent to your email",
     });
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     console.error("Send signup OTP error:", error);
     res.status(500).json({
       success: false,
-      message: "Error sending verification code",
-      error: error instanceof Error ? error.message : "Unknown error",
+      message: `Error sending verification code: ${errorMessage}`,
+      error: errorMessage,
     });
   }
 };
@@ -269,7 +278,9 @@ export const sendForgotPasswordOtp = async (req: Request, res: Response): Promis
       return;
     }
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const user = await User.findOne({ email: normalizedEmail });
     // Security: don't reveal whether account exists
     if (!user) {
       res.status(200).json({
@@ -280,27 +291,33 @@ export const sendForgotPasswordOtp = async (req: Request, res: Response): Promis
     }
 
     // Invalidate existing forgot-password OTPs
-    await Otp.deleteMany({ email: email.toLowerCase().trim(), type: "forgot-password" });
+    await Otp.deleteMany({ email: normalizedEmail, type: "forgot-password" });
 
     const otp = generateOtp();
     await Otp.create({
-      email: email.toLowerCase().trim(),
+      email: normalizedEmail,
       otp,
       type: "forgot-password",
     });
 
-    await sendForgotPasswordOtpEmail(email, otp);
+    try {
+      await sendForgotPasswordOtpEmail(normalizedEmail, otp);
+    } catch (sendError) {
+      await Otp.deleteMany({ email: normalizedEmail, type: "forgot-password" });
+      throw sendError;
+    }
 
     res.status(200).json({
       success: true,
       message: "If an account with this email exists, a reset code has been sent.",
     });
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     console.error("Forgot password OTP error:", error);
     res.status(500).json({
       success: false,
-      message: "Error sending reset code",
-      error: error instanceof Error ? error.message : "Unknown error",
+      message: `Error sending reset code: ${errorMessage}`,
+      error: errorMessage,
     });
   }
 };
@@ -408,3 +425,4 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
     });
   }
 };
+
