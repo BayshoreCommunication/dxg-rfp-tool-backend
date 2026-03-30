@@ -16,7 +16,12 @@ const toSlug = (value: string): string =>
     .replace(/^-+|-+$/g, "");
 
 const getFrontendBaseUrl = (): string =>
-  (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "");
+  (
+    process.env.FRONTEND_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.NEXT_PUBLIC_FRONTEND_URL ||
+    "http://localhost:3000"
+  ).replace(/\/+$/, "");
 
 const getApiBaseUrl = (): string =>
   (
