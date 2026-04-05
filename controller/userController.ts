@@ -2,6 +2,15 @@ import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import User from "../modal/userModel";
 
+const isPrivilegedRole = (role?: string): boolean => {
+  const normalizedRole = (role || "").toLowerCase();
+  return (
+    normalizedRole === "admin" ||
+    normalizedRole === "super_admin" ||
+    normalizedRole === "superadmin"
+  );
+};
+
 // Get all users
 export const getUsers = async (
   req: AuthRequest,
@@ -27,6 +36,45 @@ export const getUsers = async (
   }
 };
 
+// Get current authenticated user
+export const getCurrentUser = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        message: "Unauthorized user",
+      });
+      return;
+    }
+
+    const user = await User.findById(userId).select("-password");
+    if (!user) {
+      res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "User fetched successfully",
+      data: user,
+    });
+  } catch (error) {
+    console.error("Get current user error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching user",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
 // Get user by ID
 export const getUserById = async (
   req: AuthRequest,
@@ -34,6 +82,25 @@ export const getUserById = async (
 ): Promise<void> => {
   try {
     const { id } = req.params;
+    const requesterId = req.user?.userId?.toString();
+    const canAccessOthers = isPrivilegedRole(req.user?.role);
+
+    if (!requesterId) {
+      res.status(401).json({
+        success: false,
+        message: "Unauthorized user",
+      });
+      return;
+    }
+
+    if (id !== requesterId && !canAccessOthers) {
+      res.status(403).json({
+        success: false,
+        message: "You can only access your own profile",
+      });
+      return;
+    }
+
     const user = await User.findById(id).select("-password");
 
     if (!user) {
@@ -58,6 +125,70 @@ export const getUserById = async (
   }
 };
 
+// Update current authenticated user
+export const updateCurrentUser = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        message: "Unauthorized user",
+      });
+      return;
+    }
+
+    const { name, email, phone, password, avatar } = req.body;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+      return;
+    }
+
+    if (email && email !== user.email) {
+      const existingUser = await User.findOne({ email });
+      if (existingUser) {
+        res.status(400).json({
+          success: false,
+          message: "Email already in use",
+        });
+        return;
+      }
+    }
+
+    const updateData: any = {};
+    if (name) updateData.name = name;
+    if (email) updateData.email = email;
+    if (phone !== undefined) updateData.phone = phone;
+    if (password) updateData.password = password;
+    if (avatar !== undefined) updateData.avatar = avatar;
+
+    const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
+      new: true,
+      runValidators: true,
+    }).select("-password");
+
+    res.status(200).json({
+      success: true,
+      message: "User updated successfully",
+      data: updatedUser,
+    });
+  } catch (error) {
+    console.error("Update current user error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating user",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
 // Update user
 export const updateUser = async (
   req: AuthRequest,
@@ -65,6 +196,25 @@ export const updateUser = async (
 ): Promise<void> => {
   try {
     const { id } = req.params;
+    const requesterId = req.user?.userId?.toString();
+    const canAccessOthers = isPrivilegedRole(req.user?.role);
+
+    if (!requesterId) {
+      res.status(401).json({
+        success: false,
+        message: "Unauthorized user",
+      });
+      return;
+    }
+
+    if (id !== requesterId && !canAccessOthers) {
+      res.status(403).json({
+        success: false,
+        message: "You can only update your own profile",
+      });
+      return;
+    }
+
     const { name, email, phone, password, avatar } = req.body;
 
     // Find user
@@ -124,6 +274,24 @@ export const deleteUser = async (
 ): Promise<void> => {
   try {
     const { id } = req.params;
+    const requesterId = req.user?.userId?.toString();
+    const canAccessOthers = isPrivilegedRole(req.user?.role);
+
+    if (!requesterId) {
+      res.status(401).json({
+        success: false,
+        message: "Unauthorized user",
+      });
+      return;
+    }
+
+    if (id !== requesterId && !canAccessOthers) {
+      res.status(403).json({
+        success: false,
+        message: "You do not have permission to delete this user",
+      });
+      return;
+    }
 
     // Prevent deleting yourself
     if (id === req.user?.userId || id === req.user?.userId?.toString()) {

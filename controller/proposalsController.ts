@@ -13,6 +13,7 @@ export const getAllProposals = async (
   try {
     const {
       status,
+      favorite,
       search,
       page = "1",
       limit = "20",
@@ -30,6 +31,12 @@ export const getAllProposals = async (
     // Filter by status
     if (status && typeof status === "string") {
       filter.status = status;
+    }
+
+    // Filter by favorite flag
+    if (typeof favorite === "string") {
+      if (favorite === "true") filter.isFavorite = true;
+      if (favorite === "false") filter.isFavorite = false;
     }
 
     // Search by event name or contact name/email

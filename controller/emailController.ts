@@ -32,7 +32,7 @@ const getApiBaseUrl = (): string =>
   ).replace(/\/+$/, "");
 
 const buildProposalPublicUrl = (proposalSlug: string): string =>
-  `${getFrontendBaseUrl()}/proposal/${proposalSlug}`;
+  `${getFrontendBaseUrl()}/proposal/${proposalSlug}?source=email`;
 
 const buildTrackingOpenUrl = (trackingId: string): string =>
   `${getApiBaseUrl()}/api/emails/open/${trackingId}`;

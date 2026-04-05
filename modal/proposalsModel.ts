@@ -12,6 +12,13 @@ export interface IProposal extends Document {
   isAccepted: boolean;
   isOpen: boolean;
   viewsCount: number;
+  templateId: "template-one" | "template-two";
+  proposalSettings?: {
+    linkPrefix?: string;
+    defaultFont?: "Inter" | "Poppins" | "Roboto";
+    defaultCurrency?: string;
+    dateFormat?: string;
+  };
 
   event: {
     eventName: string;
@@ -26,6 +33,45 @@ export interface IProposal extends Document {
 
   roomByRoom: {
     roomFunction?: string;
+    estimatedAttendeesInRoom?: string;
+    loadInDateTime?: string;
+    rehearsalDateTime?: string;
+    showStartDateTime?: string;
+    showEndDateTime?: string;
+    audioSystemForHowManyPpl?: string;
+    podiumMic?: string;
+    podiumMicQty?: string;
+    wirelessMics?: string;
+    wirelessMicsQty?: string;
+    wirelessMicsType?: string;
+    audioRecording?: string;
+    largeMonitorsOrScreenProjector?: string;
+    largeMonitorsQty?: string;
+    ledWall?: string;
+    clientProvideOwnPresentationLaptop?: string;
+    clientLaptopQty?: string;
+    presentationLaptops?: string;
+    presentationLaptopQty?: string;
+    videoPlayback?: string;
+    videoPlaybackCount?: string;
+    videoFormatAspectRatio?: string;
+    audienceQa?: string;
+    audienceQaMethod?: string;
+    cameras?: string;
+    camerasQty?: string;
+    videoRecording?: string;
+    videoRecordingType?: string;
+    stageWashLighting?: string;
+    stageWashLightingStageSize?: string;
+    backlightingFor?: string;
+    drapeOrScenicUplighting?: string;
+    audienceLighting?: string;
+    programConfidenceMonitor?: string;
+    programConfidenceMonitorQty?: string;
+    notesConfidenceMonitor?: string;
+    notesConfidenceMonitorQty?: string;
+    speakerTimer?: string;
+    scenicStageDesign?: string;
     numberOfRooms?: string;
     ceilingHeight?: string;
     roomSetup?: string;
@@ -50,6 +96,18 @@ export interface IProposal extends Document {
     videoStage?: boolean;
     frontScreen?: string;
     contentVideoNeeds?: string;
+    stageDimensions?: string;
+    confidenceMonitor?: string;
+    confidenceMonitorCount?: string;
+    projectorsProvided?: string;
+    projectorCount?: string;
+    cameraPackage?: string;
+    cameraCount?: string;
+    livestreamNeeded?: string;
+    lightingPackage?: string;
+    lightingConsole?: string;
+    teleprompterNeeded?: string;
+    showCallingRequired?: string;
   };
 
   production: {
@@ -116,6 +174,21 @@ const proposalSchema = new Schema<IProposal>(
     isAccepted: { type: Boolean, default: false },
     isOpen: { type: Boolean, default: true },
     viewsCount: { type: Number, default: 0, min: 0 },
+    templateId: {
+      type: String,
+      enum: ["template-one", "template-two"],
+      default: "template-one",
+    },
+    proposalSettings: {
+      linkPrefix: { type: String, trim: true, default: "abuco" },
+      defaultFont: {
+        type: String,
+        enum: ["Inter", "Poppins", "Roboto"],
+        default: "Poppins",
+      },
+      defaultCurrency: { type: String, trim: true, default: "$" },
+      dateFormat: { type: String, trim: true, default: "MM/DD/YYYY" },
+    },
 
     event: {
       eventName: {
@@ -134,6 +207,45 @@ const proposalSchema = new Schema<IProposal>(
 
     roomByRoom: {
       roomFunction: { type: String, trim: true },
+      estimatedAttendeesInRoom: { type: String, trim: true },
+      loadInDateTime: { type: String, trim: true },
+      rehearsalDateTime: { type: String, trim: true },
+      showStartDateTime: { type: String, trim: true },
+      showEndDateTime: { type: String, trim: true },
+      audioSystemForHowManyPpl: { type: String, trim: true },
+      podiumMic: { type: String, trim: true },
+      podiumMicQty: { type: String, trim: true },
+      wirelessMics: { type: String, trim: true },
+      wirelessMicsQty: { type: String, trim: true },
+      wirelessMicsType: { type: String, trim: true },
+      audioRecording: { type: String, trim: true },
+      largeMonitorsOrScreenProjector: { type: String, trim: true },
+      largeMonitorsQty: { type: String, trim: true },
+      ledWall: { type: String, trim: true },
+      clientProvideOwnPresentationLaptop: { type: String, trim: true },
+      clientLaptopQty: { type: String, trim: true },
+      presentationLaptops: { type: String, trim: true },
+      presentationLaptopQty: { type: String, trim: true },
+      videoPlayback: { type: String, trim: true },
+      videoPlaybackCount: { type: String, trim: true },
+      videoFormatAspectRatio: { type: String, trim: true },
+      audienceQa: { type: String, trim: true },
+      audienceQaMethod: { type: String, trim: true },
+      cameras: { type: String, trim: true },
+      camerasQty: { type: String, trim: true },
+      videoRecording: { type: String, trim: true },
+      videoRecordingType: { type: String, trim: true },
+      stageWashLighting: { type: String, trim: true },
+      stageWashLightingStageSize: { type: String, trim: true },
+      backlightingFor: { type: String, trim: true },
+      drapeOrScenicUplighting: { type: String, trim: true },
+      audienceLighting: { type: String, trim: true },
+      programConfidenceMonitor: { type: String, trim: true },
+      programConfidenceMonitorQty: { type: String, trim: true },
+      notesConfidenceMonitor: { type: String, trim: true },
+      notesConfidenceMonitorQty: { type: String, trim: true },
+      speakerTimer: { type: String, trim: true },
+      scenicStageDesign: { type: String, trim: true },
       numberOfRooms: { type: String },
       ceilingHeight: { type: String },
       roomSetup: { type: String, trim: true },
@@ -158,6 +270,18 @@ const proposalSchema = new Schema<IProposal>(
       videoStage: { type: Boolean, default: false },
       frontScreen: { type: String, trim: true },
       contentVideoNeeds: { type: String, trim: true },
+      stageDimensions: { type: String, trim: true },
+      confidenceMonitor: { type: String, trim: true },
+      confidenceMonitorCount: { type: String, trim: true },
+      projectorsProvided: { type: String, trim: true },
+      projectorCount: { type: String, trim: true },
+      cameraPackage: { type: String, trim: true },
+      cameraCount: { type: String, trim: true },
+      livestreamNeeded: { type: String, trim: true },
+      lightingPackage: { type: String, trim: true },
+      lightingConsole: { type: String, trim: true },
+      teleprompterNeeded: { type: String, trim: true },
+      showCallingRequired: { type: String, trim: true },
     },
 
     production: {
