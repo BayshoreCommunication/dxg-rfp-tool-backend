@@ -6,6 +6,7 @@ import {
   sendSignupOtp,
   signInAdmin,
   signInWithCredentials,
+  signInWithGoogle,
   signOut,
   signUp,
   verifyForgotPasswordOtp,
@@ -25,6 +26,7 @@ router.post("/register", signUp);
 
 /* ─── Sign in ─── */
 router.post("/login", signInWithCredentials);
+router.post("/google", signInWithGoogle);
 router.post("/admin/signin", signInAdmin);
 
 /* ─── Forgot password flow ─── */

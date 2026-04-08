@@ -65,6 +65,12 @@ const userSchema = new mongoose_1.Schema({
     avatar: {
         type: String,
     },
+    googleId: {
+        type: String,
+        trim: true,
+        unique: true,
+        sparse: true,
+    },
 }, {
     timestamps: true,
 });

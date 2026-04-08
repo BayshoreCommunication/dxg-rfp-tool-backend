@@ -3,7 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.resetPassword = exports.verifyForgotPasswordOtp = exports.sendForgotPasswordOtp = exports.signOut = exports.getCurrentUser = exports.signInAdmin = exports.signInWithCredentials = exports.signUp = exports.verifySignupOtp = exports.sendSignupOtp = void 0;
+exports.resetPassword = exports.verifyForgotPasswordOtp = exports.sendForgotPasswordOtp = exports.signOut = exports.getCurrentUser = exports.signInAdmin = exports.signInWithGoogle = exports.signInWithCredentials = exports.signUp = exports.verifySignupOtp = exports.sendSignupOtp = void 0;
+const crypto_1 = require("crypto");
 const jwt_1 = require("../config/jwt");
 const otpModel_1 = __importDefault(require("../modal/otpModel"));
 const userModel_1 = __importDefault(require("../modal/userModel"));
@@ -222,6 +223,81 @@ const signInWithCredentials = async (req, res) => {
     }
 };
 exports.signInWithCredentials = signInWithCredentials;
+/* ─────────────────────────────────────────────
+   POST /api/auth/google
+   Sign in with Google (create account if not exists)
+───────────────────────────────────────────── */
+const signInWithGoogle = async (req, res) => {
+    try {
+        const { email, name, avatar, googleId } = req.body;
+        if (!email || !email.trim()) {
+            res.status(400).json({ success: false, message: "Email is required" });
+            return;
+        }
+        const normalizedEmail = email.toLowerCase().trim();
+        const trimmedName = (name || "").trim();
+        const trimmedAvatar = (avatar || "").trim();
+        const trimmedGoogleId = (googleId || "").trim();
+        let user = await userModel_1.default.findOne({ email: normalizedEmail });
+        let isNewUser = false;
+        if (!user) {
+            const fallbackName = normalizedEmail.split("@")[0] || "Google User";
+            const generatedPassword = (0, crypto_1.randomBytes)(24).toString("hex");
+            user = await userModel_1.default.create({
+                name: trimmedName || fallbackName,
+                email: normalizedEmail,
+                avatar: trimmedAvatar || undefined,
+                password: generatedPassword,
+                googleId: trimmedGoogleId || undefined,
+            });
+            isNewUser = true;
+        }
+        else {
+            let shouldSave = false;
+            if (trimmedAvatar && user.avatar !== trimmedAvatar) {
+                user.avatar = trimmedAvatar;
+                shouldSave = true;
+            }
+            if (trimmedName && (!user.name || user.name.trim() !== trimmedName)) {
+                user.name = trimmedName;
+                shouldSave = true;
+            }
+            if (trimmedGoogleId && user.googleId !== trimmedGoogleId) {
+                user.googleId = trimmedGoogleId;
+                shouldSave = true;
+            }
+            if (shouldSave) {
+                await user.save();
+            }
+        }
+        const tokenPayload = {
+            userId: user._id.toString(),
+            email: user.email,
+            role: "customer",
+        };
+        const tokenData = (0, jwt_1.generateAccessToken)(tokenPayload);
+        res.status(200).json({
+            success: true,
+            message: isNewUser
+                ? "Google account created and signed in successfully"
+                : "Google sign in successful",
+            isNewUser,
+            user: userResponse(user),
+            accessToken: tokenData.accessToken,
+            tokenExpiresAt: tokenData.expiresAt,
+            tokenExpiresIn: tokenData.expiresIn,
+        });
+    }
+    catch (error) {
+        console.error("Google sign in error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error during Google sign in",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.signInWithGoogle = signInWithGoogle;
 /* ─────────────────────────────────────────────
    POST /api/auth/admin/signin
    Admin-only sign in

@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { randomBytes } from "crypto";
 import { generateAccessToken, TokenPayload } from "../config/jwt";
 import { AuthRequest } from "../middleware/auth";
 import Otp from "../modal/otpModel";
@@ -242,6 +243,95 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
     res.status(500).json({
       success: false,
       message: "Error during login",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+/* ─────────────────────────────────────────────
+   POST /api/auth/google
+   Sign in with Google (create account if not exists)
+───────────────────────────────────────────── */
+export const signInWithGoogle = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email, name, avatar, googleId } = req.body as {
+      email?: string;
+      name?: string;
+      avatar?: string;
+      googleId?: string;
+    };
+
+    if (!email || !email.trim()) {
+      res.status(400).json({ success: false, message: "Email is required" });
+      return;
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const trimmedName = (name || "").trim();
+    const trimmedAvatar = (avatar || "").trim();
+    const trimmedGoogleId = (googleId || "").trim();
+
+    let user = await User.findOne({ email: normalizedEmail });
+    let isNewUser = false;
+
+    if (!user) {
+      const fallbackName = normalizedEmail.split("@")[0] || "Google User";
+      const generatedPassword = randomBytes(24).toString("hex");
+
+      user = await User.create({
+        name: trimmedName || fallbackName,
+        email: normalizedEmail,
+        avatar: trimmedAvatar || undefined,
+        password: generatedPassword,
+        googleId: trimmedGoogleId || undefined,
+      });
+      isNewUser = true;
+    } else {
+      let shouldSave = false;
+
+      if (trimmedAvatar && user.avatar !== trimmedAvatar) {
+        user.avatar = trimmedAvatar;
+        shouldSave = true;
+      }
+
+      if (trimmedName && (!user.name || user.name.trim() !== trimmedName)) {
+        user.name = trimmedName;
+        shouldSave = true;
+      }
+
+      if (trimmedGoogleId && user.googleId !== trimmedGoogleId) {
+        user.googleId = trimmedGoogleId;
+        shouldSave = true;
+      }
+
+      if (shouldSave) {
+        await user.save();
+      }
+    }
+
+    const tokenPayload: TokenPayload = {
+      userId: user._id.toString(),
+      email: user.email,
+      role: "customer",
+    };
+    const tokenData = generateAccessToken(tokenPayload);
+
+    res.status(200).json({
+      success: true,
+      message: isNewUser
+        ? "Google account created and signed in successfully"
+        : "Google sign in successful",
+      isNewUser,
+      user: userResponse(user),
+      accessToken: tokenData.accessToken,
+      tokenExpiresAt: tokenData.expiresAt,
+      tokenExpiresIn: tokenData.expiresIn,
+    });
+  } catch (error) {
+    console.error("Google sign in error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error during Google sign in",
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }

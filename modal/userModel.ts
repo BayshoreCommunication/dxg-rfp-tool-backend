@@ -7,6 +7,7 @@ export interface IUser extends Document {
   phone?: string;
   password?: string;
   avatar?: string;
+  googleId?: string;
   createdAt: Date;
   updatedAt: Date;
   comparePassword(candidatePassword: string): Promise<boolean>;
@@ -39,6 +40,12 @@ const userSchema = new Schema<IUser>(
     },
     avatar: {
       type: String,
+    },
+    googleId: {
+      type: String,
+      trim: true,
+      unique: true,
+      sparse: true,
     },
   },
   {
