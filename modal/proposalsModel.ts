@@ -1,10 +1,6 @@
 import mongoose, { Document, Schema } from "mongoose";
 
-/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-   Interfaces
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 export interface IProposal extends Document {
-  // Meta
   userId?: mongoose.Types.ObjectId;
   status: "draft" | "submitted" | "reviewed" | "approved" | "rejected";
   isActive: boolean;
@@ -13,13 +9,6 @@ export interface IProposal extends Document {
   isOpen: boolean;
   viewsCount: number;
   templateId: "template-one" | "template-two";
-  proposalSettings?: {
-    linkPrefix?: string;
-    defaultFont?: "Inter" | "Poppins" | "Roboto";
-    defaultCurrency?: string;
-    dateFormat?: string;
-  };
-
   event: {
     eventName: string;
     startDate?: string;
@@ -27,120 +16,16 @@ export interface IProposal extends Document {
     venue?: string;
     attendees?: string;
     eventFormat?: "In-Person" | "Hybrid" | "Virtual";
-    eventType?: string;
-    eventTypeOther?: string;
+    eventType?: {
+      eventType?: string;
+      eventTypeOther?: string;
+    };
   };
-
-  roomByRoom: {
-    roomFunction?: string;
-    estimatedAttendeesInRoom?: string;
-    loadInDateTime?: string;
-    rehearsalDateTime?: string;
-    showStartDateTime?: string;
-    showEndDateTime?: string;
-    audioSystemForHowManyPpl?: string;
-    podiumMic?: string;
-    podiumMicQty?: string;
-    wirelessMics?: string;
-    wirelessMicsQty?: string;
-    wirelessMicsType?: string;
-    audioRecording?: string;
-    largeMonitorsOrScreenProjector?: string;
-    largeMonitorsQty?: string;
-    ledWall?: string;
-    clientProvideOwnPresentationLaptop?: string;
-    clientLaptopQty?: string;
-    presentationLaptops?: string;
-    presentationLaptopQty?: string;
-    videoPlayback?: string;
-    videoPlaybackCount?: string;
-    videoFormatAspectRatio?: string;
-    audienceQa?: string;
-    audienceQaMethod?: string;
-    cameras?: string;
-    camerasQty?: string;
-    videoRecording?: string;
-    videoRecordingType?: string;
-    stageWashLighting?: string;
-    stageWashLightingStageSize?: string;
-    backlightingFor?: string;
-    drapeOrScenicUplighting?: string;
-    audienceLighting?: string;
-    programConfidenceMonitor?: string;
-    programConfidenceMonitorQty?: string;
-    notesConfidenceMonitor?: string;
-    notesConfidenceMonitorQty?: string;
-    speakerTimer?: string;
-    scenicStageDesign?: string;
-    numberOfRooms?: string;
-    ceilingHeight?: string;
-    roomSetup?: string;
-    showPrep?: string;
-    showSize?: string;
-    hasPipeAndDrape?: boolean;
-    showRig?: boolean;
-    rigPowerSize?: string;
-    preferredRigging?: string[];
-    decibelLimitation?: string;
-    avSpec?: string;
-    avPa?: string;
-    mainSound?: string;
-    mainSoundSize?: string;
-    hearingImpaired?: string;
-    preferredA1?: string;
-    recordAudio?: string;
-    chairs?: string;
-    stageRisers?: string[];
-    backdropsWallSize?: string;
-    scenicElements?: boolean;
-    videoStage?: boolean;
-    frontScreen?: string;
-    contentVideoNeeds?: string;
-    stageDimensions?: string;
-    confidenceMonitor?: string;
-    confidenceMonitorCount?: string;
-    projectorsProvided?: string;
-    projectorCount?: string;
-    cameraPackage?: string;
-    cameraCount?: string;
-    livestreamNeeded?: string;
-    lightingPackage?: string;
-    lightingConsole?: string;
-    teleprompterNeeded?: string;
-    showCallingRequired?: string;
-  };
-
-  production: {
-    scenicStageDesign?: string;
-    unionLabor?: string;
-    showCrewNeeded?: string[];
-    otherRolesNeeded?: string;
-  };
-
-  venue: {
-    needRiggingForFlown?: string;
-    riggingPlotOrSpecs?: string;
-    needDedicatedPowerDrops?: string;
-    standardAmpWall?: string;
-    powerDropsHowMany?: string;
-  };
-
-  uploads: {
-    supportDocuments?: string[];
-    reviewExistingAvQuote?: string;
-    avQuoteFiles?: string[];
-  };
-
-  budget: {
-    estimatedAvBudget?: string;
-    budgetCustomAmount?: string;
-    proposalFormatPreferences?: string[];
-    timelineForProposal?: string;
-    callWithDxgProducer?: string;
-    howDidYouHear?: string;
-    howDidYouHearOther?: string;
-  };
-
+  roomByRoom?: Record<string, unknown>;
+  production?: Record<string, unknown>;
+  venue?: Record<string, unknown>;
+  uploads?: Record<string, unknown>;
+  budget?: Record<string, unknown>;
   contact: {
     contactFirstName: string;
     contactLastName: string;
@@ -150,20 +35,17 @@ export interface IProposal extends Document {
     contactPhone: string;
     anythingElse?: string;
   };
-
   createdAt: Date;
   updatedAt: Date;
 }
 
-/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-   Schema
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 const proposalSchema = new Schema<IProposal>(
   {
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
     },
+
     status: {
       type: String,
       enum: ["draft", "submitted", "reviewed", "approved", "rejected"],
@@ -179,16 +61,6 @@ const proposalSchema = new Schema<IProposal>(
       enum: ["template-one", "template-two"],
       default: "template-one",
     },
-    proposalSettings: {
-      linkPrefix: { type: String, trim: true, default: "abuco" },
-      defaultFont: {
-        type: String,
-        enum: ["Inter", "Poppins", "Roboto"],
-        default: "Poppins",
-      },
-      defaultCurrency: { type: String, trim: true, default: "$" },
-      dateFormat: { type: String, trim: true, default: "MM/DD/YYYY" },
-    },
 
     event: {
       eventName: {
@@ -201,119 +73,17 @@ const proposalSchema = new Schema<IProposal>(
       venue: { type: String, trim: true },
       attendees: { type: String, trim: true },
       eventFormat: { type: String, enum: ["In-Person", "Hybrid", "Virtual"] },
-      eventType: { type: String, trim: true },
-      eventTypeOther: { type: String, trim: true },
+      eventType: {
+        eventType: { type: String, trim: true },
+        eventTypeOther: { type: String, trim: true },
+      },
     },
 
-    roomByRoom: {
-      roomFunction: { type: String, trim: true },
-      estimatedAttendeesInRoom: { type: String, trim: true },
-      loadInDateTime: { type: String, trim: true },
-      rehearsalDateTime: { type: String, trim: true },
-      showStartDateTime: { type: String, trim: true },
-      showEndDateTime: { type: String, trim: true },
-      audioSystemForHowManyPpl: { type: String, trim: true },
-      podiumMic: { type: String, trim: true },
-      podiumMicQty: { type: String, trim: true },
-      wirelessMics: { type: String, trim: true },
-      wirelessMicsQty: { type: String, trim: true },
-      wirelessMicsType: { type: String, trim: true },
-      audioRecording: { type: String, trim: true },
-      largeMonitorsOrScreenProjector: { type: String, trim: true },
-      largeMonitorsQty: { type: String, trim: true },
-      ledWall: { type: String, trim: true },
-      clientProvideOwnPresentationLaptop: { type: String, trim: true },
-      clientLaptopQty: { type: String, trim: true },
-      presentationLaptops: { type: String, trim: true },
-      presentationLaptopQty: { type: String, trim: true },
-      videoPlayback: { type: String, trim: true },
-      videoPlaybackCount: { type: String, trim: true },
-      videoFormatAspectRatio: { type: String, trim: true },
-      audienceQa: { type: String, trim: true },
-      audienceQaMethod: { type: String, trim: true },
-      cameras: { type: String, trim: true },
-      camerasQty: { type: String, trim: true },
-      videoRecording: { type: String, trim: true },
-      videoRecordingType: { type: String, trim: true },
-      stageWashLighting: { type: String, trim: true },
-      stageWashLightingStageSize: { type: String, trim: true },
-      backlightingFor: { type: String, trim: true },
-      drapeOrScenicUplighting: { type: String, trim: true },
-      audienceLighting: { type: String, trim: true },
-      programConfidenceMonitor: { type: String, trim: true },
-      programConfidenceMonitorQty: { type: String, trim: true },
-      notesConfidenceMonitor: { type: String, trim: true },
-      notesConfidenceMonitorQty: { type: String, trim: true },
-      speakerTimer: { type: String, trim: true },
-      scenicStageDesign: { type: String, trim: true },
-      numberOfRooms: { type: String },
-      ceilingHeight: { type: String },
-      roomSetup: { type: String, trim: true },
-      showPrep: { type: String },
-      showSize: { type: String },
-      hasPipeAndDrape: { type: Boolean, default: false },
-      showRig: { type: Boolean, default: false },
-      rigPowerSize: { type: String, trim: true },
-      preferredRigging: [{ type: String }],
-      decibelLimitation: { type: String, trim: true },
-      avSpec: { type: String, trim: true },
-      avPa: { type: String, trim: true },
-      mainSound: { type: String, trim: true },
-      mainSoundSize: { type: String, trim: true },
-      hearingImpaired: { type: String, trim: true },
-      preferredA1: { type: String, trim: true },
-      recordAudio: { type: String, trim: true },
-      chairs: { type: String },
-      stageRisers: [{ type: String }],
-      backdropsWallSize: { type: String },
-      scenicElements: { type: Boolean, default: false },
-      videoStage: { type: Boolean, default: false },
-      frontScreen: { type: String, trim: true },
-      contentVideoNeeds: { type: String, trim: true },
-      stageDimensions: { type: String, trim: true },
-      confidenceMonitor: { type: String, trim: true },
-      confidenceMonitorCount: { type: String, trim: true },
-      projectorsProvided: { type: String, trim: true },
-      projectorCount: { type: String, trim: true },
-      cameraPackage: { type: String, trim: true },
-      cameraCount: { type: String, trim: true },
-      livestreamNeeded: { type: String, trim: true },
-      lightingPackage: { type: String, trim: true },
-      lightingConsole: { type: String, trim: true },
-      teleprompterNeeded: { type: String, trim: true },
-      showCallingRequired: { type: String, trim: true },
-    },
-
-    production: {
-      scenicStageDesign: { type: String, trim: true },
-      unionLabor: { type: String, trim: true },
-      showCrewNeeded: [{ type: String }],
-      otherRolesNeeded: { type: String, trim: true },
-    },
-
-    venue: {
-      needRiggingForFlown: { type: String },
-      riggingPlotOrSpecs: { type: String, trim: true },
-      needDedicatedPowerDrops: { type: String },
-      standardAmpWall: { type: String, trim: true },
-      powerDropsHowMany: { type: String, trim: true },
-    },
-
-    uploads: {
-      supportDocuments: [{ type: String }],
-      reviewExistingAvQuote: { type: String },
-      avQuoteFiles: [{ type: String }],
-    },
-
-    budget: {
-      estimatedAvBudget: { type: String, trim: true },
-      budgetCustomAmount: { type: String, trim: true },
-      proposalFormatPreferences: [{ type: String }],
-      timelineForProposal: { type: String, trim: true },
-      callWithDxgProducer: { type: String },
-      howDidYouHear: { type: String, trim: true },
-      howDidYouHearOther: { type: String, trim: true },
-    },
+    roomByRoom: { type: Schema.Types.Mixed, default: {} },
+    production: { type: Schema.Types.Mixed, default: {} },
+    venue: { type: Schema.Types.Mixed, default: {} },
+    uploads: { type: Schema.Types.Mixed, default: {} },
+    budget: { type: Schema.Types.Mixed, default: {} },
 
     contact: {
       contactFirstName: {
@@ -347,7 +117,6 @@ const proposalSchema = new Schema<IProposal>(
   }
 );
 
-/* â”€â”€â”€ Index for fast lookups â”€â”€â”€ */
 proposalSchema.index({ userId: 1, createdAt: -1 });
 proposalSchema.index({ status: 1 });
 proposalSchema.index({ "contact.contactEmail": 1 });

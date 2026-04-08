@@ -4,6 +4,7 @@ import {
   resetPassword,
   sendForgotPasswordOtp,
   sendSignupOtp,
+  signInAdmin,
   signInWithCredentials,
   signOut,
   signUp,
@@ -24,6 +25,7 @@ router.post("/register", signUp);
 
 /* ─── Sign in ─── */
 router.post("/login", signInWithCredentials);
+router.post("/admin/signin", signInAdmin);
 
 /* ─── Forgot password flow ─── */
 // Step 1: Send reset OTP

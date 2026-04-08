@@ -11,6 +11,7 @@ import extractRoutes from "./routes/extractRoute";
 import proposalRoutes from "./routes/proposalsRoute";
 import settingsRoutes from "./routes/settingsRoute";
 import userRoutes from "./routes/usersRoute";
+import { startCronJobs } from "./utils/cronJobs";
 import { getUploadsDir } from "./utils/paths";
 
 // Load environment variables
@@ -137,6 +138,9 @@ if (require.main === module) {
     try {
       // Connect to database first
       await connectDB();
+      
+      // Initialize background workers
+      startCronJobs();
 
       // Start listening after database connection
       app.listen(PORT, () => {

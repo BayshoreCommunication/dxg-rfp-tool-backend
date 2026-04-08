@@ -59,12 +59,47 @@ const imageFilter = (_req: Request, file: any, cb: FileFilterCallback) => {
   }
 };
 
+// File filter for proposal documents (PDF, Office, images, video)
+const documentFilter = (_req: Request, file: any, cb: FileFilterCallback) => {
+  const allowedMimes = [
+    // Images
+    "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/bmp",
+    // Documents
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "text/plain",
+    "text/csv",
+    // Video
+    "video/mp4", "video/quicktime", "video/x-msvideo", "video/x-matroska", "video/webm",
+  ];
+
+  if (allowedMimes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error(`Unsupported file type: ${file.mimetype}`));
+  }
+};
+
 // Configure multer
 export const uploadImage = multer({
   storage,
   fileFilter: imageFilter,
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB max file size
+  },
+});
+
+// For proposal support documents & AV quote files (50MB max)
+export const uploadDocument = multer({
+  storage,
+  fileFilter: documentFilter,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB
   },
 });
 
@@ -80,3 +115,9 @@ export const uploadMultiple = (fieldName: string, maxCount: number = 10) =>
 export const uploadFields = (
   fields: Array<{ name: string; maxCount?: number }>
 ) => uploadImage.fields(fields);
+
+// Middleware for proposal file uploads (support docs + AV quote files)
+export const uploadProposalDocs = uploadDocument.fields([
+  { name: "supportDocuments", maxCount: 20 },
+  { name: "avQuoteFiles", maxCount: 10 },
+]);

@@ -2,9 +2,11 @@ import { Router } from "express";
 import {
   deleteUser,
   getCurrentUser,
+  getPrimaryAdminProfile,
   getUserById,
   getUsers,
   updateCurrentUser,
+  updatePrimaryAdminProfile,
   updateUser,
 } from "../controller/userController";
 import { authenticate } from "../middleware/auth";
@@ -22,6 +24,10 @@ router.get("/me", getCurrentUser);
 
 // Update current authenticated user
 router.put("/me", updateCurrentUser);
+
+// Singleton admin profile (always one user)
+router.get("/admin/profile", getPrimaryAdminProfile);
+router.put("/admin/profile", updatePrimaryAdminProfile);
 
 // Get user by ID
 router.get("/:id", getUserById);

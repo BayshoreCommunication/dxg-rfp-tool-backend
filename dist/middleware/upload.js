@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.uploadFields = exports.uploadMultiple = exports.uploadSingle = exports.uploadImage = void 0;
+exports.uploadProposalDocs = exports.uploadFields = exports.uploadMultiple = exports.uploadSingle = exports.uploadDocument = exports.uploadImage = void 0;
 const fs_1 = __importDefault(require("fs"));
 const multer_1 = __importDefault(require("multer"));
 const path_1 = __importDefault(require("path"));
@@ -55,12 +55,45 @@ const imageFilter = (_req, file, cb) => {
         cb(new Error("Invalid file type. Only JPEG, PNG, GIF, WebP, SVG, and BMP images are allowed."));
     }
 };
+// File filter for proposal documents (PDF, Office, images, video)
+const documentFilter = (_req, file, cb) => {
+    const allowedMimes = [
+        // Images
+        "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/bmp",
+        // Documents
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "text/plain",
+        "text/csv",
+        // Video
+        "video/mp4", "video/quicktime", "video/x-msvideo", "video/x-matroska", "video/webm",
+    ];
+    if (allowedMimes.includes(file.mimetype)) {
+        cb(null, true);
+    }
+    else {
+        cb(new Error(`Unsupported file type: ${file.mimetype}`));
+    }
+};
 // Configure multer
 exports.uploadImage = (0, multer_1.default)({
     storage,
     fileFilter: imageFilter,
     limits: {
         fileSize: 10 * 1024 * 1024, // 10MB max file size
+    },
+});
+// For proposal support documents & AV quote files (50MB max)
+exports.uploadDocument = (0, multer_1.default)({
+    storage,
+    fileFilter: documentFilter,
+    limits: {
+        fileSize: 50 * 1024 * 1024, // 50MB
     },
 });
 // Middleware for single image upload
@@ -72,4 +105,9 @@ exports.uploadMultiple = uploadMultiple;
 // Middleware for multiple fields
 const uploadFields = (fields) => exports.uploadImage.fields(fields);
 exports.uploadFields = uploadFields;
+// Middleware for proposal file uploads (support docs + AV quote files)
+exports.uploadProposalDocs = exports.uploadDocument.fields([
+    { name: "supportDocuments", maxCount: 20 },
+    { name: "avQuoteFiles", maxCount: 10 },
+]);
 //# sourceMappingURL=upload.js.map

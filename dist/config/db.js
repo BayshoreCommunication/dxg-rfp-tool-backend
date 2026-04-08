@@ -22,14 +22,14 @@ const connectDB = async () => {
     connectionPromise = (async () => {
         try {
             // Support both variable names for flexibility
-            const mongoURI = process.env.MONGODB_URI || process.env.MONGO_URI;
+            const mongoURI = process.env.MONGODB_URL || process.env.MONGO_URL;
             if (!mongoURI) {
-                throw new Error("MONGODB_URI environment variable is not defined");
+                throw new Error("MONGODB_URL environment variable is not defined");
             }
             console.log("🔄 Attempting to connect to MongoDB...");
             const conn = await mongoose_1.default.connect(mongoURI, {
                 // Database name
-                dbName: "yunlaiporcelianartco_db",
+                dbName: "dxg_rfp_tool_db",
                 // Optimized for serverless/Vercel deployment
                 bufferCommands: false, // Disable buffering to fail fast if not connected
                 serverSelectionTimeoutMS: 30000, // Increased to 30s (was 10s - causing timeouts)

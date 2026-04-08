@@ -3,66 +3,73 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getDashboardStats = void 0;
-const blog_1 = __importDefault(require("../modal/blog"));
-const product_1 = __importDefault(require("../modal/product"));
-const getDashboardStats = async (req, res) => {
+exports.getDashboardOverview = void 0;
+const mongoose_1 = __importDefault(require("mongoose"));
+const emailModel_1 = __importDefault(require("../modal/emailModel"));
+const proposalsModel_1 = __importDefault(require("../modal/proposalsModel"));
+const getDashboardOverview = async (req, res) => {
     try {
-        // Run queries in parallel for better performance
-        const [totalProducts, activeProducts, draftProducts, archivedProducts, totalBlogs, publishedBlogs, draftBlogs, archivedBlogs,] = await Promise.all([
-            product_1.default.countDocuments(),
-            product_1.default.countDocuments({ status: "active" }),
-            product_1.default.countDocuments({ status: "draft" }),
-            product_1.default.countDocuments({ status: "archived" }),
-            blog_1.default.countDocuments(),
-            blog_1.default.countDocuments({ status: "published" }),
-            blog_1.default.countDocuments({ status: "draft" }),
-            blog_1.default.countDocuments({ status: "archived" }),
+        const userId = req.user?.userId;
+        if (!userId) {
+            res.status(401).json({ success: false, message: "Unauthorized" });
+            return;
+        }
+        if (!mongoose_1.default.isValidObjectId(userId)) {
+            res.status(400).json({ success: false, message: "Invalid user id." });
+            return;
+        }
+        const userObjectId = new mongoose_1.default.Types.ObjectId(userId);
+        const [totalProposals, emailAgg, proposalViewsAgg, latestProposals,] = await Promise.all([
+            proposalsModel_1.default.countDocuments({ userId: userObjectId }),
+            emailModel_1.default.aggregate([
+                { $match: { userId: userObjectId } },
+                {
+                    $group: {
+                        _id: null,
+                        totalEmailSent: { $sum: "$sentCount" },
+                        totalEmailClicked: { $sum: "$clickedCount" },
+                    },
+                },
+            ]),
+            proposalsModel_1.default.aggregate([
+                { $match: { userId: userObjectId } },
+                {
+                    $group: {
+                        _id: null,
+                        totalProposalViews: { $sum: "$viewsCount" },
+                    },
+                },
+            ]),
+            proposalsModel_1.default.find({ userId: userObjectId })
+                .sort({ createdAt: -1 })
+                .limit(5)
+                .select("_id status isActive isFavorite viewsCount createdAt event contact"),
         ]);
-        // Prepare data for charts
-        const productStats = {
-            total: totalProducts,
-            byStatus: {
-                active: activeProducts,
-                draft: draftProducts,
-                archived: archivedProducts,
-            },
-            chartData: [
-                { name: "Active", value: activeProducts, color: "#22c55e" }, // Green
-                { name: "Draft", value: draftProducts, color: "#eab308" }, // Yellow
-                { name: "Archived", value: archivedProducts, color: "#ef4444" }, // Red
-            ],
-        };
-        const blogStats = {
-            total: totalBlogs,
-            byStatus: {
-                published: publishedBlogs,
-                draft: draftBlogs,
-                archived: archivedBlogs,
-            },
-            chartData: [
-                { name: "Published", value: publishedBlogs, color: "#3b82f6" }, // Blue
-                { name: "Draft", value: draftBlogs, color: "#eab308" }, // Yellow
-                { name: "Archived", value: archivedBlogs, color: "#ef4444" }, // Red
-            ],
-        };
+        const totalEmailSent = emailAgg[0]?.totalEmailSent || 0;
+        const totalEmailClicked = emailAgg[0]?.totalEmailClicked || 0;
+        const totalProposalViews = proposalViewsAgg[0]?.totalProposalViews || 0;
         res.status(200).json({
             success: true,
+            message: "Dashboard overview fetched successfully",
             data: {
-                products: productStats,
-                blogs: blogStats,
+                totals: {
+                    totalProposals,
+                    totalEmailSent,
+                    totalEmailClicked,
+                    totalProposalViews,
+                },
+                latestProposals,
             },
-            timestamp: new Date().toISOString(),
         });
     }
     catch (error) {
-        console.error("Error fetching dashboard stats:", error);
+        console.error("Get dashboard overview error:", error);
         res.status(500).json({
             success: false,
-            message: "Error fetching dashboard statistics",
-            error: error.message,
+            message: "Error fetching dashboard overview",
+            error: error instanceof Error ? error.message : "Unknown error",
         });
     }
 };
-exports.getDashboardStats = getDashboardStats;
+exports.getDashboardOverview = getDashboardOverview;
 //# sourceMappingURL=dashboardController.js.map

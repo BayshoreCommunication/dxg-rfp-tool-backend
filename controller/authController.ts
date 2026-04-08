@@ -16,10 +16,20 @@ const userResponse = (user: any) => ({
   _id: user._id,
   name: user.name,
   email: user.email,
+  role: user.role,
   phone: user.phone,
   avatar: user.avatar,
   createdAt: user.createdAt,
 });
+
+const isAdminRole = (role?: string): boolean => {
+  const normalizedRole = (role || "").toLowerCase().trim();
+  return (
+    normalizedRole === "admin" ||
+    normalizedRole === "superadmin" ||
+    normalizedRole === "super_admin"
+  );
+};
 
 /* ─────────────────────────────────────────
    POST /api/auth/send-otp
@@ -232,6 +242,60 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
     res.status(500).json({
       success: false,
       message: "Error during login",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+/* ─────────────────────────────────────────────
+   POST /api/auth/admin/signin
+   Admin-only sign in
+───────────────────────────────────────────── */
+export const signInAdmin = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      res.status(400).json({ success: false, message: "Email and password are required" });
+      return;
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select("+password");
+
+    if (!user || !(await user.comparePassword(password))) {
+      res.status(401).json({ success: false, message: "Invalid email or password" });
+      return;
+    }
+
+    const role = String((user as any).role || "");
+    if (!isAdminRole(role)) {
+      res.status(403).json({
+        success: false,
+        message: "Access denied. Admin account required.",
+      });
+      return;
+    }
+
+    const tokenPayload: TokenPayload = {
+      userId: user._id.toString(),
+      email: user.email,
+      role: role || "admin",
+    };
+    const tokenData = generateAccessToken(tokenPayload);
+
+    res.status(200).json({
+      success: true,
+      message: "Admin login successful",
+      user: userResponse(user),
+      accessToken: tokenData.accessToken,
+      tokenExpiresAt: tokenData.expiresAt,
+      tokenExpiresIn: tokenData.expiresIn,
+    });
+  } catch (error) {
+    console.error("Admin sign in error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error during admin login",
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }

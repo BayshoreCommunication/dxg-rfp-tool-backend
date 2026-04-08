@@ -1,0 +1,443 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.uploadProposalFiles = exports.deleteProposal = exports.incrementProposalViews = exports.updateProposalMeta = exports.updateProposalStatus = exports.updateProposal = exports.createProposal = exports.getProposalById = exports.getAllProposals = void 0;
+const proposalsModel_1 = __importDefault(require("../modal/proposalsModel"));
+const settingsModel_1 = __importDefault(require("../modal/settingsModel"));
+const uploadToSpaces_1 = require("../utils/uploadToSpaces");
+const buildProposalSettingSnapshot = (settings) => ({
+    branding: {
+        brandName: settings?.branding?.brandName ?? "",
+        linkPrefix: settings?.branding?.linkPrefix ?? "",
+        defaultFont: settings?.branding?.defaultFont ?? "",
+        signatureColor: settings?.branding?.signatureColor ?? "",
+        logoFile: settings?.branding?.logoFile ?? null,
+    },
+    proposals: {
+        proposalLanguage: settings?.proposals?.proposalLanguage ?? "",
+        defaultCurrency: settings?.proposals?.defaultCurrency ?? "",
+        expiryDate: settings?.proposals?.expiryDate ?? "",
+        priceSeparator: settings?.proposals?.priceSeparator ?? "",
+        dateFormat: settings?.proposals?.dateFormat ?? "",
+        decimalPrecision: settings?.proposals?.decimalPrecision ?? "",
+        contacts: {
+            email: {
+                enabled: settings?.proposals?.contacts?.email?.enabled ?? false,
+                value: settings?.proposals?.contacts?.email?.value ?? "",
+            },
+            call: {
+                enabled: settings?.proposals?.contacts?.call?.enabled ?? false,
+                value: settings?.proposals?.contacts?.call?.value ?? "",
+            },
+        },
+        downloadPreview: settings?.proposals?.downloadPreview ?? "",
+        teammateEmail: settings?.proposals?.teammateEmail ?? "",
+    },
+    signatures: {
+        signatureType: settings?.signatures?.signatureType ?? "",
+        signatureImageUrl: settings?.signatures?.signatureImageUrl ?? "",
+        signatureText: settings?.signatures?.signatureText ?? "",
+        signatureStyle: settings?.signatures?.signatureStyle ?? "",
+    },
+});
+const getOrCreateSettingsByUserId = async (userId) => {
+    if (!userId)
+        return null;
+    let settings = await settingsModel_1.default.findOne({ userId });
+    if (!settings) {
+        settings = await settingsModel_1.default.create({ userId });
+    }
+    return settings;
+};
+const withLiveSettings = (proposal, settings) => {
+    if (!proposal)
+        return proposal;
+    const plain = typeof proposal.toObject === "function" ? proposal.toObject() : proposal;
+    return {
+        ...plain,
+        proposalSetting: buildProposalSettingSnapshot(settings),
+    };
+};
+const parseExpiryDays = (expirySetting) => {
+    if (!expirySetting || typeof expirySetting !== "string")
+        return null;
+    const match = expirySetting.match(/(\d+)/);
+    if (!match)
+        return null;
+    const days = parseInt(match[1], 10);
+    return Number.isFinite(days) && days > 0 ? days : null;
+};
+const checkAndExpireProposal = async (proposal, expirySetting) => {
+    if (!proposal || !proposal.isActive)
+        return proposal;
+    const days = parseExpiryDays(expirySetting);
+    if (!days)
+        return proposal;
+    const creationDate = new Date(proposal.createdAt);
+    const expiryDate = new Date(creationDate.getTime() + days * 24 * 60 * 60 * 1000);
+    if (new Date() > expiryDate) {
+        try {
+            const updated = await proposalsModel_1.default.findByIdAndUpdate(proposal._id, { isActive: false, isOpen: false, status: "rejected" }, { new: true }).populate("userId", "name email");
+            return updated || proposal;
+        }
+        catch (e) {
+            console.error(`Auto-expire failed for ${proposal._id}:`, e);
+            return proposal;
+        }
+    }
+    return proposal;
+};
+const getAllProposals = async (req, res) => {
+    try {
+        const userId = req.user?.userId;
+        const settings = await getOrCreateSettingsByUserId(userId);
+        const expirySetting = settings?.proposals?.expiryDate;
+        const { status, favorite, isActive, search, page = "1", limit = "20", sortBy = "createdAt", sortOrder = "desc", } = req.query;
+        const filter = {};
+        if (userId) {
+            filter.userId = userId;
+        }
+        if (status && typeof status === "string") {
+            filter.status = status;
+        }
+        if (typeof isActive === "string") {
+            filter.isActive = isActive === "true";
+        }
+        if (typeof favorite === "string") {
+            if (favorite === "true")
+                filter.isFavorite = true;
+            if (favorite === "false")
+                filter.isFavorite = false;
+        }
+        if (search && typeof search === "string") {
+            const regex = new RegExp(search, "i");
+            filter.$or = [
+                { "event.eventName": regex },
+                { "contact.contactFirstName": regex },
+                { "contact.contactLastName": regex },
+                { "contact.contactEmail": regex },
+                { "contact.contactOrganization": regex },
+            ];
+        }
+        const pageNum = Math.max(1, parseInt(page, 10));
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
+        const skip = (pageNum - 1) * limitNum;
+        const sort = {
+            [sortBy]: sortOrder === "asc" ? 1 : -1,
+        };
+        let [proposals, total] = await Promise.all([
+            proposalsModel_1.default.find(filter)
+                .populate("userId", "name email")
+                .sort(sort)
+                .skip(skip)
+                .limit(limitNum),
+            proposalsModel_1.default.countDocuments(filter),
+        ]);
+        proposals = await Promise.all(proposals.map((p) => checkAndExpireProposal(p, expirySetting)));
+        res.status(200).json({
+            success: true,
+            message: "Proposals fetched successfully",
+            data: proposals.map((p) => withLiveSettings(p, settings)),
+            pagination: {
+                total,
+                page: pageNum,
+                limit: limitNum,
+                totalPages: Math.ceil(total / limitNum),
+            },
+        });
+    }
+    catch (error) {
+        console.error("Get all proposals error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error fetching proposals",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.getAllProposals = getAllProposals;
+const getProposalById = async (req, res) => {
+    try {
+        const userId = req.user?.userId;
+        const settings = await getOrCreateSettingsByUserId(userId);
+        const expirySetting = settings?.proposals?.expiryDate;
+        const { id } = req.params;
+        let proposal = await proposalsModel_1.default.findOne({
+            _id: id,
+            userId,
+        }).populate("userId", "name email");
+        if (!proposal) {
+            res.status(404).json({
+                success: false,
+                message: "Proposal not found",
+            });
+            return;
+        }
+        proposal = await checkAndExpireProposal(proposal, expirySetting);
+        res.status(200).json({
+            success: true,
+            data: withLiveSettings(proposal, settings),
+        });
+    }
+    catch (error) {
+        console.error("Get proposal error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error fetching proposal",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.getProposalById = getProposalById;
+const createProposal = async (req, res) => {
+    try {
+        const body = req.body;
+        const userId = req.user?.userId;
+        if (userId) {
+            body.userId = userId;
+        }
+        delete body.proposalSetting;
+        const proposal = new proposalsModel_1.default(body);
+        await proposal.save();
+        const settings = await getOrCreateSettingsByUserId(userId);
+        res.status(201).json({
+            success: true,
+            message: "Proposal created successfully",
+            data: withLiveSettings(proposal, settings),
+        });
+    }
+    catch (error) {
+        console.error("Create proposal error:", error);
+        if (error.name === "ValidationError") {
+            const messages = Object.values(error.errors).map((e) => e.message);
+            res.status(400).json({
+                success: false,
+                message: "Validation failed",
+                errors: messages,
+            });
+            return;
+        }
+        res.status(500).json({
+            success: false,
+            message: "Error creating proposal",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.createProposal = createProposal;
+const updateProposal = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
+        const userId = req.user?.userId;
+        delete updates._id;
+        delete updates.createdAt;
+        delete updates.userId;
+        delete updates.proposalSetting;
+        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { $set: updates }, { new: true, runValidators: true }).populate("userId", "name email");
+        if (!proposal) {
+            res.status(404).json({
+                success: false,
+                message: "Proposal not found",
+            });
+            return;
+        }
+        const settings = await getOrCreateSettingsByUserId(userId);
+        res.status(200).json({
+            success: true,
+            message: "Proposal updated successfully",
+            data: withLiveSettings(proposal, settings),
+        });
+    }
+    catch (error) {
+        console.error("Update proposal error:", error);
+        if (error.name === "ValidationError") {
+            const messages = Object.values(error.errors).map((e) => e.message);
+            res.status(400).json({
+                success: false,
+                message: "Validation failed",
+                errors: messages,
+            });
+            return;
+        }
+        res.status(500).json({
+            success: false,
+            message: "Error updating proposal",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.updateProposal = updateProposal;
+const updateProposalStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+        const userId = req.user?.userId;
+        const allowed = ["draft", "submitted", "reviewed", "approved", "rejected"];
+        if (!allowed.includes(status)) {
+            res.status(400).json({
+                success: false,
+                message: `Invalid status. Must be one of: ${allowed.join(", ")}`,
+            });
+            return;
+        }
+        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { status }, { new: true });
+        if (!proposal) {
+            res.status(404).json({ success: false, message: "Proposal not found" });
+            return;
+        }
+        const settings = await getOrCreateSettingsByUserId(userId);
+        res.status(200).json({
+            success: true,
+            message: `Proposal status updated to "${status}"`,
+            data: withLiveSettings(proposal, settings),
+        });
+    }
+    catch (error) {
+        console.error("Update status error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error updating proposal status",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.updateProposalStatus = updateProposalStatus;
+const updateProposalMeta = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user?.userId;
+        const { isActive, isFavorite, isAccepted, isOpen, viewsCount } = req.body;
+        const updates = {};
+        if (typeof isActive === "boolean")
+            updates.isActive = isActive;
+        if (typeof isFavorite === "boolean")
+            updates.isFavorite = isFavorite;
+        if (typeof isAccepted === "boolean")
+            updates.isAccepted = isAccepted;
+        if (typeof isOpen === "boolean")
+            updates.isOpen = isOpen;
+        if (typeof viewsCount === "number" && viewsCount >= 0) {
+            updates.viewsCount = viewsCount;
+        }
+        if (Object.keys(updates).length === 0) {
+            res.status(400).json({
+                success: false,
+                message: "No valid fields provided. Use isActive, isFavorite, isAccepted, isOpen, or viewsCount.",
+            });
+            return;
+        }
+        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { $set: updates }, { new: true, runValidators: true });
+        if (!proposal) {
+            res.status(404).json({ success: false, message: "Proposal not found" });
+            return;
+        }
+        const settings = await getOrCreateSettingsByUserId(userId);
+        res.status(200).json({
+            success: true,
+            message: "Proposal metadata updated",
+            data: withLiveSettings(proposal, settings),
+        });
+    }
+    catch (error) {
+        console.error("Update proposal meta error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error updating proposal metadata",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.updateProposalMeta = updateProposalMeta;
+const incrementProposalViews = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user?.userId;
+        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { $inc: { viewsCount: 1 } }, { new: true });
+        if (!proposal) {
+            res.status(404).json({ success: false, message: "Proposal not found" });
+            return;
+        }
+        const settings = await getOrCreateSettingsByUserId(userId);
+        res.status(200).json({
+            success: true,
+            message: "Proposal views incremented",
+            data: withLiveSettings(proposal, settings),
+        });
+    }
+    catch (error) {
+        console.error("Increment proposal views error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error incrementing proposal views",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.incrementProposalViews = incrementProposalViews;
+const deleteProposal = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const proposal = await proposalsModel_1.default.findOneAndDelete({
+            _id: id,
+            userId: req.user?.userId,
+        });
+        if (!proposal) {
+            res.status(404).json({
+                success: false,
+                message: "Proposal not found",
+            });
+            return;
+        }
+        res.status(200).json({
+            success: true,
+            message: "Proposal deleted successfully",
+        });
+    }
+    catch (error) {
+        console.error("Delete proposal error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error deleting proposal",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.deleteProposal = deleteProposal;
+const uploadProposalFiles = async (req, res) => {
+    try {
+        const userId = req.user?.userId || "anonymous";
+        const files = req.files;
+        if (!files || Object.keys(files).length === 0) {
+            res.status(400).json({ success: false, message: "No files uploaded" });
+            return;
+        }
+        const { DO_FOLDER_NAME = "DXG-RFP-Tool" } = process.env;
+        const results = [];
+        for (const fieldname of Object.keys(files)) {
+            for (const file of files[fieldname]) {
+                const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+                const objectKey = `${DO_FOLDER_NAME}/proposals/${userId}/${Date.now()}-${safeName}`;
+                const url = await (0, uploadToSpaces_1.uploadToSpaces)(file.path, objectKey);
+                results.push({ fieldname, originalname: file.originalname, url });
+            }
+        }
+        res.status(200).json({
+            success: true,
+            message: `${results.length} file(s) uploaded successfully`,
+            data: results,
+        });
+    }
+    catch (error) {
+        console.error("Upload proposal files error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error uploading files",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.uploadProposalFiles = uploadProposalFiles;
+//# sourceMappingURL=proposalsController.js.map

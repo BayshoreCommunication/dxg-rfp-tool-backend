@@ -9,17 +9,21 @@ const express_1 = __importDefault(require("express"));
 const mongoose_1 = __importDefault(require("mongoose"));
 const morgan_1 = __importDefault(require("morgan"));
 const db_1 = __importDefault(require("./config/db"));
-const auth_1 = __importDefault(require("./routes/auth"));
-const blog_1 = __importDefault(require("./routes/blog"));
-const category_1 = __importDefault(require("./routes/category"));
-const dashboard_1 = __importDefault(require("./routes/dashboard"));
-const product_1 = __importDefault(require("./routes/product"));
-const users_1 = __importDefault(require("./routes/users"));
+const authRoute_1 = __importDefault(require("./routes/authRoute"));
+const dashboardRoute_1 = __importDefault(require("./routes/dashboardRoute"));
+const emailRoute_1 = __importDefault(require("./routes/emailRoute"));
+const extractRoute_1 = __importDefault(require("./routes/extractRoute"));
+const proposalsRoute_1 = __importDefault(require("./routes/proposalsRoute"));
+const settingsRoute_1 = __importDefault(require("./routes/settingsRoute"));
+const usersRoute_1 = __importDefault(require("./routes/usersRoute"));
+const cronJobs_1 = require("./utils/cronJobs");
 const paths_1 = require("./utils/paths");
 // Load environment variables
 dotenv_1.default.config();
+console.log("Loaded SMTP_MAIL:", process.env.SMTP_MAIL ? "***" : "UNDEFINED");
+console.log("Loaded SMTP_PASSWORD:", process.env.SMTP_PASSWORD ? "***" : "UNDEFINED");
 const app = (0, express_1.default)();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8000;
 // Middleware
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
@@ -54,7 +58,7 @@ catch (error) {
 app.get("/", (_req, res) => {
     res.json({
         success: true,
-        message: "Yunlai Porcelain Art Co. API is running!",
+        message: "DXG RFP Tool - API is running!",
         version: "1.0.0",
         timestamp: new Date().toISOString(),
     });
@@ -79,14 +83,19 @@ app.get("/api", (_req, res) => {
     });
 });
 // Auth routes
-app.use("/api/auth", auth_1.default);
+app.use("/api/auth", authRoute_1.default);
 // User management routes
-app.use("/api/users", users_1.default);
-// E-commerce routes
-app.use("/api/products", product_1.default);
-app.use("/api/categories", category_1.default);
-app.use("/api/blogs", blog_1.default);
-app.use("/api/dashboard", dashboard_1.default);
+app.use("/api/users", usersRoute_1.default);
+// Proposal routes
+app.use("/api/proposals", proposalsRoute_1.default);
+// Email campaign routes
+app.use("/api/emails", emailRoute_1.default);
+// Document extraction / AI auto-fill route
+app.use("/api/extract-proposal", extractRoute_1.default);
+// Settings routes
+app.use("/api/settings", settingsRoute_1.default);
+// Dashboard routes
+app.use("/api/dashboard", dashboardRoute_1.default);
 // 404 Handler
 app.use((_req, res) => {
     res.status(404).json({
@@ -109,6 +118,8 @@ if (require.main === module) {
         try {
             // Connect to database first
             await (0, db_1.default)();
+            // Initialize background workers
+            (0, cronJobs_1.startCronJobs)();
             // Start listening after database connection
             app.listen(PORT, () => {
                 console.log("========================================");

@@ -8,12 +8,15 @@ import {
   updateProposal,
   updateProposalMeta,
   updateProposalStatus,
+  uploadProposalFiles,
 } from "../controller/proposalsController";
 import { authenticate } from "../middleware/auth";
+import { uploadProposalDocs } from "../middleware/upload";
 
 const router = Router();
 
 /* Protected routes (require auth) */
+router.post("/upload-files", authenticate, uploadProposalDocs, uploadProposalFiles);
 router.post("/", authenticate, createProposal);
 router.get("/", authenticate, getAllProposals);
 router.get("/:id", authenticate, getProposalById);

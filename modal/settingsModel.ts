@@ -7,7 +7,6 @@ export interface ISettings extends Document {
     linkPrefix: string;
     defaultFont: string;
     signatureColor: string;
-    buttonTextColor: string;
     logoFile: string | null;
   };
   proposals: {
@@ -20,19 +19,15 @@ export interface ISettings extends Document {
     contacts: {
       email: { enabled: boolean; value: string };
       call: { enabled: boolean; value: string };
-      whatsapp: { enabled: boolean; value: string };
     };
-    redirectUrl: string;
-    redirectDelay: string;
-    downloadPreviewTop: string;
+    downloadPreview: string;
     teammateEmail: string;
-    downloadPreviewBottom: string;
-    enableAiAssistant: boolean;
   };
   signatures: {
-    signatureType: string;
-    prospectOptions: string[];
-    signatureText: string;
+    signatureType: string;      // "Upload" | "Draw"
+    signatureImageUrl: string;  // used when type = "Upload"
+    signatureText: string;      // used when type = "Draw"
+    signatureStyle: string;     // used when type = "Draw" (font family)
   };
   createdAt: Date;
   updatedAt: Date;
@@ -45,11 +40,10 @@ const settingsSchema = new Schema<ISettings>(
       ref: "User",
     },
     branding: {
-      brandName: { type: String, default: "Abuco", trim: true },
-      linkPrefix: { type: String, default: "abuco", trim: true },
+      brandName: { type: String, default: "", trim: true },
+      linkPrefix: { type: String, default: "", trim: true },
       defaultFont: { type: String, default: "Poppins", trim: true },
       signatureColor: { type: String, default: "#2DC6F5", trim: true },
-      buttonTextColor: { type: String, default: "#FFFFFF", trim: true },
       logoFile: { type: String, default: null },
     },
     proposals: {
@@ -62,31 +56,21 @@ const settingsSchema = new Schema<ISettings>(
       contacts: {
         email: {
           enabled: { type: Boolean, default: true },
-          value: { type: String, default: "ui.abukawsar@gmail.com", trim: true },
+          value: { type: String, default: "", trim: true },
         },
         call: {
           enabled: { type: Boolean, default: false },
-          value: { type: String, default: "+12163547758", trim: true },
-        },
-        whatsapp: {
-          enabled: { type: Boolean, default: false },
-          value: { type: String, default: "+12163547758", trim: true },
+          value: { type: String, default: "", trim: true },
         },
       },
-      redirectUrl: { type: String, default: "", trim: true },
-      redirectDelay: { type: String, default: "0", trim: true },
-      downloadPreviewTop: { type: String, default: "Yes", trim: true },
+      downloadPreview: { type: String, default: "Yes", trim: true },
       teammateEmail: { type: String, default: "", trim: true },
-      downloadPreviewBottom: { type: String, default: "Yes", trim: true },
-      enableAiAssistant: { type: Boolean, default: true },
     },
     signatures: {
-      signatureType: { type: String, default: "Type", trim: true },
-      prospectOptions: {
-        type: [String],
-        default: ["Type", "Upload", "Draw"],
-      },
-      signatureText: { type: String, default: "ui.abukawsar", trim: true },
+      signatureType: { type: String, default: "Upload", trim: true },
+      signatureImageUrl: { type: String, default: "", trim: true },
+      signatureText: { type: String, default: "", trim: true },
+      signatureStyle: { type: String, default: "", trim: true },
     },
   },
   { timestamps: true }

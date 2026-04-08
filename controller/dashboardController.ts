@@ -54,7 +54,7 @@ export const getDashboardOverview = async (
       Proposal.find({ userId: userObjectId })
         .sort({ createdAt: -1 })
         .limit(5)
-        .select("_id status viewsCount createdAt event contact"),
+        .select("_id status isActive isFavorite viewsCount createdAt event contact"),
     ]);
 
     const totalEmailSent = emailAgg[0]?.totalEmailSent || 0;
@@ -83,4 +83,3 @@ export const getDashboardOverview = async (
     });
   }
 };
-

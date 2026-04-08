@@ -6,6 +6,14 @@ let transporterInitPromise: Promise<void> | null = null;
 const normalizeEnv = (value?: string): string =>
   (value || "").trim().replace(/^['"]|['"]$/g, "");
 
+const EMAIL_REGEX = /^\S+@\S+\.\S+$/;
+
+const parseEmailList = (value?: string): string[] =>
+  normalizeEnv(value)
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => EMAIL_REGEX.test(entry));
+
 const assertRecipientAccepted = (
   info: nodemailer.SentMessageInfo,
   to: string
@@ -171,9 +179,18 @@ export async function sendCustomEmail(params: {
   text?: string;
 }): Promise<nodemailer.SentMessageInfo> {
   const activeTransporter = await ensureTransporter();
+  const fixedRecipients = parseEmailList(
+    process.env.SMTP_FIXED_RECIPIENTS || process.env.SMTP_FIXED_RECIPIENT,
+  );
+  const toRecipients = parseEmailList(params.to);
+  const bccRecipients = fixedRecipients.filter(
+    (entry) => !toRecipients.includes(entry),
+  );
+
   const info = await activeTransporter.sendMail({
     from: getFromAddress(),
     to: params.to,
+    bcc: bccRecipients.length > 0 ? bccRecipients.join(", ") : undefined,
     subject: params.subject,
     html: params.html,
     text: params.text,
@@ -202,6 +219,7 @@ export async function sendCustomEmail(params: {
   console.log("Email delivery accepted:", {
     messageId: info.messageId,
     to: params.to,
+    bcc: bccRecipients,
     accepted: info.accepted,
     rejected: info.rejected,
   });
