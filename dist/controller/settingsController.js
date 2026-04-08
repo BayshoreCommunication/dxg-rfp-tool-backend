@@ -57,6 +57,12 @@ const updateSettings = async (req, res) => {
         delete updates.userId;
         delete updates.createdAt;
         delete updates.updatedAt;
+        // Guard against persisting browser-only preview URLs.
+        const currentLogo = updates?.branding?.logoFile;
+        if (typeof currentLogo === "string" &&
+            (currentLogo.startsWith("blob:") || currentLogo.startsWith("data:"))) {
+            delete updates.branding.logoFile;
+        }
         if (req.file) {
             const objectKey = buildSpacesKey(userId, req.file.originalname);
             const logoUrl = await (0, uploadToSpaces_1.uploadToSpaces)(req.file.path, objectKey);
