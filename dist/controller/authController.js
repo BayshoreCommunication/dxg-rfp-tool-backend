@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.resetPassword = exports.verifyForgotPasswordOtp = exports.sendForgotPasswordOtp = exports.signOut = exports.getCurrentUser = exports.signInAdmin = exports.signInWithGoogle = exports.signInWithCredentials = exports.signUp = exports.verifySignupOtp = exports.sendSignupOtp = void 0;
+exports.resetPassword = exports.verifyForgotPasswordOtp = exports.sendForgotPasswordOtp = exports.signOut = exports.getCurrentUser = exports.signInAdmin = exports.signUpAdmin = exports.signInWithGoogle = exports.signInWithCredentials = exports.signUp = exports.verifySignupOtp = exports.sendSignupOtp = void 0;
 const crypto_1 = require("crypto");
 const jwt_1 = require("../config/jwt");
 const otpModel_1 = __importDefault(require("../modal/otpModel"));
@@ -273,7 +273,7 @@ const signInWithGoogle = async (req, res) => {
         const tokenPayload = {
             userId: user._id.toString(),
             email: user.email,
-            role: "customer",
+            role: String(user.role || "customer"),
         };
         const tokenData = (0, jwt_1.generateAccessToken)(tokenPayload);
         res.status(200).json({
@@ -298,6 +298,69 @@ const signInWithGoogle = async (req, res) => {
     }
 };
 exports.signInWithGoogle = signInWithGoogle;
+/* ─────────────────────────────────────────────
+   POST /api/auth/admin/signup
+   Create admin account
+───────────────────────────────────────────── */
+const signUpAdmin = async (req, res) => {
+    try {
+        const { name, email, phone, password, adminSecret } = req.body;
+        if (!name || !email || !password) {
+            res.status(400).json({
+                success: false,
+                message: "Name, email, and password are required",
+            });
+            return;
+        }
+        const requiredSecret = process.env.ADMIN_SIGNUP_SECRET;
+        if (requiredSecret &&
+            String(adminSecret || "").trim() !== String(requiredSecret).trim()) {
+            res.status(403).json({
+                success: false,
+                message: "Invalid admin signup secret.",
+            });
+            return;
+        }
+        const normalizedEmail = String(email).toLowerCase().trim();
+        const existingUser = await userModel_1.default.findOne({ email: normalizedEmail });
+        if (existingUser) {
+            res
+                .status(409)
+                .json({ success: false, message: "User with this email already exists" });
+            return;
+        }
+        const user = await userModel_1.default.create({
+            name: String(name).trim(),
+            email: normalizedEmail,
+            phone: phone ? String(phone).trim() : undefined,
+            password: String(password),
+            role: "admin",
+        });
+        const tokenPayload = {
+            userId: user._id.toString(),
+            email: user.email,
+            role: "admin",
+        };
+        const tokenData = (0, jwt_1.generateAccessToken)(tokenPayload);
+        res.status(201).json({
+            success: true,
+            message: "Admin account created successfully",
+            user: userResponse(user),
+            accessToken: tokenData.accessToken,
+            tokenExpiresAt: tokenData.expiresAt,
+            tokenExpiresIn: tokenData.expiresIn,
+        });
+    }
+    catch (error) {
+        console.error("Admin sign up error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error during admin registration",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.signUpAdmin = signUpAdmin;
 /* ─────────────────────────────────────────────
    POST /api/auth/admin/signin
    Admin-only sign in

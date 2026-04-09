@@ -312,7 +312,7 @@ export const signInWithGoogle = async (req: Request, res: Response): Promise<voi
     const tokenPayload: TokenPayload = {
       userId: user._id.toString(),
       email: user.email,
-      role: "customer",
+      role: String((user as any).role || "customer"),
     };
     const tokenData = generateAccessToken(tokenPayload);
 
@@ -332,6 +332,76 @@ export const signInWithGoogle = async (req: Request, res: Response): Promise<voi
     res.status(500).json({
       success: false,
       message: "Error during Google sign in",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+/* ─────────────────────────────────────────────
+   POST /api/auth/admin/signup
+   Create admin account
+───────────────────────────────────────────── */
+export const signUpAdmin = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { name, email, phone, password, adminSecret } = req.body;
+
+    if (!name || !email || !password) {
+      res.status(400).json({
+        success: false,
+        message: "Name, email, and password are required",
+      });
+      return;
+    }
+
+    const requiredSecret = process.env.ADMIN_SIGNUP_SECRET;
+    if (
+      requiredSecret &&
+      String(adminSecret || "").trim() !== String(requiredSecret).trim()
+    ) {
+      res.status(403).json({
+        success: false,
+        message: "Invalid admin signup secret.",
+      });
+      return;
+    }
+
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const existingUser = await User.findOne({ email: normalizedEmail });
+    if (existingUser) {
+      res
+        .status(409)
+        .json({ success: false, message: "User with this email already exists" });
+      return;
+    }
+
+    const user = await User.create({
+      name: String(name).trim(),
+      email: normalizedEmail,
+      phone: phone ? String(phone).trim() : undefined,
+      password: String(password),
+      role: "admin",
+    });
+
+    const tokenPayload: TokenPayload = {
+      userId: user._id.toString(),
+      email: user.email,
+      role: "admin",
+    };
+    const tokenData = generateAccessToken(tokenPayload);
+
+    res.status(201).json({
+      success: true,
+      message: "Admin account created successfully",
+      user: userResponse(user),
+      accessToken: tokenData.accessToken,
+      tokenExpiresAt: tokenData.expiresAt,
+      tokenExpiresIn: tokenData.expiresIn,
+    });
+  } catch (error) {
+    console.error("Admin sign up error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error during admin registration",
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }

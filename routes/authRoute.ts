@@ -4,6 +4,7 @@ import {
   resetPassword,
   sendForgotPasswordOtp,
   sendSignupOtp,
+  signUpAdmin,
   signInAdmin,
   signInWithCredentials,
   signInWithGoogle,
@@ -27,6 +28,7 @@ router.post("/register", signUp);
 /* ─── Sign in ─── */
 router.post("/login", signInWithCredentials);
 router.post("/google", signInWithGoogle);
+router.post("/admin/signup", signUpAdmin);
 router.post("/admin/signin", signInAdmin);
 
 /* ─── Forgot password flow ─── */

@@ -5,6 +5,9 @@ import mongoose from "mongoose";
 import morgan from "morgan";
 import connectDB from "./config/db";
 import authRoutes from "./routes/authRoute";
+import adminRoutes from "./routes/adminRoute";
+import adminUserRoutes from "./routes/adminUserRoute";
+import allClientsRoutes from "./routes/allClientsRoute";
 import dashboardRoutes from "./routes/dashboardRoute";
 import emailRoutes from "./routes/emailRoute";
 import extractRoutes from "./routes/extractRoute";
@@ -95,6 +98,13 @@ app.get("/api", (_req: Request, res: Response) => {
 
 // Auth routes
 app.use("/api/auth", authRoutes);
+
+// Admin routes
+app.use("/api/admin", adminRoutes);
+app.use("/api/admin-user", adminUserRoutes);
+
+// Admin clients route
+app.use("/api/all-clients", allClientsRoutes);
 
 // User management routes
 app.use("/api/users", userRoutes);

@@ -14,6 +14,7 @@ router.post("/register", authController_1.signUp);
 /* ─── Sign in ─── */
 router.post("/login", authController_1.signInWithCredentials);
 router.post("/google", authController_1.signInWithGoogle);
+router.post("/admin/signup", authController_1.signUpAdmin);
 router.post("/admin/signin", authController_1.signInAdmin);
 /* ─── Forgot password flow ─── */
 // Step 1: Send reset OTP
