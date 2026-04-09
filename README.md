@@ -1,147 +1,290 @@
-# Coaching Center Backend API
+# DXG RFP Tool Backend
 
-A Node.js, Express.js, and TypeScript backend API with authentication system.
+Express + TypeScript + MongoDB API for the DXG RFP platform. This service handles authentication, admin/user profile management, proposal CRUD, AI-assisted proposal extraction, email campaign tracking, settings, and dashboard summaries.
 
-## Features
+## Tech Stack
 
-- ✅ User authentication (Sign up, Sign in)
-- ✅ Social login (Google, Facebook, GitHub)
-- ✅ JWT access tokens and refresh tokens
-- ✅ Password hashing with bcrypt
-- ✅ MongoDB database with Mongoose
-- ✅ TypeScript for type safety
-- ✅ Protected routes with authentication middleware
+- Node.js
+- Express
+- TypeScript
+- MongoDB with Mongoose
+- JWT authentication
+- Nodemailer for OTP and campaign email delivery
+- Multer for uploads
+- OpenAI for proposal field extraction
+- DigitalOcean Spaces via S3-compatible SDK for asset storage
 
-## Environment Variables
+## What This Backend Does
 
-Create a `.env` file in the backend directory with the following variables:
+- Supports email OTP signup and forgot-password flows
+- Supports user login, Google login, and admin sign-in/signup
+- Stores and manages proposals, proposal metadata, and proposal status
+- Uploads proposal support documents and AV quote files
+- Extracts proposal data from PDF, DOC, DOCX, TXT, and CSV files with OpenAI
+- Sends proposal email campaigns and tracks opens/clicks
+- Manages dashboard overview data and app settings
+- Exposes admin-only overview and client listing endpoints
+- Runs a background expiration check for proposals based on settings
 
-```env
-# Server Configuration
-PORT=5000
-NODE_ENV=development
+## Getting Started
 
-# Database Configuration
-MONGODB_URI=mongodb://localhost:27017/coaching-center
-# Or for MongoDB Atlas:
-# MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/coaching-center?retryWrites=true&w=majority
+### 1. Install dependencies
 
-# JWT Configuration
-JWT_SECRET=your-super-secret-jwt-key-change-in-production
-JWT_REFRESH_SECRET=your-super-secret-refresh-key-change-in-production
-JWT_EXPIRE=15m
-JWT_REFRESH_EXPIRE=7d
-```
-
-## Installation
-
-1. Install dependencies:
 ```bash
 npm install
 ```
 
-2. Create `.env` file with the variables above
+### 2. Create your environment file
 
-3. Start development server:
+Create `backend/.env` and add the variables your environment needs.
+
+Example:
+
+```env
+PORT=8000
+NODE_ENV=development
+
+MONGODB_URL=mongodb://127.0.0.1:27017/dxg_rfp_tool_db
+JWT_SECRET=replace-with-a-strong-secret
+JWT_EXPIRE=30d
+
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_MAIL=no-reply@example.com
+SMTP_PASSWORD=your-smtp-password
+
+OPENAI_API_KEY=your-openai-api-key
+
+DO_SPACES_BUCKET=your-bucket
+DO_SPACES_REGION=your-region
+DO_SPACES_KEY=your-key
+DO_SPACES_SECRET=your-secret
+DO_FOLDER_NAME=DXG-RFP-Tool
+
+FRONTEND_URL=http://localhost:3000
+BACKEND_URL=http://localhost:8000
+ADMIN_SIGNUP_SECRET=your-admin-signup-secret
+SUPER_USER_EMAIL=admin@example.com
+```
+
+### 3. Start the development server
+
 ```bash
 npm run dev
 ```
 
-## API Endpoints
+The API starts on `http://localhost:8000` by default.
 
-### Authentication Routes (`/api/auth`)
+## Available Scripts
 
-#### Public Routes
+- `npm run dev` starts the backend with `nodemon`
+- `npm run build` compiles TypeScript into `dist/`
+- `npm start` runs the compiled server from `dist/server.js`
+- `npm run type-check` runs TypeScript without emitting files
+- `npm run create-super-user` creates the configured super user
+- `npm run test-image-upload` runs the upload test helper
 
-- `POST /api/auth/register` - Sign up with credentials
-  ```json
-  {
-    "name": "John Doe",
-    "email": "john@example.com",
-    "password": "password123",
-    "role": "student" // optional: "student" | "teacher" | "admin"
-  }
-  ```
+## Health and Base Routes
 
-- `POST /api/auth/login` - Sign in with credentials
-  ```json
-  {
-    "email": "john@example.com",
-    "password": "password123"
-  }
-  ```
+- `GET /` returns a simple API status response
+- `GET /health` returns service and database health
+- `GET /api` returns an API welcome response
 
-- `POST /api/auth/signin/social` - Sign in with social provider
-  ```json
-  {
-    "provider": "google", // "google" | "facebook" | "github"
-    "providerId": "123456789",
-    "email": "john@example.com",
-    "name": "John Doe",
-    "avatar": "https://example.com/avatar.jpg" // optional
-  }
-  ```
+## Main API Routes
 
-- `POST /api/auth/refresh` - Refresh access token
-  ```json
-  {
-    "refreshToken": "your-refresh-token"
-  }
-  ```
+### Auth
 
-#### Protected Routes (Require Bearer Token)
+Base path: `/api/auth`
 
-- `GET /api/auth/me` - Get current user
-  - Headers: `Authorization: Bearer <accessToken>`
+- `POST /send-otp`
+- `POST /verify-otp`
+- `POST /register`
+- `POST /login`
+- `POST /google`
+- `POST /admin/signup`
+- `POST /admin/signin`
+- `POST /forgot-password/send-otp`
+- `POST /forgot-password/verify-otp`
+- `POST /forgot-password/reset`
+- `GET /me`
+- `POST /logout`
 
-- `POST /api/auth/logout` - Sign out (clears refresh token)
-  - Headers: `Authorization: Bearer <accessToken>`
+### Users
 
-## Response Format
+Base path: `/api/users`
 
-### Success Response
-```json
-{
-  "success": true,
-  "message": "Operation successful",
-  "user": { ... },
-  "accessToken": "...",
-  "refreshToken": "..."
-}
+- `GET /`
+- `GET /me`
+- `PUT /me`
+- `GET /admin/profile`
+- `PUT /admin/profile`
+- `GET /:id`
+- `PUT /:id`
+- `DELETE /:id`
+
+### Signed-in Admin Profile
+
+Base path: `/api/admin-user`
+
+- `GET /me`
+- `PUT /me`
+
+### Admin Overview
+
+Base path: `/api/admin`
+
+- `GET /overview`
+
+### Admin Client List
+
+Base path: `/api/all-clients`
+
+- `GET /`
+
+### Proposals
+
+Base path: `/api/proposals`
+
+- `POST /upload-files`
+- `POST /`
+- `GET /`
+- `GET /:id`
+- `PUT /:id`
+- `PATCH /:id/status`
+- `PATCH /:id/meta`
+- `PATCH /:id/views`
+- `DELETE /:id`
+
+### Emails
+
+Base path: `/api/emails`
+
+Public tracking:
+
+- `GET /open/:trackingId`
+- `GET /click/:trackingId`
+
+Protected:
+
+- `POST /send`
+- `GET /`
+- `GET /stats`
+- `DELETE /proposal/:proposalId`
+- `DELETE /:campaignId`
+
+### AI Proposal Extraction
+
+Base path: `/api/extract-proposal`
+
+- `POST /`
+
+Upload the file under the form field name `file`.
+
+Supported file types:
+
+- PDF
+- DOC
+- DOCX
+- TXT
+- CSV
+
+### Settings
+
+Base path: `/api/settings`
+
+- `GET /`
+- `PUT /`
+- `DELETE /`
+
+### Dashboard
+
+Base path: `/api/dashboard`
+
+- `GET /overview`
+
+## Authentication
+
+Protected routes expect a Bearer token:
+
+```http
+Authorization: Bearer <accessToken>
 ```
 
-### Error Response
-```json
-{
-  "success": false,
-  "message": "Error message"
-}
-```
+JWT generation and verification live in [config/jwt.ts](d:/Dxg-rfp-tool/backend/config/jwt.ts).
+
+## Uploads
+
+This backend supports:
+
+- Image uploads up to 10 MB
+- Proposal/support document uploads up to 50 MB
+- Temporary local storage via `multer`
+- Optional upload-to-cloud flow using DigitalOcean Spaces
+
+Important upload-related files:
+
+- [middleware/upload.ts](d:/Dxg-rfp-tool/backend/middleware/upload.ts)
+- [utils/uploadToSpaces.ts](d:/Dxg-rfp-tool/backend/utils/uploadToSpaces.ts)
+
+## AI Extraction
+
+The extraction endpoint uses OpenAI to parse uploaded files into structured proposal data. PDF uploads use the Responses API, while DOC/DOCX/TXT/CSV content is converted to text first and then parsed.
+
+Implementation:
+
+- [controller/extractController.ts](d:/Dxg-rfp-tool/backend/controller/extractController.ts)
+
+## Email Delivery
+
+This backend uses Nodemailer for:
+
+- Signup OTP emails
+- Forgot-password OTP emails
+- Campaign email sends
+- Open and click tracking
+
+If SMTP settings are not configured, the service can fall back to an Ethereal test account for development.
+
+Implementation:
+
+- [utils/emailService.ts](d:/Dxg-rfp-tool/backend/utils/emailService.ts)
+- [routes/emailRoute.ts](d:/Dxg-rfp-tool/backend/routes/emailRoute.ts)
+
+## Background Jobs
+
+On startup, the backend begins a recurring proposal expiration check. The current implementation runs once immediately and then every 12 hours.
+
+Implementation:
+
+- [utils/cronJobs.ts](d:/Dxg-rfp-tool/backend/utils/cronJobs.ts)
 
 ## Project Structure
 
-```
+```text
 backend/
-├── config/
-│   ├── db.ts          # Database connection
-│   └── jwt.ts         # JWT utilities
-├── controller/
-│   └── authController.ts  # Auth business logic
-├── middleware/
-│   └── auth.ts        # Authentication middleware
-├── modal/
-│   └── user.ts        # User model/schema
-├── routes/
-│   └── auth.ts        # Auth routes
-├── server.ts          # Express app setup
-└── package.json
+|-- config/           # Database and JWT configuration
+|-- controller/       # Route handlers and business logic
+|-- middleware/       # Auth and upload middleware
+|-- modal/            # Mongoose models
+|-- routes/           # Express route modules
+|-- scripts/          # Utility scripts
+|-- uploads/          # Local uploads
+|-- utils/            # Email, path, cron, and storage helpers
+|-- dist/             # Compiled output
+|-- server.ts         # Express entry point
+|-- package.json
+|-- tsconfig.json
+|-- vercel.json
 ```
 
-## Development
+## Deployment Notes
 
-- `npm run dev` - Start development server with nodemon
-- `npm run build` - Build TypeScript to JavaScript
-- `npm start` - Start production server
-- `npm run type-check` - Type check without building
+- The codebase is written to work in both long-running Node environments and serverless-style deployments
+- MongoDB connections are cached to reduce reconnection overhead
+- Local `/uploads` serving may be limited in serverless environments
+- For production file storage, prefer DigitalOcean Spaces or another external object store
 
-"# dxg-rfp-tool-backend" 
+## Notes
+
+- The package name and some older strings in the codebase still reference a previous project name; the active backend behavior and routes in this repository are for DXG RFP Tool
+- If you update routes or environment variables, keep this README in sync so the frontend teams can integrate confidently
