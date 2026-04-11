@@ -1,6 +1,7 @@
 import { Response } from "express";
 import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth";
+import { createNotification } from "../utils/notificationService";
 import Proposal from "../modal/proposalsModel";
 import Settings from "../modal/settingsModel";
 import { uploadToSpaces } from "../utils/uploadToSpaces";
@@ -677,6 +678,20 @@ export const incrementProposalViews = async (
     }
 
     const settings = await getSettingsByUserId(userId);
+
+    if (userId) {
+      const proposalTitle = proposal.event?.eventName?.trim() || "Untitled Proposal";
+      await createNotification({
+        userId,
+        proposalId: String(proposal._id),
+        type: "proposal_view",
+        title: "Proposal viewed",
+        message: `"${proposalTitle}" received a new view. Total views: ${proposal.viewsCount}.`,
+        metadata: {
+          viewsCount: proposal.viewsCount,
+        },
+      });
+    }
 
     res.status(200).json({
       success: true,

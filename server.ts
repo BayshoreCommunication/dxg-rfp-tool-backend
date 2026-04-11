@@ -1,6 +1,7 @@
 import cors from "cors";
 import dotenv from "dotenv";
 import express, { Application, NextFunction, Request, Response } from "express";
+import http from "http";
 import mongoose from "mongoose";
 import morgan from "morgan";
 import connectDB from "./config/db";
@@ -11,10 +12,12 @@ import allClientsRoutes from "./routes/allClientsRoute";
 import dashboardRoutes from "./routes/dashboardRoute";
 import emailRoutes from "./routes/emailRoute";
 import extractRoutes from "./routes/extractRoute";
+import notificationRoutes from "./routes/notificationRoute";
 import proposalRoutes from "./routes/proposalsRoute";
 import settingsRoutes from "./routes/settingsRoute";
 import userRoutes from "./routes/usersRoute";
 import { startCronJobs } from "./utils/cronJobs";
+import { initializeNotificationWebSocketServer } from "./utils/notificationService";
 import { getUploadsDir } from "./utils/paths";
 
 // Load environment variables
@@ -115,6 +118,9 @@ app.use("/api/proposals", proposalRoutes);
 // Email campaign routes
 app.use("/api/emails", emailRoutes);
 
+// Notification routes
+app.use("/api/notifications", notificationRoutes);
+
 // Document extraction / AI auto-fill route
 app.use("/api/extract-proposal", extractRoutes);
 
@@ -152,8 +158,11 @@ if (require.main === module) {
       // Initialize background workers
       startCronJobs();
 
+      const server = http.createServer(app);
+      initializeNotificationWebSocketServer(server);
+
       // Start listening after database connection
-      app.listen(PORT, () => {
+      server.listen(PORT, () => {
         console.log("========================================");
         console.log("🚀 Server Started Successfully!");
         console.log("========================================");
