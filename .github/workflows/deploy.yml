@@ -1,0 +1,44 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to DigitalOcean
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: ${{ secrets.DO_USERNAME }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+
+            # Load nvm so node/npm/pm2 are available
+            export NVM_DIR="/root/.nvm"
+            source "$NVM_DIR/nvm.sh"
+
+            cd /var/www/dxg-rfp-tool-backend
+
+            echo "📥 Pulling latest code..."
+            git pull origin main
+
+            echo "📦 Installing dependencies..."
+            npm install --omit=dev
+
+            echo "♻️ Restarting PM2..."
+            pm2 restart dxg-rfp-tool --update-env
+            pm2 save
+
+            echo "✅ Deployment complete!"
+            pm2 status
