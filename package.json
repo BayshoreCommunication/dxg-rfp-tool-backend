@@ -1,7 +1,7 @@
 {
-  "name": "yunlaiporcelianartco-backend",
+  "name": "dxg-rfp-tool-backend",
   "version": "1.0.0",
-  "description": "Backend API for Coaching Center Application",
+  "description": "Backend API for DXG RFP Tool",
   "main": "dist/server.js",
   "scripts": {
     "dev": "nodemon",
