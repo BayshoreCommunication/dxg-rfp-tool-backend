@@ -8,69 +8,61 @@ exports.sendSignupOtpEmail = sendSignupOtpEmail;
 exports.sendForgotPasswordOtpEmail = sendForgotPasswordOtpEmail;
 exports.sendCustomEmail = sendCustomEmail;
 const nodemailer_1 = __importDefault(require("nodemailer"));
-let transporter = null;
-let transporterInitPromise = null;
+const resend_1 = require("resend");
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 const normalizeEnv = (value) => (value || "").trim().replace(/^['"]|['"]$/g, "");
 const EMAIL_REGEX = /^\S+@\S+\.\S+$/;
 const parseEmailList = (value) => normalizeEnv(value)
     .split(",")
     .map((entry) => entry.trim().toLowerCase())
     .filter((entry) => EMAIL_REGEX.test(entry));
-const assertRecipientAccepted = (info, to) => {
-    const accepted = Array.isArray(info.accepted)
-        ? info.accepted.map((entry) => String(entry).toLowerCase())
-        : [];
-    const rejected = Array.isArray(info.rejected)
-        ? info.rejected.map((entry) => String(entry).toLowerCase())
-        : [];
-    const toList = to
-        .split(",")
-        .map((entry) => entry.trim().toLowerCase())
-        .filter(Boolean);
-    const hasAcceptedRecipient = toList.some((entry) => accepted.includes(entry));
-    const hasRejectedRecipient = toList.some((entry) => rejected.includes(entry));
-    if (!hasAcceptedRecipient || hasRejectedRecipient) {
-        const rejectedLabel = rejected.length > 0 ? rejected.join(", ") : to;
-        throw new Error(`SMTP did not accept recipient(s): ${rejectedLabel}`);
-    }
+// ---------------------------------------------------------------------------
+// Resend (HTTP API — works on DigitalOcean, no SMTP ports needed)
+// ---------------------------------------------------------------------------
+let resendClient = null;
+const getResendClient = () => {
+    const key = normalizeEnv(process.env.RESEND_API_KEY);
+    if (!key)
+        return null;
+    if (!resendClient)
+        resendClient = new resend_1.Resend(key);
+    return resendClient;
 };
+// ---------------------------------------------------------------------------
+// Nodemailer SMTP (fallback for local dev — blocked by DigitalOcean)
+// ---------------------------------------------------------------------------
+let transporter = null;
+let transporterInitPromise = null;
 const initializeTransporter = async () => {
     const SMTP_HOST = normalizeEnv(process.env.SMTP_HOST);
     const SMTP_PORT = normalizeEnv(process.env.SMTP_PORT);
     const SMTP_MAIL = normalizeEnv(process.env.SMTP_MAIL);
     const SMTP_PASSWORD = normalizeEnv(process.env.SMTP_PASSWORD);
     if (SMTP_HOST && SMTP_PORT && SMTP_MAIL && SMTP_PASSWORD) {
-        console.log("Setting up real SMTP transporter using environment variables");
-        // DigitalOcean blocks port 465 (SMTP SSL) and may route through IPv6.
-        // Force IPv4 (family:4) and fall back to port 587 (STARTTLS) if 465 is set.
+        console.log("Setting up SMTP transporter (local dev fallback)");
         const requestedPort = parseInt(SMTP_PORT, 10);
+        // Force port 587 STARTTLS + IPv4 to avoid DO SMTP blocks
         const usePort = requestedPort === 465 ? 587 : requestedPort;
-        const useSecure = requestedPort === 465 ? false : requestedPort === 465;
         transporter = nodemailer_1.default.createTransport({
             host: SMTP_HOST,
             port: usePort,
-            secure: useSecure, // false = STARTTLS on 587; true = SSL on 465
-            family: 4, // Force IPv4 — prevents ENETUNREACH on DigitalOcean
+            secure: false,
+            family: 4,
             socketTimeout: 30000,
             connectionTimeout: 30000,
-            auth: {
-                user: SMTP_MAIL,
-                pass: SMTP_PASSWORD,
-            },
+            auth: { user: SMTP_MAIL, pass: SMTP_PASSWORD },
         });
     }
     else {
         console.log("No SMTP credentials found, creating Ethereal test account");
         const testAccount = await nodemailer_1.default.createTestAccount();
-        console.log("Ethereal test account created:", testAccount.user);
         transporter = nodemailer_1.default.createTransport({
             host: "smtp.ethereal.email",
             port: 587,
             secure: false,
-            auth: {
-                user: testAccount.user,
-                pass: testAccount.pass,
-            },
+            auth: { user: testAccount.user, pass: testAccount.pass },
         });
     }
     try {
@@ -85,25 +77,79 @@ const initializeTransporter = async () => {
 const ensureTransporter = async () => {
     if (transporter)
         return transporter;
-    // Lazy-init transporter on first send. This avoids initializing before env is loaded.
     if (!transporterInitPromise) {
         transporterInitPromise = initializeTransporter();
     }
     await transporterInitPromise;
-    if (!transporter) {
+    if (!transporter)
         throw new Error("Email transporter could not be initialized.");
-    }
     return transporter;
 };
-const getFromAddress = () => `"DXG RFP Tool" <${normalizeEnv(process.env.SMTP_MAIL) || "noreply@dxg.com"}>`;
+// ---------------------------------------------------------------------------
+// Unified send helper
+// ---------------------------------------------------------------------------
+const getFromAddress = () => {
+    const mail = normalizeEnv(process.env.SMTP_MAIL) || "noreply@dxg-agency.com";
+    return `"DXG RFP Tool" <${mail}>`;
+};
+/**
+ * Send an email.
+ * - Uses Resend HTTP API if RESEND_API_KEY is set (production / DigitalOcean).
+ * - Falls back to nodemailer SMTP for local development.
+ */
+const sendEmail = async (params) => {
+    const resend = getResendClient();
+    const toList = Array.isArray(params.to) ? params.to : [params.to];
+    const bccList = params.bcc
+        ? Array.isArray(params.bcc) ? params.bcc : [params.bcc]
+        : undefined;
+    if (resend) {
+        // -----------------------------------------------------------------------
+        // Resend — HTTP API, no SMTP ports, works everywhere
+        // -----------------------------------------------------------------------
+        console.log(`[Resend] Sending email to: ${toList.join(", ")}`);
+        const { error } = await resend.emails.send({
+            from: getFromAddress(),
+            to: toList,
+            bcc: bccList,
+            subject: params.subject,
+            html: params.html,
+            text: params.text,
+        });
+        if (error) {
+            console.error("[Resend] Send error:", error);
+            throw new Error(`Resend error: ${error.message}`);
+        }
+        console.log("[Resend] Email sent successfully");
+    }
+    else {
+        // -----------------------------------------------------------------------
+        // SMTP fallback (local dev)
+        // -----------------------------------------------------------------------
+        const activeTransporter = await ensureTransporter();
+        const info = await activeTransporter.sendMail({
+            from: getFromAddress(),
+            to: toList.join(", "),
+            bcc: bccList?.join(", "),
+            subject: params.subject,
+            html: params.html,
+            text: params.text,
+        });
+        console.log("Email sent via SMTP:", info.messageId);
+        const previewUrl = nodemailer_1.default.getTestMessageUrl(info);
+        if (previewUrl)
+            console.log("Preview URL:", previewUrl);
+    }
+};
+// ---------------------------------------------------------------------------
+// Public API — matches original function signatures
+// ---------------------------------------------------------------------------
 function generateOtp() {
     return String(Math.floor(100000 + Math.random() * 900000));
 }
 async function sendSignupOtpEmail(email, otp) {
-    const activeTransporter = await ensureTransporter();
     console.log(`Sending OTP ${otp} to ${email}`);
-    const info = await activeTransporter.sendMail({
-        from: getFromAddress(),
+    await sendEmail({
         to: email,
         subject: "Verify your email - DXG RFP Tool",
         html: `
@@ -117,22 +163,9 @@ async function sendSignupOtpEmail(email, otp) {
       </div>
     `,
     });
-    assertRecipientAccepted(info, email);
-    console.log("Email sent:", info.messageId);
-    console.log("Email accepted:", {
-        to: email,
-        accepted: info.accepted,
-        rejected: info.rejected,
-    });
-    const previewUrl = nodemailer_1.default.getTestMessageUrl(info);
-    if (previewUrl) {
-        console.log("Preview URL:", previewUrl);
-    }
 }
 async function sendForgotPasswordOtpEmail(email, otp) {
-    const activeTransporter = await ensureTransporter();
-    const info = await activeTransporter.sendMail({
-        from: getFromAddress(),
+    await sendEmail({
         to: email,
         subject: "Reset your password - DXG RFP Tool",
         html: `
@@ -142,53 +175,25 @@ async function sendForgotPasswordOtpEmail(email, otp) {
         <div style="background:#fff;border:2px solid #35bdf2;border-radius:8px;padding:24px;text-align:center;">
           <span style="font-size:40px;font-weight:bold;letter-spacing:12px;color:#0f1b57;">${otp}</span>
         </div>
-        <p style="color:#888;font-size:12px;margin-top:24px;">If you did not request a password reset, please ignore this email. Your password will not change.</p>
+        <p style="color:#888;font-size:12px;margin-top:24px;">If you did not request a password reset, please ignore this email.</p>
       </div>
     `,
     });
-    assertRecipientAccepted(info, email);
-    console.log("Email accepted:", {
-        to: email,
-        accepted: info.accepted,
-        rejected: info.rejected,
-    });
 }
 async function sendCustomEmail(params) {
-    const activeTransporter = await ensureTransporter();
     const fixedRecipients = parseEmailList(process.env.SMTP_FIXED_RECIPIENTS || process.env.SMTP_FIXED_RECIPIENT);
     const toRecipients = parseEmailList(params.to);
     const bccRecipients = fixedRecipients.filter((entry) => !toRecipients.includes(entry));
-    const info = await activeTransporter.sendMail({
-        from: getFromAddress(),
+    await sendEmail({
         to: params.to,
-        bcc: bccRecipients.length > 0 ? bccRecipients.join(", ") : undefined,
+        bcc: bccRecipients.length > 0 ? bccRecipients : undefined,
         subject: params.subject,
         html: params.html,
         text: params.text,
     });
-    const accepted = Array.isArray(info.accepted)
-        ? info.accepted.map((entry) => String(entry).toLowerCase())
-        : [];
-    const rejected = Array.isArray(info.rejected)
-        ? info.rejected.map((entry) => String(entry).toLowerCase())
-        : [];
-    const toList = params.to
-        .split(",")
-        .map((entry) => entry.trim().toLowerCase())
-        .filter(Boolean);
-    const hasAcceptedRecipient = toList.some((entry) => accepted.includes(entry));
-    const hasRejectedRecipient = toList.some((entry) => rejected.includes(entry));
-    if (!hasAcceptedRecipient || hasRejectedRecipient) {
-        const rejectedLabel = rejected.length > 0 ? rejected.join(", ") : params.to;
-        throw new Error(`SMTP did not accept recipient(s): ${rejectedLabel}`);
-    }
     console.log("Email delivery accepted:", {
-        messageId: info.messageId,
         to: params.to,
         bcc: bccRecipients,
-        accepted: info.accepted,
-        rejected: info.rejected,
     });
-    return info;
 }
 //# sourceMappingURL=emailService.js.map

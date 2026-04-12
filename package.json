@@ -35,6 +35,7 @@
     "multer": "^2.0.2",
     "nodemailer": "^8.0.2",
     "pdf-parse": "^2.4.5",
+    "resend": "^6.10.0",
     "sharp": "^0.34.5"
   },
   "devDependencies": {
