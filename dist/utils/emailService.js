@@ -89,7 +89,12 @@ const ensureTransporter = async () => {
 // Unified send helper
 // ---------------------------------------------------------------------------
 const getFromAddress = () => {
-    const mail = normalizeEnv(process.env.SMTP_MAIL) || "noreply@dxg-agency.com";
+    // When using Resend, use the verified domain address (RESEND_FROM).
+    // Fall back to SMTP_MAIL only for local SMTP dev.
+    const resend = getResendClient();
+    const mail = resend
+        ? (normalizeEnv(process.env.RESEND_FROM) || "noreply@dxg-agency.com")
+        : (normalizeEnv(process.env.SMTP_MAIL) || "noreply@dxg-agency.com");
     return `"DXG RFP Tool" <${mail}>`;
 };
 /**
