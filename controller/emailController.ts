@@ -15,20 +15,26 @@ const toSlug = (value: string): string =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
+const firstUrlFromEnv = (value: string): string =>
+  value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)[0] || value.trim();
+
 const getFrontendBaseUrl = (): string =>
-  (
+  firstUrlFromEnv(
     process.env.FRONTEND_URL ||
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.NEXT_PUBLIC_FRONTEND_URL ||
-    "http://localhost:3000"
+      process.env.NEXT_PUBLIC_APP_URL ||
+      process.env.NEXT_PUBLIC_FRONTEND_URL ||
+      "http://localhost:3000",
   ).replace(/\/+$/, "");
 
 const getApiBaseUrl = (): string =>
-  (
+  firstUrlFromEnv(
     process.env.API_BASE_URL ||
-    process.env.BACKEND_URL ||
-    process.env.NEXT_PUBLIC_API_URL ||
-    "http://localhost:8000"
+      process.env.BACKEND_URL ||
+      process.env.NEXT_PUBLIC_API_URL ||
+      "http://localhost:8000",
   ).replace(/\/+$/, "");
 
 const buildProposalPublicUrl = (proposalSlug: string): string =>
@@ -274,8 +280,8 @@ export const getEmailCampaigns = async (
     }
 
     const { proposalId, page = "1", limit = "20" } = req.query;
-    const pageNum = Math.max(1, parseInt(page as string, 10));
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10)));
+    const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10) || 20));
     const skip = (pageNum - 1) * limitNum;
 
     const filter: Record<string, unknown> = { userId };

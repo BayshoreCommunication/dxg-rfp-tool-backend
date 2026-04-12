@@ -4,8 +4,18 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.startCronJobs = exports.runExpirationCheck = void 0;
+const notificationService_1 = require("./notificationService");
 const proposalsModel_1 = __importDefault(require("../modal/proposalsModel"));
 const settingsModel_1 = __importDefault(require("../modal/settingsModel"));
+const parseExpiryDays = (expirySetting) => {
+    if (!expirySetting || typeof expirySetting !== "string")
+        return null;
+    const match = expirySetting.match(/(\d+)/);
+    if (!match)
+        return null;
+    const days = parseInt(match[1], 10);
+    return Number.isFinite(days) && days > 0 ? days : null;
+};
 const runExpirationCheck = async () => {
     try {
         const activeProposals = await proposalsModel_1.default.find({ isActive: true });
@@ -19,22 +29,46 @@ const runExpirationCheck = async () => {
                 settingsByUserId.set(userIdText, settings);
             }
             const expirySetting = settings?.proposals?.expiryDate;
-            if (!expirySetting || typeof expirySetting !== "string")
-                continue;
-            const match = expirySetting.match(/(\d+)/);
-            if (!match)
-                continue;
-            const days = parseInt(match[1], 10);
-            if (isNaN(days) || days <= 0)
+            const days = parseExpiryDays(expirySetting);
+            if (!days)
                 continue;
             const creationDate = new Date(proposal.createdAt);
             const expiryDate = new Date(creationDate.getTime() + days * 24 * 60 * 60 * 1000);
             const now = new Date();
+            const msUntilExpiry = expiryDate.getTime() - now.getTime();
+            const proposalTitle = proposal.event?.eventName?.trim() || "Untitled Proposal";
+            if (userIdText && msUntilExpiry > 0 && msUntilExpiry <= 24 * 60 * 60 * 1000) {
+                const expiryDay = expiryDate.toISOString().slice(0, 10);
+                await (0, notificationService_1.createNotification)({
+                    userId: userIdText,
+                    proposalId: String(proposal._id),
+                    type: "proposal_expiring_soon",
+                    title: "Proposal expires tomorrow",
+                    message: `"${proposalTitle}" will expire on ${expiryDate.toLocaleDateString()}.`,
+                    dedupeKey: `proposal-expiring-soon:${proposal._id}:${expiryDay}`,
+                    metadata: {
+                        expiryDate: expiryDate.toISOString(),
+                    },
+                });
+            }
             if (now > expiryDate) {
                 proposal.isActive = false;
                 proposal.isOpen = false;
                 proposal.status = "rejected";
                 await proposal.save();
+                if (userIdText) {
+                    await (0, notificationService_1.createNotification)({
+                        userId: userIdText,
+                        proposalId: String(proposal._id),
+                        type: "proposal_expired",
+                        title: "Proposal expired",
+                        message: `"${proposalTitle}" has expired and is now closed.`,
+                        dedupeKey: `proposal-expired:${proposal._id}`,
+                        metadata: {
+                            expiryDate: expiryDate.toISOString(),
+                        },
+                    });
+                }
                 console.log(`[Cron] Auto-expired proposal ${proposal._id}`);
             }
         }

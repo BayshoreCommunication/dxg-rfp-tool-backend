@@ -4,9 +4,57 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.uploadProposalFiles = exports.deleteProposal = exports.incrementProposalViews = exports.updateProposalMeta = exports.updateProposalStatus = exports.updateProposal = exports.createProposal = exports.getProposalById = exports.getAllProposals = void 0;
+const mongoose_1 = __importDefault(require("mongoose"));
+const notificationService_1 = require("../utils/notificationService");
 const proposalsModel_1 = __importDefault(require("../modal/proposalsModel"));
 const settingsModel_1 = __importDefault(require("../modal/settingsModel"));
 const uploadToSpaces_1 = require("../utils/uploadToSpaces");
+const LIST_PROPOSAL_SELECT = [
+    "_id",
+    "status",
+    "isActive",
+    "isFavorite",
+    "isAccepted",
+    "isOpen",
+    "viewsCount",
+    "createdAt",
+    "updatedAt",
+    "event.eventName",
+    "contact.contactFirstName",
+    "contact.contactLastName",
+].join(" ");
+const DETAIL_PROPOSAL_SELECT = "-__v";
+const SETTINGS_SELECT = [
+    "branding.brandName",
+    "branding.linkPrefix",
+    "branding.defaultFont",
+    "branding.signatureColor",
+    "branding.logoFile",
+    "proposals.proposalLanguage",
+    "proposals.defaultCurrency",
+    "proposals.expiryDate",
+    "proposals.priceSeparator",
+    "proposals.dateFormat",
+    "proposals.decimalPrecision",
+    "proposals.contacts.email.enabled",
+    "proposals.contacts.email.value",
+    "proposals.contacts.call.enabled",
+    "proposals.contacts.call.value",
+    "proposals.downloadPreview",
+    "proposals.teammateEmail",
+    "signatures.signatureType",
+    "signatures.signatureImageUrl",
+    "signatures.signatureText",
+    "signatures.signatureStyle",
+].join(" ");
+const ALLOWED_SORT_FIELDS = new Set([
+    "createdAt",
+    "updatedAt",
+    "status",
+    "viewsCount",
+    "event.eventName",
+]);
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const buildProposalSettingSnapshot = (settings) => ({
     branding: {
         brandName: settings?.branding?.brandName ?? "",
@@ -42,21 +90,23 @@ const buildProposalSettingSnapshot = (settings) => ({
         signatureStyle: settings?.signatures?.signatureStyle ?? "",
     },
 });
-const getOrCreateSettingsByUserId = async (userId) => {
+const getSettingsByUserId = async (userId, options) => {
     if (!userId)
         return null;
-    let settings = await settingsModel_1.default.findOne({ userId });
-    if (!settings) {
-        settings = await settingsModel_1.default.create({ userId });
+    let settings = await settingsModel_1.default.findOne({ userId })
+        .select(SETTINGS_SELECT)
+        .lean();
+    if (!settings && options?.createIfMissing) {
+        const createdSettings = await settingsModel_1.default.create({ userId });
+        settings = createdSettings.toObject();
     }
     return settings;
 };
 const withLiveSettings = (proposal, settings) => {
     if (!proposal)
         return proposal;
-    const plain = typeof proposal.toObject === "function" ? proposal.toObject() : proposal;
     return {
-        ...plain,
+        ...proposal,
         proposalSetting: buildProposalSettingSnapshot(settings),
     };
 };
@@ -69,32 +119,88 @@ const parseExpiryDays = (expirySetting) => {
     const days = parseInt(match[1], 10);
     return Number.isFinite(days) && days > 0 ? days : null;
 };
-const checkAndExpireProposal = async (proposal, expirySetting) => {
-    if (!proposal || !proposal.isActive)
+const applyDerivedExpiryState = (proposal, expirySetting) => {
+    if (!proposal || proposal.isActive === false)
         return proposal;
     const days = parseExpiryDays(expirySetting);
     if (!days)
         return proposal;
-    const creationDate = new Date(proposal.createdAt);
-    const expiryDate = new Date(creationDate.getTime() + days * 24 * 60 * 60 * 1000);
-    if (new Date() > expiryDate) {
-        try {
-            const updated = await proposalsModel_1.default.findByIdAndUpdate(proposal._id, { isActive: false, isOpen: false, status: "rejected" }, { new: true }).populate("userId", "name email");
-            return updated || proposal;
-        }
-        catch (e) {
-            console.error(`Auto-expire failed for ${proposal._id}:`, e);
-            return proposal;
-        }
-    }
-    return proposal;
+    const createdAt = new Date(proposal.createdAt);
+    if (Number.isNaN(createdAt.getTime()))
+        return proposal;
+    const expiresAt = createdAt.getTime() + days * 24 * 60 * 60 * 1000;
+    if (Date.now() <= expiresAt)
+        return proposal;
+    return {
+        ...proposal,
+        isActive: false,
+        isOpen: false,
+        status: "rejected",
+    };
+};
+const normalizeSort = (sortBy, sortOrder) => {
+    const safeSortBy = sortBy && ALLOWED_SORT_FIELDS.has(sortBy) ? sortBy : "createdAt";
+    return {
+        [safeSortBy]: sortOrder === "asc" ? 1 : -1,
+        _id: sortOrder === "asc" ? 1 : -1,
+    };
+};
+const isValidProposalId = (id) => typeof id === "string" && mongoose_1.default.isValidObjectId(id);
+const buildCountsAggregation = (baseFilter, expirySetting) => {
+    const expiryDays = parseExpiryDays(expirySetting);
+    const expiredThreshold = expiryDays && expiryDays > 0
+        ? new Date(Date.now() - expiryDays * 24 * 60 * 60 * 1000)
+        : null;
+    return [
+        { $match: baseFilter },
+        {
+            $group: {
+                _id: null,
+                all: { $sum: 1 },
+                draft: {
+                    $sum: {
+                        $cond: [{ $eq: ["$status", "draft"] }, 1, 0],
+                    },
+                },
+                live: {
+                    $sum: {
+                        $cond: [{ $eq: ["$status", "submitted"] }, 1, 0],
+                    },
+                },
+                favorite: {
+                    $sum: {
+                        $cond: [{ $eq: ["$isFavorite", true] }, 1, 0],
+                    },
+                },
+                expired: {
+                    $sum: {
+                        $cond: [
+                            expiredThreshold
+                                ? {
+                                    $or: [
+                                        { $eq: ["$isActive", false] },
+                                        {
+                                            $and: [
+                                                { $eq: ["$isActive", true] },
+                                                { $lte: ["$createdAt", expiredThreshold] },
+                                            ],
+                                        },
+                                    ],
+                                }
+                                : { $eq: ["$isActive", false] },
+                            1,
+                            0,
+                        ],
+                    },
+                },
+            },
+        },
+    ];
 };
 const getAllProposals = async (req, res) => {
     try {
         const userId = req.user?.userId;
-        const settings = await getOrCreateSettingsByUserId(userId);
-        const expirySetting = settings?.proposals?.expiryDate;
-        const { status, favorite, isActive, search, page = "1", limit = "20", sortBy = "createdAt", sortOrder = "desc", } = req.query;
+        const { status, favorite, isActive, includeCounts, search, page = "1", limit = "20", sortBy = "createdAt", sortOrder = "desc", } = req.query;
         const filter = {};
         if (userId) {
             filter.userId = userId;
@@ -112,40 +218,76 @@ const getAllProposals = async (req, res) => {
                 filter.isFavorite = false;
         }
         if (search && typeof search === "string") {
-            const regex = new RegExp(search, "i");
-            filter.$or = [
-                { "event.eventName": regex },
-                { "contact.contactFirstName": regex },
-                { "contact.contactLastName": regex },
-                { "contact.contactEmail": regex },
-                { "contact.contactOrganization": regex },
-            ];
+            const trimmedSearch = search.trim();
+            if (trimmedSearch) {
+                const regex = new RegExp(escapeRegex(trimmedSearch), "i");
+                filter.$or = [
+                    { "event.eventName": regex },
+                    { "contact.contactFirstName": regex },
+                    { "contact.contactLastName": regex },
+                    { "contact.contactEmail": regex },
+                    { "contact.contactOrganization": regex },
+                ];
+            }
         }
-        const pageNum = Math.max(1, parseInt(page, 10));
-        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
         const skip = (pageNum - 1) * limitNum;
-        const sort = {
-            [sortBy]: sortOrder === "asc" ? 1 : -1,
-        };
-        let [proposals, total] = await Promise.all([
+        const sort = normalizeSort(typeof sortBy === "string" ? sortBy : undefined, typeof sortOrder === "string" ? sortOrder : undefined);
+        const [settings, proposals, total] = await Promise.all([
+            getSettingsByUserId(userId),
             proposalsModel_1.default.find(filter)
-                .populate("userId", "name email")
+                .select(LIST_PROPOSAL_SELECT)
                 .sort(sort)
                 .skip(skip)
-                .limit(limitNum),
+                .limit(limitNum)
+                .lean(),
             proposalsModel_1.default.countDocuments(filter),
         ]);
-        proposals = await Promise.all(proposals.map((p) => checkAndExpireProposal(p, expirySetting)));
+        const expirySetting = settings?.proposals?.expiryDate;
+        const snapshot = buildProposalSettingSnapshot(settings);
+        const shouldIncludeCounts = includeCounts === "true";
+        let counts;
+        if (shouldIncludeCounts) {
+            const baseFilter = {
+                ...(userId ? { userId } : {}),
+            };
+            if (search && typeof search === "string") {
+                const trimmedSearch = search.trim();
+                if (trimmedSearch) {
+                    const regex = new RegExp(escapeRegex(trimmedSearch), "i");
+                    baseFilter.$or = [
+                        { "event.eventName": regex },
+                        { "contact.contactFirstName": regex },
+                        { "contact.contactLastName": regex },
+                        { "contact.contactEmail": regex },
+                        { "contact.contactOrganization": regex },
+                    ];
+                }
+            }
+            const [countsResult] = await proposalsModel_1.default.aggregate(buildCountsAggregation(baseFilter, expirySetting));
+            counts = {
+                all: countsResult?.all ?? 0,
+                draft: countsResult?.draft ?? 0,
+                live: countsResult?.live ?? 0,
+                favorite: countsResult?.favorite ?? 0,
+                expired: countsResult?.expired ?? 0,
+            };
+        }
         res.status(200).json({
             success: true,
             message: "Proposals fetched successfully",
-            data: proposals.map((p) => withLiveSettings(p, settings)),
+            data: proposals.map((proposal) => ({
+                ...applyDerivedExpiryState(proposal, expirySetting),
+                proposalSetting: snapshot,
+            })),
             pagination: {
                 total,
                 page: pageNum,
                 limit: limitNum,
                 totalPages: Math.ceil(total / limitNum),
             },
+            ...(counts ? { counts } : {}),
         });
     }
     catch (error) {
@@ -161,13 +303,23 @@ exports.getAllProposals = getAllProposals;
 const getProposalById = async (req, res) => {
     try {
         const userId = req.user?.userId;
-        const settings = await getOrCreateSettingsByUserId(userId);
-        const expirySetting = settings?.proposals?.expiryDate;
         const { id } = req.params;
-        let proposal = await proposalsModel_1.default.findOne({
-            _id: id,
-            userId,
-        }).populate("userId", "name email");
+        if (!isValidProposalId(id)) {
+            res.status(400).json({
+                success: false,
+                message: "Invalid proposal id",
+            });
+            return;
+        }
+        const [settings, proposal] = await Promise.all([
+            getSettingsByUserId(userId),
+            proposalsModel_1.default.findOne({
+                _id: id,
+                userId,
+            })
+                .select(DETAIL_PROPOSAL_SELECT)
+                .lean(),
+        ]);
         if (!proposal) {
             res.status(404).json({
                 success: false,
@@ -175,10 +327,9 @@ const getProposalById = async (req, res) => {
             });
             return;
         }
-        proposal = await checkAndExpireProposal(proposal, expirySetting);
         res.status(200).json({
             success: true,
-            data: withLiveSettings(proposal, settings),
+            data: withLiveSettings(applyDerivedExpiryState(proposal, settings?.proposals?.expiryDate), settings),
         });
     }
     catch (error) {
@@ -201,11 +352,11 @@ const createProposal = async (req, res) => {
         delete body.proposalSetting;
         const proposal = new proposalsModel_1.default(body);
         await proposal.save();
-        const settings = await getOrCreateSettingsByUserId(userId);
+        const settings = await getSettingsByUserId(userId, { createIfMissing: true });
         res.status(201).json({
             success: true,
             message: "Proposal created successfully",
-            data: withLiveSettings(proposal, settings),
+            data: withLiveSettings(proposal.toObject(), settings),
         });
     }
     catch (error) {
@@ -232,11 +383,20 @@ const updateProposal = async (req, res) => {
         const { id } = req.params;
         const updates = req.body;
         const userId = req.user?.userId;
+        if (!isValidProposalId(id)) {
+            res.status(400).json({
+                success: false,
+                message: "Invalid proposal id",
+            });
+            return;
+        }
         delete updates._id;
         delete updates.createdAt;
         delete updates.userId;
         delete updates.proposalSetting;
-        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { $set: updates }, { new: true, runValidators: true }).populate("userId", "name email");
+        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { $set: updates }, { new: true, runValidators: true })
+            .select(DETAIL_PROPOSAL_SELECT)
+            .lean();
         if (!proposal) {
             res.status(404).json({
                 success: false,
@@ -244,7 +404,7 @@ const updateProposal = async (req, res) => {
             });
             return;
         }
-        const settings = await getOrCreateSettingsByUserId(userId);
+        const settings = await getSettingsByUserId(userId, { createIfMissing: true });
         res.status(200).json({
             success: true,
             message: "Proposal updated successfully",
@@ -275,6 +435,13 @@ const updateProposalStatus = async (req, res) => {
         const { id } = req.params;
         const { status } = req.body;
         const userId = req.user?.userId;
+        if (!isValidProposalId(id)) {
+            res.status(400).json({
+                success: false,
+                message: "Invalid proposal id",
+            });
+            return;
+        }
         const allowed = ["draft", "submitted", "reviewed", "approved", "rejected"];
         if (!allowed.includes(status)) {
             res.status(400).json({
@@ -283,12 +450,14 @@ const updateProposalStatus = async (req, res) => {
             });
             return;
         }
-        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { status }, { new: true });
+        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { status }, { new: true })
+            .select(DETAIL_PROPOSAL_SELECT)
+            .lean();
         if (!proposal) {
             res.status(404).json({ success: false, message: "Proposal not found" });
             return;
         }
-        const settings = await getOrCreateSettingsByUserId(userId);
+        const settings = await getSettingsByUserId(userId, { createIfMissing: true });
         res.status(200).json({
             success: true,
             message: `Proposal status updated to "${status}"`,
@@ -310,6 +479,13 @@ const updateProposalMeta = async (req, res) => {
         const { id } = req.params;
         const userId = req.user?.userId;
         const { isActive, isFavorite, isAccepted, isOpen, viewsCount } = req.body;
+        if (!isValidProposalId(id)) {
+            res.status(400).json({
+                success: false,
+                message: "Invalid proposal id",
+            });
+            return;
+        }
         const updates = {};
         if (typeof isActive === "boolean")
             updates.isActive = isActive;
@@ -329,12 +505,14 @@ const updateProposalMeta = async (req, res) => {
             });
             return;
         }
-        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { $set: updates }, { new: true, runValidators: true });
+        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { $set: updates }, { new: true, runValidators: true })
+            .select(DETAIL_PROPOSAL_SELECT)
+            .lean();
         if (!proposal) {
             res.status(404).json({ success: false, message: "Proposal not found" });
             return;
         }
-        const settings = await getOrCreateSettingsByUserId(userId);
+        const settings = await getSettingsByUserId(userId, { createIfMissing: true });
         res.status(200).json({
             success: true,
             message: "Proposal metadata updated",
@@ -355,12 +533,34 @@ const incrementProposalViews = async (req, res) => {
     try {
         const { id } = req.params;
         const userId = req.user?.userId;
-        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { $inc: { viewsCount: 1 } }, { new: true });
+        if (!isValidProposalId(id)) {
+            res.status(400).json({
+                success: false,
+                message: "Invalid proposal id",
+            });
+            return;
+        }
+        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { $inc: { viewsCount: 1 } }, { new: true })
+            .select(DETAIL_PROPOSAL_SELECT)
+            .lean();
         if (!proposal) {
             res.status(404).json({ success: false, message: "Proposal not found" });
             return;
         }
-        const settings = await getOrCreateSettingsByUserId(userId);
+        const settings = await getSettingsByUserId(userId);
+        if (userId) {
+            const proposalTitle = proposal.event?.eventName?.trim() || "Untitled Proposal";
+            await (0, notificationService_1.createNotification)({
+                userId,
+                proposalId: String(proposal._id),
+                type: "proposal_view",
+                title: "Proposal viewed",
+                message: `"${proposalTitle}" received a new view. Total views: ${proposal.viewsCount}.`,
+                metadata: {
+                    viewsCount: proposal.viewsCount,
+                },
+            });
+        }
         res.status(200).json({
             success: true,
             message: "Proposal views incremented",
@@ -380,10 +580,17 @@ exports.incrementProposalViews = incrementProposalViews;
 const deleteProposal = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!isValidProposalId(id)) {
+            res.status(400).json({
+                success: false,
+                message: "Invalid proposal id",
+            });
+            return;
+        }
         const proposal = await proposalsModel_1.default.findOneAndDelete({
             _id: id,
             userId: req.user?.userId,
-        });
+        }).lean();
         if (!proposal) {
             res.status(404).json({
                 success: false,

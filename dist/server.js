@@ -6,17 +6,23 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const express_1 = __importDefault(require("express"));
+const http_1 = __importDefault(require("http"));
 const mongoose_1 = __importDefault(require("mongoose"));
 const morgan_1 = __importDefault(require("morgan"));
 const db_1 = __importDefault(require("./config/db"));
 const authRoute_1 = __importDefault(require("./routes/authRoute"));
+const adminRoute_1 = __importDefault(require("./routes/adminRoute"));
+const adminUserRoute_1 = __importDefault(require("./routes/adminUserRoute"));
+const allClientsRoute_1 = __importDefault(require("./routes/allClientsRoute"));
 const dashboardRoute_1 = __importDefault(require("./routes/dashboardRoute"));
 const emailRoute_1 = __importDefault(require("./routes/emailRoute"));
 const extractRoute_1 = __importDefault(require("./routes/extractRoute"));
+const notificationRoute_1 = __importDefault(require("./routes/notificationRoute"));
 const proposalsRoute_1 = __importDefault(require("./routes/proposalsRoute"));
 const settingsRoute_1 = __importDefault(require("./routes/settingsRoute"));
 const usersRoute_1 = __importDefault(require("./routes/usersRoute"));
 const cronJobs_1 = require("./utils/cronJobs");
+const notificationService_1 = require("./utils/notificationService");
 const paths_1 = require("./utils/paths");
 // Load environment variables
 dotenv_1.default.config();
@@ -84,12 +90,19 @@ app.get("/api", (_req, res) => {
 });
 // Auth routes
 app.use("/api/auth", authRoute_1.default);
+// Admin routes
+app.use("/api/admin", adminRoute_1.default);
+app.use("/api/admin-user", adminUserRoute_1.default);
+// Admin clients route
+app.use("/api/all-clients", allClientsRoute_1.default);
 // User management routes
 app.use("/api/users", usersRoute_1.default);
 // Proposal routes
 app.use("/api/proposals", proposalsRoute_1.default);
 // Email campaign routes
 app.use("/api/emails", emailRoute_1.default);
+// Notification routes
+app.use("/api/notifications", notificationRoute_1.default);
 // Document extraction / AI auto-fill route
 app.use("/api/extract-proposal", extractRoute_1.default);
 // Settings routes
@@ -120,8 +133,10 @@ if (require.main === module) {
             await (0, db_1.default)();
             // Initialize background workers
             (0, cronJobs_1.startCronJobs)();
+            const server = http_1.default.createServer(app);
+            (0, notificationService_1.initializeNotificationWebSocketServer)(server);
             // Start listening after database connection
-            app.listen(PORT, () => {
+            server.listen(PORT, () => {
                 console.log("========================================");
                 console.log("🚀 Server Started Successfully!");
                 console.log("========================================");

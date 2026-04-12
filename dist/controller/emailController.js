@@ -15,11 +15,15 @@ const toSlug = (value) => value
     .trim()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-const getFrontendBaseUrl = () => (process.env.FRONTEND_URL ||
+const firstUrlFromEnv = (value) => value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)[0] || value.trim();
+const getFrontendBaseUrl = () => firstUrlFromEnv(process.env.FRONTEND_URL ||
     process.env.NEXT_PUBLIC_APP_URL ||
     process.env.NEXT_PUBLIC_FRONTEND_URL ||
     "http://localhost:3000").replace(/\/+$/, "");
-const getApiBaseUrl = () => (process.env.API_BASE_URL ||
+const getApiBaseUrl = () => firstUrlFromEnv(process.env.API_BASE_URL ||
     process.env.BACKEND_URL ||
     process.env.NEXT_PUBLIC_API_URL ||
     "http://localhost:8000").replace(/\/+$/, "");
@@ -207,8 +211,8 @@ const getEmailCampaigns = async (req, res) => {
             return;
         }
         const { proposalId, page = "1", limit = "20" } = req.query;
-        const pageNum = Math.max(1, parseInt(page, 10));
-        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
         const skip = (pageNum - 1) * limitNum;
         const filter = { userId };
         if (proposalId && typeof proposalId === "string") {

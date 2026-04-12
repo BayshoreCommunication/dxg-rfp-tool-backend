@@ -1,8 +1,19 @@
 import jwt, { SignOptions } from "jsonwebtoken";
 
+const DEFAULT_JWT_SECRET = "your-secret-key-change-in-production";
+
 const JWT_SECRET =
-  process.env.JWT_SECRET || "your-secret-key-change-in-production";
-const JWT_EXPIRE = process.env.JWT_EXPIRE || "30d"; // 30 days
+  process.env.JWT_SECRET || process.env.SECRET_KEY || DEFAULT_JWT_SECRET;
+
+const JWT_EXPIRE =
+  process.env.JWT_EXPIRE ||
+  (process.env.ACCESS_TOKEN_EXPIRE_MINUTES
+    ? `${process.env.ACCESS_TOKEN_EXPIRE_MINUTES}m`
+    : "30d"); // 30 days
+
+if (process.env.NODE_ENV === "production" && JWT_SECRET === DEFAULT_JWT_SECRET) {
+  throw new Error("JWT_SECRET must be set in production");
+}
 
 // 30 days in milliseconds
 export const TOKEN_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;

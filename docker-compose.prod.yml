@@ -1,0 +1,32 @@
+services:
+  mongo:
+    image: mongo:6-jammy
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      # Optional: bind locally if needed for debugging, else comment out or remove
+      - "127.0.0.1:27018:27017"
+      
+  dxg-rfp-tool-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dxg-rfp-tool-backend:latest
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    env_file:
+      - ./.env
+    environment:
+      NODE_ENV: production
+      PORT: 8000
+    ports:
+      # Bind to localhost so only Nginx can reach it
+      - "127.0.0.1:8001:8000"
+    volumes:
+      # Persist uploads across container restarts (if you rely on local uploads)
+      - ./uploads:/app/uploads
+
+volumes:
+  mongo_data:

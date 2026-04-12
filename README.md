@@ -283,6 +283,7 @@ backend/
 - MongoDB connections are cached to reduce reconnection overhead
 - Local `/uploads` serving may be limited in serverless environments
 - For production file storage, prefer DigitalOcean Spaces or another external object store
+- For a DigitalOcean droplet deployment (including hosting as a second project behind Nginx), see [deploy/DIGITALOCEAN.md](deploy/DIGITALOCEAN.md).
 
 ## Notes
 
