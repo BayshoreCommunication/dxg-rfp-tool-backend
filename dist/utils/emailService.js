@@ -41,10 +41,18 @@ const initializeTransporter = async () => {
     const SMTP_PASSWORD = normalizeEnv(process.env.SMTP_PASSWORD);
     if (SMTP_HOST && SMTP_PORT && SMTP_MAIL && SMTP_PASSWORD) {
         console.log("Setting up real SMTP transporter using environment variables");
+        // DigitalOcean blocks port 465 (SMTP SSL) and may route through IPv6.
+        // Force IPv4 (family:4) and fall back to port 587 (STARTTLS) if 465 is set.
+        const requestedPort = parseInt(SMTP_PORT, 10);
+        const usePort = requestedPort === 465 ? 587 : requestedPort;
+        const useSecure = requestedPort === 465 ? false : requestedPort === 465;
         transporter = nodemailer_1.default.createTransport({
             host: SMTP_HOST,
-            port: parseInt(SMTP_PORT, 10),
-            secure: parseInt(SMTP_PORT, 10) === 465,
+            port: usePort,
+            secure: useSecure, // false = STARTTLS on 587; true = SSL on 465
+            family: 4, // Force IPv4 — prevents ENETUNREACH on DigitalOcean
+            socketTimeout: 30000,
+            connectionTimeout: 30000,
             auth: {
                 user: SMTP_MAIL,
                 pass: SMTP_PASSWORD,
