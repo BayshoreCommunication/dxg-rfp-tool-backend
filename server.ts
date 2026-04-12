@@ -54,6 +54,7 @@ app.use(async (_req: Request, _res: Response, next: NextFunction) => {
 });
 
 // Serve static files from uploads directory
+
 // Note: In serverless environments, static file serving may not work
 // Consider using cloud storage (S3, Cloudinary, etc.) for production
 try {
