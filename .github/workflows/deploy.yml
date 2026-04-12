@@ -37,7 +37,7 @@ jobs:
             npm install --omit=dev
 
             echo "♻️ Restarting PM2..."
-            pm2 restart dxg-rfp-tool --update-env
+            pm2 startOrRestart ecosystem.config.js --update-env
             pm2 save
 
             echo "✅ Deployment complete!"
