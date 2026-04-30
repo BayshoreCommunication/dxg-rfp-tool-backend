@@ -223,6 +223,14 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
       return;
     }
 
+    if (user.isBlocked) {
+      res.status(403).json({
+        success: false,
+        message: "Your account has been suspended. Please contact support.",
+      });
+      return;
+    }
+
     const tokenPayload: TokenPayload = {
       userId: user._id.toString(),
       email: user.email,
@@ -306,6 +314,14 @@ export const signInWithGoogle = async (req: Request, res: Response): Promise<voi
 
       if (shouldSave) {
         await user.save();
+      }
+
+      if (user.isBlocked) {
+        res.status(403).json({
+          success: false,
+          message: "Your account has been suspended. Please contact support.",
+        });
+        return;
       }
     }
 
@@ -432,6 +448,14 @@ export const signInAdmin = async (req: Request, res: Response): Promise<void> =>
       res.status(403).json({
         success: false,
         message: "Access denied. Admin account required.",
+      });
+      return;
+    }
+
+    if (user.isBlocked) {
+      res.status(403).json({
+        success: false,
+        message: "Your account has been suspended. Please contact support.",
       });
       return;
     }

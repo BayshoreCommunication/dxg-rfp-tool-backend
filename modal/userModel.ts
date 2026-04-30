@@ -9,6 +9,7 @@ export interface IUser extends Document {
   avatar?: string;
   googleId?: string;
   role?: "customer" | "admin" | "super_admin" | "superadmin";
+  isBlocked?: boolean;
   createdAt: Date;
   updatedAt: Date;
   comparePassword(candidatePassword: string): Promise<boolean>;
@@ -53,6 +54,10 @@ const userSchema = new Schema<IUser>(
       enum: ["customer", "admin", "super_admin", "superadmin"],
       default: "customer",
       trim: true,
+    },
+    isBlocked: {
+      type: Boolean,
+      default: false,
     },
   },
   {

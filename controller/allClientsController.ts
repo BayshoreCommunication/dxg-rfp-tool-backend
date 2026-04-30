@@ -109,6 +109,7 @@ export const getAdminClientsList = async (
                 name: 1,
                 email: 1,
                 joinDate: "$createdAt",
+                isBlocked: { $ifNull: ["$isBlocked", false] },
                 totalProposals: {
                   $ifNull: [{ $first: "$proposalStats.count" }, 0],
                 },
@@ -146,6 +147,65 @@ export const getAdminClientsList = async (
     res.status(500).json({
       success: false,
       message: "Error fetching clients list",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+export const blockClient = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    if (!req.user?.userId || !isAdminRole(req.user.role)) {
+      res.status(403).json({
+        success: false,
+        message: "Only admin can perform this action.",
+      });
+      return;
+    }
+
+    const { id } = req.params;
+    const { isBlocked } = req.body;
+
+    if (typeof isBlocked !== "boolean") {
+      res.status(400).json({
+        success: false,
+        message: "isBlocked must be a boolean.",
+      });
+      return;
+    }
+
+    const user = await User.findById(id);
+
+    if (!user) {
+      res.status(404).json({ success: false, message: "Client not found." });
+      return;
+    }
+
+    if (isAdminRole(user.role)) {
+      res.status(400).json({
+        success: false,
+        message: "Cannot block an admin account.",
+      });
+      return;
+    }
+
+    user.isBlocked = isBlocked;
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: isBlocked
+        ? "Client blocked successfully."
+        : "Client unblocked successfully.",
+      data: { id: user._id, isBlocked: user.isBlocked },
+    });
+  } catch (error) {
+    console.error("Block client error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating client status.",
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }
