@@ -23,17 +23,22 @@ const firstUrlFromEnv = (value: string): string =>
 
 const getFrontendBaseUrl = (): string =>
   firstUrlFromEnv(
-    process.env.FRONTEND_URL ||
+    process.env.PUBLIC_FRONTEND_URL ||
+      process.env.FRONTEND_URL ||
       process.env.NEXT_PUBLIC_APP_URL ||
       process.env.NEXT_PUBLIC_FRONTEND_URL ||
       "http://localhost:3000",
   ).replace(/\/+$/, "");
 
+// PUBLIC_API_URL must be the externally reachable backend URL (e.g. https://api.yourdomain.com).
+// BACKEND_URL is often the internal/localhost address used for server-to-server calls and
+// must NOT be used for links embedded in emails sent to end users.
 const getApiBaseUrl = (): string =>
   firstUrlFromEnv(
-    process.env.API_BASE_URL ||
-      process.env.BACKEND_URL ||
+    process.env.PUBLIC_API_URL ||
+      process.env.API_BASE_URL ||
       process.env.NEXT_PUBLIC_API_URL ||
+      process.env.BACKEND_URL ||
       "http://localhost:8000",
   ).replace(/\/+$/, "");
 
