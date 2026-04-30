@@ -30,7 +30,7 @@ const getFrontendBaseUrl = (): string =>
       "http://localhost:3000",
   ).replace(/\/+$/, "");
 
-// PUBLIC_API_URL must be the externally reachable backend URL (e.g. https://api.yourdomain.com).
+// PUBLIC_API_URL must be the externally reachable backend URL (e.g. https://dxg-rfp-tool-backend.vercel.app).
 // BACKEND_URL is often the internal/localhost address used for server-to-server calls and
 // must NOT be used for links embedded in emails sent to end users.
 const getApiBaseUrl = (): string =>
