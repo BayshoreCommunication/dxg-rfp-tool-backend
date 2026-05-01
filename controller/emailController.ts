@@ -21,22 +21,25 @@ const firstUrlFromEnv = (value: string): string =>
     .map((item) => item.trim())
     .filter(Boolean)[0] || value.trim();
 
+// These are the live production URLs. They are used as the final fallback so that
+// email links are never broken even when env vars are absent on the host (e.g. Vercel).
+const PRODUCTION_BACKEND_URL = "https://dxg-rfp-tool-backend.vercel.app";
+const PRODUCTION_FRONTEND_URL = "https://dxg-rfp-tool-dashboard.vercel.app";
+
+// PUBLIC_API_URL must be the externally reachable backend URL.
+// Never use BACKEND_URL or a localhost address in email links — they are unreachable by recipients.
+const getApiBaseUrl = (): string =>
+  firstUrlFromEnv(
+    process.env.PUBLIC_API_URL || PRODUCTION_BACKEND_URL,
+  ).replace(/\/+$/, "");
+
 const getFrontendBaseUrl = (): string =>
   firstUrlFromEnv(
     process.env.PUBLIC_FRONTEND_URL ||
       process.env.FRONTEND_URL ||
       process.env.NEXT_PUBLIC_APP_URL ||
       process.env.NEXT_PUBLIC_FRONTEND_URL ||
-      "http://localhost:3000",
-  ).replace(/\/+$/, "");
-
-// PUBLIC_API_URL must be the externally reachable backend URL (e.g. https://dxg-rfp-tool-backend.vercel.app).
-// Never use BACKEND_URL or PORT-based localhost addresses in email links — they are unreachable by recipients.
-const PRODUCTION_BACKEND_URL = "https://dxg-rfp-tool-backend.vercel.app";
-
-const getApiBaseUrl = (): string =>
-  firstUrlFromEnv(
-    process.env.PUBLIC_API_URL || PRODUCTION_BACKEND_URL,
+      PRODUCTION_FRONTEND_URL,
   ).replace(/\/+$/, "");
 
 const buildProposalPublicUrl = (proposalSlug: string): string =>
