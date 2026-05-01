@@ -187,7 +187,26 @@ const buildCountsAggregation = (
         },
         live: {
           $sum: {
-            $cond: [{ $eq: ["$status", "submitted"] }, 1, 0],
+            $cond: [
+              // A proposal is "live" only when it is submitted AND not manually
+              // deactivated AND has not yet expired by date.
+              expiredThreshold
+                ? {
+                    $and: [
+                      { $eq: ["$status", "submitted"] },
+                      { $ne: ["$isActive", false] },
+                      { $gt: ["$createdAt", expiredThreshold] },
+                    ],
+                  }
+                : {
+                    $and: [
+                      { $eq: ["$status", "submitted"] },
+                      { $ne: ["$isActive", false] },
+                    ],
+                  },
+              1,
+              0,
+            ],
           },
         },
         favorite: {
@@ -239,6 +258,16 @@ export const getAllProposals = async (
       sortOrder = "desc",
     } = req.query;
 
+    // Settings must be fetched first so we can derive the expiry threshold
+    // and build an accurate filter for the "Expired" tab.
+    const settings = await getSettingsByUserId(userId);
+    const expirySetting = settings?.proposals?.expiryDate;
+    const snapshot = buildProposalSettingSnapshot(settings);
+    const expiryDays = parseExpiryDays(expirySetting);
+    const expiredThreshold = expiryDays
+      ? new Date(Date.now() - expiryDays * 24 * 60 * 60 * 1000)
+      : null;
+
     const filter: Record<string, any> = {};
 
     if (userId) {
@@ -250,7 +279,21 @@ export const getAllProposals = async (
     }
 
     if (typeof isActive === "string") {
-      filter.isActive = isActive === "true";
+      if (isActive === "false") {
+        // Include proposals that are either manually deactivated OR expired
+        // by date, so that the Expired tab returns exactly what the badge
+        // count promises.
+        if (expiredThreshold) {
+          filter.$or = [
+            { isActive: false },
+            { isActive: { $ne: false }, createdAt: { $lte: expiredThreshold } },
+          ];
+        } else {
+          filter.isActive = false;
+        }
+      } else {
+        filter.isActive = isActive === "true";
+      }
     }
 
     if (typeof favorite === "string") {
@@ -262,13 +305,21 @@ export const getAllProposals = async (
       const trimmedSearch = search.trim();
       if (trimmedSearch) {
         const regex = new RegExp(escapeRegex(trimmedSearch), "i");
-        filter.$or = [
+        const searchConditions = [
           { "event.eventName": regex },
           { "contact.contactFirstName": regex },
           { "contact.contactLastName": regex },
           { "contact.contactEmail": regex },
           { "contact.contactOrganization": regex },
         ];
+        // When the expired filter already uses $or, combine with $and so both
+        // conditions are required.
+        if (filter.$or) {
+          filter.$and = [{ $or: filter.$or }, { $or: searchConditions }];
+          delete filter.$or;
+        } else {
+          filter.$or = searchConditions;
+        }
       }
     }
 
@@ -280,8 +331,7 @@ export const getAllProposals = async (
       typeof sortOrder === "string" ? sortOrder : undefined,
     );
 
-    const [settings, proposals, total] = await Promise.all([
-      getSettingsByUserId(userId),
+    const [proposals, total] = await Promise.all([
       Proposal.find(filter)
         .select(LIST_PROPOSAL_SELECT)
         .sort(sort)
@@ -291,8 +341,6 @@ export const getAllProposals = async (
       Proposal.countDocuments(filter),
     ]);
 
-    const expirySetting = settings?.proposals?.expiryDate;
-    const snapshot = buildProposalSettingSnapshot(settings);
     const shouldIncludeCounts = includeCounts === "true";
 
     let counts:
