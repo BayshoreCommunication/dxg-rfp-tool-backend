@@ -34,12 +34,7 @@ const getFrontendBaseUrl = (): string =>
 // BACKEND_URL is often the internal/localhost address used for server-to-server calls and
 // must NOT be used for links embedded in emails sent to end users.
 const getApiBaseUrl = (): string =>
-  firstUrlFromEnv(
-    process.env.PUBLIC_API_URL ||
-      process.env.API_BASE_URL ||
-      process.env.NEXT_PUBLIC_API_URL ||
-      process.env.BACKEND_URL ||
-      "https://dxg-rfp-tool-backend.vercel.app",
+  firstUrlFromEnv("https://dxg-rfp-tool-backend.vercel.app",
   ).replace(/\/+$/, "");
 
 const buildProposalPublicUrl = (proposalSlug: string): string =>
