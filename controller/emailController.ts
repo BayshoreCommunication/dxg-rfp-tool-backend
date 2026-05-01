@@ -39,7 +39,7 @@ const getApiBaseUrl = (): string =>
       process.env.API_BASE_URL ||
       process.env.NEXT_PUBLIC_API_URL ||
       process.env.BACKEND_URL ||
-      "http://localhost:8000",
+      "https://dxg-rfp-tool-backend.vercel.app",
   ).replace(/\/+$/, "");
 
 const buildProposalPublicUrl = (proposalSlug: string): string =>
