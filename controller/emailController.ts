@@ -31,10 +31,12 @@ const getFrontendBaseUrl = (): string =>
   ).replace(/\/+$/, "");
 
 // PUBLIC_API_URL must be the externally reachable backend URL (e.g. https://dxg-rfp-tool-backend.vercel.app).
-// BACKEND_URL is often the internal/localhost address used for server-to-server calls and
-// must NOT be used for links embedded in emails sent to end users.
+// Never use BACKEND_URL or PORT-based localhost addresses in email links — they are unreachable by recipients.
+const PRODUCTION_BACKEND_URL = "https://dxg-rfp-tool-backend.vercel.app";
+
 const getApiBaseUrl = (): string =>
-  firstUrlFromEnv("https://dxg-rfp-tool-backend.vercel.app",
+  firstUrlFromEnv(
+    process.env.PUBLIC_API_URL || PRODUCTION_BACKEND_URL,
   ).replace(/\/+$/, "");
 
 const buildProposalPublicUrl = (proposalSlug: string): string =>
