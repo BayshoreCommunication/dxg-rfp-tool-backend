@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getAdminClientsList = void 0;
+exports.blockClient = exports.getAdminClientsList = void 0;
 const userModel_1 = __importDefault(require("../modal/userModel"));
 const PER_PAGE = 10;
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -86,6 +86,7 @@ const getAdminClientsList = async (req, res) => {
                                 name: 1,
                                 email: 1,
                                 joinDate: "$createdAt",
+                                isBlocked: { $ifNull: ["$isBlocked", false] },
                                 totalProposals: {
                                     $ifNull: [{ $first: "$proposalStats.count" }, 0],
                                 },
@@ -127,4 +128,54 @@ const getAdminClientsList = async (req, res) => {
     }
 };
 exports.getAdminClientsList = getAdminClientsList;
+const blockClient = async (req, res) => {
+    try {
+        if (!req.user?.userId || !isAdminRole(req.user.role)) {
+            res.status(403).json({
+                success: false,
+                message: "Only admin can perform this action.",
+            });
+            return;
+        }
+        const { id } = req.params;
+        const { isBlocked } = req.body;
+        if (typeof isBlocked !== "boolean") {
+            res.status(400).json({
+                success: false,
+                message: "isBlocked must be a boolean.",
+            });
+            return;
+        }
+        const user = await userModel_1.default.findById(id);
+        if (!user) {
+            res.status(404).json({ success: false, message: "Client not found." });
+            return;
+        }
+        if (isAdminRole(user.role)) {
+            res.status(400).json({
+                success: false,
+                message: "Cannot block an admin account.",
+            });
+            return;
+        }
+        user.isBlocked = isBlocked;
+        await user.save();
+        res.status(200).json({
+            success: true,
+            message: isBlocked
+                ? "Client blocked successfully."
+                : "Client unblocked successfully.",
+            data: { id: user._id, isBlocked: user.isBlocked },
+        });
+    }
+    catch (error) {
+        console.error("Block client error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error updating client status.",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.blockClient = blockClient;
 //# sourceMappingURL=allClientsController.js.map

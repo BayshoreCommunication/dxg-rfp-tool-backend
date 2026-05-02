@@ -198,6 +198,13 @@ const signInWithCredentials = async (req, res) => {
             res.status(401).json({ success: false, message: "Invalid email or password" });
             return;
         }
+        if (user.isBlocked) {
+            res.status(403).json({
+                success: false,
+                message: "Your account has been suspended. Please contact support.",
+            });
+            return;
+        }
         const tokenPayload = {
             userId: user._id.toString(),
             email: user.email,
@@ -268,6 +275,13 @@ const signInWithGoogle = async (req, res) => {
             }
             if (shouldSave) {
                 await user.save();
+            }
+            if (user.isBlocked) {
+                res.status(403).json({
+                    success: false,
+                    message: "Your account has been suspended. Please contact support.",
+                });
+                return;
             }
         }
         const tokenPayload = {
@@ -382,6 +396,13 @@ const signInAdmin = async (req, res) => {
             res.status(403).json({
                 success: false,
                 message: "Access denied. Admin account required.",
+            });
+            return;
+        }
+        if (user.isBlocked) {
+            res.status(403).json({
+                success: false,
+                message: "Your account has been suspended. Please contact support.",
             });
             return;
         }

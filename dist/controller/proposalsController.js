@@ -164,7 +164,26 @@ const buildCountsAggregation = (baseFilter, expirySetting) => {
                 },
                 live: {
                     $sum: {
-                        $cond: [{ $eq: ["$status", "submitted"] }, 1, 0],
+                        $cond: [
+                            // A proposal is "live" only when it is submitted AND not manually
+                            // deactivated AND has not yet expired by date.
+                            expiredThreshold
+                                ? {
+                                    $and: [
+                                        { $eq: ["$status", "submitted"] },
+                                        { $ne: ["$isActive", false] },
+                                        { $gt: ["$createdAt", expiredThreshold] },
+                                    ],
+                                }
+                                : {
+                                    $and: [
+                                        { $eq: ["$status", "submitted"] },
+                                        { $ne: ["$isActive", false] },
+                                    ],
+                                },
+                            1,
+                            0,
+                        ],
                     },
                 },
                 favorite: {
@@ -181,7 +200,7 @@ const buildCountsAggregation = (baseFilter, expirySetting) => {
                                         { $eq: ["$isActive", false] },
                                         {
                                             $and: [
-                                                { $eq: ["$isActive", true] },
+                                                { $ne: ["$isActive", false] },
                                                 { $lte: ["$createdAt", expiredThreshold] },
                                             ],
                                         },
@@ -201,6 +220,15 @@ const getAllProposals = async (req, res) => {
     try {
         const userId = req.user?.userId;
         const { status, favorite, isActive, includeCounts, search, page = "1", limit = "20", sortBy = "createdAt", sortOrder = "desc", } = req.query;
+        // Settings must be fetched first so we can derive the expiry threshold
+        // and build an accurate filter for the "Expired" tab.
+        const settings = await getSettingsByUserId(userId);
+        const expirySetting = settings?.proposals?.expiryDate;
+        const snapshot = buildProposalSettingSnapshot(settings);
+        const expiryDays = parseExpiryDays(expirySetting);
+        const expiredThreshold = expiryDays
+            ? new Date(Date.now() - expiryDays * 24 * 60 * 60 * 1000)
+            : null;
         const filter = {};
         if (userId) {
             filter.userId = userId;
@@ -209,7 +237,23 @@ const getAllProposals = async (req, res) => {
             filter.status = status;
         }
         if (typeof isActive === "string") {
-            filter.isActive = isActive === "true";
+            if (isActive === "false") {
+                // Include proposals that are either manually deactivated OR expired
+                // by date, so that the Expired tab returns exactly what the badge
+                // count promises.
+                if (expiredThreshold) {
+                    filter.$or = [
+                        { isActive: false },
+                        { isActive: { $ne: false }, createdAt: { $lte: expiredThreshold } },
+                    ];
+                }
+                else {
+                    filter.isActive = false;
+                }
+            }
+            else {
+                filter.isActive = isActive === "true";
+            }
         }
         if (typeof favorite === "string") {
             if (favorite === "true")
@@ -221,21 +265,29 @@ const getAllProposals = async (req, res) => {
             const trimmedSearch = search.trim();
             if (trimmedSearch) {
                 const regex = new RegExp(escapeRegex(trimmedSearch), "i");
-                filter.$or = [
+                const searchConditions = [
                     { "event.eventName": regex },
                     { "contact.contactFirstName": regex },
                     { "contact.contactLastName": regex },
                     { "contact.contactEmail": regex },
                     { "contact.contactOrganization": regex },
                 ];
+                // When the expired filter already uses $or, combine with $and so both
+                // conditions are required.
+                if (filter.$or) {
+                    filter.$and = [{ $or: filter.$or }, { $or: searchConditions }];
+                    delete filter.$or;
+                }
+                else {
+                    filter.$or = searchConditions;
+                }
             }
         }
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
         const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
         const skip = (pageNum - 1) * limitNum;
         const sort = normalizeSort(typeof sortBy === "string" ? sortBy : undefined, typeof sortOrder === "string" ? sortOrder : undefined);
-        const [settings, proposals, total] = await Promise.all([
-            getSettingsByUserId(userId),
+        const [proposals, total] = await Promise.all([
             proposalsModel_1.default.find(filter)
                 .select(LIST_PROPOSAL_SELECT)
                 .sort(sort)
@@ -244,14 +296,16 @@ const getAllProposals = async (req, res) => {
                 .lean(),
             proposalsModel_1.default.countDocuments(filter),
         ]);
-        const expirySetting = settings?.proposals?.expiryDate;
-        const snapshot = buildProposalSettingSnapshot(settings);
         const shouldIncludeCounts = includeCounts === "true";
         let counts;
         if (shouldIncludeCounts) {
-            const baseFilter = {
-                ...(userId ? { userId } : {}),
-            };
+            // Aggregation pipelines do NOT apply Mongoose schema casting, so we must
+            // explicitly convert userId from string → ObjectId, otherwise $match finds
+            // nothing and every count returns 0 even when proposals exist.
+            const baseFilter = {};
+            if (userId && mongoose_1.default.isValidObjectId(userId)) {
+                baseFilter.userId = new mongoose_1.default.Types.ObjectId(userId);
+            }
             if (search && typeof search === "string") {
                 const trimmedSearch = search.trim();
                 if (trimmedSearch) {

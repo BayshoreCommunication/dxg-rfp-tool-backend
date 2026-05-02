@@ -77,6 +77,10 @@ const userSchema = new mongoose_1.Schema({
         default: "customer",
         trim: true,
     },
+    isBlocked: {
+        type: Boolean,
+        default: false,
+    },
 }, {
     timestamps: true,
 });
