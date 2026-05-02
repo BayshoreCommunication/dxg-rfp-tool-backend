@@ -223,7 +223,7 @@ const buildCountsAggregation = (
                       { $eq: ["$isActive", false] },
                       {
                         $and: [
-                          { $eq: ["$isActive", true] },
+                          { $ne: ["$isActive", false] },
                           { $lte: ["$createdAt", expiredThreshold] },
                         ],
                       },
@@ -354,9 +354,13 @@ export const getAllProposals = async (
       | undefined;
 
     if (shouldIncludeCounts) {
-      const baseFilter: Record<string, any> = {
-        ...(userId ? { userId } : {}),
-      };
+      // Aggregation pipelines do NOT apply Mongoose schema casting, so we must
+      // explicitly convert userId from string → ObjectId, otherwise $match finds
+      // nothing and every count returns 0 even when proposals exist.
+      const baseFilter: Record<string, any> = {};
+      if (userId && mongoose.isValidObjectId(userId)) {
+        baseFilter.userId = new mongoose.Types.ObjectId(userId);
+      }
       if (search && typeof search === "string") {
         const trimmedSearch = search.trim();
         if (trimmedSearch) {
