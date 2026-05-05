@@ -8,6 +8,7 @@ export interface IUser extends Document {
   password?: string;
   avatar?: string;
   googleId?: string;
+  company?: string;
   role?: "customer" | "admin" | "super_admin" | "superadmin";
   isBlocked?: boolean;
   createdAt: Date;
@@ -48,6 +49,10 @@ const userSchema = new Schema<IUser>(
       trim: true,
       unique: true,
       sparse: true,
+    },
+    company: {
+      type: String,
+      trim: true,
     },
     role: {
       type: String,

@@ -47,6 +47,7 @@ export const getAdminOverview = async (
           id: string;
           name: string;
           email: string;
+          company?: string;
           joinDate: Date;
           totalProposals: number;
           totalEmailSent: number;
@@ -95,6 +96,7 @@ export const getAdminOverview = async (
               id: "$_id",
               name: 1,
               email: 1,
+              company: { $ifNull: ["$company", null] },
               joinDate: "$createdAt",
               totalProposals: {
                 $ifNull: [{ $first: "$proposalStats.count" }, 0],

@@ -16,6 +16,11 @@ const isAdminRole = (role?: string): boolean => {
   );
 };
 
+const isSuperAdminRole = (role?: string): boolean => {
+  const normalized = String(role || "").toLowerCase().trim();
+  return normalized === "super_admin" || normalized === "superadmin";
+};
+
 export const getAdminClientsList = async (
   req: AuthRequest,
   res: Response,
@@ -54,6 +59,7 @@ export const getAdminClientsList = async (
         _id: string;
         name: string;
         email: string;
+        company?: string;
         joinDate: Date;
         totalProposals: number;
         totalEmailSent: number;
@@ -108,6 +114,7 @@ export const getAdminClientsList = async (
                 id: "$_id",
                 name: 1,
                 email: 1,
+                company: { $ifNull: ["$company", null] },
                 joinDate: "$createdAt",
                 isBlocked: { $ifNull: ["$isBlocked", false] },
                 totalProposals: {
@@ -157,10 +164,10 @@ export const blockClient = async (
   res: Response,
 ): Promise<void> => {
   try {
-    if (!req.user?.userId || !isAdminRole(req.user.role)) {
+    if (!req.user?.userId || !isSuperAdminRole(req.user.role)) {
       res.status(403).json({
         success: false,
-        message: "Only admin can perform this action.",
+        message: "Only super admin can perform this action.",
       });
       return;
     }
@@ -206,6 +213,53 @@ export const blockClient = async (
     res.status(500).json({
       success: false,
       message: "Error updating client status.",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+export const deleteClient = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    if (!req.user?.userId || !isSuperAdminRole(req.user.role)) {
+      res.status(403).json({
+        success: false,
+        message: "Only super admin can perform this action.",
+      });
+      return;
+    }
+
+    const { id } = req.params;
+
+    const user = await User.findById(id);
+
+    if (!user) {
+      res.status(404).json({ success: false, message: "Client not found." });
+      return;
+    }
+
+    if (isAdminRole(user.role)) {
+      res.status(400).json({
+        success: false,
+        message: "Cannot delete an admin account.",
+      });
+      return;
+    }
+
+    await user.deleteOne();
+
+    res.status(200).json({
+      success: true,
+      message: "Client deleted successfully.",
+      data: { id },
+    });
+  } catch (error) {
+    console.error("Delete client error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error deleting client.",
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }

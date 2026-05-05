@@ -19,6 +19,7 @@ const userResponse = (user: any) => ({
   email: user.email,
   role: user.role,
   phone: user.phone,
+  company: user.company,
   avatar: user.avatar,
   createdAt: user.createdAt,
 });
@@ -144,7 +145,7 @@ export const verifySignupOtp = async (req: Request, res: Response): Promise<void
 ───────────────────────────────────────── */
 export const signUp = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, email, phone, password } = req.body;
+    const { name, email, phone, company, password } = req.body;
 
     if (!name || !email || !password) {
       res.status(400).json({ success: false, message: "Name, email, and password are required" });
@@ -173,7 +174,7 @@ export const signUp = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const user = await User.create({ name, email, phone, password });
+    const user = await User.create({ name, email, phone, company, password, role: "customer" });
 
     // Clean up OTP record
     await otpRecord.deleteOne();
@@ -218,15 +219,30 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
 
     const user = await User.findOne({ email: email.toLowerCase().trim() }).select("+password");
 
-    if (!user || !(await user.comparePassword(password))) {
-      res.status(401).json({ success: false, message: "Invalid email or password" });
+    if (!user) {
+      res.status(404).json({
+        success: false,
+        message: "No account found with this email. Please create an account first.",
+        errorCode: "USER_NOT_FOUND",
+      });
+      return;
+    }
+
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      res.status(401).json({
+        success: false,
+        message: "Incorrect password. Please try again.",
+        errorCode: "WRONG_PASSWORD",
+      });
       return;
     }
 
     if (user.isBlocked) {
       res.status(403).json({
         success: false,
-        message: "Your account has been suspended. Please contact support.",
+        message: "Your account has been blocked. Please contact support.",
+        errorCode: "USER_BLOCKED",
       });
       return;
     }
@@ -438,8 +454,22 @@ export const signInAdmin = async (req: Request, res: Response): Promise<void> =>
 
     const user = await User.findOne({ email: email.toLowerCase().trim() }).select("+password");
 
-    if (!user || !(await user.comparePassword(password))) {
-      res.status(401).json({ success: false, message: "Invalid email or password" });
+    if (!user) {
+      res.status(404).json({
+        success: false,
+        message: "No account found with this email.",
+        errorCode: "USER_NOT_FOUND",
+      });
+      return;
+    }
+
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      res.status(401).json({
+        success: false,
+        message: "Incorrect password. Please try again.",
+        errorCode: "WRONG_PASSWORD",
+      });
       return;
     }
 
@@ -447,7 +477,8 @@ export const signInAdmin = async (req: Request, res: Response): Promise<void> =>
     if (!isAdminRole(role)) {
       res.status(403).json({
         success: false,
-        message: "Access denied. Admin account required.",
+        message: "This account does not have admin access.",
+        errorCode: "NOT_ADMIN",
       });
       return;
     }
@@ -455,7 +486,8 @@ export const signInAdmin = async (req: Request, res: Response): Promise<void> =>
     if (user.isBlocked) {
       res.status(403).json({
         success: false,
-        message: "Your account has been suspended. Please contact support.",
+        message: "Your account has been blocked. Please contact support.",
+        errorCode: "USER_BLOCKED",
       });
       return;
     }
