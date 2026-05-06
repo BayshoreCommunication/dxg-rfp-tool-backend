@@ -21,7 +21,7 @@ export interface IProposal extends Document {
       eventTypeOther?: string;
     };
   };
-  roomByRoom?: Record<string, unknown>;
+  roomByRoom?: Record<string, unknown>[];
   production?: Record<string, unknown>;
   venue?: Record<string, unknown>;
   uploads?: Record<string, unknown>;
@@ -79,7 +79,7 @@ const proposalSchema = new Schema<IProposal>(
       },
     },
 
-    roomByRoom: { type: Schema.Types.Mixed, default: {} },
+    roomByRoom: { type: [Schema.Types.Mixed], default: [] },
     production: { type: Schema.Types.Mixed, default: {} },
     venue: { type: Schema.Types.Mixed, default: {} },
     uploads: { type: Schema.Types.Mixed, default: {} },
