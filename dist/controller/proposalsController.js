@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.uploadProposalFiles = exports.deleteProposal = exports.incrementProposalViews = exports.updateProposalMeta = exports.updateProposalStatus = exports.updateProposal = exports.createProposal = exports.getProposalById = exports.getAllProposals = void 0;
+exports.uploadProposalFiles = exports.deleteProposal = exports.incrementProposalViews = exports.incrementProposalViewsPublic = exports.updateProposalMeta = exports.updateProposalStatus = exports.updateProposal = exports.createProposal = exports.getProposalByIdPublic = exports.getProposalById = exports.getAllProposals = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
 const notificationService_1 = require("../utils/notificationService");
 const proposalsModel_1 = __importDefault(require("../modal/proposalsModel"));
@@ -696,6 +696,85 @@ const uploadProposalFiles = async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Error uploading files",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.getProposalByIdPublic = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidProposalId(id)) {
+            res.status(400).json({ success: false, message: "Invalid proposal id" });
+            return;
+        }
+        const proposal = await proposalsModel_1.default.findById(id)
+            .select(DETAIL_PROPOSAL_SELECT)
+            .lean();
+        if (!proposal) {
+            res.status(404).json({ success: false, message: "Proposal not found" });
+            return;
+        }
+        const ownerId = String(proposal.userId || "");
+        const settings = await getSettingsByUserId(ownerId);
+        res.status(200).json({
+            success: true,
+            data: withLiveSettings(
+                applyDerivedExpiryState(proposal, settings?.proposals?.expiryDate),
+                settings,
+            ),
+        });
+    }
+    catch (error) {
+        console.error("Get proposal public error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error fetching proposal",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.incrementProposalViewsPublic = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidProposalId(id)) {
+            res.status(400).json({ success: false, message: "Invalid proposal id" });
+            return;
+        }
+        const proposal = await proposalsModel_1.default.findByIdAndUpdate(
+            id,
+            { $inc: { viewsCount: 1 } },
+            { new: true },
+        )
+            .select(DETAIL_PROPOSAL_SELECT)
+            .lean();
+        if (!proposal) {
+            res.status(404).json({ success: false, message: "Proposal not found" });
+            return;
+        }
+        const ownerId = String(proposal.userId || "");
+        const settings = await getSettingsByUserId(ownerId);
+        if (ownerId) {
+            const proposalTitle = proposal.event?.eventName?.trim() || "Untitled Proposal";
+            await (0, notificationService_1.createNotification)({
+                userId: ownerId,
+                proposalId: String(proposal._id),
+                type: "proposal_view",
+                title: "Proposal viewed",
+                message: `"${proposalTitle}" received a new view. Total views: ${proposal.viewsCount}.`,
+                metadata: { viewsCount: proposal.viewsCount },
+            });
+        }
+        res.status(200).json({
+            success: true,
+            message: "Proposal views incremented",
+            data: withLiveSettings(proposal, settings),
+        });
+    }
+    catch (error) {
+        console.error("Increment proposal views public error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error incrementing proposal views",
             error: error instanceof Error ? error.message : "Unknown error",
         });
     }
