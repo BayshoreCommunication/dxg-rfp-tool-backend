@@ -23,7 +23,7 @@ const firstUrlFromEnv = (value: string): string =>
 
 // These are the live production URLs. They are used as the final fallback so that
 // email links are never broken even when env vars are absent on the host (e.g. Vercel).
-const PRODUCTION_BACKEND_URL = "https://dxg-rfp-tool-backend.vercel.app";
+const PRODUCTION_BACKEND_URL = "https://api.dxg-agency.com";
 const PRODUCTION_FRONTEND_URL = "https://dxg-rfp-tool-dashboard.vercel.app";
 
 // PUBLIC_API_URL must be the externally reachable backend URL.
