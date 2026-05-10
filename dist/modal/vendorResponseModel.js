@@ -42,8 +42,11 @@ const vendorResponseSchema = new mongoose_2.Schema({
     message: { type: String, trim: true, default: "" },
     documents: { type: [vendorDocumentSchema], default: [] },
     isRead: { type: Boolean, default: false },
+    emailTrackingId: { type: String, default: null, index: true, sparse: true },
 }, { timestamps: true });
 vendorResponseSchema.index({ proposalOwnerId: 1, createdAt: -1 });
 vendorResponseSchema.index({ proposalOwnerId: 1, isRead: 1 });
+vendorResponseSchema.index({ proposalId: 1, email: 1 }, { unique: true });
+vendorResponseSchema.index({ emailTrackingId: 1 }, { unique: true, sparse: true });
 const VendorResponse = mongoose_1.default.model("VendorResponse", vendorResponseSchema);
 exports.default = VendorResponse;

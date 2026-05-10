@@ -529,9 +529,13 @@ const markVendorResponseClicked = async (req, res) => {
                 await campaign.save();
             }
             const base = buildVendorResponseUrl(campaign.proposalSlug);
-            redirectUrl = recipient?.email
-                ? `${base}${base.includes("?") ? "&" : "?"}email=${encodeURIComponent(recipient.email)}`
-                : base;
+            if (recipient?.email) {
+                const sep = base.includes("?") ? "&" : "?";
+                redirectUrl = `${base}${sep}email=${encodeURIComponent(recipient.email)}&tid=${encodeURIComponent(trackingId)}`;
+            }
+            else {
+                redirectUrl = base;
+            }
         }
         if (!campaign && /^https?:\/\//i.test(redirectParam)) {
             redirectUrl = redirectParam;

@@ -13,15 +13,26 @@ const notificationService_1 = require("../utils/notificationService");
 const VENDOR_RESPONSE_SELECT = "_id proposalId proposalOwnerId proposalTitle vendorName submittedBy email message documents isRead createdAt updatedAt";
 const checkVendorResponseExists = async (req, res) => {
     try {
-        const { proposalId, email } = req.query;
-        if (!proposalId || !mongoose_1.default.isValidObjectId(proposalId) || !email?.trim()) {
+        const { proposalId, email, tid } = req.query;
+        if (!proposalId || !mongoose_1.default.isValidObjectId(proposalId)) {
             res.status(200).json({ alreadySubmitted: false });
             return;
         }
-        const existing = await vendorResponseModel_1.default.findOne({
-            proposalId: new mongoose_1.default.Types.ObjectId(proposalId),
-            email: email.trim().toLowerCase(),
-        })
+        const orConditions = [];
+        if (email?.trim()) {
+            orConditions.push({
+                proposalId: new mongoose_1.default.Types.ObjectId(proposalId),
+                email: email.trim().toLowerCase(),
+            });
+        }
+        if (tid?.trim()) {
+            orConditions.push({ emailTrackingId: tid.trim() });
+        }
+        if (orConditions.length === 0) {
+            res.status(200).json({ alreadySubmitted: false });
+            return;
+        }
+        const existing = await vendorResponseModel_1.default.findOne({ $or: orConditions })
             .select("_id")
             .lean();
         res.status(200).json({ alreadySubmitted: !!existing });
@@ -33,7 +44,7 @@ const checkVendorResponseExists = async (req, res) => {
 exports.checkVendorResponseExists = checkVendorResponseExists;
 const submitVendorResponse = async (req, res) => {
     try {
-        const { proposalId, vendorName, submittedBy, email, message } = req.body;
+        const { proposalId, vendorName, submittedBy, email, message, emailTrackingId } = req.body;
         if (!proposalId || !mongoose_1.default.isValidObjectId(proposalId)) {
             res.status(400).json({ success: false, message: "Valid proposal id is required." });
             return;
@@ -51,10 +62,14 @@ const submitVendorResponse = async (req, res) => {
             return;
         }
         const normalizedEmail = email.trim().toLowerCase();
-        const existing = await vendorResponseModel_1.default.findOne({
-            proposalId: new mongoose_1.default.Types.ObjectId(proposalId),
-            email: normalizedEmail,
-        }).lean();
+        const normalizedTid = emailTrackingId?.trim() || null;
+        const orConditions = [
+            { proposalId: new mongoose_1.default.Types.ObjectId(proposalId), email: normalizedEmail },
+        ];
+        if (normalizedTid) {
+            orConditions.push({ emailTrackingId: normalizedTid });
+        }
+        const existing = await vendorResponseModel_1.default.findOne({ $or: orConditions }).lean();
         if (existing) {
             res.status(409).json({
                 success: false,
@@ -95,6 +110,7 @@ const submitVendorResponse = async (req, res) => {
             email: email.trim().toLowerCase(),
             message: message?.trim() || "",
             documents: uploadedDocs,
+            ...(normalizedTid ? { emailTrackingId: normalizedTid } : {}),
         });
         await (0, notificationService_1.createNotification)({
             userId: String(proposalOwnerId),

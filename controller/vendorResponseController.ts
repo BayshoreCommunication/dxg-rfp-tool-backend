@@ -20,15 +20,30 @@ export const checkVendorResponseExists = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const { proposalId, email } = req.query as { proposalId?: string; email?: string };
-    if (!proposalId || !mongoose.isValidObjectId(proposalId) || !email?.trim()) {
+    const { proposalId, email, tid } = req.query as {
+      proposalId?: string;
+      email?: string;
+      tid?: string;
+    };
+    if (!proposalId || !mongoose.isValidObjectId(proposalId)) {
       res.status(200).json({ alreadySubmitted: false });
       return;
     }
-    const existing = await VendorResponse.findOne({
-      proposalId: new mongoose.Types.ObjectId(proposalId),
-      email: email.trim().toLowerCase(),
-    })
+    const orConditions: Record<string, unknown>[] = [];
+    if (email?.trim()) {
+      orConditions.push({
+        proposalId: new mongoose.Types.ObjectId(proposalId),
+        email: email.trim().toLowerCase(),
+      });
+    }
+    if (tid?.trim()) {
+      orConditions.push({ emailTrackingId: tid.trim() });
+    }
+    if (orConditions.length === 0) {
+      res.status(200).json({ alreadySubmitted: false });
+      return;
+    }
+    const existing = await VendorResponse.findOne({ $or: orConditions })
       .select("_id")
       .lean();
     res.status(200).json({ alreadySubmitted: !!existing });
@@ -42,12 +57,13 @@ export const submitVendorResponse = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const { proposalId, vendorName, submittedBy, email, message } = req.body as {
+    const { proposalId, vendorName, submittedBy, email, message, emailTrackingId } = req.body as {
       proposalId?: string;
       vendorName?: string;
       submittedBy?: string;
       email?: string;
       message?: string;
+      emailTrackingId?: string;
     };
 
     if (!proposalId || !mongoose.isValidObjectId(proposalId)) {
@@ -68,11 +84,16 @@ export const submitVendorResponse = async (
     }
 
     const normalizedEmail = email.trim().toLowerCase();
+    const normalizedTid = emailTrackingId?.trim() || null;
 
-    const existing = await VendorResponse.findOne({
-      proposalId: new mongoose.Types.ObjectId(proposalId),
-      email: normalizedEmail,
-    }).lean();
+    const orConditions: Record<string, unknown>[] = [
+      { proposalId: new mongoose.Types.ObjectId(proposalId), email: normalizedEmail },
+    ];
+    if (normalizedTid) {
+      orConditions.push({ emailTrackingId: normalizedTid });
+    }
+
+    const existing = await VendorResponse.findOne({ $or: orConditions }).lean();
 
     if (existing) {
       res.status(409).json({
@@ -119,6 +140,7 @@ export const submitVendorResponse = async (
       email: email.trim().toLowerCase(),
       message: message?.trim() || "",
       documents: uploadedDocs,
+      ...(normalizedTid ? { emailTrackingId: normalizedTid } : {}),
     });
 
     await createNotification({
