@@ -16,6 +16,7 @@ import notificationRoutes from "./routes/notificationRoute";
 import proposalRoutes from "./routes/proposalsRoute";
 import settingsRoutes from "./routes/settingsRoute";
 import userRoutes from "./routes/usersRoute";
+import vendorResponseRoutes from "./routes/vendorResponseRoute";
 import { startCronJobs } from "./utils/cronJobs";
 import { initializeNotificationWebSocketServer } from "./utils/notificationService";
 import { getUploadsDir } from "./utils/paths";
@@ -130,6 +131,9 @@ app.use("/api/settings", settingsRoutes);
 
 // Dashboard routes
 app.use("/api/dashboard", dashboardRoutes);
+
+// Vendor response routes
+app.use("/api/vendor-responses", vendorResponseRoutes);
 
 // 404 Handler
 app.use((_req: Request, res: Response) => {

@@ -74,12 +74,33 @@ export const runExpirationCheck = async () => {
   }
 };
 
+export const purgeArchivedProposals = async () => {
+  try {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const result = await Proposal.deleteMany({
+      isArchived: true,
+      archivedAt: { $lte: thirtyDaysAgo },
+    });
+    if (result.deletedCount > 0) {
+      console.log(`[Cron] Purged ${result.deletedCount} archived proposal(s) older than 30 days`);
+    }
+  } catch (error) {
+    console.error("[Cron] Archive purge error:", error);
+  }
+};
+
 export const startCronJobs = () => {
   // Run once immediately on startup
   runExpirationCheck();
+  purgeArchivedProposals();
 
-  // Run every 12 hours (12 * 60 * 60 * 1000 ms)
+  // Run every 12 hours
   setInterval(() => {
     runExpirationCheck();
   }, 12 * 60 * 60 * 1000);
+
+  // Run archive purge once per day (24 hours)
+  setInterval(() => {
+    purgeArchivedProposals();
+  }, 24 * 60 * 60 * 1000);
 };

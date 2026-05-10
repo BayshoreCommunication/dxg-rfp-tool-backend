@@ -110,4 +110,8 @@ exports.uploadProposalDocs = exports.uploadDocument.fields([
     { name: "supportDocuments", maxCount: 20 },
     { name: "avQuoteFiles", maxCount: 10 },
 ]);
+// Middleware for vendor response document uploads
+exports.uploadVendorDocs = exports.uploadDocument.fields([
+    { name: "documents", maxCount: 10 },
+]);
 //# sourceMappingURL=upload.js.map

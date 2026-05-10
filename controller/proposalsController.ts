@@ -13,6 +13,8 @@ const LIST_PROPOSAL_SELECT = [
   "isFavorite",
   "isAccepted",
   "isOpen",
+  "isArchived",
+  "archivedAt",
   "viewsCount",
   "createdAt",
   "updatedAt",
@@ -174,25 +176,34 @@ const buildCountsAggregation = (
       ? new Date(Date.now() - expiryDays * 24 * 60 * 60 * 1000)
       : null;
 
+  const notArchived = { $ne: ["$isArchived", true] };
+
   return [
     { $match: baseFilter },
     {
       $group: {
         _id: null,
-        all: { $sum: 1 },
+        all: {
+          $sum: { $cond: [notArchived, 1, 0] },
+        },
         draft: {
           $sum: {
-            $cond: [{ $eq: ["$status", "draft"] }, 1, 0],
+            $cond: [
+              { $and: [notArchived, { $eq: ["$status", "draft"] }] },
+              1,
+              0,
+            ],
           },
         },
         live: {
           $sum: {
             $cond: [
               // A proposal is "live" only when it is submitted AND not manually
-              // deactivated AND has not yet expired by date.
+              // deactivated AND has not yet expired by date AND not archived.
               expiredThreshold
                 ? {
                     $and: [
+                      notArchived,
                       { $eq: ["$status", "submitted"] },
                       { $ne: ["$isActive", false] },
                       { $gt: ["$createdAt", expiredThreshold] },
@@ -200,6 +211,7 @@ const buildCountsAggregation = (
                   }
                 : {
                     $and: [
+                      notArchived,
                       { $eq: ["$status", "submitted"] },
                       { $ne: ["$isActive", false] },
                     ],
@@ -211,7 +223,11 @@ const buildCountsAggregation = (
         },
         favorite: {
           $sum: {
-            $cond: [{ $eq: ["$isFavorite", true] }, 1, 0],
+            $cond: [
+              { $and: [notArchived, { $eq: ["$isFavorite", true] }] },
+              1,
+              0,
+            ],
           },
         },
         expired: {
@@ -219,21 +235,29 @@ const buildCountsAggregation = (
             $cond: [
               expiredThreshold
                 ? {
-                    $or: [
-                      { $eq: ["$isActive", false] },
+                    $and: [
+                      notArchived,
                       {
-                        $and: [
-                          { $ne: ["$isActive", false] },
-                          { $lte: ["$createdAt", expiredThreshold] },
+                        $or: [
+                          { $eq: ["$isActive", false] },
+                          {
+                            $and: [
+                              { $ne: ["$isActive", false] },
+                              { $lte: ["$createdAt", expiredThreshold] },
+                            ],
+                          },
                         ],
                       },
                     ],
                   }
-                : { $eq: ["$isActive", false] },
+                : { $and: [notArchived, { $eq: ["$isActive", false] }] },
               1,
               0,
             ],
           },
+        },
+        archive: {
+          $sum: { $cond: [{ $eq: ["$isArchived", true] }, 1, 0] },
         },
       },
     },
@@ -250,6 +274,7 @@ export const getAllProposals = async (
       status,
       favorite,
       isActive,
+      archived,
       includeCounts,
       search,
       page = "1",
@@ -272,6 +297,13 @@ export const getAllProposals = async (
 
     if (userId) {
       filter.userId = userId;
+    }
+
+    // Archive tab shows only archived; all other tabs exclude archived proposals.
+    if (archived === "true") {
+      filter.isArchived = true;
+    } else {
+      filter.isArchived = { $ne: true };
     }
 
     if (status && typeof status === "string") {
@@ -350,6 +382,7 @@ export const getAllProposals = async (
           live: number;
           favorite: number;
           expired: number;
+          archive: number;
         }
       | undefined;
 
@@ -381,6 +414,7 @@ export const getAllProposals = async (
         live?: number;
         favorite?: number;
         expired?: number;
+        archive?: number;
       }>(buildCountsAggregation(baseFilter, expirySetting));
 
       counts = {
@@ -389,6 +423,7 @@ export const getAllProposals = async (
         live: countsResult?.live ?? 0,
         favorite: countsResult?.favorite ?? 0,
         expired: countsResult?.expired ?? 0,
+        archive: countsResult?.archive ?? 0,
       };
     }
 
@@ -865,35 +900,106 @@ export const deleteProposal = async (
     const { id } = req.params;
 
     if (!isValidProposalId(id)) {
-      res.status(400).json({
-        success: false,
-        message: "Invalid proposal id",
-      });
+      res.status(400).json({ success: false, message: "Invalid proposal id" });
+      return;
+    }
+
+    const proposal = await Proposal.findOneAndUpdate(
+      { _id: id, userId: req.user?.userId, isArchived: { $ne: true } },
+      { $set: { isArchived: true, archivedAt: new Date() } },
+      { new: true },
+    ).lean();
+
+    if (!proposal) {
+      res.status(404).json({ success: false, message: "Proposal not found" });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Proposal archived. It will be permanently deleted after 30 days.",
+    });
+  } catch (error) {
+    console.error("Archive proposal error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error archiving proposal",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+export const restoreProposal = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    if (!isValidProposalId(id)) {
+      res.status(400).json({ success: false, message: "Invalid proposal id" });
+      return;
+    }
+
+    const proposal = await Proposal.findOneAndUpdate(
+      { _id: id, userId: req.user?.userId, isArchived: true },
+      { $set: { isArchived: false }, $unset: { archivedAt: "" } },
+      { new: true },
+    )
+      .select(DETAIL_PROPOSAL_SELECT)
+      .lean();
+
+    if (!proposal) {
+      res.status(404).json({ success: false, message: "Archived proposal not found" });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Proposal restored successfully.",
+    });
+  } catch (error) {
+    console.error("Restore proposal error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error restoring proposal",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+export const permanentlyDeleteProposal = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    if (!isValidProposalId(id)) {
+      res.status(400).json({ success: false, message: "Invalid proposal id" });
       return;
     }
 
     const proposal = await Proposal.findOneAndDelete({
       _id: id,
       userId: req.user?.userId,
+      isArchived: true,
     }).lean();
 
     if (!proposal) {
-      res.status(404).json({
-        success: false,
-        message: "Proposal not found",
-      });
+      res.status(404).json({ success: false, message: "Archived proposal not found" });
       return;
     }
 
     res.status(200).json({
       success: true,
-      message: "Proposal deleted successfully",
+      message: "Proposal permanently deleted.",
     });
   } catch (error) {
-    console.error("Delete proposal error:", error);
+    console.error("Permanent delete proposal error:", error);
     res.status(500).json({
       success: false,
-      message: "Error deleting proposal",
+      message: "Error permanently deleting proposal",
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }

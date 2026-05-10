@@ -8,6 +8,8 @@ import {
   getProposalByIdPublic,
   incrementProposalViews,
   incrementProposalViewsPublic,
+  permanentlyDeleteProposal,
+  restoreProposal,
   updateProposal,
   updateProposalMeta,
   updateProposalStatus,
@@ -68,6 +70,8 @@ router.get("/", authenticate, getAllProposals);
 router.put("/:id", authenticate, validateProposalId, updateProposal);
 router.patch("/:id/status", authenticate, validateProposalId, updateProposalStatus);
 router.patch("/:id/meta", authenticate, validateProposalId, updateProposalMeta);
+router.patch("/:id/restore", authenticate, validateProposalId, restoreProposal);
+router.delete("/:id/permanent", authenticate, validateProposalId, permanentlyDeleteProposal);
 router.delete("/:id", authenticate, validateProposalId, deleteProposal);
 
 export default router;

@@ -121,3 +121,8 @@ export const uploadProposalDocs = uploadDocument.fields([
   { name: "supportDocuments", maxCount: 20 },
   { name: "avQuoteFiles", maxCount: 10 },
 ]);
+
+// Middleware for vendor response document uploads
+export const uploadVendorDocs = uploadDocument.fields([
+  { name: "documents", maxCount: 10 },
+]);

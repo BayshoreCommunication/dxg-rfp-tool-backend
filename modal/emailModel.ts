@@ -6,6 +6,7 @@ export interface IEmailRecipient {
   sentAt?: Date;
   openedAt?: Date;
   clickedAt?: Date;
+  vendorResponseClickedAt?: Date;
   status: "sent" | "failed";
   errorMessage?: string;
 }
@@ -22,6 +23,7 @@ export interface IEmailCampaign extends Document {
   sentCount: number;
   openedCount: number;
   clickedCount: number;
+  vendorResponseClickCount: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -44,6 +46,7 @@ const emailRecipientSchema = new Schema<IEmailRecipient>(
     sentAt: { type: Date },
     openedAt: { type: Date },
     clickedAt: { type: Date },
+    vendorResponseClickedAt: { type: Date },
     status: {
       type: String,
       enum: ["sent", "failed"],
@@ -96,6 +99,7 @@ const emailCampaignSchema = new Schema<IEmailCampaign>(
     sentCount: { type: Number, default: 0, min: 0 },
     openedCount: { type: Number, default: 0, min: 0 },
     clickedCount: { type: Number, default: 0, min: 0 },
+    vendorResponseClickCount: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
 );

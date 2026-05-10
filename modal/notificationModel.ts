@@ -3,7 +3,8 @@ import mongoose, { Document, Schema } from "mongoose";
 export type NotificationType =
   | "proposal_view"
   | "proposal_expiring_soon"
-  | "proposal_expired";
+  | "proposal_expired"
+  | "vendor_response";
 
 export interface INotification extends Document {
   userId: mongoose.Types.ObjectId;
@@ -34,7 +35,7 @@ const notificationSchema = new Schema<INotification>(
     },
     type: {
       type: String,
-      enum: ["proposal_view", "proposal_expiring_soon", "proposal_expired"],
+      enum: ["proposal_view", "proposal_expiring_soon", "proposal_expired", "vendor_response"],
       required: true,
     },
     title: {

@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth";
 import EmailCampaign from "../modal/emailModel";
 import Proposal from "../modal/proposalsModel";
+import VendorResponse from "../modal/vendorResponseModel";
 import { sendCustomEmail } from "../utils/emailService";
 
 const EMAIL_REGEX = /^\S+@\S+\.\S+$/;
@@ -45,6 +46,15 @@ const getFrontendBaseUrl = (): string =>
 const buildProposalPublicUrl = (proposalSlug: string): string =>
   `${getFrontendBaseUrl()}/proposal-view/${proposalSlug}?source=email`;
 
+const buildVendorResponseUrl = (proposalSlug: string): string =>
+  `${getFrontendBaseUrl()}/vendor-response/${proposalSlug}?source=email`;
+
+const buildVendorResponseTrackingClickUrl = (
+  trackingId: string,
+  redirectUrl: string,
+): string =>
+  `${getApiBaseUrl()}/api/emails/vendor-click/${trackingId}?redirect=${encodeURIComponent(redirectUrl)}`;
+
 const buildTrackingOpenUrl = (trackingId: string): string =>
   `${getApiBaseUrl()}/api/emails/open/${trackingId}`;
 
@@ -78,6 +88,7 @@ const buildProposalEmailHtml = (params: {
   trackingOpenUrl: string;
   trackingClickUrl: string;
   proposalReference: string;
+  vendorResponseTrackingClickUrl: string;
 }): string => `
   <div style="font-family:Inter,Arial,sans-serif;max-width:620px;margin:0 auto;padding:24px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
     <p style="margin:0 0 8px;color:#0f172a;font-size:14px;">You have received a proposal from DXG.</p>
@@ -95,6 +106,12 @@ const buildProposalEmailHtml = (params: {
       If the button does not work, copy this link:
       <a href="${params.proposalUrl}" style="color:#0284c7;text-decoration:underline;">${params.proposalUrl}</a>
     </p>
+    <div style="margin:24px 0 0;padding-top:20px;border-top:1px solid #e2e8f0;">
+      <p style="margin:0 0 10px;color:#334155;font-size:13px;font-weight:600;">Ready to respond to this proposal?</p>
+      <a href="${params.vendorResponseTrackingClickUrl}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700;">
+        Submit Your Proposal
+      </a>
+    </div>
     <img src="${params.trackingOpenUrl}" alt="" width="1" height="1" style="display:block;opacity:0;" />
   </div>
 `;
@@ -161,6 +178,7 @@ export const sendProposalEmailCampaign = async (
       proposal.event?.eventName?.trim() || "Untitled Proposal";
     const proposalSlug = `${toSlug(proposalTitle) || "proposal"}-${proposal._id}`;
     const proposalUrl = buildProposalPublicUrl(proposalSlug);
+    const vendorResponseUrl = buildVendorResponseUrl(proposalSlug);
     const finalSubject =
       subject?.trim() || `Proposal for ${proposalTitle} - DXG RFP Tool`;
     const defaultMessage = `Hi,
@@ -201,6 +219,10 @@ DXG Team`;
           recipient.trackingId,
           proposalUrl,
         );
+        const vendorRespClickUrl = buildVendorResponseTrackingClickUrl(
+          recipient.trackingId,
+          vendorResponseUrl,
+        );
         const html = buildProposalEmailHtml({
           title: proposalTitle,
           message: finalMessage,
@@ -208,6 +230,7 @@ DXG Team`;
           trackingOpenUrl: openUrl,
           trackingClickUrl: clickUrl,
           proposalReference,
+          vendorResponseTrackingClickUrl: vendorRespClickUrl,
         });
 
         await sendCustomEmail({
@@ -298,14 +321,32 @@ export const getEmailCampaigns = async (
       EmailCampaign.find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(limitNum),
+        .limit(limitNum)
+        .lean(),
       EmailCampaign.countDocuments(filter),
     ]);
+
+    // Attach vendorResponseCount per proposalId
+    const responseCounts = await VendorResponse.aggregate<{
+      _id: string;
+      count: number;
+    }>([
+      { $match: { proposalId: { $in: campaigns.map((c) => c.proposalId) } } },
+      { $group: { _id: { $toString: "$proposalId" }, count: { $sum: 1 } } },
+    ]);
+    const responseCountMap = Object.fromEntries(
+      responseCounts.map((r) => [r._id, r.count]),
+    );
+
+    const data = campaigns.map((c) => ({
+      ...c,
+      vendorResponseCount: responseCountMap[String(c.proposalId)] ?? 0,
+    }));
 
     res.status(200).json({
       success: true,
       message: "Email campaigns fetched successfully",
-      data: campaigns,
+      data,
       pagination: {
         total,
         page: pageNum,
@@ -620,6 +661,47 @@ export const markEmailClicked = async (
     res.redirect(302, redirectUrl);
   } catch (error) {
     console.error("Mark email clicked error:", error);
+    res.redirect(302, getFrontendBaseUrl());
+  }
+};
+
+export const markVendorResponseClicked = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    const { trackingId } = req.params;
+    const redirectParam =
+      typeof req.query.redirect === "string" ? req.query.redirect : "";
+
+    const campaign = await EmailCampaign.findOne({
+      "recipients.trackingId": trackingId,
+    });
+
+    let redirectUrl = getFrontendBaseUrl();
+
+    if (campaign) {
+      const recipient = campaign.recipients.find(
+        (entry) => entry.trackingId === trackingId,
+      );
+
+      if (recipient && !recipient.vendorResponseClickedAt) {
+        recipient.vendorResponseClickedAt = new Date();
+        campaign.vendorResponseClickCount =
+          (campaign.vendorResponseClickCount ?? 0) + 1;
+        await campaign.save();
+      }
+
+      redirectUrl = buildVendorResponseUrl(campaign.proposalSlug);
+    }
+
+    if (!campaign && /^https?:\/\//i.test(redirectParam)) {
+      redirectUrl = redirectParam;
+    }
+
+    res.redirect(302, redirectUrl);
+  } catch (error) {
+    console.error("Mark vendor response clicked error:", error);
     res.redirect(302, getFrontendBaseUrl());
   }
 };

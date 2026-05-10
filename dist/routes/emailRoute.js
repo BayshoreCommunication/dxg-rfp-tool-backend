@@ -7,6 +7,7 @@ const router = (0, express_1.Router)();
 // Public tracking endpoints
 router.get("/open/:trackingId", emailController_1.markEmailOpened);
 router.get("/click/:trackingId", emailController_1.markEmailClicked);
+router.get("/vendor-click/:trackingId", emailController_1.markVendorResponseClicked);
 // Protected endpoints
 router.post("/send", auth_1.authenticate, emailController_1.sendProposalEmailCampaign);
 router.get("/", auth_1.authenticate, emailController_1.getEmailCampaigns);

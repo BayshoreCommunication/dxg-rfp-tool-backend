@@ -51,6 +51,7 @@ const emailRecipientSchema = new mongoose_1.Schema({
     sentAt: { type: Date },
     openedAt: { type: Date },
     clickedAt: { type: Date },
+    vendorResponseClickedAt: { type: Date },
     status: {
         type: String,
         enum: ["sent", "failed"],
@@ -99,6 +100,7 @@ const emailCampaignSchema = new mongoose_1.Schema({
     sentCount: { type: Number, default: 0, min: 0 },
     openedCount: { type: Number, default: 0, min: 0 },
     clickedCount: { type: Number, default: 0, min: 0 },
+    vendorResponseClickCount: { type: Number, default: 0, min: 0 },
 }, { timestamps: true });
 emailCampaignSchema.index({ userId: 1, createdAt: -1 });
 emailCampaignSchema.index({ userId: 1, proposalId: 1, createdAt: -1 });

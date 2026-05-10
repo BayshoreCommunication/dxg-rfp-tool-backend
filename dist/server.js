@@ -21,6 +21,7 @@ const notificationRoute_1 = __importDefault(require("./routes/notificationRoute"
 const proposalsRoute_1 = __importDefault(require("./routes/proposalsRoute"));
 const settingsRoute_1 = __importDefault(require("./routes/settingsRoute"));
 const usersRoute_1 = __importDefault(require("./routes/usersRoute"));
+const vendorResponseRoute_1 = __importDefault(require("./routes/vendorResponseRoute"));
 const cronJobs_1 = require("./utils/cronJobs");
 const notificationService_1 = require("./utils/notificationService");
 const paths_1 = require("./utils/paths");
@@ -109,6 +110,8 @@ app.use("/api/extract-proposal", extractRoute_1.default);
 app.use("/api/settings", settingsRoute_1.default);
 // Dashboard routes
 app.use("/api/dashboard", dashboardRoute_1.default);
+// Vendor response routes
+app.use("/api/vendor-responses", vendorResponseRoute_1.default);
 // 404 Handler
 app.use((_req, res) => {
     res.status(404).json({

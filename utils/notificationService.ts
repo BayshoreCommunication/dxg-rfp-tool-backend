@@ -32,7 +32,7 @@ type ConnectedClient = {
 type CreateNotificationInput = {
   userId: string;
   proposalId?: string | null;
-  type: "proposal_view" | "proposal_expiring_soon" | "proposal_expired";
+  type: "proposal_view" | "proposal_expiring_soon" | "proposal_expired" | "vendor_response";
   title: string;
   message: string;
   metadata?: Record<string, unknown>;

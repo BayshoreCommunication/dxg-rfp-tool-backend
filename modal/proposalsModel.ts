@@ -7,6 +7,8 @@ export interface IProposal extends Document {
   isFavorite: boolean;
   isAccepted: boolean;
   isOpen: boolean;
+  isArchived: boolean;
+  archivedAt?: Date | null;
   viewsCount: number;
   templateId: "template-one" | "template-two";
   event: {
@@ -55,6 +57,8 @@ const proposalSchema = new Schema<IProposal>(
     isFavorite: { type: Boolean, default: false },
     isAccepted: { type: Boolean, default: false },
     isOpen: { type: Boolean, default: true },
+    isArchived: { type: Boolean, default: false, index: true },
+    archivedAt: { type: Date, default: null },
     viewsCount: { type: Number, default: 0, min: 0 },
     templateId: {
       type: String,

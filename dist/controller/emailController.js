@@ -3,11 +3,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.markEmailClicked = exports.markEmailOpened = exports.getEmailStats = exports.deleteEmailCampaignById = exports.deleteEmailCampaignsByProposal = exports.getEmailCampaigns = exports.sendProposalEmailCampaign = void 0;
+exports.markVendorResponseClicked = exports.markEmailClicked = exports.markEmailOpened = exports.getEmailStats = exports.deleteEmailCampaignById = exports.deleteEmailCampaignsByProposal = exports.getEmailCampaigns = exports.sendProposalEmailCampaign = void 0;
 const crypto_1 = __importDefault(require("crypto"));
 const mongoose_1 = __importDefault(require("mongoose"));
 const emailModel_1 = __importDefault(require("../modal/emailModel"));
 const proposalsModel_1 = __importDefault(require("../modal/proposalsModel"));
+const vendorResponseModel_1 = __importDefault(require("../modal/vendorResponseModel"));
 const emailService_1 = require("../utils/emailService");
 const EMAIL_REGEX = /^\S+@\S+\.\S+$/;
 const toSlug = (value) => value
@@ -32,6 +33,8 @@ const getFrontendBaseUrl = () => firstUrlFromEnv(process.env.PUBLIC_FRONTEND_URL
     process.env.NEXT_PUBLIC_FRONTEND_URL ||
     PRODUCTION_FRONTEND_URL).replace(/\/+$/, "");
 const buildProposalPublicUrl = (proposalSlug) => `${getFrontendBaseUrl()}/proposal-view/${proposalSlug}?source=email`;
+const buildVendorResponseUrl = (proposalSlug) => `${getFrontendBaseUrl()}/vendor-response/${proposalSlug}?source=email`;
+const buildVendorResponseTrackingClickUrl = (trackingId, redirectUrl) => `${getApiBaseUrl()}/api/emails/vendor-click/${trackingId}?redirect=${encodeURIComponent(redirectUrl)}`;
 const buildTrackingOpenUrl = (trackingId) => `${getApiBaseUrl()}/api/emails/open/${trackingId}`;
 const buildTrackingClickUrl = (trackingId, redirectUrl) => `${getApiBaseUrl()}/api/emails/click/${trackingId}?redirect=${encodeURIComponent(redirectUrl)}`;
 const escapeHtml = (value) => value
@@ -62,6 +65,12 @@ const buildProposalEmailHtml = (params) => `
       If the button does not work, copy this link:
       <a href="${params.proposalUrl}" style="color:#0284c7;text-decoration:underline;">${params.proposalUrl}</a>
     </p>
+    <div style="margin:24px 0 0;padding-top:20px;border-top:1px solid #e2e8f0;">
+      <p style="margin:0 0 10px;color:#334155;font-size:13px;font-weight:600;">Ready to respond to this proposal?</p>
+      <a href="${params.vendorResponseTrackingClickUrl}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700;">
+        Submit Your Proposal
+      </a>
+    </div>
     <img src="${params.trackingOpenUrl}" alt="" width="1" height="1" style="display:block;opacity:0;" />
   </div>
 `;
@@ -110,6 +119,7 @@ const sendProposalEmailCampaign = async (req, res) => {
         const proposalTitle = proposal.event?.eventName?.trim() || "Untitled Proposal";
         const proposalSlug = `${toSlug(proposalTitle) || "proposal"}-${proposal._id}`;
         const proposalUrl = buildProposalPublicUrl(proposalSlug);
+        const vendorResponseUrl = buildVendorResponseUrl(proposalSlug);
         const finalSubject = subject?.trim() || `Proposal for ${proposalTitle} - DXG RFP Tool`;
         const defaultMessage = `Hi,
 
@@ -142,6 +152,7 @@ DXG Team`;
             try {
                 const openUrl = buildTrackingOpenUrl(recipient.trackingId);
                 const clickUrl = buildTrackingClickUrl(recipient.trackingId, proposalUrl);
+                const vendorRespClickUrl = buildVendorResponseTrackingClickUrl(recipient.trackingId, vendorResponseUrl);
                 const html = buildProposalEmailHtml({
                     title: proposalTitle,
                     message: finalMessage,
@@ -149,6 +160,7 @@ DXG Team`;
                     trackingOpenUrl: openUrl,
                     trackingClickUrl: clickUrl,
                     proposalReference,
+                    vendorResponseTrackingClickUrl: vendorRespClickUrl,
                 });
                 await (0, emailService_1.sendCustomEmail)({
                     to: recipient.email,
@@ -226,13 +238,23 @@ const getEmailCampaigns = async (req, res) => {
             emailModel_1.default.find(filter)
                 .sort({ createdAt: -1 })
                 .skip(skip)
-                .limit(limitNum),
+                .limit(limitNum)
+                .lean(),
             emailModel_1.default.countDocuments(filter),
         ]);
+        const responseCounts = await vendorResponseModel_1.default.aggregate([
+            { $match: { proposalId: { $in: campaigns.map((c) => c.proposalId) } } },
+            { $group: { _id: { $toString: "$proposalId" }, count: { $sum: 1 } } },
+        ]);
+        const responseCountMap = Object.fromEntries(responseCounts.map((r) => [r._id, r.count]));
+        const data = campaigns.map((c) => ({
+            ...c,
+            vendorResponseCount: responseCountMap[String(c.proposalId)] ?? 0,
+        }));
         res.status(200).json({
             success: true,
             message: "Email campaigns fetched successfully",
-            data: campaigns,
+            data,
             pagination: {
                 total,
                 page: pageNum,
@@ -491,4 +513,32 @@ const markEmailClicked = async (req, res) => {
     }
 };
 exports.markEmailClicked = markEmailClicked;
+const markVendorResponseClicked = async (req, res) => {
+    try {
+        const { trackingId } = req.params;
+        const redirectParam = typeof req.query.redirect === "string" ? req.query.redirect : "";
+        const campaign = await emailModel_1.default.findOne({
+            "recipients.trackingId": trackingId,
+        });
+        let redirectUrl = getFrontendBaseUrl();
+        if (campaign) {
+            const recipient = campaign.recipients.find((entry) => entry.trackingId === trackingId);
+            if (recipient && !recipient.vendorResponseClickedAt) {
+                recipient.vendorResponseClickedAt = new Date();
+                campaign.vendorResponseClickCount = (campaign.vendorResponseClickCount ?? 0) + 1;
+                await campaign.save();
+            }
+            redirectUrl = buildVendorResponseUrl(campaign.proposalSlug);
+        }
+        if (!campaign && /^https?:\/\//i.test(redirectParam)) {
+            redirectUrl = redirectParam;
+        }
+        res.redirect(302, redirectUrl);
+    }
+    catch (error) {
+        console.error("Mark vendor response clicked error:", error);
+        res.redirect(302, getFrontendBaseUrl());
+    }
+};
+exports.markVendorResponseClicked = markVendorResponseClicked;
 //# sourceMappingURL=emailController.js.map
