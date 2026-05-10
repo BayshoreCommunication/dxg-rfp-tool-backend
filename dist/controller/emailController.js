@@ -232,6 +232,7 @@ const getEmailCampaigns = async (req, res) => {
                 .lean(),
             emailModel_1.default.countDocuments(filter),
         ]);
+        // Attach vendorResponseCount per proposalId
         const responseCounts = await vendorResponseModel_1.default.aggregate([
             { $match: { proposalId: { $in: campaigns.map((c) => c.proposalId) } } },
             { $group: { _id: { $toString: "$proposalId" }, count: { $sum: 1 } } },
@@ -515,7 +516,8 @@ const markVendorResponseClicked = async (req, res) => {
             const recipient = campaign.recipients.find((entry) => entry.trackingId === trackingId);
             if (recipient && !recipient.vendorResponseClickedAt) {
                 recipient.vendorResponseClickedAt = new Date();
-                campaign.vendorResponseClickCount = (campaign.vendorResponseClickCount ?? 0) + 1;
+                campaign.vendorResponseClickCount =
+                    (campaign.vendorResponseClickCount ?? 0) + 1;
                 await campaign.save();
             }
             const base = buildVendorResponseUrl(campaign.proposalSlug);

@@ -24,3 +24,4 @@ router.get("/", auth_1.authenticate, vendorResponseController_1.getVendorRespons
 router.get("/:id", auth_1.authenticate, validateResponseId, vendorResponseController_1.getVendorResponseById);
 router.patch("/:id/read", auth_1.authenticate, validateResponseId, vendorResponseController_1.markVendorResponseRead);
 exports.default = router;
+//# sourceMappingURL=vendorResponseRoute.js.map

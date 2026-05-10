@@ -18,6 +18,7 @@ const userResponse = (user) => ({
     email: user.email,
     role: user.role,
     phone: user.phone,
+    company: user.company,
     avatar: user.avatar,
     createdAt: user.createdAt,
 });
@@ -130,7 +131,7 @@ exports.verifySignupOtp = verifySignupOtp;
 ───────────────────────────────────────── */
 const signUp = async (req, res) => {
     try {
-        const { name, email, phone, password } = req.body;
+        const { name, email, phone, company, password } = req.body;
         if (!name || !email || !password) {
             res.status(400).json({ success: false, message: "Name, email, and password are required" });
             return;
@@ -154,7 +155,7 @@ const signUp = async (req, res) => {
             res.status(409).json({ success: false, message: "User with this email already exists" });
             return;
         }
-        const user = await userModel_1.default.create({ name, email, phone, password });
+        const user = await userModel_1.default.create({ name, email, phone, company, password, role: "customer" });
         // Clean up OTP record
         await otpRecord.deleteOne();
         const tokenPayload = {
@@ -194,14 +195,28 @@ const signInWithCredentials = async (req, res) => {
             return;
         }
         const user = await userModel_1.default.findOne({ email: email.toLowerCase().trim() }).select("+password");
-        if (!user || !(await user.comparePassword(password))) {
-            res.status(401).json({ success: false, message: "Invalid email or password" });
+        if (!user) {
+            res.status(404).json({
+                success: false,
+                message: "No account found with this email. Please create an account first.",
+                errorCode: "USER_NOT_FOUND",
+            });
+            return;
+        }
+        const isPasswordValid = await user.comparePassword(password);
+        if (!isPasswordValid) {
+            res.status(401).json({
+                success: false,
+                message: "Incorrect password. Please try again.",
+                errorCode: "WRONG_PASSWORD",
+            });
             return;
         }
         if (user.isBlocked) {
             res.status(403).json({
                 success: false,
-                message: "Your account has been suspended. Please contact support.",
+                message: "Your account has been blocked. Please contact support.",
+                errorCode: "USER_BLOCKED",
             });
             return;
         }
@@ -387,22 +402,37 @@ const signInAdmin = async (req, res) => {
             return;
         }
         const user = await userModel_1.default.findOne({ email: email.toLowerCase().trim() }).select("+password");
-        if (!user || !(await user.comparePassword(password))) {
-            res.status(401).json({ success: false, message: "Invalid email or password" });
+        if (!user) {
+            res.status(404).json({
+                success: false,
+                message: "No account found with this email.",
+                errorCode: "USER_NOT_FOUND",
+            });
+            return;
+        }
+        const isPasswordValid = await user.comparePassword(password);
+        if (!isPasswordValid) {
+            res.status(401).json({
+                success: false,
+                message: "Incorrect password. Please try again.",
+                errorCode: "WRONG_PASSWORD",
+            });
             return;
         }
         const role = String(user.role || "");
         if (!isAdminRole(role)) {
             res.status(403).json({
                 success: false,
-                message: "Access denied. Admin account required.",
+                message: "This account does not have admin access.",
+                errorCode: "NOT_ADMIN",
             });
             return;
         }
         if (user.isBlocked) {
             res.status(403).json({
                 success: false,
-                message: "Your account has been suspended. Please contact support.",
+                message: "Your account has been blocked. Please contact support.",
+                errorCode: "USER_BLOCKED",
             });
             return;
         }

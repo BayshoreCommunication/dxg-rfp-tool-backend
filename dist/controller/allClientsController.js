@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.blockClient = exports.getAdminClientsList = void 0;
+exports.deleteClient = exports.blockClient = exports.getAdminClientsList = void 0;
 const userModel_1 = __importDefault(require("../modal/userModel"));
 const PER_PAGE = 10;
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -12,6 +12,10 @@ const isAdminRole = (role) => {
     return (normalized === "admin" ||
         normalized === "super_admin" ||
         normalized === "superadmin");
+};
+const isSuperAdminRole = (role) => {
+    const normalized = String(role || "").toLowerCase().trim();
+    return normalized === "super_admin" || normalized === "superadmin";
 };
 const getAdminClientsList = async (req, res) => {
     try {
@@ -85,6 +89,7 @@ const getAdminClientsList = async (req, res) => {
                                 id: "$_id",
                                 name: 1,
                                 email: 1,
+                                company: { $ifNull: ["$company", null] },
                                 joinDate: "$createdAt",
                                 isBlocked: { $ifNull: ["$isBlocked", false] },
                                 totalProposals: {
@@ -130,10 +135,10 @@ const getAdminClientsList = async (req, res) => {
 exports.getAdminClientsList = getAdminClientsList;
 const blockClient = async (req, res) => {
     try {
-        if (!req.user?.userId || !isAdminRole(req.user.role)) {
+        if (!req.user?.userId || !isSuperAdminRole(req.user.role)) {
             res.status(403).json({
                 success: false,
-                message: "Only admin can perform this action.",
+                message: "Only super admin can perform this action.",
             });
             return;
         }
@@ -178,4 +183,43 @@ const blockClient = async (req, res) => {
     }
 };
 exports.blockClient = blockClient;
+const deleteClient = async (req, res) => {
+    try {
+        if (!req.user?.userId || !isSuperAdminRole(req.user.role)) {
+            res.status(403).json({
+                success: false,
+                message: "Only super admin can perform this action.",
+            });
+            return;
+        }
+        const { id } = req.params;
+        const user = await userModel_1.default.findById(id);
+        if (!user) {
+            res.status(404).json({ success: false, message: "Client not found." });
+            return;
+        }
+        if (isAdminRole(user.role)) {
+            res.status(400).json({
+                success: false,
+                message: "Cannot delete an admin account.",
+            });
+            return;
+        }
+        await user.deleteOne();
+        res.status(200).json({
+            success: true,
+            message: "Client deleted successfully.",
+            data: { id },
+        });
+    }
+    catch (error) {
+        console.error("Delete client error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error deleting client.",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.deleteClient = deleteClient;
 //# sourceMappingURL=allClientsController.js.map

@@ -36,7 +36,9 @@ const authenticate = (req, res, next) => {
 };
 exports.authenticate = authenticate;
 // Optional: Role-based authorization middleware
+const normalizeRole = (role) => String(role || "").toLowerCase().trim().replace(/[\s-]/g, "_");
 const authorize = (...roles) => {
+    const normalized = roles.map(normalizeRole);
     return (req, res, next) => {
         if (!req.user) {
             res.status(401).json({
@@ -45,7 +47,7 @@ const authorize = (...roles) => {
             });
             return;
         }
-        if (!roles.includes(req.user.role)) {
+        if (!normalized.includes(normalizeRole(req.user.role))) {
             res.status(403).json({
                 success: false,
                 message: "You don't have permission to access this resource",

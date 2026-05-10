@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.startCronJobs = exports.runExpirationCheck = void 0;
+exports.startCronJobs = exports.purgeArchivedProposals = exports.runExpirationCheck = void 0;
 const notificationService_1 = require("./notificationService");
 const proposalsModel_1 = __importDefault(require("../modal/proposalsModel"));
 const settingsModel_1 = __importDefault(require("../modal/settingsModel"));
@@ -78,13 +78,34 @@ const runExpirationCheck = async () => {
     }
 };
 exports.runExpirationCheck = runExpirationCheck;
+const purgeArchivedProposals = async () => {
+    try {
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const result = await proposalsModel_1.default.deleteMany({
+            isArchived: true,
+            archivedAt: { $lte: thirtyDaysAgo },
+        });
+        if (result.deletedCount > 0) {
+            console.log(`[Cron] Purged ${result.deletedCount} archived proposal(s) older than 30 days`);
+        }
+    }
+    catch (error) {
+        console.error("[Cron] Archive purge error:", error);
+    }
+};
+exports.purgeArchivedProposals = purgeArchivedProposals;
 const startCronJobs = () => {
     // Run once immediately on startup
     (0, exports.runExpirationCheck)();
-    // Run every 12 hours (12 * 60 * 60 * 1000 ms)
+    (0, exports.purgeArchivedProposals)();
+    // Run every 12 hours
     setInterval(() => {
         (0, exports.runExpirationCheck)();
     }, 12 * 60 * 60 * 1000);
+    // Run archive purge once per day (24 hours)
+    setInterval(() => {
+        (0, exports.purgeArchivedProposals)();
+    }, 24 * 60 * 60 * 1000);
 };
 exports.startCronJobs = startCronJobs;
 //# sourceMappingURL=cronJobs.js.map

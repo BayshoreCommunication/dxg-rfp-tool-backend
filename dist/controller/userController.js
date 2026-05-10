@@ -150,7 +150,7 @@ const updatePrimaryAdminProfile = async (req, res) => {
             });
             return;
         }
-        const { name, email, phone, password, avatar } = req.body;
+        const { name, email, phone, company, password, avatar } = req.body;
         if (email && email !== adminUser.email) {
             const existingUser = await userModel_1.default.findOne({ email });
             if (existingUser && existingUser._id.toString() !== adminUser._id.toString()) {
@@ -166,6 +166,8 @@ const updatePrimaryAdminProfile = async (req, res) => {
             adminUser.name = name;
         if (phone !== undefined)
             adminUser.phone = phone;
+        if (company !== undefined)
+            adminUser.company = company;
         if (avatar !== undefined)
             adminUser.avatar = avatar;
         if (password)
@@ -242,7 +244,7 @@ const updateCurrentUser = async (req, res) => {
             });
             return;
         }
-        const { name, email, phone, password, avatar } = req.body;
+        const { name, email, phone, company, password, avatar } = req.body;
         const user = await userModel_1.default.findById(userId);
         if (!user) {
             res.status(404).json({
@@ -268,6 +270,8 @@ const updateCurrentUser = async (req, res) => {
             updateData.email = email;
         if (phone !== undefined)
             updateData.phone = phone;
+        if (company !== undefined)
+            updateData.company = company;
         if (password)
             updateData.password = password;
         if (avatar !== undefined)
@@ -312,7 +316,7 @@ const updateUser = async (req, res) => {
             });
             return;
         }
-        const { name, email, phone, password, avatar } = req.body;
+        const { name, email, phone, company, password, avatar } = req.body;
         // Find user
         const user = await userModel_1.default.findById(id);
         if (!user) {
@@ -341,6 +345,8 @@ const updateUser = async (req, res) => {
             updateData.email = email;
         if (phone !== undefined)
             updateData.phone = phone;
+        if (company !== undefined)
+            updateData.company = company;
         if (password)
             updateData.password = password;
         if (avatar !== undefined)

@@ -82,6 +82,7 @@ const getAdminOverview = async (req, res) => {
                         id: "$_id",
                         name: 1,
                         email: 1,
+                        company: { $ifNull: ["$company", null] },
                         joinDate: "$createdAt",
                         totalProposals: {
                             $ifNull: [{ $first: "$proposalStats.count" }, 0],

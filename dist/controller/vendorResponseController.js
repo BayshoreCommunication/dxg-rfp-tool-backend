@@ -11,6 +11,10 @@ const vendorResponseModel_1 = __importDefault(require("../modal/vendorResponseMo
 const uploadToSpaces_1 = require("../utils/uploadToSpaces");
 const notificationService_1 = require("../utils/notificationService");
 const VENDOR_RESPONSE_SELECT = "_id proposalId proposalOwnerId proposalTitle vendorName submittedBy email message documents isRead createdAt updatedAt";
+const extractProposalId = (slug) => {
+    const match = /([a-f0-9]{24})$/i.exec(slug);
+    return match ? match[1] : null;
+};
 const checkVendorResponseExists = async (req, res) => {
     try {
         const { proposalId, email } = req.query;
@@ -86,7 +90,10 @@ const submitVendorResponse = async (req, res) => {
                     uploadedDocs.push({ name: file.originalname, url });
                 }
                 catch {
-                    try { fs_1.default.unlinkSync(file.path); } catch { /* ignore */ }
+                    try {
+                        fs_1.default.unlinkSync(file.path);
+                    }
+                    catch { /* ignore */ }
                 }
             }
         }
@@ -245,3 +252,4 @@ const markVendorResponseRead = async (req, res) => {
     }
 };
 exports.markVendorResponseRead = markVendorResponseRead;
+//# sourceMappingURL=vendorResponseController.js.map

@@ -53,6 +53,11 @@ const optionalAuth = (req: Request, _res: Response, next: NextFunction) => {
   next();
 };
 
+/* Protected static routes — must come BEFORE /:id wildcard */
+router.get("/", authenticate, getAllProposals);
+router.post("/", authenticate, createProposal);
+router.post("/upload-files", authenticate, uploadProposalDocs, uploadProposalFiles);
+
 /* Routes accessible with or without auth — different controller per case */
 router.get("/:id", validateProposalId, optionalAuth, (req: Request, res: Response) => {
   if ((req as AuthRequest).user) return getProposalById(req as AuthRequest, res);
@@ -65,9 +70,6 @@ router.patch("/:id/views", validateProposalId, optionalAuth, (req: Request, res:
 });
 
 /* Protected routes (require auth) */
-router.post("/upload-files", authenticate, uploadProposalDocs, uploadProposalFiles);
-router.post("/", authenticate, createProposal);
-router.get("/", authenticate, getAllProposals);
 router.post("/:id/copy", authenticate, validateProposalId, copyProposal);
 router.put("/:id", authenticate, validateProposalId, updateProposal);
 router.patch("/:id/status", authenticate, validateProposalId, updateProposalStatus);

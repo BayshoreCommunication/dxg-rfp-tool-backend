@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.uploadProposalFiles = exports.deleteProposal = exports.incrementProposalViews = exports.incrementProposalViewsPublic = exports.updateProposalMeta = exports.updateProposalStatus = exports.updateProposal = exports.createProposal = exports.getProposalByIdPublic = exports.getProposalById = exports.getAllProposals = void 0;
+exports.uploadProposalFiles = exports.copyProposal = exports.permanentlyDeleteProposal = exports.restoreProposal = exports.deleteProposal = exports.incrementProposalViews = exports.updateProposalMeta = exports.updateProposalStatus = exports.updateProposal = exports.createProposal = exports.incrementProposalViewsPublic = exports.getProposalByIdPublic = exports.getProposalById = exports.getAllProposals = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
 const notificationService_1 = require("../utils/notificationService");
 const proposalsModel_1 = __importDefault(require("../modal/proposalsModel"));
@@ -12,10 +12,14 @@ const uploadToSpaces_1 = require("../utils/uploadToSpaces");
 const LIST_PROPOSAL_SELECT = [
     "_id",
     "status",
+    "isDraft",
     "isActive",
     "isFavorite",
     "isAccepted",
     "isOpen",
+    "isArchived",
+    "archivedAt",
+    "isCopy",
     "viewsCount",
     "createdAt",
     "updatedAt",
@@ -135,7 +139,7 @@ const applyDerivedExpiryState = (proposal, expirySetting) => {
         ...proposal,
         isActive: false,
         isOpen: false,
-        status: "rejected",
+        status: "unsubmitted",
     };
 };
 const normalizeSort = (sortBy, sortOrder) => {
@@ -151,25 +155,36 @@ const buildCountsAggregation = (baseFilter, expirySetting) => {
     const expiredThreshold = expiryDays && expiryDays > 0
         ? new Date(Date.now() - expiryDays * 24 * 60 * 60 * 1000)
         : null;
+    const notArchived = { $ne: ["$isArchived", true] };
+    // Exclude copies from all, draft, live, etc. — they only appear in the Saved tab
+    const notCopy = { $ne: ["$isCopy", true] };
     return [
         { $match: baseFilter },
         {
             $group: {
                 _id: null,
-                all: { $sum: 1 },
+                all: {
+                    $sum: { $cond: [{ $and: [notArchived, notCopy] }, 1, 0] },
+                },
                 draft: {
                     $sum: {
-                        $cond: [{ $eq: ["$status", "draft"] }, 1, 0],
+                        $cond: [
+                            { $and: [notArchived, notCopy, { $eq: ["$isDraft", true] }] },
+                            1,
+                            0,
+                        ],
                     },
                 },
                 live: {
                     $sum: {
                         $cond: [
-                            // A proposal is "live" only when it is submitted AND not manually
-                            // deactivated AND has not yet expired by date.
+                            // Live: submitted AND not deactivated AND not expired AND not archived AND not a copy AND not a draft
                             expiredThreshold
                                 ? {
                                     $and: [
+                                        notArchived,
+                                        notCopy,
+                                        { $eq: ["$isDraft", false] },
                                         { $eq: ["$status", "submitted"] },
                                         { $ne: ["$isActive", false] },
                                         { $gt: ["$createdAt", expiredThreshold] },
@@ -177,6 +192,9 @@ const buildCountsAggregation = (baseFilter, expirySetting) => {
                                 }
                                 : {
                                     $and: [
+                                        notArchived,
+                                        notCopy,
+                                        { $eq: ["$isDraft", false] },
                                         { $eq: ["$status", "submitted"] },
                                         { $ne: ["$isActive", false] },
                                     ],
@@ -188,7 +206,11 @@ const buildCountsAggregation = (baseFilter, expirySetting) => {
                 },
                 favorite: {
                     $sum: {
-                        $cond: [{ $eq: ["$isFavorite", true] }, 1, 0],
+                        $cond: [
+                            { $and: [notArchived, notCopy, { $eq: ["$isFavorite", true] }] },
+                            1,
+                            0,
+                        ],
                     },
                 },
                 expired: {
@@ -196,17 +218,37 @@ const buildCountsAggregation = (baseFilter, expirySetting) => {
                         $cond: [
                             expiredThreshold
                                 ? {
-                                    $or: [
-                                        { $eq: ["$isActive", false] },
+                                    $and: [
+                                        notArchived,
+                                        notCopy,
+                                        { $eq: ["$isDraft", false] },
                                         {
-                                            $and: [
-                                                { $ne: ["$isActive", false] },
-                                                { $lte: ["$createdAt", expiredThreshold] },
+                                            $or: [
+                                                { $eq: ["$isActive", false] },
+                                                {
+                                                    $and: [
+                                                        { $ne: ["$isActive", false] },
+                                                        { $lte: ["$createdAt", expiredThreshold] },
+                                                    ],
+                                                },
                                             ],
                                         },
                                     ],
                                 }
-                                : { $eq: ["$isActive", false] },
+                                : { $and: [notArchived, notCopy, { $eq: ["$isDraft", false] }, { $eq: ["$isActive", false] }] },
+                            1,
+                            0,
+                        ],
+                    },
+                },
+                archive: {
+                    $sum: { $cond: [{ $eq: ["$isArchived", true] }, 1, 0] },
+                },
+                saved: {
+                    // Counts all copies regardless of status
+                    $sum: {
+                        $cond: [
+                            { $and: [notArchived, { $eq: ["$isCopy", true] }] },
                             1,
                             0,
                         ],
@@ -219,7 +261,7 @@ const buildCountsAggregation = (baseFilter, expirySetting) => {
 const getAllProposals = async (req, res) => {
     try {
         const userId = req.user?.userId;
-        const { status, favorite, isActive, includeCounts, search, page = "1", limit = "20", sortBy = "createdAt", sortOrder = "desc", } = req.query;
+        const { status, favorite, isActive, archived, isCopy, includeCounts, search, page = "1", limit = "20", sortBy = "createdAt", sortOrder = "desc", } = req.query;
         // Settings must be fetched first so we can derive the expiry threshold
         // and build an accurate filter for the "Expired" tab.
         const settings = await getSettingsByUserId(userId);
@@ -233,8 +275,23 @@ const getAllProposals = async (req, res) => {
         if (userId) {
             filter.userId = userId;
         }
+        // Archive tab shows only archived; all other tabs exclude archived proposals.
+        if (archived === "true") {
+            filter.isArchived = true;
+        }
+        else {
+            filter.isArchived = { $ne: true };
+        }
         if (status && typeof status === "string") {
             filter.status = status;
+        }
+        // Draft tab: use isDraft flag (independent of status)
+        const isDraftParam = req.query.isDraft;
+        if (isDraftParam === "true") {
+            filter.isDraft = true;
+        }
+        else if (isDraftParam === "false") {
+            filter.isDraft = false;
         }
         if (typeof isActive === "string") {
             if (isActive === "false") {
@@ -260,6 +317,14 @@ const getAllProposals = async (req, res) => {
                 filter.isFavorite = true;
             if (favorite === "false")
                 filter.isFavorite = false;
+        }
+        if (isCopy === "true") {
+            // Saved tab: only copies (any status)
+            filter.isCopy = true;
+        }
+        else if (archived !== "true") {
+            // All non-archive, non-saved tabs: exclude copies entirely
+            filter.isCopy = { $ne: true };
         }
         if (search && typeof search === "string") {
             const trimmedSearch = search.trim();
@@ -326,6 +391,8 @@ const getAllProposals = async (req, res) => {
                 live: countsResult?.live ?? 0,
                 favorite: countsResult?.favorite ?? 0,
                 expired: countsResult?.expired ?? 0,
+                archive: countsResult?.archive ?? 0,
+                saved: countsResult?.saved ?? 0,
             };
         }
         res.status(200).json({
@@ -396,6 +463,80 @@ const getProposalById = async (req, res) => {
     }
 };
 exports.getProposalById = getProposalById;
+const getProposalByIdPublic = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidProposalId(id)) {
+            res.status(400).json({ success: false, message: "Invalid proposal id" });
+            return;
+        }
+        const proposal = await proposalsModel_1.default.findById(id)
+            .select(DETAIL_PROPOSAL_SELECT)
+            .lean();
+        if (!proposal) {
+            res.status(404).json({ success: false, message: "Proposal not found" });
+            return;
+        }
+        const ownerId = String(proposal.userId || "");
+        const settings = await getSettingsByUserId(ownerId);
+        res.status(200).json({
+            success: true,
+            data: withLiveSettings(applyDerivedExpiryState(proposal, settings?.proposals?.expiryDate), settings),
+        });
+    }
+    catch (error) {
+        console.error("Get proposal public error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error fetching proposal",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.getProposalByIdPublic = getProposalByIdPublic;
+const incrementProposalViewsPublic = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidProposalId(id)) {
+            res.status(400).json({ success: false, message: "Invalid proposal id" });
+            return;
+        }
+        const proposal = await proposalsModel_1.default.findByIdAndUpdate(id, { $inc: { viewsCount: 1 } }, { new: true })
+            .select(DETAIL_PROPOSAL_SELECT)
+            .lean();
+        if (!proposal) {
+            res.status(404).json({ success: false, message: "Proposal not found" });
+            return;
+        }
+        const ownerId = String(proposal.userId || "");
+        const settings = await getSettingsByUserId(ownerId);
+        if (ownerId) {
+            const proposalTitle = proposal.event?.eventName?.trim() || "Untitled Proposal";
+            await (0, notificationService_1.createNotification)({
+                userId: ownerId,
+                proposalId: String(proposal._id),
+                type: "proposal_view",
+                title: "Proposal viewed",
+                message: `"${proposalTitle}" received a new view. Total views: ${proposal.viewsCount}.`,
+                metadata: { viewsCount: proposal.viewsCount },
+            });
+        }
+        res.status(200).json({
+            success: true,
+            message: "Proposal views incremented",
+            data: withLiveSettings(proposal, settings),
+        });
+    }
+    catch (error) {
+        console.error("Increment proposal views public error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error incrementing proposal views",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.incrementProposalViewsPublic = incrementProposalViewsPublic;
 const createProposal = async (req, res) => {
     try {
         const body = req.body;
@@ -404,6 +545,15 @@ const createProposal = async (req, res) => {
             body.userId = userId;
         }
         delete body.proposalSetting;
+        // isDraft drives the Draft tab — set it based on incoming status
+        // If frontend explicitly sends isDraft, honour it; otherwise derive from status
+        if (typeof body.isDraft !== "boolean") {
+            body.isDraft = !body.status || body.status === "draft" || body.status === "unsubmitted";
+        }
+        // Normalise legacy "draft" status → "unsubmitted"
+        if (body.status === "draft" || !body.status) {
+            body.status = "unsubmitted";
+        }
         const proposal = new proposalsModel_1.default(body);
         await proposal.save();
         const settings = await getSettingsByUserId(userId, { createIfMissing: true });
@@ -448,6 +598,7 @@ const updateProposal = async (req, res) => {
         delete updates.createdAt;
         delete updates.userId;
         delete updates.proposalSetting;
+        delete updates.isCopy;
         const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { $set: updates }, { new: true, runValidators: true })
             .select(DETAIL_PROPOSAL_SELECT)
             .lean();
@@ -496,7 +647,9 @@ const updateProposalStatus = async (req, res) => {
             });
             return;
         }
-        const allowed = ["draft", "submitted", "reviewed", "approved", "rejected"];
+        // "unsubmitted" keeps isDraft:true; any other status clears it
+        // Publishing a copy (submitted/approved) auto-promotes it to a real proposal
+        const allowed = ["unsubmitted", "submitted", "reviewed", "approved", "rejected"];
         if (!allowed.includes(status)) {
             res.status(400).json({
                 success: false,
@@ -504,7 +657,18 @@ const updateProposalStatus = async (req, res) => {
             });
             return;
         }
-        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { status }, { new: true })
+        const isPublishing = status !== "unsubmitted";
+        // When a copy gets published: clear isCopy → it graduates to a real proposal
+        const statusUpdate = {
+            status,
+            isDraft: !isPublishing,
+            ...(isPublishing && {
+                isCopy: false, // no longer a copy — it's a real proposal now
+                isActive: true, // goes live
+                isOpen: true,
+            }),
+        };
+        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId }, { $set: statusUpdate }, { new: true })
             .select(DETAIL_PROPOSAL_SELECT)
             .lean();
         if (!proposal) {
@@ -532,30 +696,45 @@ const updateProposalMeta = async (req, res) => {
     try {
         const { id } = req.params;
         const userId = req.user?.userId;
-        const { isActive, isFavorite, isAccepted, isOpen, viewsCount } = req.body;
+        const { isActive, isFavorite, isAccepted, isOpen, viewsCount, isDraft } = req.body;
         if (!isValidProposalId(id)) {
-            res.status(400).json({
-                success: false,
-                message: "Invalid proposal id",
-            });
+            res.status(400).json({ success: false, message: "Invalid proposal id" });
             return;
         }
+        // Fetch first so we can enforce copy restrictions
+        const existing = await proposalsModel_1.default.findOne({ _id: id, userId }).select("isCopy").lean();
+        if (!existing) {
+            res.status(404).json({ success: false, message: "Proposal not found" });
+            return;
+        }
+        const isCopyProposal = existing.isCopy === true;
         const updates = {};
-        if (typeof isActive === "boolean")
-            updates.isActive = isActive;
-        if (typeof isFavorite === "boolean")
-            updates.isFavorite = isFavorite;
+        if (typeof isActive === "boolean") {
+            // Copies are always offline until published via status route
+            if (!isCopyProposal)
+                updates.isActive = isActive;
+        }
+        if (typeof isFavorite === "boolean") {
+            // Copies cannot be favourited
+            if (!isCopyProposal)
+                updates.isFavorite = isFavorite;
+        }
         if (typeof isAccepted === "boolean")
             updates.isAccepted = isAccepted;
-        if (typeof isOpen === "boolean")
-            updates.isOpen = isOpen;
-        if (typeof viewsCount === "number" && viewsCount >= 0) {
-            updates.viewsCount = viewsCount;
+        if (typeof isOpen === "boolean") {
+            if (!isCopyProposal)
+                updates.isOpen = isOpen;
         }
+        if (typeof isDraft === "boolean")
+            updates.isDraft = isDraft;
+        if (typeof viewsCount === "number" && viewsCount >= 0)
+            updates.viewsCount = viewsCount;
         if (Object.keys(updates).length === 0) {
             res.status(400).json({
                 success: false,
-                message: "No valid fields provided. Use isActive, isFavorite, isAccepted, isOpen, or viewsCount.",
+                message: isCopyProposal
+                    ? "Copies cannot be favourited or toggled active. Publish the copy first."
+                    : "No valid fields provided.",
             });
             return;
         }
@@ -635,38 +814,156 @@ const deleteProposal = async (req, res) => {
     try {
         const { id } = req.params;
         if (!isValidProposalId(id)) {
-            res.status(400).json({
-                success: false,
-                message: "Invalid proposal id",
-            });
+            res.status(400).json({ success: false, message: "Invalid proposal id" });
             return;
         }
-        const proposal = await proposalsModel_1.default.findOneAndDelete({
-            _id: id,
-            userId: req.user?.userId,
-        }).lean();
+        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId: req.user?.userId, isArchived: { $ne: true } }, { $set: { isArchived: true, archivedAt: new Date() } }, { new: true }).lean();
         if (!proposal) {
-            res.status(404).json({
-                success: false,
-                message: "Proposal not found",
-            });
+            res.status(404).json({ success: false, message: "Proposal not found" });
             return;
         }
         res.status(200).json({
             success: true,
-            message: "Proposal deleted successfully",
+            message: "Proposal archived. It will be permanently deleted after 30 days.",
         });
     }
     catch (error) {
-        console.error("Delete proposal error:", error);
+        console.error("Archive proposal error:", error);
         res.status(500).json({
             success: false,
-            message: "Error deleting proposal",
+            message: "Error archiving proposal",
             error: error instanceof Error ? error.message : "Unknown error",
         });
     }
 };
 exports.deleteProposal = deleteProposal;
+const restoreProposal = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidProposalId(id)) {
+            res.status(400).json({ success: false, message: "Invalid proposal id" });
+            return;
+        }
+        const proposal = await proposalsModel_1.default.findOneAndUpdate({ _id: id, userId: req.user?.userId, isArchived: true }, { $set: { isArchived: false }, $unset: { archivedAt: "" } }, { new: true })
+            .select(DETAIL_PROPOSAL_SELECT)
+            .lean();
+        if (!proposal) {
+            res.status(404).json({ success: false, message: "Archived proposal not found" });
+            return;
+        }
+        res.status(200).json({
+            success: true,
+            message: "Proposal restored successfully.",
+        });
+    }
+    catch (error) {
+        console.error("Restore proposal error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error restoring proposal",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.restoreProposal = restoreProposal;
+const permanentlyDeleteProposal = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidProposalId(id)) {
+            res.status(400).json({ success: false, message: "Invalid proposal id" });
+            return;
+        }
+        const proposal = await proposalsModel_1.default.findOneAndDelete({
+            _id: id,
+            userId: req.user?.userId,
+            isArchived: true,
+        }).lean();
+        if (!proposal) {
+            res.status(404).json({ success: false, message: "Archived proposal not found" });
+            return;
+        }
+        res.status(200).json({
+            success: true,
+            message: "Proposal permanently deleted.",
+        });
+    }
+    catch (error) {
+        console.error("Permanent delete proposal error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error permanently deleting proposal",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.permanentlyDeleteProposal = permanentlyDeleteProposal;
+const copyProposal = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user?.userId;
+        const { eventName, startDate, endDate, templateId } = req.body;
+        if (!isValidProposalId(id)) {
+            res.status(400).json({ success: false, message: "Invalid proposal id" });
+            return;
+        }
+        const source = await proposalsModel_1.default.findOne({ _id: id, userId }).lean();
+        if (!source) {
+            res.status(404).json({ success: false, message: "Source proposal not found" });
+            return;
+        }
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { _id, createdAt, updatedAt, __v, ...sourceData } = source;
+        const copyData = {
+            ...sourceData,
+            userId,
+            // ── Copy lifecycle state ──────────────────────────────────────────────
+            // isCopy:true  = lives in "Saved" tab, offline, cannot be favoured/shared
+            // When the user publishes it, isCopy is auto-cleared → becomes a live proposal
+            status: "unsubmitted",
+            isDraft: true,
+            isActive: false, // offline until published
+            isFavorite: false, // copies cannot be favourited
+            isAccepted: false,
+            isOpen: false,
+            isArchived: false,
+            archivedAt: null,
+            isCopy: true,
+            viewsCount: 0,
+        };
+        if (templateId)
+            copyData.templateId = templateId;
+        if (eventName || startDate || endDate) {
+            copyData.event = {
+                ...(copyData.event ?? {}),
+                ...(eventName ? { eventName } : {}),
+                ...(startDate ? { startDate } : {}),
+                ...(endDate ? { endDate } : {}),
+            };
+        }
+        const copy = new proposalsModel_1.default(copyData);
+        await copy.save();
+        const settings = await getSettingsByUserId(userId, { createIfMissing: true });
+        res.status(201).json({
+            success: true,
+            message: "Proposal copied successfully",
+            data: withLiveSettings(copy.toObject(), settings),
+        });
+    }
+    catch (error) {
+        console.error("Copy proposal error:", error);
+        if (error.name === "ValidationError") {
+            const messages = Object.values(error.errors).map((e) => e.message);
+            res.status(400).json({ success: false, message: "Validation failed", errors: messages });
+            return;
+        }
+        res.status(500).json({
+            success: false,
+            message: "Error copying proposal",
+            error: error instanceof Error ? error.message : "Unknown error",
+        });
+    }
+};
+exports.copyProposal = copyProposal;
 const uploadProposalFiles = async (req, res) => {
     try {
         const userId = req.user?.userId || "anonymous";
@@ -696,85 +993,6 @@ const uploadProposalFiles = async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Error uploading files",
-            error: error instanceof Error ? error.message : "Unknown error",
-        });
-    }
-};
-exports.getProposalByIdPublic = async (req, res) => {
-    try {
-        const { id } = req.params;
-        if (!isValidProposalId(id)) {
-            res.status(400).json({ success: false, message: "Invalid proposal id" });
-            return;
-        }
-        const proposal = await proposalsModel_1.default.findById(id)
-            .select(DETAIL_PROPOSAL_SELECT)
-            .lean();
-        if (!proposal) {
-            res.status(404).json({ success: false, message: "Proposal not found" });
-            return;
-        }
-        const ownerId = String(proposal.userId || "");
-        const settings = await getSettingsByUserId(ownerId);
-        res.status(200).json({
-            success: true,
-            data: withLiveSettings(
-                applyDerivedExpiryState(proposal, settings?.proposals?.expiryDate),
-                settings,
-            ),
-        });
-    }
-    catch (error) {
-        console.error("Get proposal public error:", error);
-        res.status(500).json({
-            success: false,
-            message: "Error fetching proposal",
-            error: error instanceof Error ? error.message : "Unknown error",
-        });
-    }
-};
-exports.incrementProposalViewsPublic = async (req, res) => {
-    try {
-        const { id } = req.params;
-        if (!isValidProposalId(id)) {
-            res.status(400).json({ success: false, message: "Invalid proposal id" });
-            return;
-        }
-        const proposal = await proposalsModel_1.default.findByIdAndUpdate(
-            id,
-            { $inc: { viewsCount: 1 } },
-            { new: true },
-        )
-            .select(DETAIL_PROPOSAL_SELECT)
-            .lean();
-        if (!proposal) {
-            res.status(404).json({ success: false, message: "Proposal not found" });
-            return;
-        }
-        const ownerId = String(proposal.userId || "");
-        const settings = await getSettingsByUserId(ownerId);
-        if (ownerId) {
-            const proposalTitle = proposal.event?.eventName?.trim() || "Untitled Proposal";
-            await (0, notificationService_1.createNotification)({
-                userId: ownerId,
-                proposalId: String(proposal._id),
-                type: "proposal_view",
-                title: "Proposal viewed",
-                message: `"${proposalTitle}" received a new view. Total views: ${proposal.viewsCount}.`,
-                metadata: { viewsCount: proposal.viewsCount },
-            });
-        }
-        res.status(200).json({
-            success: true,
-            message: "Proposal views incremented",
-            data: withLiveSettings(proposal, settings),
-        });
-    }
-    catch (error) {
-        console.error("Increment proposal views public error:", error);
-        res.status(500).json({
-            success: false,
-            message: "Error incrementing proposal views",
             error: error instanceof Error ? error.message : "Unknown error",
         });
     }

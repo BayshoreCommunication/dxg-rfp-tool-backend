@@ -2,7 +2,8 @@ import mongoose, { Document, Schema } from "mongoose";
 
 export interface IProposal extends Document {
   userId?: mongoose.Types.ObjectId;
-  status: "draft" | "submitted" | "reviewed" | "approved" | "rejected";
+  status: "unsubmitted"| "submitted" | "reviewed" | "approved" | "rejected";
+  isDraft: boolean;
   isActive: boolean;
   isFavorite: boolean;
   isAccepted: boolean;
@@ -51,9 +52,10 @@ const proposalSchema = new Schema<IProposal>(
 
     status: {
       type: String,
-      enum: ["draft", "submitted", "reviewed", "approved", "rejected"],
-      default: "submitted",
+      enum: ["unsubmitted", "submitted", "reviewed", "approved", "rejected"],
+      default: "unsubmitted",
     },
+    isDraft: { type: Boolean, default: true, index: true },
     isActive: { type: Boolean, default: true },
     isFavorite: { type: Boolean, default: false },
     isAccepted: { type: Boolean, default: false },

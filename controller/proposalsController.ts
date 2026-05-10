@@ -9,6 +9,7 @@ import { uploadToSpaces } from "../utils/uploadToSpaces";
 const LIST_PROPOSAL_SELECT = [
   "_id",
   "status",
+  "isDraft",
   "isActive",
   "isFavorite",
   "isAccepted",
@@ -147,7 +148,7 @@ const applyDerivedExpiryState = (proposal: any, expirySetting?: string) => {
     ...proposal,
     isActive: false,
     isOpen: false,
-    status: "rejected",
+    status: "unsubmitted",
   };
 };
 
@@ -178,10 +179,8 @@ const buildCountsAggregation = (
       : null;
 
   const notArchived = { $ne: ["$isArchived", true] };
-  // Exclude only draft copies — published copies are counted as regular proposals
-  const notDraftCopy = {
-    $or: [{ $ne: ["$isCopy", true] }, { $ne: ["$status", "draft"] }],
-  };
+  // Exclude copies from all, draft, live, etc. — they only appear in the Saved tab
+  const notCopy = { $ne: ["$isCopy", true] };
 
   return [
     { $match: baseFilter },
@@ -189,12 +188,12 @@ const buildCountsAggregation = (
       $group: {
         _id: null,
         all: {
-          $sum: { $cond: [{ $and: [notArchived, notDraftCopy] }, 1, 0] },
+          $sum: { $cond: [{ $and: [notArchived, notCopy] }, 1, 0] },
         },
         draft: {
           $sum: {
             $cond: [
-              { $and: [notArchived, notDraftCopy, { $eq: ["$status", "draft"] }] },
+              { $and: [notArchived, notCopy, { $eq: ["$isDraft", true] }] },
               1,
               0,
             ],
@@ -203,12 +202,13 @@ const buildCountsAggregation = (
         live: {
           $sum: {
             $cond: [
-              // Live: submitted AND not deactivated AND not expired AND not archived AND not a draft copy
+              // Live: submitted AND not deactivated AND not expired AND not archived AND not a copy AND not a draft
               expiredThreshold
                 ? {
                     $and: [
                       notArchived,
-                      notDraftCopy,
+                      notCopy,
+                      { $eq: ["$isDraft", false] },
                       { $eq: ["$status", "submitted"] },
                       { $ne: ["$isActive", false] },
                       { $gt: ["$createdAt", expiredThreshold] },
@@ -217,7 +217,8 @@ const buildCountsAggregation = (
                 : {
                     $and: [
                       notArchived,
-                      notDraftCopy,
+                      notCopy,
+                      { $eq: ["$isDraft", false] },
                       { $eq: ["$status", "submitted"] },
                       { $ne: ["$isActive", false] },
                     ],
@@ -230,7 +231,7 @@ const buildCountsAggregation = (
         favorite: {
           $sum: {
             $cond: [
-              { $and: [notArchived, notDraftCopy, { $eq: ["$isFavorite", true] }] },
+              { $and: [notArchived, notCopy, { $eq: ["$isFavorite", true] }] },
               1,
               0,
             ],
@@ -243,7 +244,8 @@ const buildCountsAggregation = (
                 ? {
                     $and: [
                       notArchived,
-                      notDraftCopy,
+                      notCopy,
+                      { $eq: ["$isDraft", false] },
                       {
                         $or: [
                           { $eq: ["$isActive", false] },
@@ -257,7 +259,7 @@ const buildCountsAggregation = (
                       },
                     ],
                   }
-                : { $and: [notArchived, notDraftCopy, { $eq: ["$isActive", false] }] },
+                : { $and: [notArchived, notCopy, { $eq: ["$isDraft", false] }, { $eq: ["$isActive", false] }] },
               1,
               0,
             ],
@@ -267,10 +269,10 @@ const buildCountsAggregation = (
           $sum: { $cond: [{ $eq: ["$isArchived", true] }, 1, 0] },
         },
         saved: {
-          // Only counts draft copies (unpublished saves)
+          // Counts all copies regardless of status
           $sum: {
             $cond: [
-              { $and: [notArchived, { $eq: ["$isCopy", true] }, { $eq: ["$status", "draft"] }] },
+              { $and: [notArchived, { $eq: ["$isCopy", true] }] },
               1,
               0,
             ],
@@ -328,6 +330,14 @@ export const getAllProposals = async (
       filter.status = status;
     }
 
+    // Draft tab: use isDraft flag (independent of status)
+    const isDraftParam = req.query.isDraft;
+    if (isDraftParam === "true") {
+      filter.isDraft = true;
+    } else if (isDraftParam === "false") {
+      filter.isDraft = false;
+    }
+
     if (typeof isActive === "string") {
       if (isActive === "false") {
         // Include proposals that are either manually deactivated OR expired
@@ -352,12 +362,11 @@ export const getAllProposals = async (
     }
 
     if (isCopy === "true") {
-      // Saved tab: only unpublished copies (draft copies)
+      // Saved tab: only copies (any status)
       filter.isCopy = true;
-      filter.status = "draft";
     } else if (archived !== "true") {
-      // All non-archive tabs: exclude draft copies; published copies are regular proposals
-      filter.$nor = [{ isCopy: true, status: "draft" }];
+      // All non-archive, non-saved tabs: exclude copies entirely
+      filter.isCopy = { $ne: true };
     }
 
     if (search && typeof search === "string") {
@@ -644,6 +653,16 @@ export const createProposal = async (
 
     delete body.proposalSetting;
 
+    // isDraft drives the Draft tab — set it based on incoming status
+    // If frontend explicitly sends isDraft, honour it; otherwise derive from status
+    if (typeof body.isDraft !== "boolean") {
+      body.isDraft = !body.status || body.status === "draft" || body.status === "unsubmitted";
+    }
+    // Normalise legacy "draft" status → "unsubmitted"
+    if (body.status === "draft" || !body.status) {
+      body.status = "unsubmitted";
+    }
+
     const proposal = new Proposal(body);
     await proposal.save();
 
@@ -759,7 +778,9 @@ export const updateProposalStatus = async (
       return;
     }
 
-    const allowed = ["draft", "submitted", "reviewed", "approved", "rejected"];
+    // "unsubmitted" keeps isDraft:true; any other status clears it
+    // Publishing a copy (submitted/approved) auto-promotes it to a real proposal
+    const allowed = ["unsubmitted", "submitted", "reviewed", "approved", "rejected"];
     if (!allowed.includes(status)) {
       res.status(400).json({
         success: false,
@@ -768,9 +789,22 @@ export const updateProposalStatus = async (
       return;
     }
 
+    const isPublishing = status !== "unsubmitted";
+
+    // When a copy gets published: clear isCopy → it graduates to a real proposal
+    const statusUpdate: Record<string, any> = {
+      status,
+      isDraft: !isPublishing,
+      ...(isPublishing && {
+        isCopy: false,     // no longer a copy — it's a real proposal now
+        isActive: true,    // goes live
+        isOpen: true,
+      }),
+    };
+
     const proposal = await Proposal.findOneAndUpdate(
       { _id: id, userId },
-      { status },
+      { $set: statusUpdate },
       { new: true },
     )
       .select(DETAIL_PROPOSAL_SELECT)
@@ -805,30 +839,44 @@ export const updateProposalMeta = async (
   try {
     const { id } = req.params;
     const userId = req.user?.userId;
-    const { isActive, isFavorite, isAccepted, isOpen, viewsCount } = req.body;
+    const { isActive, isFavorite, isAccepted, isOpen, viewsCount, isDraft } = req.body;
 
     if (!isValidProposalId(id)) {
-      res.status(400).json({
-        success: false,
-        message: "Invalid proposal id",
-      });
+      res.status(400).json({ success: false, message: "Invalid proposal id" });
       return;
     }
 
-    const updates: Record<string, any> = {};
-    if (typeof isActive === "boolean") updates.isActive = isActive;
-    if (typeof isFavorite === "boolean") updates.isFavorite = isFavorite;
-    if (typeof isAccepted === "boolean") updates.isAccepted = isAccepted;
-    if (typeof isOpen === "boolean") updates.isOpen = isOpen;
-    if (typeof viewsCount === "number" && viewsCount >= 0) {
-      updates.viewsCount = viewsCount;
+    // Fetch first so we can enforce copy restrictions
+    const existing = await Proposal.findOne({ _id: id, userId }).select("isCopy").lean();
+    if (!existing) {
+      res.status(404).json({ success: false, message: "Proposal not found" });
+      return;
     }
+
+    const isCopyProposal = (existing as any).isCopy === true;
+
+    const updates: Record<string, any> = {};
+    if (typeof isActive === "boolean") {
+      // Copies are always offline until published via status route
+      if (!isCopyProposal) updates.isActive = isActive;
+    }
+    if (typeof isFavorite === "boolean") {
+      // Copies cannot be favourited
+      if (!isCopyProposal) updates.isFavorite = isFavorite;
+    }
+    if (typeof isAccepted === "boolean") updates.isAccepted = isAccepted;
+    if (typeof isOpen === "boolean") {
+      if (!isCopyProposal) updates.isOpen = isOpen;
+    }
+    if (typeof isDraft === "boolean") updates.isDraft = isDraft;
+    if (typeof viewsCount === "number" && viewsCount >= 0) updates.viewsCount = viewsCount;
 
     if (Object.keys(updates).length === 0) {
       res.status(400).json({
         success: false,
-        message:
-          "No valid fields provided. Use isActive, isFavorite, isAccepted, isOpen, or viewsCount.",
+        message: isCopyProposal
+          ? "Copies cannot be favourited or toggled active. Publish the copy first."
+          : "No valid fields provided.",
       });
       return;
     }
@@ -1043,12 +1091,11 @@ export const copyProposal = async (
   try {
     const { id } = req.params;
     const userId = req.user?.userId;
-    const { eventName, startDate, endDate, templateId, status } = req.body as {
+    const { eventName, startDate, endDate, templateId } = req.body as {
       eventName?: string;
       startDate?: string;
       endDate?: string;
       templateId?: "template-one" | "template-two";
-      status?: "draft" | "submitted";
     };
 
     if (!isValidProposalId(id)) {
@@ -1068,11 +1115,15 @@ export const copyProposal = async (
     const copyData: Record<string, any> = {
       ...sourceData,
       userId,
-      status: status ?? "draft",
-      isActive: true,
-      isFavorite: false,
+      // ── Copy lifecycle state ──────────────────────────────────────────────
+      // isCopy:true  = lives in "Saved" tab, offline, cannot be favoured/shared
+      // When the user publishes it, isCopy is auto-cleared → becomes a live proposal
+      status: "unsubmitted",
+      isDraft: true,
+      isActive: false,      // offline until published
+      isFavorite: false,    // copies cannot be favourited
       isAccepted: false,
-      isOpen: true,
+      isOpen: false,
       isArchived: false,
       archivedAt: null,
       isCopy: true,
