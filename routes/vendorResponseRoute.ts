@@ -2,6 +2,7 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import { Request, Response, NextFunction } from "express";
 import {
+  checkVendorResponseExists,
   submitVendorResponse,
   getVendorResponses,
   getVendorResponseById,
@@ -20,7 +21,8 @@ const validateResponseId = (req: Request, res: Response, next: NextFunction) => 
   next();
 };
 
-/* Public route — vendors submit without authentication */
+/* Public routes — no authentication required */
+router.get("/check", checkVendorResponseExists);
 router.post("/", uploadVendorDocs, submitVendorResponse);
 
 /* Protected routes — planner dashboard */

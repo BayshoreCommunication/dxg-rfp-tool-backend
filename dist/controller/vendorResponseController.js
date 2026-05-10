@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.markVendorResponseRead = exports.getVendorResponseById = exports.getVendorResponses = exports.submitVendorResponse = void 0;
+exports.markVendorResponseRead = exports.getVendorResponseById = exports.getVendorResponses = exports.submitVendorResponse = exports.checkVendorResponseExists = void 0;
 const fs_1 = __importDefault(require("fs"));
 const mongoose_1 = __importDefault(require("mongoose"));
 const proposalsModel_1 = __importDefault(require("../modal/proposalsModel"));
@@ -11,6 +11,26 @@ const vendorResponseModel_1 = __importDefault(require("../modal/vendorResponseMo
 const uploadToSpaces_1 = require("../utils/uploadToSpaces");
 const notificationService_1 = require("../utils/notificationService");
 const VENDOR_RESPONSE_SELECT = "_id proposalId proposalOwnerId proposalTitle vendorName submittedBy email message documents isRead createdAt updatedAt";
+const checkVendorResponseExists = async (req, res) => {
+    try {
+        const { proposalId, email } = req.query;
+        if (!proposalId || !mongoose_1.default.isValidObjectId(proposalId) || !email?.trim()) {
+            res.status(200).json({ alreadySubmitted: false });
+            return;
+        }
+        const existing = await vendorResponseModel_1.default.findOne({
+            proposalId: new mongoose_1.default.Types.ObjectId(proposalId),
+            email: email.trim().toLowerCase(),
+        })
+            .select("_id")
+            .lean();
+        res.status(200).json({ alreadySubmitted: !!existing });
+    }
+    catch {
+        res.status(200).json({ alreadySubmitted: false });
+    }
+};
+exports.checkVendorResponseExists = checkVendorResponseExists;
 const submitVendorResponse = async (req, res) => {
     try {
         const { proposalId, vendorName, submittedBy, email, message } = req.body;

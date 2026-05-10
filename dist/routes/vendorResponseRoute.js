@@ -16,7 +16,8 @@ const validateResponseId = (req, res, next) => {
     }
     next();
 };
-/* Public route — vendors submit without authentication */
+/* Public routes — no authentication required */
+router.get("/check", vendorResponseController_1.checkVendorResponseExists);
 router.post("/", upload_1.uploadVendorDocs, vendorResponseController_1.submitVendorResponse);
 /* Protected routes — planner dashboard */
 router.get("/", auth_1.authenticate, vendorResponseController_1.getVendorResponses);

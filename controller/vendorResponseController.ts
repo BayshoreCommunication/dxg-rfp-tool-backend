@@ -15,6 +15,28 @@ const extractProposalId = (slug: string): string | null => {
   return match ? match[1] : null;
 };
 
+export const checkVendorResponseExists = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    const { proposalId, email } = req.query as { proposalId?: string; email?: string };
+    if (!proposalId || !mongoose.isValidObjectId(proposalId) || !email?.trim()) {
+      res.status(200).json({ alreadySubmitted: false });
+      return;
+    }
+    const existing = await VendorResponse.findOne({
+      proposalId: new mongoose.Types.ObjectId(proposalId),
+      email: email.trim().toLowerCase(),
+    })
+      .select("_id")
+      .lean();
+    res.status(200).json({ alreadySubmitted: !!existing });
+  } catch {
+    res.status(200).json({ alreadySubmitted: false });
+  }
+};
+
 export const submitVendorResponse = async (
   req: Request,
   res: Response,
