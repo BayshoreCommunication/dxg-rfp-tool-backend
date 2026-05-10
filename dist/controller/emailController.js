@@ -20,18 +20,8 @@ const firstUrlFromEnv = (value) => value
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean)[0] || value.trim();
-// These are the live production URLs. They are used as the final fallback so that
-// email links are never broken even when env vars are absent on the host (e.g. Vercel).
-const PRODUCTION_BACKEND_URL = "https://api.dxg-agency.com";
-const PRODUCTION_FRONTEND_URL = "https://dxg-rfp-tool-dashboard.vercel.app";
-// PUBLIC_API_URL must be the externally reachable backend URL.
-// Never use BACKEND_URL or a localhost address in email links — they are unreachable by recipients.
-const getApiBaseUrl = () => firstUrlFromEnv(process.env.PUBLIC_API_URL || PRODUCTION_BACKEND_URL).replace(/\/+$/, "");
-const getFrontendBaseUrl = () => firstUrlFromEnv(process.env.PUBLIC_FRONTEND_URL ||
-    process.env.FRONTEND_URL ||
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.NEXT_PUBLIC_FRONTEND_URL ||
-    PRODUCTION_FRONTEND_URL).replace(/\/+$/, "");
+const getApiBaseUrl = () => firstUrlFromEnv(process.env.BACKEND_URL || "").replace(/\/+$/, "");
+const getFrontendBaseUrl = () => firstUrlFromEnv(process.env.FRONTEND_URL || "").replace(/\/+$/, "");
 const buildProposalPublicUrl = (proposalSlug) => `${getFrontendBaseUrl()}/proposal-view/${proposalSlug}?source=email`;
 const buildVendorResponseUrl = (proposalSlug) => `${getFrontendBaseUrl()}/vendor-response/${proposalSlug}?source=email`;
 const buildVendorResponseTrackingClickUrl = (trackingId, redirectUrl) => `${getApiBaseUrl()}/api/emails/vendor-click/${trackingId}?redirect=${encodeURIComponent(redirectUrl)}`;

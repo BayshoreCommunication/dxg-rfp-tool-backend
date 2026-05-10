@@ -13,26 +13,15 @@ const notificationService_1 = require("../utils/notificationService");
 const VENDOR_RESPONSE_SELECT = "_id proposalId proposalOwnerId proposalTitle vendorName submittedBy email message documents isRead createdAt updatedAt";
 const checkVendorResponseExists = async (req, res) => {
     try {
-        const { proposalId, email, tid } = req.query;
-        if (!proposalId || !mongoose_1.default.isValidObjectId(proposalId)) {
+        const { proposalId, email } = req.query;
+        if (!proposalId || !mongoose_1.default.isValidObjectId(proposalId) || !email?.trim()) {
             res.status(200).json({ alreadySubmitted: false });
             return;
         }
-        const orConditions = [];
-        if (email?.trim()) {
-            orConditions.push({
-                proposalId: new mongoose_1.default.Types.ObjectId(proposalId),
-                email: email.trim().toLowerCase(),
-            });
-        }
-        if (tid?.trim()) {
-            orConditions.push({ emailTrackingId: tid.trim() });
-        }
-        if (orConditions.length === 0) {
-            res.status(200).json({ alreadySubmitted: false });
-            return;
-        }
-        const existing = await vendorResponseModel_1.default.findOne({ $or: orConditions })
+        const existing = await vendorResponseModel_1.default.findOne({
+            proposalId: new mongoose_1.default.Types.ObjectId(proposalId),
+            email: email.trim().toLowerCase(),
+        })
             .select("_id")
             .lean();
         res.status(200).json({ alreadySubmitted: !!existing });
