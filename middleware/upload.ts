@@ -8,7 +8,7 @@ import { getUploadPath } from "../utils/paths";
 const uploadsDir = getUploadPath();
 const tempDir = getUploadPath("temp");
 
-// Ensure uploads directory exists
+//Ensure uploads directory exists
 try {
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
