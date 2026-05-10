@@ -23,10 +23,10 @@ const firstUrlFromEnv = (value: string): string =>
     .filter(Boolean)[0] || value.trim();
 
 const getApiBaseUrl = (): string =>
-  firstUrlFromEnv(process.env.BACKEND_URL || "").replace(/\/+$/, "");
+  firstUrlFromEnv(process.env.BACKEND_URL || process.env.API_URL || "http://localhost:5000").replace(/\/+$/, "");
 
 const getFrontendBaseUrl = (): string =>
-  firstUrlFromEnv(process.env.FRONTEND_URL || "").replace(/\/+$/, "");
+  firstUrlFromEnv(process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "");
 
 const buildProposalPublicUrl = (proposalSlug: string): string =>
   `${getFrontendBaseUrl()}/proposal-view/${proposalSlug}?source=email`;
