@@ -15,6 +15,7 @@ const LIST_PROPOSAL_SELECT = [
   "isOpen",
   "isArchived",
   "archivedAt",
+  "isCopy",
   "viewsCount",
   "createdAt",
   "updatedAt",
@@ -177,6 +178,10 @@ const buildCountsAggregation = (
       : null;
 
   const notArchived = { $ne: ["$isArchived", true] };
+  // Exclude only draft copies — published copies are counted as regular proposals
+  const notDraftCopy = {
+    $or: [{ $ne: ["$isCopy", true] }, { $ne: ["$status", "draft"] }],
+  };
 
   return [
     { $match: baseFilter },
@@ -184,12 +189,12 @@ const buildCountsAggregation = (
       $group: {
         _id: null,
         all: {
-          $sum: { $cond: [notArchived, 1, 0] },
+          $sum: { $cond: [{ $and: [notArchived, notDraftCopy] }, 1, 0] },
         },
         draft: {
           $sum: {
             $cond: [
-              { $and: [notArchived, { $eq: ["$status", "draft"] }] },
+              { $and: [notArchived, notDraftCopy, { $eq: ["$status", "draft"] }] },
               1,
               0,
             ],
@@ -198,12 +203,12 @@ const buildCountsAggregation = (
         live: {
           $sum: {
             $cond: [
-              // A proposal is "live" only when it is submitted AND not manually
-              // deactivated AND has not yet expired by date AND not archived.
+              // Live: submitted AND not deactivated AND not expired AND not archived AND not a draft copy
               expiredThreshold
                 ? {
                     $and: [
                       notArchived,
+                      notDraftCopy,
                       { $eq: ["$status", "submitted"] },
                       { $ne: ["$isActive", false] },
                       { $gt: ["$createdAt", expiredThreshold] },
@@ -212,6 +217,7 @@ const buildCountsAggregation = (
                 : {
                     $and: [
                       notArchived,
+                      notDraftCopy,
                       { $eq: ["$status", "submitted"] },
                       { $ne: ["$isActive", false] },
                     ],
@@ -224,7 +230,7 @@ const buildCountsAggregation = (
         favorite: {
           $sum: {
             $cond: [
-              { $and: [notArchived, { $eq: ["$isFavorite", true] }] },
+              { $and: [notArchived, notDraftCopy, { $eq: ["$isFavorite", true] }] },
               1,
               0,
             ],
@@ -237,6 +243,7 @@ const buildCountsAggregation = (
                 ? {
                     $and: [
                       notArchived,
+                      notDraftCopy,
                       {
                         $or: [
                           { $eq: ["$isActive", false] },
@@ -250,7 +257,7 @@ const buildCountsAggregation = (
                       },
                     ],
                   }
-                : { $and: [notArchived, { $eq: ["$isActive", false] }] },
+                : { $and: [notArchived, notDraftCopy, { $eq: ["$isActive", false] }] },
               1,
               0,
             ],
@@ -258,6 +265,16 @@ const buildCountsAggregation = (
         },
         archive: {
           $sum: { $cond: [{ $eq: ["$isArchived", true] }, 1, 0] },
+        },
+        saved: {
+          // Only counts draft copies (unpublished saves)
+          $sum: {
+            $cond: [
+              { $and: [notArchived, { $eq: ["$isCopy", true] }, { $eq: ["$status", "draft"] }] },
+              1,
+              0,
+            ],
+          },
         },
       },
     },
@@ -275,6 +292,7 @@ export const getAllProposals = async (
       favorite,
       isActive,
       archived,
+      isCopy,
       includeCounts,
       search,
       page = "1",
@@ -333,6 +351,15 @@ export const getAllProposals = async (
       if (favorite === "false") filter.isFavorite = false;
     }
 
+    if (isCopy === "true") {
+      // Saved tab: only unpublished copies (draft copies)
+      filter.isCopy = true;
+      filter.status = "draft";
+    } else if (archived !== "true") {
+      // All non-archive tabs: exclude draft copies; published copies are regular proposals
+      filter.$nor = [{ isCopy: true, status: "draft" }];
+    }
+
     if (search && typeof search === "string") {
       const trimmedSearch = search.trim();
       if (trimmedSearch) {
@@ -383,6 +410,7 @@ export const getAllProposals = async (
           favorite: number;
           expired: number;
           archive: number;
+          saved: number;
         }
       | undefined;
 
@@ -415,6 +443,7 @@ export const getAllProposals = async (
         favorite?: number;
         expired?: number;
         archive?: number;
+        saved?: number;
       }>(buildCountsAggregation(baseFilter, expirySetting));
 
       counts = {
@@ -424,6 +453,7 @@ export const getAllProposals = async (
         favorite: countsResult?.favorite ?? 0,
         expired: countsResult?.expired ?? 0,
         archive: countsResult?.archive ?? 0,
+        saved: countsResult?.saved ?? 0,
       };
     }
 
@@ -666,6 +696,7 @@ export const updateProposal = async (
     delete updates.createdAt;
     delete updates.userId;
     delete updates.proposalSetting;
+    delete updates.isCopy;
 
     const proposal = await Proposal.findOneAndUpdate(
       { _id: id, userId },
@@ -1000,6 +1031,85 @@ export const permanentlyDeleteProposal = async (
     res.status(500).json({
       success: false,
       message: "Error permanently deleting proposal",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+export const copyProposal = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    const { eventName, startDate, endDate, templateId, status } = req.body as {
+      eventName?: string;
+      startDate?: string;
+      endDate?: string;
+      templateId?: "template-one" | "template-two";
+      status?: "draft" | "submitted";
+    };
+
+    if (!isValidProposalId(id)) {
+      res.status(400).json({ success: false, message: "Invalid proposal id" });
+      return;
+    }
+
+    const source = await Proposal.findOne({ _id: id, userId }).lean();
+    if (!source) {
+      res.status(404).json({ success: false, message: "Source proposal not found" });
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { _id, createdAt, updatedAt, __v, ...sourceData } = source as any;
+
+    const copyData: Record<string, any> = {
+      ...sourceData,
+      userId,
+      status: status ?? "draft",
+      isActive: true,
+      isFavorite: false,
+      isAccepted: false,
+      isOpen: true,
+      isArchived: false,
+      archivedAt: null,
+      isCopy: true,
+      viewsCount: 0,
+    };
+
+    if (templateId) copyData.templateId = templateId;
+
+    if (eventName || startDate || endDate) {
+      copyData.event = {
+        ...(copyData.event ?? {}),
+        ...(eventName ? { eventName } : {}),
+        ...(startDate ? { startDate } : {}),
+        ...(endDate ? { endDate } : {}),
+      };
+    }
+
+    const copy = new Proposal(copyData);
+    await copy.save();
+
+    const settings = await getSettingsByUserId(userId, { createIfMissing: true });
+
+    res.status(201).json({
+      success: true,
+      message: "Proposal copied successfully",
+      data: withLiveSettings(copy.toObject(), settings),
+    });
+  } catch (error: any) {
+    console.error("Copy proposal error:", error);
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors).map((e: any) => e.message);
+      res.status(400).json({ success: false, message: "Validation failed", errors: messages });
+      return;
+    }
+    res.status(500).json({
+      success: false,
+      message: "Error copying proposal",
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }

@@ -9,6 +9,7 @@ export interface IProposal extends Document {
   isOpen: boolean;
   isArchived: boolean;
   archivedAt?: Date | null;
+  isCopy: boolean;
   viewsCount: number;
   templateId: "template-one" | "template-two";
   event: {
@@ -59,6 +60,7 @@ const proposalSchema = new Schema<IProposal>(
     isOpen: { type: Boolean, default: true },
     isArchived: { type: Boolean, default: false, index: true },
     archivedAt: { type: Date, default: null },
+    isCopy: { type: Boolean, default: false, index: true },
     viewsCount: { type: Number, default: 0, min: 0 },
     templateId: {
       type: String,

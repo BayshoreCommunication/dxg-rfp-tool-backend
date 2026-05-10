@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response, Router } from "express";
 import mongoose from "mongoose";
 import {
+  copyProposal,
   createProposal,
   deleteProposal,
   getAllProposals,
@@ -67,6 +68,7 @@ router.patch("/:id/views", validateProposalId, optionalAuth, (req: Request, res:
 router.post("/upload-files", authenticate, uploadProposalDocs, uploadProposalFiles);
 router.post("/", authenticate, createProposal);
 router.get("/", authenticate, getAllProposals);
+router.post("/:id/copy", authenticate, validateProposalId, copyProposal);
 router.put("/:id", authenticate, validateProposalId, updateProposal);
 router.patch("/:id/status", authenticate, validateProposalId, updateProposalStatus);
 router.patch("/:id/meta", authenticate, validateProposalId, updateProposalMeta);
