@@ -45,6 +45,22 @@ export const submitVendorResponse = async (
       return;
     }
 
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const existing = await VendorResponse.findOne({
+      proposalId: new mongoose.Types.ObjectId(proposalId),
+      email: normalizedEmail,
+    }).lean();
+
+    if (existing) {
+      res.status(409).json({
+        success: false,
+        alreadySubmitted: true,
+        message: "You have already submitted a response for this proposal.",
+      });
+      return;
+    }
+
     const proposal = await Proposal.findById(proposalId).select(
       "_id userId event",
     );

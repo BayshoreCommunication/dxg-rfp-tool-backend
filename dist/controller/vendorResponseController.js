@@ -30,6 +30,19 @@ const submitVendorResponse = async (req, res) => {
             res.status(400).json({ success: false, message: "Email is required." });
             return;
         }
+        const normalizedEmail = email.trim().toLowerCase();
+        const existing = await vendorResponseModel_1.default.findOne({
+            proposalId: new mongoose_1.default.Types.ObjectId(proposalId),
+            email: normalizedEmail,
+        }).lean();
+        if (existing) {
+            res.status(409).json({
+                success: false,
+                alreadySubmitted: true,
+                message: "You have already submitted a response for this proposal.",
+            });
+            return;
+        }
         const proposal = await proposalsModel_1.default.findById(proposalId).select("_id userId event");
         if (!proposal) {
             res.status(404).json({ success: false, message: "Proposal not found." });
