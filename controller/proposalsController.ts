@@ -717,6 +717,17 @@ export const updateProposal = async (
     delete updates.proposalSetting;
     delete updates.isCopy;
 
+    // Enforce state machine logic when updating a proposal
+    if (updates.status === "unsubmitted") {
+      updates.isDraft = true;
+      updates.isActive = false; // Drafts are offline by default
+      updates.isCopy = false;   // Editing a copy graduates it from the Saved tab
+    } else if (updates.status === "submitted") {
+      updates.isDraft = false;
+      updates.isActive = true;  // Submitted proposals go live
+      updates.isCopy = false;   // Publishing a copy graduates it from the Saved tab
+    }
+
     const proposal = await Proposal.findOneAndUpdate(
       { _id: id, userId },
       { $set: updates },
