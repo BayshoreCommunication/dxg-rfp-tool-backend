@@ -692,7 +692,10 @@ export const markVendorResponseClicked = async (
         await campaign.save();
       }
 
-      redirectUrl = buildVendorResponseUrl(campaign.proposalSlug);
+      const base = buildVendorResponseUrl(campaign.proposalSlug);
+      redirectUrl = recipient?.email
+        ? `${base}${base.includes("?") ? "&" : "?"}email=${encodeURIComponent(recipient.email)}`
+        : base;
     }
 
     if (!campaign && /^https?:\/\//i.test(redirectParam)) {
