@@ -2,7 +2,7 @@ import mongoose, { Document, Schema } from "mongoose";
 
 export interface IProposal extends Document {
   userId?: mongoose.Types.ObjectId;
-  status: "unsubmitted"| "submitted" | "reviewed" | "approved" | "rejected";
+  status: "unsubmitted" | "submitted" | "reviewed" | "approved" | "rejected";
   isDraft: boolean;
   isActive: boolean;
   isFavorite: boolean;
@@ -12,21 +12,32 @@ export interface IProposal extends Document {
   archivedAt?: Date | null;
   isCopy: boolean;
   viewsCount: number;
-  templateId: "template-one" | "template-two";
+  proposalSettings?: Record<string, unknown>;
   event: {
     eventName: string;
+    editionYear?: string;
+    eventTheme?: string;
     startDate?: string;
     endDate?: string;
     venue?: string;
+    venueCity?: string;
     attendees?: string;
     eventFormat?: "In-Person" | "Hybrid" | "Virtual";
     eventType?: {
       eventType?: string;
       eventTypeOther?: string;
     };
+    primaryAudience?: string[];
+    eventObjectives?: string;
+    toneDirection?: string[];
+    sacredConstraints?: string;
   };
+  venueSchedule?: Record<string, unknown>;
   roomByRoom?: Record<string, unknown>[];
   production?: Record<string, unknown>;
+  hybridVirtual?: Record<string, unknown>;
+  contentCreative?: Record<string, unknown>;
+  videoRecordingStep?: Record<string, unknown>;
   venue?: Record<string, unknown>;
   uploads?: Record<string, unknown>;
   budget?: Record<string, unknown>;
@@ -35,8 +46,14 @@ export interface IProposal extends Document {
     contactLastName: string;
     contactTitle?: string;
     contactOrganization?: string;
+    organizationLegalName?: string;
     contactEmail: string;
     contactPhone: string;
+    contactPhoneExt?: string;
+    contactPhoneType?: string;
+    additionalContacts?: Record<string, unknown>[];
+    preferredContactMethod?: string;
+    bestTimeToReach?: string;
     anythingElse?: string;
   };
   createdAt: Date;
@@ -64,11 +81,8 @@ const proposalSchema = new Schema<IProposal>(
     archivedAt: { type: Date, default: null },
     isCopy: { type: Boolean, default: false, index: true },
     viewsCount: { type: Number, default: 0, min: 0 },
-    templateId: {
-      type: String,
-      enum: ["template-one", "template-two"],
-      default: "template-one",
-    },
+
+    proposalSettings: { type: Schema.Types.Mixed, default: {} },
 
     event: {
       eventName: {
@@ -76,19 +90,30 @@ const proposalSchema = new Schema<IProposal>(
         required: [true, "Event name is required"],
         trim: true,
       },
+      editionYear: { type: String, trim: true },
+      eventTheme: { type: String, trim: true },
       startDate: { type: String, trim: true },
       endDate: { type: String, trim: true },
       venue: { type: String, trim: true },
+      venueCity: { type: String, trim: true },
       attendees: { type: String, trim: true },
       eventFormat: { type: String, enum: ["In-Person", "Hybrid", "Virtual"] },
       eventType: {
         eventType: { type: String, trim: true },
         eventTypeOther: { type: String, trim: true },
       },
+      primaryAudience: [{ type: String }],
+      eventObjectives: { type: String, trim: true },
+      toneDirection: [{ type: String }],
+      sacredConstraints: { type: String, trim: true },
     },
 
+    venueSchedule: { type: Schema.Types.Mixed, default: {} },
     roomByRoom: { type: [Schema.Types.Mixed], default: [] },
     production: { type: Schema.Types.Mixed, default: {} },
+    hybridVirtual: { type: Schema.Types.Mixed, default: {} },
+    contentCreative: { type: Schema.Types.Mixed, default: {} },
+    videoRecordingStep: { type: Schema.Types.Mixed, default: {} },
     venue: { type: Schema.Types.Mixed, default: {} },
     uploads: { type: Schema.Types.Mixed, default: {} },
     budget: { type: Schema.Types.Mixed, default: {} },
@@ -106,6 +131,7 @@ const proposalSchema = new Schema<IProposal>(
       },
       contactTitle: { type: String, trim: true },
       contactOrganization: { type: String, trim: true },
+      organizationLegalName: { type: String, trim: true },
       contactEmail: {
         type: String,
         required: [true, "Contact email is required"],
@@ -117,12 +143,17 @@ const proposalSchema = new Schema<IProposal>(
         required: [true, "Contact phone is required"],
         trim: true,
       },
+      contactPhoneExt: { type: String, trim: true },
+      contactPhoneType: { type: String, trim: true },
+      additionalContacts: { type: [Schema.Types.Mixed], default: [] },
+      preferredContactMethod: { type: String, trim: true },
+      bestTimeToReach: { type: String, trim: true },
       anythingElse: { type: String, trim: true },
     },
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 proposalSchema.index({ userId: 1, createdAt: -1 });
