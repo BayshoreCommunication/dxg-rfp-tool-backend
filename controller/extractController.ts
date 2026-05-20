@@ -32,54 +32,70 @@ export const extractUpload = multer({
 });
 
 /* ─── Extraction prompt ─── */
-const EXTRACTION_PROMPT = `You are a document parser for an AV production proposal tool.
+const EXTRACTION_PROMPT = `You are a document parser for an AV production RFP tool.
 
-Extract the following fields from the document and return them as a single JSON object.
-Only include fields you can confidently extract. If a field is not present, OMIT it entirely.
+Extract ALL fields you can find in the document and return them as a single JSON object.
+Only include fields you can confidently extract — OMIT fields that are not present.
 Do NOT invent or guess values. Return ONLY valid JSON — no explanation, no markdown fences.
 
 Schema:
 {
   "event": {
-    "eventName": "string",
+    "eventName": "string — full official event name",
+    "editionYear": "string — e.g. '12th Annual' or '2026' (omit if not mentioned)",
+    "eventTheme": "string — event theme or tagline (omit if not mentioned)",
     "startDate": "YYYY-MM-DD",
     "endDate": "YYYY-MM-DD",
-    "venue": "string",
     "attendees": "one of: < 100 | 100 - 150 | 200 - 500 | 500 - 1,000 | 1,000+",
     "eventFormat": "one of: In-Person | Hybrid | Virtual",
-    "eventType": "one of: Conference | Meeting | Gala | Trade Show | Awards Show | Other",
-    "eventTypeOther": "string (only if eventType is Other)"
+    "eventType": "one of: Corporate Conference | User / Customer Summit | Sales Kickoff (SKO) | Annual Meeting / Shareholder Event | Product Launch | Awards Show / Gala | Trade Show / Exhibition | Internal Town Hall | Training / Certification Event | Association / Member Conference | Industry Symposium | Hybrid Broadcast / Studio Production | Other",
+    "eventTypeOther": "string (only if eventType is Other)",
+    "primaryAudience": "array of any matching: C-Suite Executives | Senior Leadership / VPs | Sales Team / Field Reps | Customers / End Users | Prospects / Leads | Partners / Channel / Resellers | Employees (All-Hands) | Investors / Shareholders | Press / Media / Analysts | Industry Professionals | Developers / Technical | Members (Association) | Students / Academic | General Public",
+    "eventObjectives": "string — 2-4 sentences describing event goals",
+    "sacredConstraints": "string — non-negotiable requirements or special considerations"
+  },
+  "venueSchedule": {
+    "venueName": "string — full official venue name",
+    "venueCity": "string — city name only",
+    "venueState": "string — 2-letter US state code (e.g. NV, CA) or OTHER",
+    "venueAddress": "string — full street address",
+    "venueType": "one of: Convention Center | Hotel Ballroom | Resort / Conference Center | Theater / Performing Arts Venue | Arena / Stadium | Corporate Campus / HQ | Outdoor Venue / Tent | Broadcast Studio | Restaurant / Private Event Space | Cruise Ship | Other",
+    "venueConfirmedStatus": "one of: CONTRACT_SIGNED | VERBAL_CONFIRM | STRONG_PREF | NOT_SELECTED",
+    "isUnionVenue": "one of: YES | NO | NOT_SURE",
+    "unionJurisdictions": "array of any matching: IATSE (Stage Labor) | IBEW (Electrical) | Teamsters (Freight) | Carpenters Union | Local Stagehands Union | Other",
+    "loadInDate": "YYYY-MM-DD",
+    "loadInTime": "HH:MM in 24-hour format (e.g. 07:00)",
+    "rehearsalDate": "YYYY-MM-DD",
+    "rehearsalTime": "HH:MM in 24-hour format",
+    "strikeDate": "YYYY-MM-DD",
+    "strikeTime": "HH:MM in 24-hour format",
+    "numberOfEventRooms": "string — numeric count of rooms requiring AV",
+    "timeZone": "one of: Eastern Time (ET) | Central Time (CT) | Mountain Time (MT) | Pacific Time (PT) | Alaska Time (AKT) | Hawaii Time (HT) | Other / International"
   },
   "roomByRoom": {
-    "roomFunction": "string",
+    "roomFunction": "string — e.g. General Session, Breakout, VIP Lounge",
     "estimatedAttendeesInRoom": "string",
-    "loadInDateTime": "ISO datetime string",
-    "rehearsalDateTime": "ISO datetime string",
     "showStartDateTime": "ISO datetime string",
     "showEndDateTime": "ISO datetime string",
-    "audioSystemForHowManyPpl": "string",
     "podiumMic": "one of: Yes | No",
     "podiumMicQty": "string (only if podiumMic is Yes)",
     "wirelessMics": "one of: Yes | No",
     "wirelessMicsQty": "string (only if wirelessMics is Yes)",
-    "wirelessMicsType": "one of: Handhelds | Headset Mics (only if wirelessMics is Yes)",
+    "wirelessMicsType": "one of: Handhelds | Headset Mics",
     "audioRecording": "one of: Yes | No",
     "largeMonitorsOrScreenProjector": "one of: Yes | No",
     "largeMonitorsQty": "string (only if largeMonitorsOrScreenProjector is Yes)",
     "ledWall": "one of: Yes | No",
-    "clientProvideOwnPresentationLaptop": "one of: Yes | No",
-    "clientLaptopQty": "string (only if clientProvideOwnPresentationLaptop is Yes)",
     "presentationLaptops": "one of: Yes | No",
     "presentationLaptopQty": "string (only if presentationLaptops is Yes)",
     "videoPlayback": "one of: Yes | No",
-    "videoPlaybackCount": "string (only if videoPlayback is Yes)",
     "videoFormatAspectRatio": "one of: 16:9 format | Unique Aspect Ratio | Both",
     "audienceQa": "one of: Yes | No",
-    "audienceQaMethod": "one of: Via an App | Passing a Microphone | Both (only if audienceQa is Yes)",
+    "audienceQaMethod": "one of: Via an App | Passing a Microphone | Both",
     "cameras": "one of: Yes | No",
     "camerasQty": "string (only if cameras is Yes)",
     "videoRecording": "one of: Yes | No",
-    "videoRecordingType": "one of: Camera Feed Only | Presentation Only | Side by Side (Camera and Presentation) | All The Above (only if videoRecording is Yes)",
+    "videoRecordingType": "one of: Camera Feed Only | Presentation Only | Side by Side (Camera and Presentation) | All The Above",
     "stageWashLighting": "one of: Yes | No",
     "stageWashLightingStageSize": "string (only if stageWashLighting is Yes)",
     "backlightingFor": "one of: Yes | No",
@@ -91,37 +107,99 @@ Schema:
     "notesConfidenceMonitorQty": "string (only if notesConfidenceMonitor is Yes)",
     "speakerTimer": "one of: Yes | No",
     "scenicStageDesign": "one of: Yes | No",
-    "stageDimensions": "string",
-    "confidenceMonitor": "one of: Yes | No",
-    "confidenceMonitorCount": "string",
-    "projectorsProvided": "one of: Yes | No",
-    "projectorCount": "string",
-    "cameraPackage": "string",
-    "cameraCount": "string",
-    "livestreamNeeded": "one of: Yes | No",
-    "lightingPackage": "string",
-    "lightingConsole": "string",
     "teleprompterNeeded": "one of: Yes | No",
-    "showCallingRequired": "one of: Yes | No",
-    "contentVideoNeeds": "string"
+    "unionLabor": "one of: Yes | No | Not Sure",
+    "showCrewNeeded": "array of any matching: A1 (AUDIO) | A2 (AUDIO ASSIST) | V1 (VIDEO) | V2 (VIDEO ASSIST) | TD (TECHNICAL DIRECTOR) | L1 (LIGHTING) | GRAPHICS OP | CAMERA OPERATOR | SHOWCALLER | STAGE MANAGER | PRODUCER | TELEPROMPTER OP | RIGGER | STAGEHAND",
+    "otherRolesNeeded": "string"
   },
   "production": {
     "scenicStageDesign": "one of: Yes | No",
     "unionLabor": "one of: Yes | No | Not Sure",
-    "showCrewNeeded": "array of any matching: A1 (AUDIO) | V1 (VIDEO) | TD (TECHNICAL DIRECTOR) | GRAPHICS OP | CAMERA OPERATOR | SHOWCALLER | STAGE MANAGER | LIGHTING DIRECTOR",
+    "showCrewNeeded": "array of any matching: A1 (AUDIO) | A2 (AUDIO ASSIST) | V1 (VIDEO) | V2 (VIDEO ASSIST) | TD (TECHNICAL DIRECTOR) | L1 (LIGHTING) | GRAPHICS OP | CAMERA OPERATOR | SHOWCALLER | STAGE MANAGER | PRODUCER | TELEPROMPTER OP | RIGGER | STAGEHAND",
     "otherRolesNeeded": "string"
   },
+  "hybridVirtual": {
+    "virtualAttendeeEstimate": "string — numeric estimate of virtual attendees",
+    "streamingPlatform": "one of: Zoom | Teams | Hopin | vMix | StreamYard | Webex | Other",
+    "streamingPlatformOther": "string (only if streamingPlatform is Other)",
+    "platformIntegrationWithAv": "one of: YES | NO",
+    "streamOwnership": "one of: Client | AV Vendor | TBD",
+    "remoteSpeakers": {
+      "remoteSpeakers": "one of: YES | NO",
+      "howManyRemoteSpeakers": "string",
+      "remoteFeedPlatform": "string — e.g. Zoom Webinar",
+      "techRehearsalOwner": "one of: Client | AV Vendor"
+    },
+    "liveVirtualQa": "one of: YES | NO",
+    "virtualOnlyBreakouts": "one of: YES | NO",
+    "dedicatedVirtualProducer": "one of: YES | NO",
+    "closedCaptions": {
+      "closedCaptions": "one of: YES | NO",
+      "captionLanguages": "array of language strings",
+      "captionType": "one of: AI | Human"
+    },
+    "onDemandRecording": "one of: YES | NO",
+    "sponsorOverlays": "one of: YES | NO",
+    "virtualNetworking": "one of: YES | NO"
+  },
+  "contentCreative": {
+    "contentServicesNeeded": "one of: YES | NO",
+    "presentationTemplateDesign": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
+    "speakerSlideCollection": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
+    "motionGraphicsOpenerVideo": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
+    "lowerThirdsNameSupers": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
+    "sizzleRecapVideo": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
+    "liveDataFeeds": {
+      "needed": "one of: YES | NO",
+      "ownership": "one of: Client / Internal Team | AV Vendor | TBD | N/A"
+    },
+    "sponsorRecognitionContent": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
+    "socialMediaContentCapture": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
+    "creativeDirectionNotes": "string — theme, colour palette, brand constraints"
+  },
+  "videoRecordingStep": {
+    "videoRecordingRequired": "one of: YES | NO",
+    "numberOfCameras": "string — numeric",
+    "cameraPositions": "array of strings — e.g. Stage Wide, Speaker Close-Up, Audience Reaction, Roaming",
+    "imagRequired": "one of: YES | NO",
+    "cameraOperators": "string — numeric count",
+    "isoRecordings": "string — e.g. All cameras ISO",
+    "recordingResolution": "string — e.g. 4K, 1080p",
+    "recordingMedia": "string — e.g. SSD, NVMe",
+    "editedDeliverable": {
+      "needed": "one of: YES | NO",
+      "deliverableType": "array of any matching: Highlight Reel | Full Edit | Speaker Cuts",
+      "turnaroundTime": "string — e.g. 5 Business Days",
+      "reelLengthPreference": "string — e.g. 2-3 min"
+    },
+    "rawFootageTurnover": "one of: YES | NO",
+    "deliverableFormat": "array of strings — e.g. H.264 MP4",
+    "deliveryMethod": "array of any matching: WeTransfer | Dropbox | Hard Drive | USB | Cloud Link | FTP"
+  },
   "venue": {
-    "needRiggingForFlown": "one of: YES | NO",
+    "venueAvContactName": "string — in-house AV contact name at the venue",
+    "venueAvContactPhone": "string",
+    "venueAvContactEmail": "string",
+    "inHouseAvCompanyName": "string — e.g. PSAV, Encore",
+    "riggingRequired": "one of: YES | NO",
     "riggingPlotOrSpecs": "string",
-    "needDedicatedPowerDrops": "one of: YES | NO",
-    "standardAmpWall": "one of: 100A | 200A | 400A",
-    "powerDropsHowMany": "string"
+    "maxWeightPerRiggingPoint": "string — e.g. 500 lbs",
+    "numberOfRiggingPoints": "string — numeric",
+    "powerDropsRequired": "one of: YES | NO",
+    "powerDropAmperage": "one of: 100A | 200A | 400A",
+    "numberOfPowerDrops": "string — numeric",
+    "wirelessInternetRequired": "one of: YES | NO",
+    "internetUseCases": "array of strings — e.g. Livestream, Remote Speakers, Signage",
+    "coiRequirements": "string — insurance requirements",
+    "venueAccessRequirements": "string — access hours, dock procedures"
   },
   "budget": {
-    "estimatedAvBudget": "one of: <$10K | $10-25K | $25-50K | $50-100K | $100K+ | Other",
+    "estimatedAvBudget": "one of: Essential | Standard | Production | Premium | Enterprise | Signature | Not Yet Determined",
     "proposalFormatPreferences": "array of any matching: GEAR ITEMIZATION | LABOR BREAKDOWN | ALL-IN ESTIMATE | ADD-ON OPTIONS",
-    "timelineForProposal": "one of: Within 3 Business Days | 1 Week | 2 Weeks | Flexible",
+    "timelineForProposal": "one of: Within 24 Hours | Within 3 Business Days | 1 Week | 2 Weeks | Flexible",
+    "decisionDate": "YYYY-MM-DD",
+    "competitiveBid": "one of: YES | NO",
+    "numberOfProposals": "string — numeric count of vendors being asked",
     "callWithDxgProducer": "one of: YES | NO",
     "howDidYouHear": "one of: Referral | Venue | Google | Social Media | LinkedIn | Other",
     "howDidYouHearOther": "string (only if howDidYouHear is Other)"
@@ -129,11 +207,15 @@ Schema:
   "contact": {
     "contactFirstName": "string",
     "contactLastName": "string",
-    "contactTitle": "string",
-    "contactOrganization": "string",
+    "contactTitle": "string — job title",
+    "contactOrganization": "string — display name of the organization",
+    "organizationLegalName": "string — legal entity name if different",
     "contactEmail": "string",
     "contactPhone": "string",
-    "anythingElse": "string"
+    "contactPhoneExt": "string",
+    "preferredContactMethod": "one of: Email | Phone | Either",
+    "bestTimeToReach": "string — e.g. Weekdays 9-5 PT",
+    "anythingElse": "string — any additional notes"
   }
 }`;
 
@@ -190,10 +272,11 @@ export const extractProposal = async (
         res.status(422).json({ success: false, message: "Document appears empty." });
         return;
       }
-      const truncated = docText.slice(0, 12000);
+      const truncated = docText.slice(0, 24000);
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         temperature: 0,
+        response_format: { type: "json_object" },
         messages: [
           { role: "system", content: EXTRACTION_PROMPT },
           { role: "user", content: `Document text:\n\n${truncated}` },
@@ -202,7 +285,7 @@ export const extractProposal = async (
       rawContent = completion.choices[0]?.message?.content ?? "";
     } else {
       /* ── TXT / CSV: read as UTF-8, then call LLM ── */
-      const text = buffer.toString("utf-8").slice(0, 12000);
+      const text = buffer.toString("utf-8").slice(0, 24000);
       if (!text.trim()) {
         res.status(422).json({ success: false, message: "Document appears empty." });
         return;
@@ -210,6 +293,7 @@ export const extractProposal = async (
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         temperature: 0,
+        response_format: { type: "json_object" },
         messages: [
           { role: "system", content: EXTRACTION_PROMPT },
           { role: "user", content: `Document text:\n\n${text}` },

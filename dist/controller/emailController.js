@@ -20,8 +20,8 @@ const firstUrlFromEnv = (value) => value
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean)[0] || value.trim();
-const getApiBaseUrl = () => firstUrlFromEnv(process.env.BACKEND_URL || "").replace(/\/+$/, "");
-const getFrontendBaseUrl = () => firstUrlFromEnv(process.env.FRONTEND_URL || "").replace(/\/+$/, "");
+const getApiBaseUrl = () => firstUrlFromEnv(process.env.BACKEND_URL || process.env.API_URL || "http://localhost:5000").replace(/\/+$/, "");
+const getFrontendBaseUrl = () => firstUrlFromEnv(process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "");
 const buildProposalPublicUrl = (proposalSlug) => `${getFrontendBaseUrl()}/proposal-view/${proposalSlug}?source=email`;
 const buildVendorResponseUrl = (proposalSlug) => `${getFrontendBaseUrl()}/vendor-response/${proposalSlug}?source=email`;
 const buildVendorResponseTrackingClickUrl = (trackingId, redirectUrl) => `${getApiBaseUrl()}/api/emails/vendor-click/${trackingId}?redirect=${encodeURIComponent(redirectUrl)}`;

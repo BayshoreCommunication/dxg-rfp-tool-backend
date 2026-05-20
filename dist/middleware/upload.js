@@ -11,7 +11,7 @@ const paths_1 = require("../utils/paths");
 // Get upload directories using the utility function
 const uploadsDir = (0, paths_1.getUploadPath)();
 const tempDir = (0, paths_1.getUploadPath)("temp");
-// Ensure uploads directory exists
+//Ensure uploads directory exists
 try {
     if (!fs_1.default.existsSync(uploadsDir)) {
         fs_1.default.mkdirSync(uploadsDir, { recursive: true });

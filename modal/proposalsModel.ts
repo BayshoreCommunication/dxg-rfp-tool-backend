@@ -19,8 +19,6 @@ export interface IProposal extends Document {
     eventTheme?: string;
     startDate?: string;
     endDate?: string;
-    venue?: string;
-    venueCity?: string;
     attendees?: string;
     eventFormat?: "In-Person" | "Hybrid" | "Virtual";
     eventType?: {
@@ -94,8 +92,6 @@ const proposalSchema = new Schema<IProposal>(
       eventTheme: { type: String, trim: true },
       startDate: { type: String, trim: true },
       endDate: { type: String, trim: true },
-      venue: { type: String, trim: true },
-      venueCity: { type: String, trim: true },
       attendees: { type: String, trim: true },
       eventFormat: { type: String, enum: ["In-Person", "Hybrid", "Virtual"] },
       eventType: {
