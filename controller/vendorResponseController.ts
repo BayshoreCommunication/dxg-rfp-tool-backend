@@ -2,6 +2,7 @@ import fs from "fs";
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth";
+import EmailCampaign from "../modal/emailModel";
 import Proposal from "../modal/proposalsModel";
 import VendorResponse from "../modal/vendorResponseModel";
 import { uploadToSpaces } from "../utils/uploadToSpaces";
@@ -170,6 +171,11 @@ export const submitVendorResponse = async (
       if (newDocs.length > 0) {
         existing.documents.push(...newDocs);
       }
+      // Move the response to the new campaign's tracking ID so that the
+      // latest send is credited — not the original campaign.
+      if (normalizedTid && existing.emailTrackingId !== normalizedTid) {
+        existing.emailTrackingId = normalizedTid;
+      }
       await existing.save();
 
       // Send update confirmation (non-blocking)
@@ -262,14 +268,28 @@ export const getVendorResponses = async (
       return;
     }
 
-    const { page = "1", limit = "20", unreadOnly = "false", proposalId } = req.query;
+    const { page = "1", limit = "20", unreadOnly = "false", proposalId, campaignId } = req.query;
     const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10) || 20));
     const skip = (pageNum - 1) * limitNum;
 
     const filter: Record<string, unknown> = { proposalOwnerId: new mongoose.Types.ObjectId(userId) };
     if (unreadOnly === "true") filter.isRead = false;
-    if (proposalId && mongoose.isValidObjectId(proposalId as string)) {
+
+    if (campaignId && mongoose.isValidObjectId(campaignId as string)) {
+      // Filter to only responses that came through this specific campaign's tracking links
+      const campaign = await EmailCampaign.findOne({
+        _id: new mongoose.Types.ObjectId(campaignId as string),
+        userId: new mongoose.Types.ObjectId(userId),
+      }).select("recipients.trackingId").lean();
+
+      const trackingIds = (campaign?.recipients ?? [])
+        .map((r) => r.trackingId)
+        .filter(Boolean);
+
+      // If campaign has no tracking IDs, return empty result
+      filter.emailTrackingId = trackingIds.length > 0 ? { $in: trackingIds } : { $exists: false, $eq: null };
+    } else if (proposalId && mongoose.isValidObjectId(proposalId as string)) {
       filter.proposalId = new mongoose.Types.ObjectId(proposalId as string);
     }
 
