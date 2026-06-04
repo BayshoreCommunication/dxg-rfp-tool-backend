@@ -39,6 +39,14 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
 
+// Prevent any proxy / CDN / browser from caching API responses
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  next();
+});
+
 // Database connection middleware for serverless environments
 app.use(async (_req: Request, _res: Response, next: NextFunction) => {
   try {
