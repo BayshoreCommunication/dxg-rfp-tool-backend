@@ -134,27 +134,30 @@ const sendEmail = async (params: {
     });
 
     if (error) {
-      console.error("[Resend] Send error:", error);
-      throw new Error(`Resend error: ${error.message}`);
+      console.warn(`[Resend] Failed (${error.message}), falling back to SMTP...`);
+      // Fall through to SMTP below
+    } else {
+      console.log("[Resend] Email sent successfully");
+      return; // Resend succeeded — skip SMTP
     }
-    console.log("[Resend] Email sent successfully");
-  } else {
-    // -----------------------------------------------------------------------
-    // SMTP fallback (local dev)
-    // -----------------------------------------------------------------------
-    const activeTransporter = await ensureTransporter();
-    const info = await activeTransporter.sendMail({
-      from: getFromAddress(),
-      to: toList.join(", "),
-      bcc: bccList?.join(", "),
-      subject: params.subject,
-      html: params.html,
-      text: params.text,
-    });
-    console.log("Email sent via SMTP:", info.messageId);
-    const previewUrl = nodemailer.getTestMessageUrl(info);
-    if (previewUrl) console.log("Preview URL:", previewUrl);
   }
+
+  // -------------------------------------------------------------------------
+  // SMTP — fallback when Resend is absent or returned an error
+  // -------------------------------------------------------------------------
+  const smtpFrom = `"DXG RFP Tool" <${normalizeEnv(process.env.SMTP_MAIL) || "noreply@dxg-agency.com"}>`;
+  const activeTransporter = await ensureTransporter();
+  const info = await activeTransporter.sendMail({
+    from: smtpFrom,
+    to: toList.join(", "),
+    bcc: bccList?.join(", "),
+    subject: params.subject,
+    html: params.html,
+    text: params.text,
+  });
+  console.log("[SMTP] Email sent:", info.messageId);
+  const previewUrl = nodemailer.getTestMessageUrl(info);
+  if (previewUrl) console.log("[SMTP] Preview URL:", previewUrl);
 };
 
 // ---------------------------------------------------------------------------

@@ -64,15 +64,18 @@ const sendVendorConfirmation = async (params: {
   proposalTitle: string;
   isUpdate: boolean;
 }): Promise<void> => {
+  const action = params.isUpdate ? "updated" : "submitted";
+  console.log(`[VendorConfirmation] Sending ${action} confirmation to: ${params.email}`);
   try {
     await sendCustomEmail({
       to: params.email,
-      subject: `Your response has been ${params.isUpdate ? "updated" : "submitted"} — ${params.proposalTitle}`,
+      subject: `Your response has been ${action} — ${params.proposalTitle}`,
       html: buildVendorConfirmationHtml(params),
-      text: `Hi ${params.vendorName},\n\nYour proposal response for "${params.proposalTitle}" has been ${params.isUpdate ? "updated" : "received"} successfully.\n\nSubmitted by: ${params.submittedBy}\n\nThe event planner will review your response and reach out if they are interested.\n\nDXG RFP Tool`,
+      text: `Hi ${params.vendorName},\n\nYour proposal response for "${params.proposalTitle}" has been ${action} successfully.\n\nSubmitted by: ${params.submittedBy}\n\nThe event planner will review your response and reach out if they are interested.\n\nDXG RFP Tool`,
     });
+    console.log(`[VendorConfirmation] Confirmation email delivered to: ${params.email}`);
   } catch (err) {
-    console.error("Vendor confirmation email failed (non-fatal):", err);
+    console.error(`[VendorConfirmation] Failed to send confirmation to ${params.email}:`, err);
   }
 };
 
