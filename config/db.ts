@@ -1,4 +1,8 @@
+import dns from "dns";
 import mongoose from "mongoose";
+
+// Use Google DNS to bypass local DNS resolution issues with MongoDB Atlas SRV records
+dns.setServers(["8.8.8.8", "8.8.4.4"]);
 
 // Mongoose connection caching for serverless
 let isConnected = false;
