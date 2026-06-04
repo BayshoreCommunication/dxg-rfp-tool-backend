@@ -311,21 +311,43 @@ export const getEmailCampaigns = async (
       EmailCampaign.countDocuments(filter),
     ]);
 
-    // Attach vendorResponseCount per proposalId
-    const responseCounts = await VendorResponse.aggregate<{
-      _id: string;
-      count: number;
-    }>([
-      { $match: { proposalId: { $in: campaigns.map((c) => c.proposalId) } } },
-      { $group: { _id: { $toString: "$proposalId" }, count: { $sum: 1 } } },
-    ]);
-    const responseCountMap = Object.fromEntries(
-      responseCounts.map((r) => [r._id, r.count]),
-    );
+    // Count vendor responses per campaign by matching each campaign's
+    // recipient trackingIds against VendorResponse.emailTrackingId.
+    // This prevents all campaigns for the same proposal sharing one count.
+    const trackingToCampaign: Record<string, string> = {};
+    for (const campaign of campaigns) {
+      for (const recipient of campaign.recipients) {
+        if (recipient.trackingId) {
+          trackingToCampaign[recipient.trackingId] = String(campaign._id);
+        }
+      }
+    }
+
+    const allTrackingIds = Object.keys(trackingToCampaign);
+    const vendorResponsesByCampaign: Record<string, number> = {};
+
+    if (allTrackingIds.length > 0) {
+      const matchedResponses = await VendorResponse.find({
+        emailTrackingId: { $in: allTrackingIds },
+      })
+        .select("emailTrackingId")
+        .lean();
+
+      for (const resp of matchedResponses) {
+        const tid = resp.emailTrackingId;
+        if (tid) {
+          const campaignId = trackingToCampaign[tid];
+          if (campaignId) {
+            vendorResponsesByCampaign[campaignId] =
+              (vendorResponsesByCampaign[campaignId] ?? 0) + 1;
+          }
+        }
+      }
+    }
 
     const data = campaigns.map((c) => ({
       ...c,
-      vendorResponseCount: responseCountMap[String(c.proposalId)] ?? 0,
+      vendorResponseCount: vendorResponsesByCampaign[String(c._id)] ?? 0,
     }));
 
     res.status(200).json({
