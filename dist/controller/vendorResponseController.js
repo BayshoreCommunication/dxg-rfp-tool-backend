@@ -68,7 +68,23 @@ const sendVendorConfirmation = async (params) => {
 };
 const checkVendorResponseExists = async (req, res) => {
     try {
-        const { proposalId, email } = req.query;
+        const { proposalId, email, emailTrackingId } = req.query;
+        const tid = emailTrackingId?.trim();
+        // When vendor arrives via an email link (tracking ID present), only show
+        // update mode if their existing response is specifically tied to THIS
+        // campaign's tracking ID. A response from an older campaign should not
+        // trigger update mode — vendor gets a fresh form for the new campaign.
+        if (tid) {
+            const existing = await vendorResponseModel_1.default.findOne({ emailTrackingId: tid })
+                .select("_id vendorName submittedBy email message documents createdAt updatedAt")
+                .lean();
+            res.status(200).json({
+                alreadySubmitted: !!existing,
+                existingResponse: existing ?? null,
+            });
+            return;
+        }
+        // Direct form access (no tracking ID) — fall back to proposalId + email
         if (!proposalId || !mongoose_1.default.isValidObjectId(proposalId) || !email?.trim()) {
             res.status(200).json({ alreadySubmitted: false, existingResponse: null });
             return;
