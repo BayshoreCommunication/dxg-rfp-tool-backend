@@ -64,8 +64,6 @@ const proposalSchema = new mongoose_1.Schema({
         eventTheme: { type: String, trim: true },
         startDate: { type: String, trim: true },
         endDate: { type: String, trim: true },
-        venue: { type: String, trim: true },
-        venueCity: { type: String, trim: true },
         attendees: { type: String, trim: true },
         eventFormat: { type: String, enum: ["In-Person", "Hybrid", "Virtual"] },
         eventType: {

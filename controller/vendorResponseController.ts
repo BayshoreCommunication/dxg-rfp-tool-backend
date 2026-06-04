@@ -290,8 +290,18 @@ export const getVendorResponses = async (
         .map((r) => r.trackingId)
         .filter(Boolean);
 
-      // If campaign has no tracking IDs, return empty result
-      filter.emailTrackingId = trackingIds.length > 0 ? { $in: trackingIds } : { $exists: false, $eq: null };
+      // No tracking IDs means no responses can belong to this campaign — return empty immediately
+      if (trackingIds.length === 0) {
+        res.status(200).json({
+          success: true,
+          data: [],
+          pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
+          unreadCount: 0,
+        });
+        return;
+      }
+
+      filter.emailTrackingId = { $in: trackingIds };
     } else if (proposalId && mongoose.isValidObjectId(proposalId as string)) {
       filter.proposalId = new mongoose.Types.ObjectId(proposalId as string);
     }

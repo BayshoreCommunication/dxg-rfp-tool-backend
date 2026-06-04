@@ -122,29 +122,31 @@ const sendEmail = async (params) => {
             text: params.text,
         });
         if (error) {
-            console.error("[Resend] Send error:", error);
-            throw new Error(`Resend error: ${error.message}`);
+            console.warn(`[Resend] Failed (${error.message}), falling back to SMTP...`);
+            // Fall through to SMTP below
         }
-        console.log("[Resend] Email sent successfully");
+        else {
+            console.log("[Resend] Email sent successfully");
+            return; // Resend succeeded — skip SMTP
+        }
     }
-    else {
-        // -----------------------------------------------------------------------
-        // SMTP fallback (local dev)
-        // -----------------------------------------------------------------------
-        const activeTransporter = await ensureTransporter();
-        const info = await activeTransporter.sendMail({
-            from: getFromAddress(),
-            to: toList.join(", "),
-            bcc: bccList?.join(", "),
-            subject: params.subject,
-            html: params.html,
-            text: params.text,
-        });
-        console.log("Email sent via SMTP:", info.messageId);
-        const previewUrl = nodemailer_1.default.getTestMessageUrl(info);
-        if (previewUrl)
-            console.log("Preview URL:", previewUrl);
-    }
+    // -------------------------------------------------------------------------
+    // SMTP — fallback when Resend is absent or returned an error
+    // -------------------------------------------------------------------------
+    const smtpFrom = `"DXG RFP Tool" <${normalizeEnv(process.env.SMTP_MAIL) || "noreply@dxg-agency.com"}>`;
+    const activeTransporter = await ensureTransporter();
+    const info = await activeTransporter.sendMail({
+        from: smtpFrom,
+        to: toList.join(", "),
+        bcc: bccList?.join(", "),
+        subject: params.subject,
+        html: params.html,
+        text: params.text,
+    });
+    console.log("[SMTP] Email sent:", info.messageId);
+    const previewUrl = nodemailer_1.default.getTestMessageUrl(info);
+    if (previewUrl)
+        console.log("[SMTP] Preview URL:", previewUrl);
 };
 // ---------------------------------------------------------------------------
 // Public API — matches original function signatures
