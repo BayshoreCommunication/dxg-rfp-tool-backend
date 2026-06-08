@@ -23,7 +23,25 @@ const validateResponseId = (req: Request, res: Response, next: NextFunction) => 
 
 /* Public routes — no authentication required */
 router.get("/check", checkVendorResponseExists);
-router.post("/", uploadVendorDocs, submitVendorResponse);
+router.post(
+  "/",
+  (req: Request, res: Response, next: NextFunction) => {
+    uploadVendorDocs(req, res, (err: unknown) => {
+      if (err) {
+        const msg =
+          err instanceof Error && err.message.includes("File too large")
+            ? "One or more files exceed the 10 MB size limit."
+            : err instanceof Error
+              ? err.message
+              : "File upload error.";
+        res.status(400).json({ success: false, message: msg });
+        return;
+      }
+      next();
+    });
+  },
+  submitVendorResponse,
+);
 
 /* Protected routes — planner dashboard */
 router.get("/", authenticate, getVendorResponses);

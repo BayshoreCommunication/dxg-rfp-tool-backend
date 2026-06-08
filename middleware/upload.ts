@@ -122,7 +122,16 @@ export const uploadProposalDocs = uploadDocument.fields([
   { name: "avQuoteFiles", maxCount: 10 },
 ]);
 
-// Middleware for vendor response document uploads
-export const uploadVendorDocs = uploadDocument.fields([
+// Vendor response uploads — any file type, 10 MB per file
+const uploadVendorDocsMulter = multer({
+  storage,
+  // No fileFilter — accept any MIME type the vendor sends
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10 MB
+    files: 10,
+  },
+});
+
+export const uploadVendorDocs = uploadVendorDocsMulter.fields([
   { name: "documents", maxCount: 10 },
 ]);
