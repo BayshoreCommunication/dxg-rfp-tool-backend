@@ -10,7 +10,7 @@ import {
   sendSignupOtpEmail,
 } from "../utils/emailService";
 
-/* ─────────────────────────────────────────
+/*─────────────────────────────────────────
    Helper — build safe user response
 ───────────────────────────────────────── */
 const userResponse = (user: any) => ({
