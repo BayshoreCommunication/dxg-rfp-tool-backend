@@ -1,5 +1,5 @@
+import "./config/env"; // must be first — loads .env before any module reads process.env
 import cors from "cors";
-import dotenv from "dotenv";
 import express, { Application, NextFunction, Request, Response } from "express";
 import http from "http";
 import mongoose from "mongoose";
@@ -20,9 +20,6 @@ import vendorResponseRoutes from "./routes/vendorResponseRoute";
 import { startCronJobs } from "./utils/cronJobs";
 import { initializeNotificationWebSocketServer } from "./utils/notificationService";
 import { getUploadsDir } from "./utils/paths";
-
-// Load environment variables
-dotenv.config();
 
 console.log("Loaded SMTP_MAIL:", process.env.SMTP_MAIL ? "***" : "UNDEFINED");
 console.log(
