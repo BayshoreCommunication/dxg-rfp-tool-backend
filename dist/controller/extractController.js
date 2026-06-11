@@ -8,6 +8,8 @@ const multer_1 = __importDefault(require("multer"));
 const openai_1 = __importDefault(require("openai"));
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const mammoth = require("mammoth");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pdfParse = require("pdf-parse");
 /* ─── OpenAI client (lazy — created per-request so dotenv has loaded first) ─── */
 const getOpenAI = () => new openai_1.default({ apiKey: process.env.OPENAI_API_KEY });
 /* ─── Multer — memory storage (no disk writes) ─── */
@@ -85,9 +87,13 @@ Schema:
     "largeMonitorsOrScreenProjector": "one of: Yes | No",
     "largeMonitorsQty": "string (only if largeMonitorsOrScreenProjector is Yes)",
     "ledWall": "one of: Yes | No",
+    "ledWallWidth": "string — width in feet (only if ledWall is Yes)",
+    "ledWallHeight": "string — height in feet (only if ledWall is Yes)",
+    "ledWallPixelPitch": "string — pixel pitch in mm (only if ledWall is Yes)",
     "presentationLaptops": "one of: Yes | No",
     "presentationLaptopQty": "string (only if presentationLaptops is Yes)",
     "videoPlayback": "one of: Yes | No",
+    "videoPlaybackCount": "string (only if videoPlayback is Yes)",
     "videoFormatAspectRatio": "one of: 16:9 format | Unique Aspect Ratio | Both",
     "audienceQa": "one of: Yes | No",
     "audienceQaMethod": "one of: Via an App | Passing a Microphone | Both",
@@ -105,8 +111,10 @@ Schema:
     "notesConfidenceMonitor": "one of: Yes | No",
     "notesConfidenceMonitorQty": "string (only if notesConfidenceMonitor is Yes)",
     "speakerTimer": "one of: Yes | No",
-    "scenicStageDesign": "one of: Yes | No",
     "teleprompterNeeded": "one of: Yes | No",
+    "teleprompterBilingual": "one of: Yes | No",
+    "teleprompterLanguages": "array of language strings (only if teleprompterNeeded is Yes)",
+    "scenicStageDesign": "one of: Yes | No",
     "unionLabor": "one of: Yes | No | Not Sure",
     "showCrewNeeded": "array of any matching: A1 (AUDIO) | A2 (AUDIO ASSIST) | V1 (VIDEO) | V2 (VIDEO ASSIST) | TD (TECHNICAL DIRECTOR) | L1 (LIGHTING) | GRAPHICS OP | CAMERA OPERATOR | SHOWCALLER | STAGE MANAGER | PRODUCER | TELEPROMPTER OP | RIGGER | STAGEHAND",
     "otherRolesNeeded": "string"
@@ -194,7 +202,7 @@ Schema:
   },
   "budget": {
     "estimatedAvBudget": "one of: Essential | Standard | Production | Premium | Enterprise | Signature | Not Yet Determined",
-    "proposalFormatPreferences": "array of any matching: GEAR ITEMIZATION | LABOR BREAKDOWN | ALL-IN ESTIMATE | ADD-ON OPTIONS",
+    "proposalFormatPreferences": "array of any matching: Itemized Gear List | Labor Breakdown by Day | All-In Total Estimate | Alternate / Value-Engineered Option | Creative / Scenic Approach Narrative | Crew Bios | References | LED Wall Line-Itemed Separately",
     "timelineForProposal": "one of: Within 24 Hours | Within 3 Business Days | 1 Week | 2 Weeks | Flexible",
     "decisionDate": "YYYY-MM-DD",
     "competitiveBid": "one of: YES | NO",
@@ -217,6 +225,7 @@ Schema:
     "anythingElse": "string — any additional notes"
   }
 }`;
+const TEXT_LIMIT = 40000;
 /* ─── POST /api/extract-proposal ─── */
 const extractProposal = async (req, res) => {
     try {
@@ -225,73 +234,48 @@ const extractProposal = async (req, res) => {
             return;
         }
         const openai = getOpenAI();
-        const { buffer, mimetype, originalname } = req.file;
+        const { buffer, mimetype } = req.file;
         const isPdf = mimetype === "application/pdf";
         const isDocx = mimetype === "application/msword" ||
             mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-        let rawContent;
+        let docText = "";
         if (isPdf) {
-            /* ── PDF: use OpenAI Responses API with native PDF support ── */
-            const base64 = buffer.toString("base64");
-            const dataUrl = `data:application/pdf;base64,${base64}`;
-            const response = await openai.responses.create({
-                model: "gpt-4o-mini",
-                input: [
-                    {
-                        role: "user",
-                        content: [
-                            {
-                                type: "input_file",
-                                filename: originalname,
-                                file_data: dataUrl,
-                            }, // SDK type narrowing workaround
-                            {
-                                type: "input_text",
-                                text: EXTRACTION_PROMPT,
-                            },
-                        ],
-                    },
-                ],
-            });
-            rawContent = response.output_text ?? "";
+            /* ── PDF: extract text with pdf-parse, then call LLM ── */
+            const parsed = await pdfParse(buffer);
+            docText = (parsed.text || "").trim();
+            if (!docText) {
+                res.status(422).json({ success: false, message: "PDF appears to have no extractable text. Try a text-based PDF or DOCX." });
+                return;
+            }
         }
         else if (isDocx) {
-            /* ── DOCX: extract plain text with mammoth, then call LLM ── */
-            const { value: docText } = await mammoth.extractRawText({ buffer });
-            if (!docText.trim()) {
+            /* ── DOCX/DOC: extract plain text with mammoth ── */
+            const { value } = await mammoth.extractRawText({ buffer });
+            docText = (value || "").trim();
+            if (!docText) {
                 res.status(422).json({ success: false, message: "Document appears empty." });
                 return;
             }
-            const truncated = docText.slice(0, 24000);
-            const completion = await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                temperature: 0,
-                response_format: { type: "json_object" },
-                messages: [
-                    { role: "system", content: EXTRACTION_PROMPT },
-                    { role: "user", content: `Document text:\n\n${truncated}` },
-                ],
-            });
-            rawContent = completion.choices[0]?.message?.content ?? "";
         }
         else {
-            /* ── TXT / CSV: read as UTF-8, then call LLM ── */
-            const text = buffer.toString("utf-8").slice(0, 24000);
-            if (!text.trim()) {
+            /* ── TXT / CSV: read as UTF-8 ── */
+            docText = buffer.toString("utf-8").trim();
+            if (!docText) {
                 res.status(422).json({ success: false, message: "Document appears empty." });
                 return;
             }
-            const completion = await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                temperature: 0,
-                response_format: { type: "json_object" },
-                messages: [
-                    { role: "system", content: EXTRACTION_PROMPT },
-                    { role: "user", content: `Document text:\n\n${text}` },
-                ],
-            });
-            rawContent = completion.choices[0]?.message?.content ?? "";
         }
+        const truncated = docText.slice(0, TEXT_LIMIT);
+        const completion = await openai.chat.completions.create({
+            model: "gpt-4o",
+            temperature: 0,
+            response_format: { type: "json_object" },
+            messages: [
+                { role: "system", content: EXTRACTION_PROMPT },
+                { role: "user", content: `Document text:\n\n${truncated}` },
+            ],
+        });
+        const rawContent = completion.choices[0]?.message?.content ?? "";
         /* ── Parse JSON from LLM response ── */
         let extracted = {};
         try {
