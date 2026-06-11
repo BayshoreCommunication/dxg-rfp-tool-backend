@@ -1102,11 +1102,12 @@ export const copyProposal = async (
   try {
     const { id } = req.params;
     const userId = req.user?.userId;
-    const { eventName, startDate, endDate, templateId } = req.body as {
+    const { eventName, startDate, endDate, templateId, isDraft } = req.body as {
       eventName?: string;
       startDate?: string;
       endDate?: string;
       templateId?: "template-one" | "template-two";
+      isDraft?: boolean;
     };
 
     if (!isValidProposalId(id)) {
@@ -1130,7 +1131,7 @@ export const copyProposal = async (
       // isCopy:true  = lives in "Saved" tab, offline, cannot be favoured/shared
       // When the user publishes it, isCopy is auto-cleared → becomes a live proposal
       status: "unsubmitted",
-      isDraft: true,
+      isDraft: isDraft ?? false,
       isActive: false,      // offline until published
       isFavorite: false,    // copies cannot be favourited
       isAccepted: false,
