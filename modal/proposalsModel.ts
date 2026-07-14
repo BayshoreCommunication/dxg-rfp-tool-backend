@@ -17,6 +17,7 @@ export interface IProposal extends Document {
     eventName: string;
     editionYear?: string;
     eventTheme?: string;
+    eventWebsite?: string;
     startDate?: string;
     endDate?: string;
     attendees?: string;
@@ -29,6 +30,10 @@ export interface IProposal extends Document {
     eventObjectives?: string;
     toneDirection?: string[];
     sacredConstraints?: string;
+    aboutOrganization?: string;
+    statementOfWork?: string;
+    eventProfile?: string;
+    rfpTimeline?: string;
   };
   venueSchedule?: Record<string, unknown>;
   roomByRoom?: Record<string, unknown>[];
@@ -90,6 +95,7 @@ const proposalSchema = new Schema<IProposal>(
       },
       editionYear: { type: String, trim: true },
       eventTheme: { type: String, trim: true },
+      eventWebsite: { type: String, trim: true },
       startDate: { type: String, trim: true },
       endDate: { type: String, trim: true },
       attendees: { type: String, trim: true },
@@ -102,6 +108,10 @@ const proposalSchema = new Schema<IProposal>(
       eventObjectives: { type: String, trim: true },
       toneDirection: [{ type: String }],
       sacredConstraints: { type: String, trim: true },
+      aboutOrganization: { type: String, trim: true },
+      statementOfWork: { type: String, trim: true },
+      eventProfile: { type: String, trim: true },
+      rfpTimeline: { type: String, trim: true },
     },
 
     venueSchedule: { type: Schema.Types.Mixed, default: {} },

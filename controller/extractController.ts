@@ -2,17 +2,12 @@ import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import multer from "multer";
 import OpenAI from "openai";
+import { PDFParse } from "pdf-parse";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const mammoth = require("mammoth") as {
   extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }>;
 };
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdfParse = require("pdf-parse") as (
-  buffer: Buffer,
-  options?: Record<string, unknown>
-) => Promise<{ text: string; numpages: number }>;
 
 /* ─── OpenAI client (lazy — created per-request so dotenv has loaded first) ─── */
 const getOpenAI = () => new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -50,6 +45,7 @@ Schema:
     "eventName": "string — full official event name",
     "editionYear": "string — e.g. '12th Annual' or '2026' (omit if not mentioned)",
     "eventTheme": "string — event theme or tagline (omit if not mentioned)",
+    "eventWebsite": "string — event website URL (omit if not mentioned)",
     "startDate": "YYYY-MM-DD",
     "endDate": "YYYY-MM-DD",
     "attendees": "one of: < 100 | 100 - 150 | 200 - 500 | 500 - 1,000 | 1,000+",
@@ -58,7 +54,11 @@ Schema:
     "eventTypeOther": "string (only if eventType is Other)",
     "primaryAudience": "array of any matching: C-Suite Executives | Senior Leadership / VPs | Sales Team / Field Reps | Customers / End Users | Prospects / Leads | Partners / Channel / Resellers | Employees (All-Hands) | Investors / Shareholders | Press / Media / Analysts | Industry Professionals | Developers / Technical | Members (Association) | Students / Academic | General Public",
     "eventObjectives": "string — 2-4 sentences describing event goals",
-    "sacredConstraints": "string — non-negotiable requirements or special considerations"
+    "sacredConstraints": "string — non-negotiable requirements or special considerations",
+    "aboutOrganization": "string — background on the requesting organization (omit if not mentioned)",
+    "statementOfWork": "string — scope of work requested from vendors (omit if not mentioned)",
+    "eventProfile": "string — history/significance/stature of the event (omit if not mentioned)",
+    "rfpTimeline": "string — key RFP process dates/milestones as free text (omit if not mentioned)"
   },
   "venueSchedule": {
     "venueName": "string — full official venue name",
@@ -73,6 +73,10 @@ Schema:
     "loadInTime": "HH:MM in 24-hour format (e.g. 07:00)",
     "rehearsalDate": "YYYY-MM-DD",
     "rehearsalTime": "HH:MM in 24-hour format",
+    "showStartDate": "YYYY-MM-DD",
+    "showStartTime": "HH:MM in 24-hour format",
+    "showEndDate": "YYYY-MM-DD",
+    "showEndTime": "HH:MM in 24-hour format",
     "strikeDate": "YYYY-MM-DD",
     "strikeTime": "HH:MM in 24-hour format",
     "numberOfEventRooms": "string — numeric count of rooms requiring AV",
@@ -80,25 +84,37 @@ Schema:
   },
   "roomByRoom": {
     "roomFunction": "string — e.g. General Session, Breakout, VIP Lounge",
+    "roomLocation": "string — physical room/space name, if different from roomFunction",
+    "roomSetup": "one of: Round of 8 | Rounds of 10 | Classroom | Theater",
+    "scheduleDate": "YYYY-MM-DD — the date this room is in use",
+    "scheduleDay": "string — day of week (omit if not mentioned; can be derived from scheduleDate)",
     "estimatedAttendeesInRoom": "string",
+    "loadInDateTime": "ISO datetime string",
+    "rehearsalDateTime": "ISO datetime string",
     "showStartDateTime": "ISO datetime string",
     "showEndDateTime": "ISO datetime string",
     "podiumMic": "one of: Yes | No",
     "podiumMicQty": "string (only if podiumMic is Yes)",
     "wirelessMics": "one of: Yes | No",
     "wirelessMicsQty": "string (only if wirelessMics is Yes)",
-    "wirelessMicsType": "one of: Handhelds | Headset Mics",
+    "wirelessMicsType": "one of: Handhelds | Headset Mics | Lavalier (Lav) Mics | Both | Other",
+    "wirelessMicsTypeOther": "string (only if wirelessMicsType is Other)",
     "audioRecording": "one of: Yes | No",
     "largeMonitorsOrScreenProjector": "one of: Yes | No",
-    "largeMonitorsQty": "string (only if largeMonitorsOrScreenProjector is Yes)",
+    "numberOfMonitors": "string — numeric (only if largeMonitorsOrScreenProjector is Yes)",
+    "numberOfScreens": "string — numeric (only if largeMonitorsOrScreenProjector is Yes)",
+    "monitorSize": "one of: 40 inch | 43 inch | 50 inch | 55 inch | 60 inch | 65 inch | 70 inch (only if numberOfMonitors > 0)",
+    "screenSize": "one of: 8' Tripod | 10' Wide Fastfold | 12' Wide Fastfold | 14' Wide Fastfold | 16' Wide Fastfold | 18' Wide Fastfold | 20' Wide Fastfold | 24' Wide Fastfold | 32' Wide Fastfold (only if numberOfScreens > 0)",
     "ledWall": "one of: Yes | No",
     "ledWallWidth": "string — width in feet (only if ledWall is Yes)",
     "ledWallHeight": "string — height in feet (only if ledWall is Yes)",
     "ledWallPixelPitch": "string — pixel pitch in mm (only if ledWall is Yes)",
+    "ledWallSwitcher": "one of: Barco E2/E3 | Spyder X80 | Pixelhue P20/80/Q8 | Millumin | Vendor Recommendation (only if ledWall is Yes)",
     "presentationLaptops": "one of: Yes | No",
     "presentationLaptopQty": "string (only if presentationLaptops is Yes)",
     "videoPlayback": "one of: Yes | No",
     "videoPlaybackCount": "string (only if videoPlayback is Yes)",
+    "videoPlaybackFormat": "one of: 4:3 | 16:9 | Custom Wide Screen (only if videoPlayback is Yes)",
     "videoFormatAspectRatio": "one of: 16:9 format | Unique Aspect Ratio | Both",
     "audienceQa": "one of: Yes | No",
     "audienceQaMethod": "one of: Via an App | Passing a Microphone | Both",
@@ -121,6 +137,7 @@ Schema:
     "teleprompterLanguages": "array of language strings (only if teleprompterNeeded is Yes)",
     "scenicStageDesign": "one of: Yes | No",
     "unionLabor": "one of: Yes | No | Not Sure",
+    "unionLaborDetails": "string — specific union/contract details (only if unionLabor is Yes)",
     "showCrewNeeded": "array of any matching: A1 (AUDIO) | A2 (AUDIO ASSIST) | V1 (VIDEO) | V2 (VIDEO ASSIST) | TD (TECHNICAL DIRECTOR) | L1 (LIGHTING) | GRAPHICS OP | CAMERA OPERATOR | SHOWCALLER | STAGE MANAGER | PRODUCER | TELEPROMPTER OP | RIGGER | STAGEHAND",
     "otherRolesNeeded": "string"
   },
@@ -195,8 +212,8 @@ Schema:
     "inHouseAvCompanyName": "string — e.g. PSAV, Encore",
     "riggingRequired": "one of: YES | NO",
     "riggingPlotOrSpecs": "string",
-    "maxWeightPerRiggingPoint": "string — e.g. 500 lbs",
-    "numberOfRiggingPoints": "string — numeric",
+    "trussAndMotorsProvidedByVenue": "one of: YES | NO (only if riggingRequired is YES)",
+    "liftsProvidedByVenue": "one of: YES | NO (only if riggingRequired is YES)",
     "powerDropsRequired": "one of: YES | NO",
     "powerDropAmperage": "one of: 100A | 200A | 400A",
     "numberOfPowerDrops": "string — numeric",
@@ -207,14 +224,34 @@ Schema:
   },
   "budget": {
     "estimatedAvBudget": "one of: Essential | Standard | Production | Premium | Enterprise | Signature | Not Yet Determined",
-    "proposalFormatPreferences": "array of any matching: Itemized Gear List | Labor Breakdown by Day | All-In Total Estimate | Alternate / Value-Engineered Option | Creative / Scenic Approach Narrative | Crew Bios | References | LED Wall Line-Itemed Separately",
-    "timelineForProposal": "one of: Within 24 Hours | Within 3 Business Days | 1 Week | 2 Weeks | Flexible",
+    "proposalFormatPreferences": "array of any matching: Itemized Gear List | Labor Breakdown | All-In Total Estimate | Alternate / Value-Engineered Option | Creative / Scenic Approach Narrative | Crew Bios | References | LED Wall Line-Itemed Separately",
+    "sustainabilityDeiNotes": "string — sustainability or DEI requirements/preferences (omit if not mentioned)",
+    "vendorQuestionsDueDate": "YYYY-MM-DD",
+    "responseToVendorQuestionsDate": "YYYY-MM-DD",
+    "proposalSubmissionDueDate": "YYYY-MM-DD",
+    "shortlistNotificationDate": "YYYY-MM-DD",
+    "vendorPresentationOpportunity": "one of: YES | NO — whether shortlisted vendors present before final selection",
+    "vendorPresentationDate": "YYYY-MM-DD (only if vendorPresentationOpportunity is YES)",
+    "vendorSelectionDate": "YYYY-MM-DD",
     "decisionDate": "YYYY-MM-DD",
     "competitiveBid": "one of: YES | NO",
     "numberOfProposals": "string — numeric count of vendors being asked",
     "callWithDxgProducer": "one of: YES | NO",
     "howDidYouHear": "one of: Referral | Venue | Google | Social Media | LinkedIn | Other",
     "howDidYouHearOther": "string (only if howDidYouHear is Other)"
+  },
+  "uploads": {
+    "brandGuideUrl": "string — URL to brand guide (omit if not mentioned)",
+    "referenceUrls": "array of { url: string, label: string } — reference links (Vimeo, YouTube, Behance, etc.)",
+    "ndaRequired": "one of: YES | NO",
+    "ndaType": "string — e.g. Mutual NDA (only if ndaRequired is YES)",
+    "coVendors": {
+      "inHouseVenueAv": { "companyName": "string", "contactName": "string", "contactEmail": "string", "contactPhone": "string", "status": "string — e.g. Confirmed, In Discussion, TBD, Not Applicable", "notes": "string" },
+      "eventDecorator": { "companyName": "string", "contactName": "string", "contactEmail": "string", "contactPhone": "string", "status": "string", "notes": "string" },
+      "registrationTech": { "companyName": "string", "contactName": "string", "contactEmail": "string", "contactPhone": "string", "status": "string", "notes": "string" },
+      "agencyOfRecord": { "companyName": "string", "contactName": "string", "contactEmail": "string", "contactPhone": "string", "status": "string", "notes": "string" },
+      "photographer": { "companyName": "string", "contactName": "string", "contactEmail": "string", "contactPhone": "string", "status": "string", "notes": "string" }
+    }
   },
   "contact": {
     "contactFirstName": "string",
@@ -227,7 +264,8 @@ Schema:
     "contactPhoneExt": "string",
     "preferredContactMethod": "one of: Email | Phone | Either",
     "bestTimeToReach": "string — e.g. Weekdays 9-5 PT",
-    "anythingElse": "string — any additional notes"
+    "anythingElse": "string — any additional notes",
+    "additionalContacts": "array of { fullName: string, titleAndRole: string, email: string, phone: string, role: one of: cc_all | technical_av | legal_contracts | creative_approvals | onsite_dayof | executive_sponsor } — omit if none mentioned"
   }
 }`;
 
@@ -255,8 +293,13 @@ export const extractProposal = async (
 
     if (isPdf) {
       /* ── PDF: extract text with pdf-parse, then call LLM ── */
-      const parsed = await pdfParse(buffer);
-      docText = parsed.text?.trim() ?? "";
+      const parser = new PDFParse({ data: buffer });
+      try {
+        const parsed = await parser.getText();
+        docText = parsed.text?.trim() ?? "";
+      } finally {
+        await parser.destroy();
+      }
       if (!docText) {
         res.status(422).json({ success: false, message: "PDF appears to have no extractable text. Try a text-based PDF or DOCX." });
         return;
