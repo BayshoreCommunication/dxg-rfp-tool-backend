@@ -66,6 +66,9 @@ export const createSendOwnedEmailCampaign = (dependencies: {
   frontendBaseUrl: string;
   apiBaseUrl: string;
   trackingId: () => string;
+  grants?: {
+    issue(input: { resourceId: string; purpose: "proposal:view" | "vendor:submit"; recipient?: string }): Promise<{ token: string }>;
+  };
   now?: () => Date;
 }) => async (input: {
   ownerUserId: string;
@@ -87,8 +90,8 @@ export const createSendOwnedEmailCampaign = (dependencies: {
   }`;
   const frontend = trimBase(dependencies.frontendBaseUrl);
   const api = trimBase(dependencies.apiBaseUrl);
-  const proposalUrl = `${frontend}/proposal-view/${proposalSlug}?source=email`;
-  const vendorUrl = `${frontend}/vendor-response/${proposalSlug}?source=email`;
+  const proposalBaseUrl = `${frontend}/proposal-view/${proposalSlug}?source=email`;
+  const vendorBaseUrl = `${frontend}/vendor-response/${proposalSlug}?source=email`;
   const subject =
     input.subject?.trim() ||
     `Proposal for ${proposal.proposalTitle} - DXG RFP Tool`;
@@ -112,6 +115,12 @@ export const createSendOwnedEmailCampaign = (dependencies: {
   let sentCount = 0;
   for (const recipient of recipients) {
     try {
+      const [proposalGrant, vendorGrant] = dependencies.grants ? await Promise.all([
+        dependencies.grants.issue({ resourceId: proposal.proposalId, purpose: "proposal:view", recipient: recipient.email }),
+        dependencies.grants.issue({ resourceId: proposal.proposalId, purpose: "vendor:submit", recipient: recipient.email }),
+      ]) : [null, null];
+      const proposalUrl = proposalGrant ? `${proposalBaseUrl}&accessGrant=${encodeURIComponent(proposalGrant.token)}` : proposalBaseUrl;
+      const vendorUrl = vendorGrant ? `${vendorBaseUrl}&accessGrant=${encodeURIComponent(vendorGrant.token)}` : vendorBaseUrl;
       const openUrl = `${api}/api/emails/open/${recipient.trackingId}`;
       const clickUrl = `${api}/api/emails/click/${recipient.trackingId}?redirect=${encodeURIComponent(proposalUrl)}`;
       const vendorClickUrl = `${api}/api/emails/vendor-click/${recipient.trackingId}?redirect=${encodeURIComponent(vendorUrl)}`;

@@ -5,6 +5,7 @@ const {
   createRequestOtp,
   createVerifyOtp,
 } = require("../src/modules/auth/application/manageOtp");
+const { hmacOtpCodeHasher } = require("../src/modules/auth/infrastructure/security/hmacOtpCodeHasher");
 
 test("signup OTP rejects an existing account before generating or storing a code", async () => {
   let generated = 0;
@@ -95,4 +96,27 @@ test("invalid OTP does not mutate and valid OTP is marked verified", async () =>
   assert.equal(marked, 0);
   assert.deepEqual(await verify("a@b.com", " 123456 ", "forgot-password"), { kind: "verified" });
   assert.equal(marked, 1);
+});
+
+test("production OTP hasher stores no reusable six-digit code", () => {
+  const hash = hmacOtpCodeHasher.hash("123456");
+  assert.notEqual(hash, "123456");
+  assert.equal(hash.includes("123456"), false);
+  assert.equal(hmacOtpCodeHasher.matches("123456", hash), true);
+  assert.equal(hmacOtpCodeHasher.matches("654321", hash), false);
+});
+
+test("invalid OTP attempts are recorded without marking verification", async () => {
+  let attempts = 0;
+  let verified = false;
+  const verify = createVerifyOtp({
+    async findPending() {
+      return { id: "otp-3", codeHash: hmacOtpCodeHasher.hash("123456"), expiresAt: new Date("2026-01-01T00:10:00Z"), maxAttempts: 5 };
+    },
+    async recordFailedAttempt(id, max) { assert.equal(id, "otp-3"); assert.equal(max, 5); attempts += 1; return attempts; },
+    async markVerified() { verified = true; },
+  }, { now: () => new Date("2026-01-01T00:00:00Z") }, hmacOtpCodeHasher);
+  assert.deepEqual(await verify("a@b.com", "000000", "signup"), { kind: "invalid" });
+  assert.equal(attempts, 1);
+  assert.equal(verified, false);
 });

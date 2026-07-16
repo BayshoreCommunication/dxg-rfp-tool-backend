@@ -5,6 +5,8 @@ import type {
   SafeAuthUser,
 } from "../../domain/ports/authAccountPorts";
 import { requireDefaultOrganizationId } from "./defaultOrganization";
+import OrganizationMembership from "../../../../../modal/organizationMembershipModel";
+import { legacyRoleToMembershipRoles } from "../../../identity/application/membershipMigration";
 
 const toSafeUser = (user: {
   _id: unknown;
@@ -55,6 +57,11 @@ export const mongoAuthAccountRepository: AuthAccountRepository = {
       { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true },
     ).select("-password").lean();
     if (!user) throw new Error("Customer account was not created");
+    await OrganizationMembership.updateOne(
+      { organizationId, userId: user._id },
+      { $setOnInsert: { roles: ["planner"], status: "active", version: 1, activatedAt: now } },
+      { upsert: true },
+    );
     return toSafeUser(user);
   },
   async replacePassword(email, passwordHash) {
@@ -99,6 +106,11 @@ export const mongoAuthAccountRepository: AuthAccountRepository = {
       { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true },
     ).select("-password").lean();
     if (!user) throw new Error("Admin account was not created");
+    await OrganizationMembership.updateOne(
+      { organizationId, userId: user._id },
+      { $setOnInsert: { roles: legacyRoleToMembershipRoles("admin"), status: "active", version: 1, activatedAt: now } },
+      { upsert: true },
+    );
     return toSafeUser(user);
   },
 };

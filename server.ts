@@ -14,6 +14,7 @@ import emailRoutes from "./routes/emailRoute";
 import extractRoutes from "./routes/extractRoute";
 import notificationRoutes from "./routes/notificationRoute";
 import proposalRoutes from "./routes/proposalsRoute";
+import publicAccessRoutes from "./routes/publicAccessRoute";
 import settingsRoutes from "./routes/settingsRoute";
 import userRoutes from "./routes/usersRoute";
 import vendorResponseRoutes from "./routes/vendorResponseRoute";
@@ -121,6 +122,7 @@ app.use("/api/users", userRoutes);
 
 // Proposal routes
 app.use("/api/proposals", proposalRoutes);
+app.use("/api/public-access", publicAccessRoutes);
 
 // Email campaign routes
 app.use("/api/emails", emailRoutes);

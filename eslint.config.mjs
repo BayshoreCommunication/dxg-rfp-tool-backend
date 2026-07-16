@@ -6,7 +6,7 @@ export default tseslint.config(
     ignores: ["dist/**", "node_modules/**", "contracts/generated/**"],
   },
   {
-    files: ["src/**/*.ts", "contracts/**/*.ts", "scripts/migrateProposalV1.ts", "scripts/migrateDxgOrganization.ts"],
+    files: ["src/**/*.ts", "contracts/**/*.ts", "scripts/migrateProposalV1.ts", "scripts/migrateDxgOrganization.ts", "scripts/migrateOrganizationMemberships.ts"],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     rules: {
       "@typescript-eslint/consistent-type-imports": "error",

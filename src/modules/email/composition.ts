@@ -15,6 +15,8 @@ import crypto from "crypto";
 import { createSendOwnedEmailCampaign } from "./application/sendEmailCampaign";
 import { mongoEmailCampaignSendingRepository } from "./infrastructure/mongo/mongoEmailCampaignSendingRepository";
 import { customEmailDeliveryAdapter } from "./infrastructure/delivery/customEmailDeliveryAdapter";
+import { publicAccess } from "../publicAccess/composition";
+import { currentTenant } from "../shared/tenancy/tenantContext";
 
 const firstUrl = (value: string) =>
   value
@@ -56,4 +58,17 @@ export const sendOwnedEmailCampaign = createSendOwnedEmailCampaign({
   frontendBaseUrl,
   apiBaseUrl,
   trackingId: () => crypto.randomBytes(16).toString("hex"),
+  grants: {
+    issue: ({ resourceId, purpose, recipient }) => {
+      const tenant = currentTenant();
+      return publicAccess.issue({
+        organizationId: tenant.organizationId,
+        createdByUserId: tenant.userId,
+        resourceId,
+        purpose,
+        recipient,
+        expiresInHours: 168,
+      });
+    },
+  },
 });

@@ -63,7 +63,7 @@ test("unmatched click only accepts HTTP fallback URLs", async () => {
   );
 });
 
-test("vendor-response click adds encoded recipient and tracking context", async () => {
+test("vendor-response click omits recipient PII and preserves tracking context", async () => {
   const track = createTrackVendorResponseClick({
     frontendBaseUrl: "https://app.example.com",
     repository: {
@@ -78,6 +78,17 @@ test("vendor-response click adds encoded recipient and tracking context", async 
 
   assert.equal(
     redirect,
-    "https://app.example.com/vendor-response/annual-summit-123?source=email&email=vendor%2Bsales%40example.com&tid=tracking%20id%2F001",
+    "https://app.example.com/vendor-response/annual-summit-123?source=email&tid=tracking%20id%2F001",
+  );
+});
+
+test("tracked redirects preserve only the opaque access grant from the supplied URL", async () => {
+  const click = createTrackProposalClick({
+    repository: { markProposalClickedOnce: async () => ({ proposalSlug: "safe-proposal" }) },
+    frontendBaseUrl: "https://app.example.com",
+  });
+  assert.equal(
+    await click({ trackingId: "t", fallbackRedirect: "https://evil.example/x?accessGrant=opaque-token&admin=true" }),
+    "https://app.example.com/proposal-view/safe-proposal?source=email&accessGrant=opaque-token",
   );
 });

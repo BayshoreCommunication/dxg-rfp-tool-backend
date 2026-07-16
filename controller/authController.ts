@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import crypto from "node:crypto";
 import { AuthRequest } from "../middleware/auth";
 import {
   authenticateGoogleIdentity,
@@ -9,6 +10,8 @@ import {
   requestAuthenticationOtp,
   resetCustomerPassword,
   verifyAuthenticationOtp,
+  beginAuthenticatedSession,
+  authenticationSessions,
 } from "../src/modules/auth/composition";
 
 const applicationUserResponse = (user: {
@@ -20,6 +23,7 @@ const applicationUserResponse = (user: {
   company?: string;
   avatar?: string;
   createdAt?: Date;
+  organizationId?: string;
 }) => ({
   _id: user.id,
   name: user.name,
@@ -30,6 +34,76 @@ const applicationUserResponse = (user: {
   avatar: user.avatar,
   createdAt: user.createdAt,
 });
+
+const refreshCookieName = () => process.env.NODE_ENV === "production"
+  ? "__Host-rfpilot_refresh"
+  : "rfpilot_refresh";
+const correlationId = (req: Request) => {
+  const supplied = req.headers["x-correlation-id"];
+  return typeof supplied === "string" && supplied.length <= 128
+    ? supplied
+    : crypto.randomUUID();
+};
+const setRefreshCookie = (res: Response, token: string, expiresAt: number) => {
+  res.cookie(refreshCookieName(), token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/",
+    expires: new Date(expiresAt),
+  });
+};
+const clearRefreshCookie = (res: Response) => {
+  res.clearCookie(refreshCookieName(), {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/",
+  });
+};
+const cookieValue = (req: Request, name: string) => {
+  const cookies = String(req.headers.cookie ?? "").split(";");
+  for (const cookie of cookies) {
+    const [key, ...value] = cookie.trim().split("=");
+    if (key === name) return decodeURIComponent(value.join("="));
+  }
+  return "";
+};
+const isAuthorizedBff = (req: Request) => {
+  const expected = process.env.BFF_SHARED_SECRET;
+  const supplied = req.headers["x-rfpilot-bff-key"];
+  if (!expected || typeof supplied !== "string") return false;
+  const left = Buffer.from(expected);
+  const right = Buffer.from(supplied);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+};
+const presentedRefreshToken = (req: Request) =>
+  cookieValue(req, refreshCookieName()) ||
+  (isAuthorizedBff(req) && typeof req.body?.refreshToken === "string"
+    ? req.body.refreshToken
+    : "");
+const createSession = async (req: Request, res: Response, user: {
+  id: string;
+  organizationId?: string;
+}) => {
+  if (!user.organizationId) throw new Error("User has no organization membership");
+  const session = await beginAuthenticatedSession({
+    userId: user.id,
+    organizationId: user.organizationId,
+    correlationId: correlationId(req),
+    userAgent: req.headers["user-agent"],
+    ip: req.ip,
+  });
+  setRefreshCookie(res, session.refreshToken, session.refreshExpiresAt);
+  return session;
+};
+const bffRefreshResponse = (req: Request, session: {
+  refreshToken: string;
+  refreshExpiresAt: number;
+}) => isAuthorizedBff(req) ? {
+  refreshToken: session.refreshToken,
+  refreshExpiresAt: session.refreshExpiresAt,
+} : {};
 
 /* ─────────────────────────────────────────
    POST /api/auth/send-otp
@@ -140,13 +214,16 @@ export const signUp = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const session = await createSession(req, res, result.user);
     res.status(201).json({
       success: true,
       message: "Account created successfully",
       user: { ...result.user, _id: result.user.id, id: undefined },
-      accessToken: result.token.accessToken,
-      tokenExpiresAt: result.token.expiresAt,
-      tokenExpiresIn: result.token.expiresIn,
+      accessToken: session.accessToken,
+      tokenExpiresAt: session.expiresAt,
+      tokenExpiresIn: session.expiresIn,
+      sessionId: session.sessionId,
+      ...bffRefreshResponse(req, session),
     });
   } catch (error) {
     console.error("Sign up error:", error);
@@ -201,13 +278,16 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
       return;
     }
 
+    const session = await createSession(req, res, result.user);
     res.status(200).json({
       success: true,
       message: "Login successful",
       user: applicationUserResponse(result.user),
-      accessToken: result.token.accessToken,
-      tokenExpiresAt: result.token.expiresAt,
-      tokenExpiresIn: result.token.expiresIn,
+      accessToken: session.accessToken,
+      tokenExpiresAt: session.expiresAt,
+      tokenExpiresIn: session.expiresIn,
+      sessionId: session.sessionId,
+      ...bffRefreshResponse(req, session),
     });
   } catch (error) {
     console.error("Sign in error:", error);
@@ -242,6 +322,7 @@ export const signInWithGoogle = async (req: Request, res: Response): Promise<voi
       return;
     }
 
+    const session = await createSession(req, res, result.user);
     res.status(200).json({
       success: true,
       message: result.isNewUser
@@ -249,9 +330,11 @@ export const signInWithGoogle = async (req: Request, res: Response): Promise<voi
         : "Google sign in successful",
       isNewUser: result.isNewUser,
       user: applicationUserResponse(result.user),
-      accessToken: result.token.accessToken,
-      tokenExpiresAt: result.token.expiresAt,
-      tokenExpiresIn: result.token.expiresIn,
+      accessToken: session.accessToken,
+      tokenExpiresAt: session.expiresAt,
+      tokenExpiresIn: session.expiresIn,
+      sessionId: session.sessionId,
+      ...bffRefreshResponse(req, session),
     });
   } catch (error) {
     console.error("Google sign in error:", error);
@@ -300,13 +383,16 @@ export const signUpAdmin = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
+    const session = await createSession(req, res, result.user);
     res.status(201).json({
       success: true,
       message: "Admin account created successfully",
       user: applicationUserResponse(result.user),
-      accessToken: result.token.accessToken,
-      tokenExpiresAt: result.token.expiresAt,
-      tokenExpiresIn: result.token.expiresIn,
+      accessToken: session.accessToken,
+      tokenExpiresAt: session.expiresAt,
+      tokenExpiresIn: session.expiresIn,
+      sessionId: session.sessionId,
+      ...bffRefreshResponse(req, session),
     });
   } catch (error) {
     console.error("Admin sign up error:", error);
@@ -366,13 +452,16 @@ export const signInAdmin = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
+    const session = await createSession(req, res, result.user);
     res.status(200).json({
       success: true,
       message: "Admin login successful",
       user: applicationUserResponse(result.user),
-      accessToken: result.token.accessToken,
-      tokenExpiresAt: result.token.expiresAt,
-      tokenExpiresIn: result.token.expiresIn,
+      accessToken: session.accessToken,
+      tokenExpiresAt: session.expiresAt,
+      tokenExpiresIn: session.expiresIn,
+      sessionId: session.sessionId,
+      ...bffRefreshResponse(req, session),
     });
   } catch (error) {
     console.error("Admin sign in error:", error);
@@ -411,8 +500,91 @@ export const getCurrentUser = async (req: AuthRequest, res: Response): Promise<v
 /* ─────────────────────────────────────────
    POST /api/auth/logout
 ───────────────────────────────────────── */
-export const signOut = async (_req: AuthRequest, res: Response): Promise<void> => {
+export const signOut = async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.userId && req.user.organizationId && req.user.sessionId) {
+    await authenticationSessions.revokeSession({
+      userId: req.user.userId,
+      organizationId: req.user.organizationId,
+      sessionId: req.user.sessionId,
+      correlationId: correlationId(req),
+    });
+  }
+  clearRefreshCookie(res);
   res.status(200).json({ success: true, message: "Signed out successfully" });
+};
+
+export const refreshSession = async (req: Request, res: Response): Promise<void> => {
+  const refreshToken = presentedRefreshToken(req);
+  if (!refreshToken) {
+    res.status(401).json({ success: false, message: "Refresh session required" });
+    return;
+  }
+  const result = await authenticationSessions.rotate({
+    refreshToken,
+    correlationId: correlationId(req),
+    userAgent: req.headers["user-agent"],
+    ip: req.ip,
+  });
+  if (result.kind !== "rotated") {
+    clearRefreshCookie(res);
+    res.status(401).json({ success: false, message: "Refresh session is invalid or expired" });
+    return;
+  }
+  setRefreshCookie(res, result.refreshToken, result.refreshExpiresAt);
+  res.status(200).json({
+    success: true,
+    accessToken: result.accessToken,
+    tokenExpiresAt: result.expiresAt,
+    tokenExpiresIn: result.expiresIn,
+    sessionId: result.sessionId,
+    ...bffRefreshResponse(req, result),
+  });
+};
+
+export const signOutAll = async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!req.user?.userId || !req.user.organizationId) {
+    res.status(401).json({ success: false, message: "Authentication required" });
+    return;
+  }
+  const revoked = await authenticationSessions.revokeAll({
+    userId: req.user.userId,
+    organizationId: req.user.organizationId,
+    correlationId: correlationId(req),
+  });
+  clearRefreshCookie(res);
+  res.status(200).json({ success: true, revoked });
+};
+
+export const listSessions = async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!req.user?.userId || !req.user.organizationId) {
+    res.status(401).json({ success: false, message: "Authentication required" });
+    return;
+  }
+  const sessions = await authenticationSessions.listActive({
+    userId: req.user.userId,
+    organizationId: req.user.organizationId,
+  });
+  res.status(200).json({ success: true, sessions, currentSessionId: req.user.sessionId });
+};
+
+export const revokeSession = async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!req.user?.userId || !req.user.organizationId) {
+    res.status(401).json({ success: false, message: "Authentication required" });
+    return;
+  }
+  const revoked = await authenticationSessions.revokeSession({
+    userId: req.user.userId,
+    organizationId: req.user.organizationId,
+    sessionId: req.params.id,
+    correlationId: correlationId(req),
+    reason: "user_revoked_device",
+  });
+  if (!revoked) {
+    res.status(404).json({ success: false, message: "Session not found" });
+    return;
+  }
+  if (req.params.id === req.user.sessionId) clearRefreshCookie(res);
+  res.status(200).json({ success: true, revoked });
 };
 
 /* ─────────────────────────────────────────

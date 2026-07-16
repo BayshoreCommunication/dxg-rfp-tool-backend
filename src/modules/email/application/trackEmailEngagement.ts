@@ -1,6 +1,13 @@
 import type { EmailTrackingRepository } from "../domain/ports/emailTrackingRepository";
 
 const base = (value: string) => value.replace(/\/+$/, "");
+const accessGrantFrom = (value?: string) => {
+  if (!value?.match(/^https?:\/\//i)) return "";
+  try {
+    const token = new URL(value).searchParams.get("accessGrant") ?? "";
+    return token.length <= 256 ? token : "";
+  } catch { return ""; }
+};
 
 export const createTrackEmailOpen = (dependencies: {
   repository: EmailTrackingRepository;
@@ -21,7 +28,8 @@ export const createTrackProposalClick = (dependencies: {
     occurredAt: (dependencies.now ?? (() => new Date()))(),
   });
   if (tracked) {
-    return `${base(dependencies.frontendBaseUrl)}/proposal-view/${tracked.proposalSlug}?source=email`;
+    const grant = accessGrantFrom(input.fallbackRedirect);
+    return `${base(dependencies.frontendBaseUrl)}/proposal-view/${tracked.proposalSlug}?source=email${grant ? `&accessGrant=${encodeURIComponent(grant)}` : ""}`;
   }
   return input.fallbackRedirect?.match(/^https?:\/\//i)
     ? input.fallbackRedirect
@@ -39,11 +47,8 @@ export const createTrackVendorResponseClick = (dependencies: {
   });
   if (tracked) {
     const url = `${base(dependencies.frontendBaseUrl)}/vendor-response/${tracked.proposalSlug}?source=email`;
-    return tracked.recipientEmail
-      ? `${url}&email=${encodeURIComponent(
-          tracked.recipientEmail,
-        )}&tid=${encodeURIComponent(input.trackingId)}`
-      : url;
+    const grant = accessGrantFrom(input.fallbackRedirect);
+    return `${url}&tid=${encodeURIComponent(input.trackingId)}${grant ? `&accessGrant=${encodeURIComponent(grant)}` : ""}`;
   }
   return input.fallbackRedirect?.match(/^https?:\/\//i)
     ? input.fallbackRedirect

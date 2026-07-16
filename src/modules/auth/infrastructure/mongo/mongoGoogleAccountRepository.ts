@@ -3,6 +3,7 @@ import User from "../../../../../modal/userModel";
 import type { SafeAuthUser } from "../../domain/ports/authAccountPorts";
 import type { GoogleAccountRepository } from "../../domain/ports/googleIdentityPorts";
 import { requireDefaultOrganizationId } from "./defaultOrganization";
+import OrganizationMembership from "../../../../../modal/organizationMembershipModel";
 
 const toSafeUser = (user: {
   _id: unknown;
@@ -64,6 +65,11 @@ export const mongoGoogleAccountRepository: GoogleAccountRepository = {
       { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true },
     ).select("-password").lean();
     if (!user) throw new Error("Google account was not created");
+    await OrganizationMembership.updateOne(
+      { organizationId, userId: user._id },
+      { $setOnInsert: { roles: ["planner"], status: "active", version: 1, activatedAt: now } },
+      { upsert: true },
+    );
     return toSafeUser(user);
   },
 };
