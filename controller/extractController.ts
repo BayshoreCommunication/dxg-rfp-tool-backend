@@ -67,8 +67,9 @@ Schema:
     "venueAddress": "string — full street address",
     "venueType": "one of: Convention Center | Hotel Ballroom | Resort / Conference Center | Theater / Performing Arts Venue | Arena / Stadium | Corporate Campus / HQ | Outdoor Venue / Tent | Broadcast Studio | Restaurant / Private Event Space | Cruise Ship | Other",
     "venueConfirmedStatus": "one of: CONTRACT_SIGNED | VERBAL_CONFIRM | STRONG_PREF | NOT_SELECTED",
-    "isUnionVenue": "one of: YES | NO | NOT_SURE",
+    "isUnionVenue": "one of: YES | NO | NOT_SURE — whether the venue contract requires Union, Teamster, or in-house labor",
     "unionJurisdictions": "array of any matching: IATSE (Stage Labor) | IBEW (Electrical) | Teamsters (Freight) | Carpenters Union | Local Stagehands Union | Other",
+    "unionLaborDetails": "string — specific union/contract details (only if isUnionVenue is YES)",
     "loadInDate": "YYYY-MM-DD",
     "loadInTime": "HH:MM in 24-hour format (e.g. 07:00)",
     "rehearsalDate": "YYYY-MM-DD",
@@ -136,14 +137,11 @@ Schema:
     "teleprompterBilingual": "one of: Yes | No",
     "teleprompterLanguages": "array of language strings (only if teleprompterNeeded is Yes)",
     "scenicStageDesign": "one of: Yes | No",
-    "unionLabor": "one of: Yes | No | Not Sure",
-    "unionLaborDetails": "string — specific union/contract details (only if unionLabor is Yes)",
     "showCrewNeeded": "array of any matching: A1 (AUDIO) | A2 (AUDIO ASSIST) | V1 (VIDEO) | V2 (VIDEO ASSIST) | TD (TECHNICAL DIRECTOR) | L1 (LIGHTING) | GRAPHICS OP | CAMERA OPERATOR | SHOWCALLER | STAGE MANAGER | PRODUCER | TELEPROMPTER OP | RIGGER | STAGEHAND",
     "otherRolesNeeded": "string"
   },
   "production": {
     "scenicStageDesign": "one of: Yes | No",
-    "unionLabor": "one of: Yes | No | Not Sure",
     "showCrewNeeded": "array of any matching: A1 (AUDIO) | A2 (AUDIO ASSIST) | V1 (VIDEO) | V2 (VIDEO ASSIST) | TD (TECHNICAL DIRECTOR) | L1 (LIGHTING) | GRAPHICS OP | CAMERA OPERATOR | SHOWCALLER | STAGE MANAGER | PRODUCER | TELEPROMPTER OP | RIGGER | STAGEHAND",
     "otherRolesNeeded": "string"
   },
@@ -358,6 +356,80 @@ export const extractProposal = async (
     res.status(500).json({
       success: false,
       message: "Error extracting proposal data from document.",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+/* ─── Schedule time normalization ─────────────────────────────────────────
+   Fallback for messy time-of-day values a spreadsheet parser can't confidently
+   read on its own (typos like "11;15 AM", unusual notation, etc.). Only called
+   for the handful of values the client-side regex parser already gave up on —
+   not for every cell — to keep this cheap and fast. */
+const NORMALIZE_TIME_PROMPT = `You are a data-cleaning assistant for messy spreadsheet values.
+
+You will receive a JSON array of raw strings that are each meant to represent a single time of day, taken from an Excel schedule. They may contain typos (e.g. a semicolon instead of a colon), inconsistent spacing, or unusual notation.
+
+For each string, return its time of day in 24-hour "HH:MM" format if you can confidently determine one — correcting obvious typos (e.g. "11;15 AM" -> "11:15", "2.30pm" -> "14:30"). If a value is empty, clearly not a time, or too ambiguous to confidently resolve, return null for that entry.
+
+Return ONLY a JSON object of the form {"results": [...]}  — an array of strings or nulls, the same length and in the same order as the input array. No explanation, no markdown fences.`;
+
+const MAX_NORMALIZE_VALUES = 200;
+
+/* ─── POST /api/extract-proposal/normalize-times ─── */
+export const normalizeScheduleTimes = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const { values } = req.body as { values?: unknown };
+
+    if (!Array.isArray(values) || values.length === 0) {
+      res.status(400).json({ success: false, message: "values must be a non-empty array of strings." });
+      return;
+    }
+    if (values.length > MAX_NORMALIZE_VALUES) {
+      res.status(400).json({ success: false, message: `Too many values in one request (max ${MAX_NORMALIZE_VALUES}).` });
+      return;
+    }
+    const inputs = values.map((v) => (typeof v === "string" ? v.slice(0, 100) : ""));
+
+    const openai = getOpenAI();
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: NORMALIZE_TIME_PROMPT },
+        { role: "user", content: JSON.stringify(inputs) },
+      ],
+    });
+
+    const rawContent = completion.choices[0]?.message?.content ?? "{}";
+    let results: unknown[] = [];
+    try {
+      const cleaned = rawContent
+        .replace(/^```json\s*/i, "")
+        .replace(/^```\s*/i, "")
+        .replace(/```\s*$/i, "")
+        .trim();
+      const parsed = cleaned ? JSON.parse(cleaned) : {};
+      if (Array.isArray(parsed.results)) results = parsed.results;
+    } catch {
+      results = [];
+    }
+
+    const normalized: (string | null)[] = inputs.map((_, i) => {
+      const v = results[i];
+      return typeof v === "string" && /^\d{1,2}:\d{2}$/.test(v.trim()) ? v.trim() : null;
+    });
+
+    res.status(200).json({ success: true, data: { results: normalized } });
+  } catch (error) {
+    console.error("Normalize schedule times error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error normalizing schedule time values.",
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }
