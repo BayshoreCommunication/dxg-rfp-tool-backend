@@ -1,11 +1,12 @@
 import { Response } from "express";
 import mongoose from "mongoose";
-import Notification from "../modal/notificationModel";
 import { AuthRequest } from "../middleware/auth";
-import { emitUnreadNotificationCount } from "../utils/notificationService";
-
-const NOTIFICATION_SELECT =
-  "_id userId proposalId type title message metadata isRead readAt createdAt updatedAt";
+import {
+  getOwnedUnreadCount,
+  listOwnedNotifications,
+  markAllOwnedNotificationsRead,
+  markOwnedNotificationRead,
+} from "../src/modules/notifications/composition";
 
 export const getNotifications = async (
   req: AuthRequest,
@@ -23,36 +24,20 @@ export const getNotifications = async (
       return;
     }
 
-    const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10) || 20));
-    const skip = (pageNum - 1) * limitNum;
-
-    const filter: Record<string, any> = { userId };
-    if (unreadOnly === "true") {
-      filter.isRead = false;
-    }
-
-    const [notifications, total, unreadCount] = await Promise.all([
-      Notification.find(filter)
-        .select(NOTIFICATION_SELECT)
-        .sort({ createdAt: -1, _id: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      Notification.countDocuments(filter),
-      Notification.countDocuments({ userId, isRead: false }),
-    ]);
+    const result = await listOwnedNotifications({
+      ownerUserId: userId,
+      query: {
+        page: typeof page === "string" ? page : undefined,
+        limit: typeof limit === "string" ? limit : undefined,
+        unreadOnly: typeof unreadOnly === "string" ? unreadOnly : undefined,
+      },
+    });
 
     res.status(200).json({
       success: true,
-      data: notifications,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages: Math.ceil(total / limitNum),
-      },
-      unreadCount,
+      data: result.notifications,
+      pagination: result.pagination,
+      unreadCount: result.unreadCount,
       websocket: {
         path: "/api/notifications/ws",
         auth: "Provide access token in the `token` query parameter.",
@@ -83,10 +68,7 @@ export const getUnreadNotificationCount = async (
       return;
     }
 
-    const unreadCount = await Notification.countDocuments({
-      userId,
-      isRead: false,
-    });
+    const unreadCount = await getOwnedUnreadCount(userId);
 
     res.status(200).json({
       success: true,
@@ -126,15 +108,12 @@ export const markNotificationAsRead = async (
       return;
     }
 
-    const notification = await Notification.findOneAndUpdate(
-      { _id: id, userId },
-      { isRead: true, readAt: new Date() },
-      { new: true },
-    )
-      .select(NOTIFICATION_SELECT)
-      .lean();
+    const result = await markOwnedNotificationRead({
+      notificationId: id,
+      ownerUserId: userId,
+    });
 
-    if (!notification) {
+    if (result.kind === "not_found") {
       res.status(404).json({
         success: false,
         message: "Notification not found",
@@ -142,12 +121,10 @@ export const markNotificationAsRead = async (
       return;
     }
 
-    await emitUnreadNotificationCount(userId);
-
     res.status(200).json({
       success: true,
       message: "Notification marked as read",
-      data: notification,
+      data: result.notification,
     });
   } catch (error) {
     console.error("Mark notification read error:", error);
@@ -174,12 +151,7 @@ export const markAllNotificationsAsRead = async (
       return;
     }
 
-    await Notification.updateMany(
-      { userId, isRead: false },
-      { isRead: true, readAt: new Date() },
-    );
-
-    await emitUnreadNotificationCount(userId);
+    await markAllOwnedNotificationsRead(userId);
 
     res.status(200).json({
       success: true,

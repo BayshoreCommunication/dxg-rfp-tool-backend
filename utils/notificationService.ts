@@ -2,6 +2,7 @@ import crypto from "crypto";
 import http from "http";
 import { Duplex } from "stream";
 import Notification from "../modal/notificationModel";
+import User from "../modal/userModel";
 import { verifyAccessToken } from "../config/jwt";
 
 type SocketMessage =
@@ -242,7 +243,10 @@ export const createNotification = async ({
   dedupeKey,
 }: CreateNotificationInput) => {
   try {
+    const owner = await User.findById(userId).select("organizationId").lean();
+    if (!owner?.organizationId) throw new Error("Notification owner has no organization membership");
     const notification = await Notification.create({
+      organizationId: owner.organizationId,
       userId,
       proposalId,
       type,

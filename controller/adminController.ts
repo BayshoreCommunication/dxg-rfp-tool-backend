@@ -1,8 +1,6 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
-import EmailCampaign from "../modal/emailModel";
-import Proposal from "../modal/proposalsModel";
-import User from "../modal/userModel";
+import { getAdminOverviewReport } from "../src/modules/admin/composition";
 
 const isAdminRole = (role?: string): boolean => {
   const normalized = String(role || "").toLowerCase().trim();
@@ -11,10 +9,6 @@ const isAdminRole = (role?: string): boolean => {
     normalized === "super_admin" ||
     normalized === "superadmin"
   );
-};
-
-const CLIENT_ROLE_FILTER = {
-  role: { $nin: ["admin", "super_admin", "superadmin"] },
 };
 
 export const getAdminOverview = async (
@@ -30,99 +24,12 @@ export const getAdminOverview = async (
       return;
     }
 
-    const [totalClients, totalProposals, emailStats, latestClients] =
-      await Promise.all([
-        User.countDocuments(CLIENT_ROLE_FILTER),
-        Proposal.countDocuments({}),
-        EmailCampaign.aggregate<{ totalEmailSent: number; totalClick: number }>([
-          {
-            $group: {
-              _id: null,
-              totalEmailSent: { $sum: "$sentCount" },
-              totalClick: { $sum: "$clickedCount" },
-            },
-          },
-        ]),
-        User.aggregate<{
-          id: string;
-          name: string;
-          email: string;
-          company?: string;
-          joinDate: Date;
-          totalProposals: number;
-          totalEmailSent: number;
-        }>([
-          { $match: CLIENT_ROLE_FILTER },
-          { $sort: { createdAt: -1 } },
-          { $limit: 10 },
-          {
-            $lookup: {
-              from: "proposals",
-              let: { userId: "$_id" },
-              pipeline: [
-                {
-                  $match: {
-                    $expr: { $eq: ["$userId", "$$userId"] },
-                  },
-                },
-                { $count: "count" },
-              ],
-              as: "proposalStats",
-            },
-          },
-          {
-            $lookup: {
-              from: "emailcampaigns",
-              let: { userId: "$_id" },
-              pipeline: [
-                {
-                  $match: {
-                    $expr: { $eq: ["$userId", "$$userId"] },
-                  },
-                },
-                {
-                  $group: {
-                    _id: null,
-                    totalEmailSent: { $sum: "$sentCount" },
-                  },
-                },
-              ],
-              as: "emailStats",
-            },
-          },
-          {
-            $project: {
-              _id: 0,
-              id: "$_id",
-              name: 1,
-              email: 1,
-              company: { $ifNull: ["$company", null] },
-              joinDate: "$createdAt",
-              totalProposals: {
-                $ifNull: [{ $first: "$proposalStats.count" }, 0],
-              },
-              totalEmailSent: {
-                $ifNull: [{ $first: "$emailStats.totalEmailSent" }, 0],
-              },
-            },
-          },
-        ]),
-      ]);
-
-    const totals = {
-      totalClients,
-      totalProposals,
-      totalEmailSent: emailStats[0]?.totalEmailSent || 0,
-      totalClick: emailStats[0]?.totalClick || 0,
-    };
+    const data = await getAdminOverviewReport();
 
     res.status(200).json({
       success: true,
       message: "Admin overview fetched successfully",
-      data: {
-        totals,
-        latestClients,
-      },
+      data,
     });
   } catch (error) {
     console.error("Get admin overview error:", error);

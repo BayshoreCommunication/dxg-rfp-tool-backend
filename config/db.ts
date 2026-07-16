@@ -1,10 +1,12 @@
-import dns from "dns";
-import mongoose from "mongoose";
+import dns from 'dns';
+import mongoose from 'mongoose';
+
+export const DATABASE_NAME = process.env.MONGODB_DB_NAME || 'dxg_rfp_tool_db';
 
 // Local dev only: system DNS often can't resolve MongoDB Atlas SRV records.
 // Production servers (DigitalOcean) resolve these correctly without override.
-if (process.env.NODE_ENV !== "production") {
-  dns.setServers(["8.8.8.8", "8.8.4.4"]);
+if (process.env.NODE_ENV !== 'production') {
+  dns.setServers(['8.8.8.8', '8.8.4.4']);
 }
 
 // Mongoose connection caching for serverless
@@ -14,13 +16,13 @@ let connectionPromise: Promise<void> | null = null;
 const connectDB = async (): Promise<void> => {
   // If already connected, reuse connection
   if (isConnected && mongoose.connection.readyState === 1) {
-    console.log("✅ Using existing MongoDB connection");
+    console.log('✅ Using existing MongoDB connection');
     return;
   }
 
   // If connection is in progress, wait for it
   if (connectionPromise) {
-    console.log("⏳ Waiting for existing connection attempt...");
+    console.log('⏳ Waiting for existing connection attempt...');
     return connectionPromise;
   }
 
@@ -28,17 +30,20 @@ const connectDB = async (): Promise<void> => {
   connectionPromise = (async () => {
     try {
       // Support both variable names for flexibility
-      const mongoURI = process.env.MONGODB_URL || process.env.MONGO_URL;
+      const mongoURI =
+        process.env.MONGODB_URL || process.env.MONGO_URL;
 
       if (!mongoURI) {
-        throw new Error("MONGODB_URL environment variable is not defined");
+        throw new Error(
+          'MONGODB_URL environment variable is not defined',
+        );
       }
 
-      console.log("🔄 Attempting to connect to MongoDB...");
+      console.log('🔄 Attempting to connect to MongoDB...');
 
       const conn = await mongoose.connect(mongoURI, {
         // Database name
-        dbName: "dxg_rfp_tool_db",
+        dbName: DATABASE_NAME,
         // Optimized for serverless/Vercel deployment
         bufferCommands: false, // Disable buffering to fail fast if not connected
         serverSelectionTimeoutMS: 30000, // Increased to 30s (was 10s - causing timeouts)
@@ -49,30 +54,32 @@ const connectDB = async (): Promise<void> => {
         maxIdleTimeMS: 10000, // Reduced to 10s (was 30s) to release unused connections faster
         heartbeatFrequencyMS: 10000, // Send heartbeat every 10s to keep connection alive
         retryWrites: true,
-        w: "majority",
+        w: 'majority',
       });
 
       isConnected = true;
-      console.log("========================================");
-      console.log("✅ Database Connected Successfully!");
-      console.log("========================================");
+      console.log('========================================');
+      console.log('✅ Database Connected Successfully!');
+      console.log('========================================');
       console.log(`🔗 Host: ${conn.connection.host}`);
       console.log(`📊 Database: ${conn.connection.name}`);
       console.log(`⏰ Connected At: ${new Date().toLocaleString()}`);
-      console.log("========================================\n");
+      console.log('========================================\n');
       connectionPromise = null; // Reset connection promise on success
     } catch (error) {
-      console.error("========================================");
-      console.error("❌ Database Connection Error:");
-      console.error("========================================");
-      console.error(error instanceof Error ? error.message : "Unknown error");
-      console.error("Full error:", error);
-      console.error("========================================\n");
+      console.error('========================================');
+      console.error('❌ Database Connection Error:');
+      console.error('========================================');
+      console.error(
+        error instanceof Error ? error.message : 'Unknown error',
+      );
+      console.error('Full error:', error);
+      console.error('========================================\n');
       isConnected = false;
       connectionPromise = null; // Reset connection promise on error
 
       // Don't exit in production (serverless can't handle process.exit)
-      if (process.env.NODE_ENV !== "production") {
+      if (process.env.NODE_ENV !== 'production') {
         process.exit(1);
       } else {
         // In production, throw the error so the serverless function can report it
@@ -85,19 +92,19 @@ const connectDB = async (): Promise<void> => {
 };
 
 // Handle connection events
-mongoose.connection.on("connected", () => {
+mongoose.connection.on('connected', () => {
   isConnected = true;
-  console.log("MongoDB connection established");
+  console.log('MongoDB connection established');
 });
 
-mongoose.connection.on("disconnected", () => {
+mongoose.connection.on('disconnected', () => {
   isConnected = false;
-  console.log("⚠️  MongoDB disconnected");
+  console.log('⚠️  MongoDB disconnected');
 });
 
-mongoose.connection.on("error", (err) => {
+mongoose.connection.on('error', (err) => {
   isConnected = false;
-  console.error("❌ MongoDB connection error:", err);
+  console.error('❌ MongoDB connection error:', err);
 });
 
 export default connectDB;

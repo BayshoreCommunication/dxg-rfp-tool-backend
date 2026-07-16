@@ -1,20 +1,10 @@
-import path from "path";
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
-import Settings from "../modal/settingsModel";
-import { uploadToSpaces } from "../utils/uploadToSpaces";
-
-const buildSpacesKey = (userId: string, originalName: string) => {
-  const folder = process.env.DO_FOLDER_NAME
-    ? process.env.DO_FOLDER_NAME.replace(/^\/+|\/+$/g, "")
-    : "";
-
-  const ext = path.extname(originalName).toLowerCase() || ".png";
-  const filename = `logo-${Date.now()}${ext}`;
-  const basePath = `settings/${userId}`;
-
-  return folder ? `${folder}/${basePath}/${filename}` : `${basePath}/${filename}`;
-};
+import {
+  deleteOwnedSettings,
+  getOwnedSettings,
+  updateOwnedSettings,
+} from "../src/modules/settings/composition";
 
 export const getSettings = async (
   req: AuthRequest,
@@ -27,10 +17,7 @@ export const getSettings = async (
       return;
     }
 
-    let settings = await Settings.findOne({ userId });
-    if (!settings) {
-      settings = await Settings.create({ userId });
-    }
+    const settings = await getOwnedSettings(userId);
 
     res.status(200).json({
       success: true,
@@ -62,35 +49,13 @@ export const updateSettings = async (
         ? JSON.parse(req.body.settings)
         : req.body;
 
-    const updates = { ...body };
-    delete updates._id;
-    delete updates.userId;
-    delete updates.createdAt;
-    delete updates.updatedAt;
-
-    // Guard against persisting browser-only preview URLs.
-    const currentLogo = updates?.branding?.logoFile;
-    if (
-      typeof currentLogo === "string" &&
-      (currentLogo.startsWith("blob:") || currentLogo.startsWith("data:"))
-    ) {
-      delete updates.branding.logoFile;
-    }
-
-    if (req.file) {
-      const objectKey = buildSpacesKey(userId, req.file.originalname);
-      const logoUrl = await uploadToSpaces(req.file.path, objectKey);
-      updates.branding = {
-        ...(updates.branding || {}),
-        logoFile: logoUrl,
-      };
-    }
-
-    const settings = await Settings.findOneAndUpdate(
-      { userId },
-      { $set: updates, $setOnInsert: { userId } },
-      { new: true, runValidators: true, upsert: true, setDefaultsOnInsert: true }
-    );
+    const settings = await updateOwnedSettings({
+      userId,
+      settings: body as Record<string, unknown>,
+      logo: req.file
+        ? { originalname: req.file.originalname, path: req.file.path }
+        : undefined,
+    });
 
     res.status(200).json({
       success: true,
@@ -118,7 +83,7 @@ export const deleteSettings = async (
       return;
     }
 
-    const result = await Settings.findOneAndDelete({ userId });
+    const result = await deleteOwnedSettings(userId);
 
     if (!result) {
       res.status(404).json({

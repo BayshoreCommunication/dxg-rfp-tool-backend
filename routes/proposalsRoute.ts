@@ -16,7 +16,6 @@ import {
   updateProposalStatus,
   uploadProposalFiles,
 } from "../controller/proposalsController";
-import { verifyAccessToken } from "../config/jwt";
 import { authenticate, type AuthRequest } from "../middleware/auth";
 import { uploadProposalDocs } from "../middleware/upload";
 
@@ -44,11 +43,8 @@ const validateProposalId = (
 const optionalAuth = (req: Request, _res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
-    try {
-      (req as AuthRequest).user = verifyAccessToken(authHeader.substring(7));
-    } catch {
-      // Invalid / expired token — continue as unauthenticated
-    }
+    void authenticate(req as AuthRequest, _res, next);
+    return;
   }
   next();
 };

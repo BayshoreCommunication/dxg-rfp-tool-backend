@@ -1,287 +1,26 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth";
-import { createNotification } from "../utils/notificationService";
-import Proposal from "../modal/proposalsModel";
-import Settings from "../modal/settingsModel";
-import { uploadToSpaces } from "../utils/uploadToSpaces";
-
-const LIST_PROPOSAL_SELECT = [
-  "_id",
-  "status",
-  "isDraft",
-  "isActive",
-  "isFavorite",
-  "isAccepted",
-  "isOpen",
-  "isArchived",
-  "archivedAt",
-  "isCopy",
-  "viewsCount",
-  "createdAt",
-  "updatedAt",
-  "event.eventName",
-  "contact.contactFirstName",
-  "contact.contactLastName",
-].join(" ");
-
-const DETAIL_PROPOSAL_SELECT = "-__v";
-
-const SETTINGS_SELECT = [
-  "branding.brandName",
-  "branding.linkPrefix",
-  "branding.defaultFont",
-  "branding.signatureColor",
-  "branding.logoFile",
-  "proposals.proposalLanguage",
-  "proposals.defaultCurrency",
-  "proposals.expiryDate",
-  "proposals.priceSeparator",
-  "proposals.dateFormat",
-  "proposals.decimalPrecision",
-  "proposals.contacts.email.enabled",
-  "proposals.contacts.email.value",
-  "proposals.contacts.call.enabled",
-  "proposals.contacts.call.value",
-  "proposals.downloadPreview",
-  "proposals.teammateEmail",
-  "signatures.signatureType",
-  "signatures.signatureImageUrl",
-  "signatures.signatureText",
-  "signatures.signatureStyle",
-].join(" ");
-
-const ALLOWED_SORT_FIELDS = new Set([
-  "createdAt",
-  "updatedAt",
-  "status",
-  "viewsCount",
-  "event.eventName",
-]);
-
-const escapeRegex = (value: string) =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-const buildProposalSettingSnapshot = (settings: any) => ({
-  branding: {
-    brandName: settings?.branding?.brandName ?? "",
-    linkPrefix: settings?.branding?.linkPrefix ?? "",
-    defaultFont: settings?.branding?.defaultFont ?? "",
-    signatureColor: settings?.branding?.signatureColor ?? "",
-    logoFile: settings?.branding?.logoFile ?? null,
-  },
-  proposals: {
-    proposalLanguage: settings?.proposals?.proposalLanguage ?? "",
-    defaultCurrency: settings?.proposals?.defaultCurrency ?? "",
-    expiryDate: settings?.proposals?.expiryDate ?? "",
-    priceSeparator: settings?.proposals?.priceSeparator ?? "",
-    dateFormat: settings?.proposals?.dateFormat ?? "",
-    decimalPrecision: settings?.proposals?.decimalPrecision ?? "",
-    contacts: {
-      email: {
-        enabled: settings?.proposals?.contacts?.email?.enabled ?? false,
-        value: settings?.proposals?.contacts?.email?.value ?? "",
-      },
-      call: {
-        enabled: settings?.proposals?.contacts?.call?.enabled ?? false,
-        value: settings?.proposals?.contacts?.call?.value ?? "",
-      },
-    },
-    downloadPreview: settings?.proposals?.downloadPreview ?? "",
-    teammateEmail: settings?.proposals?.teammateEmail ?? "",
-  },
-  signatures: {
-    signatureType: settings?.signatures?.signatureType ?? "",
-    signatureImageUrl: settings?.signatures?.signatureImageUrl ?? "",
-    signatureText: settings?.signatures?.signatureText ?? "",
-    signatureStyle: settings?.signatures?.signatureStyle ?? "",
-  },
-});
-
-const getSettingsByUserId = async (
-  userId?: string,
-  options?: { createIfMissing?: boolean },
-) => {
-  if (!userId) return null;
-
-  let settings: any = await Settings.findOne({ userId })
-    .select(SETTINGS_SELECT)
-    .lean();
-
-  if (!settings && options?.createIfMissing) {
-    const createdSettings = await Settings.create({ userId });
-    settings = createdSettings.toObject();
-  }
-
-  return settings;
-};
-
-const withLiveSettings = (proposal: any, settings: any) => {
-  if (!proposal) return proposal;
-  return {
-    ...proposal,
-    proposalSetting: buildProposalSettingSnapshot(settings),
-  };
-};
-
-const parseExpiryDays = (expirySetting?: string): number | null => {
-  if (!expirySetting || typeof expirySetting !== "string") return null;
-  const match = expirySetting.match(/(\d+)/);
-  if (!match) return null;
-  const days = parseInt(match[1], 10);
-  return Number.isFinite(days) && days > 0 ? days : null;
-};
-
-const applyDerivedExpiryState = (proposal: any, expirySetting?: string) => {
-  if (!proposal || proposal.isActive === false) return proposal;
-
-  const days = parseExpiryDays(expirySetting);
-  if (!days) return proposal;
-
-  const createdAt = new Date(proposal.createdAt);
-  if (Number.isNaN(createdAt.getTime())) return proposal;
-
-  const expiresAt = createdAt.getTime() + days * 24 * 60 * 60 * 1000;
-  if (Date.now() <= expiresAt) return proposal;
-
-  return {
-    ...proposal,
-    isActive: false,
-    isOpen: false,
-    status: "unsubmitted",
-  };
-};
-
-const normalizeSort = (
-  sortBy?: string,
-  sortOrder?: string,
-): Record<string, 1 | -1> => {
-  const safeSortBy =
-    sortBy && ALLOWED_SORT_FIELDS.has(sortBy) ? sortBy : "createdAt";
-
-  return {
-    [safeSortBy]: sortOrder === "asc" ? 1 : -1,
-    _id: sortOrder === "asc" ? 1 : -1,
-  };
-};
+import {
+  archiveOwnedProposal,
+  copyOwnedProposal,
+  createOwnedProposal,
+  getOwnedProposal,
+  getProposalByLegacyPublicId,
+  listOwnedProposals,
+  incrementLegacyPublicProposalViews,
+  incrementOwnedProposalViews,
+  permanentlyDeleteOwnedProposal,
+  restoreOwnedProposal,
+  updateOwnedProposalMeta,
+  updateOwnedProposalStatus,
+  updateOwnedProposal,
+  uploadOwnedProposalFiles,
+} from "../src/modules/proposals/composition";
+import { PROPOSAL_STATUSES } from "../src/modules/proposals/application/mutateOwnedProposal";
 
 const isValidProposalId = (id?: string) =>
   typeof id === "string" && mongoose.isValidObjectId(id);
-
-const buildCountsAggregation = (
-  baseFilter: Record<string, any>,
-  expirySetting?: string,
-) => {
-  const expiryDays = parseExpiryDays(expirySetting);
-  const expiredThreshold =
-    expiryDays && expiryDays > 0
-      ? new Date(Date.now() - expiryDays * 24 * 60 * 60 * 1000)
-      : null;
-
-  const notArchived = { $ne: ["$isArchived", true] };
-  // Exclude copies from all, draft, live, etc. — they only appear in the Saved tab
-  const notCopy = { $ne: ["$isCopy", true] };
-
-  return [
-    { $match: baseFilter },
-    {
-      $group: {
-        _id: null,
-        all: {
-          $sum: { $cond: [{ $and: [notArchived, notCopy] }, 1, 0] },
-        },
-        draft: {
-          $sum: {
-            $cond: [
-              { $and: [notArchived, notCopy, { $eq: ["$isDraft", true] }] },
-              1,
-              0,
-            ],
-          },
-        },
-        live: {
-          $sum: {
-            $cond: [
-              // Live: submitted AND not deactivated AND not expired AND not archived AND not a copy AND not a draft
-              expiredThreshold
-                ? {
-                    $and: [
-                      notArchived,
-                      notCopy,
-                      { $eq: ["$isDraft", false] },
-                      { $eq: ["$status", "submitted"] },
-                      { $ne: ["$isActive", false] },
-                      { $gt: ["$createdAt", expiredThreshold] },
-                    ],
-                  }
-                : {
-                    $and: [
-                      notArchived,
-                      notCopy,
-                      { $eq: ["$isDraft", false] },
-                      { $eq: ["$status", "submitted"] },
-                      { $ne: ["$isActive", false] },
-                    ],
-                  },
-              1,
-              0,
-            ],
-          },
-        },
-        favorite: {
-          $sum: {
-            $cond: [
-              { $and: [notArchived, notCopy, { $eq: ["$isFavorite", true] }] },
-              1,
-              0,
-            ],
-          },
-        },
-        expired: {
-          $sum: {
-            $cond: [
-              expiredThreshold
-                ? {
-                    $and: [
-                      notArchived,
-                      notCopy,
-                      { $eq: ["$isDraft", false] },
-                      {
-                        $or: [
-                          { $eq: ["$isActive", false] },
-                          {
-                            $and: [
-                              { $ne: ["$isActive", false] },
-                              { $lte: ["$createdAt", expiredThreshold] },
-                            ],
-                          },
-                        ],
-                      },
-                    ],
-                  }
-                : { $and: [notArchived, notCopy, { $eq: ["$isDraft", false] }, { $eq: ["$isActive", false] }] },
-              1,
-              0,
-            ],
-          },
-        },
-        archive: {
-          $sum: { $cond: [{ $eq: ["$isArchived", true] }, 1, 0] },
-        },
-        saved: {
-          // Counts all copies regardless of status
-          $sum: {
-            $cond: [
-              { $and: [notArchived, { $eq: ["$isCopy", true] }] },
-              1,
-              0,
-            ],
-          },
-        },
-      },
-    },
-  ];
-};
 
 export const getAllProposals = async (
   req: AuthRequest,
@@ -289,197 +28,30 @@ export const getAllProposals = async (
 ): Promise<void> => {
   try {
     const userId = req.user?.userId;
-    const {
-      status,
-      favorite,
-      isActive,
-      archived,
-      isCopy,
-      includeCounts,
-      search,
-      page = "1",
-      limit = "20",
-      sortBy = "createdAt",
-      sortOrder = "desc",
-    } = req.query;
-
-    // Settings must be fetched first so we can derive the expiry threshold
-    // and build an accurate filter for the "Expired" tab.
-    const settings = await getSettingsByUserId(userId);
-    const expirySetting = settings?.proposals?.expiryDate;
-    const snapshot = buildProposalSettingSnapshot(settings);
-    const expiryDays = parseExpiryDays(expirySetting);
-    const expiredThreshold = expiryDays
-      ? new Date(Date.now() - expiryDays * 24 * 60 * 60 * 1000)
-      : null;
-
-    const filter: Record<string, any> = {};
-
-    if (userId) {
-      filter.userId = userId;
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+      return;
     }
 
-    // Archive tab shows only archived; all other tabs exclude archived proposals.
-    if (archived === "true") {
-      filter.isArchived = true;
-    } else {
-      filter.isArchived = { $ne: true };
-    }
-
-    if (status && typeof status === "string") {
-      filter.status = status;
-    }
-
-    // Draft tab: use isDraft flag (independent of status)
-    const isDraftParam = req.query.isDraft;
-    if (isDraftParam === "true") {
-      filter.isDraft = true;
-    } else if (isDraftParam === "false") {
-      filter.isDraft = false;
-    }
-
-    if (typeof isActive === "string") {
-      if (isActive === "false") {
-        // Include proposals that are either manually deactivated OR expired
-        // by date, so that the Expired tab returns exactly what the badge
-        // count promises.
-        if (expiredThreshold) {
-          filter.$or = [
-            { isActive: false },
-            { isActive: { $ne: false }, createdAt: { $lte: expiredThreshold } },
-          ];
-        } else {
-          filter.isActive = false;
-        }
-      } else {
-        filter.isActive = isActive === "true";
-      }
-    }
-
-    if (typeof favorite === "string") {
-      if (favorite === "true") filter.isFavorite = true;
-      if (favorite === "false") filter.isFavorite = false;
-    }
-
-    if (isCopy === "true") {
-      // Saved tab: only copies (any status)
-      filter.isCopy = true;
-    } else if (archived !== "true") {
-      // All non-archive, non-saved tabs: exclude copies entirely
-      filter.isCopy = { $ne: true };
-    }
-
-    if (search && typeof search === "string") {
-      const trimmedSearch = search.trim();
-      if (trimmedSearch) {
-        const regex = new RegExp(escapeRegex(trimmedSearch), "i");
-        const searchConditions = [
-          { "event.eventName": regex },
-          { "contact.contactFirstName": regex },
-          { "contact.contactLastName": regex },
-          { "contact.contactEmail": regex },
-          { "contact.contactOrganization": regex },
-        ];
-        // When the expired filter already uses $or, combine with $and so both
-        // conditions are required.
-        if (filter.$or) {
-          filter.$and = [{ $or: filter.$or }, { $or: searchConditions }];
-          delete filter.$or;
-        } else {
-          filter.$or = searchConditions;
-        }
-      }
-    }
-
-    const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10) || 20));
-    const skip = (pageNum - 1) * limitNum;
-    const sort = normalizeSort(
-      typeof sortBy === "string" ? sortBy : undefined,
-      typeof sortOrder === "string" ? sortOrder : undefined,
+    const stringQuery = Object.fromEntries(
+      Object.entries(req.query).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
     );
-
-    const [proposals, total] = await Promise.all([
-      Proposal.find(filter)
-        .select(LIST_PROPOSAL_SELECT)
-        .sort(sort)
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      Proposal.countDocuments(filter),
-    ]);
-
-    const shouldIncludeCounts = includeCounts === "true";
-
-    let counts:
-      | {
-          all: number;
-          draft: number;
-          live: number;
-          favorite: number;
-          expired: number;
-          archive: number;
-          saved: number;
-        }
-      | undefined;
-
-    if (shouldIncludeCounts) {
-      // Aggregation pipelines do NOT apply Mongoose schema casting, so we must
-      // explicitly convert userId from string → ObjectId, otherwise $match finds
-      // nothing and every count returns 0 even when proposals exist.
-      const baseFilter: Record<string, any> = {};
-      if (userId && mongoose.isValidObjectId(userId)) {
-        baseFilter.userId = new mongoose.Types.ObjectId(userId);
-      }
-      if (search && typeof search === "string") {
-        const trimmedSearch = search.trim();
-        if (trimmedSearch) {
-          const regex = new RegExp(escapeRegex(trimmedSearch), "i");
-          baseFilter.$or = [
-            { "event.eventName": regex },
-            { "contact.contactFirstName": regex },
-            { "contact.contactLastName": regex },
-            { "contact.contactEmail": regex },
-            { "contact.contactOrganization": regex },
-          ];
-        }
-      }
-
-      const [countsResult] = await Proposal.aggregate<{
-        all?: number;
-        draft?: number;
-        live?: number;
-        favorite?: number;
-        expired?: number;
-        archive?: number;
-        saved?: number;
-      }>(buildCountsAggregation(baseFilter, expirySetting));
-
-      counts = {
-        all: countsResult?.all ?? 0,
-        draft: countsResult?.draft ?? 0,
-        live: countsResult?.live ?? 0,
-        favorite: countsResult?.favorite ?? 0,
-        expired: countsResult?.expired ?? 0,
-        archive: countsResult?.archive ?? 0,
-        saved: countsResult?.saved ?? 0,
-      };
-    }
+    const result = await listOwnedProposals({
+      ownerUserId: userId,
+      query: stringQuery,
+    });
 
     res.status(200).json({
       success: true,
       message: "Proposals fetched successfully",
-      data: proposals.map((proposal) => ({
-        ...applyDerivedExpiryState(proposal, expirySetting),
-        proposalSetting: snapshot,
-      })),
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages: Math.ceil(total / limitNum),
-      },
-      ...(counts ? { counts } : {}),
+      data: result.proposals,
+      pagination: result.pagination,
+      ...(result.counts ? { counts: result.counts } : {}),
     });
   } catch (error) {
     console.error("Get all proposals error:", error);
@@ -507,17 +79,20 @@ export const getProposalById = async (
       return;
     }
 
-    const [settings, proposal] = await Promise.all([
-      getSettingsByUserId(userId),
-      Proposal.findOne({
-        _id: id,
-        userId,
-      })
-        .select(DETAIL_PROPOSAL_SELECT)
-        .lean(),
-    ]);
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+      return;
+    }
 
-    if (!proposal) {
+    const result = await getOwnedProposal({
+      proposalId: id,
+      ownerUserId: userId,
+    });
+
+    if (result.kind === "not_found") {
       res.status(404).json({
         success: false,
         message: "Proposal not found",
@@ -527,10 +102,7 @@ export const getProposalById = async (
 
     res.status(200).json({
       success: true,
-      data: withLiveSettings(
-        applyDerivedExpiryState(proposal, settings?.proposals?.expiryDate),
-        settings,
-      ),
+      data: result.proposal,
     });
   } catch (error) {
     console.error("Get proposal error:", error);
@@ -554,24 +126,16 @@ export const getProposalByIdPublic = async (
       return;
     }
 
-    const proposal = await Proposal.findById(id)
-      .select(DETAIL_PROPOSAL_SELECT)
-      .lean();
+    const result = await getProposalByLegacyPublicId(id);
 
-    if (!proposal) {
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "Proposal not found" });
       return;
     }
 
-    const ownerId = String((proposal as any).userId || "");
-    const settings = await getSettingsByUserId(ownerId);
-
     res.status(200).json({
       success: true,
-      data: withLiveSettings(
-        applyDerivedExpiryState(proposal, settings?.proposals?.expiryDate),
-        settings,
-      ),
+      data: result.proposal,
     });
   } catch (error) {
     console.error("Get proposal public error:", error);
@@ -595,39 +159,17 @@ export const incrementProposalViewsPublic = async (
       return;
     }
 
-    const proposal = await Proposal.findByIdAndUpdate(
-      id,
-      { $inc: { viewsCount: 1 } },
-      { new: true },
-    )
-      .select(DETAIL_PROPOSAL_SELECT)
-      .lean();
+    const result = await incrementLegacyPublicProposalViews(id);
 
-    if (!proposal) {
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "Proposal not found" });
       return;
-    }
-
-    const ownerId = String((proposal as any).userId || "");
-    const settings = await getSettingsByUserId(ownerId);
-
-    if (ownerId) {
-      const proposalTitle =
-        (proposal as any).event?.eventName?.trim() || "Untitled Proposal";
-      await createNotification({
-        userId: ownerId,
-        proposalId: String(proposal._id),
-        type: "proposal_view",
-        title: "Proposal viewed",
-        message: `"${proposalTitle}" received a new view. Total views: ${(proposal as any).viewsCount}.`,
-        metadata: { viewsCount: (proposal as any).viewsCount },
-      });
     }
 
     res.status(200).json({
       success: true,
       message: "Proposal views incremented",
-      data: withLiveSettings(proposal, settings),
+      data: result.proposal,
     });
   } catch (error) {
     console.error("Increment proposal views public error:", error);
@@ -644,34 +186,20 @@ export const createProposal = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const body = req.body as Record<string, any>;
     const userId = req.user?.userId;
-
-    if (userId) {
-      body.userId = userId;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
     }
-
-    delete body.proposalSetting;
-
-    // isDraft drives the Draft tab — set it based on incoming status
-    // If frontend explicitly sends isDraft, honour it; otherwise derive from status
-    if (typeof body.isDraft !== "boolean") {
-      body.isDraft = !body.status || body.status === "draft" || body.status === "unsubmitted";
-    }
-    // Normalise legacy "draft" status → "unsubmitted"
-    if (body.status === "draft" || !body.status) {
-      body.status = "unsubmitted";
-    }
-
-    const proposal = new Proposal(body);
-    await proposal.save();
-
-    const settings = await getSettingsByUserId(userId, { createIfMissing: true });
+    const proposal = await createOwnedProposal({
+      ownerUserId: userId,
+      proposal: req.body as Record<string, unknown>,
+    });
 
     res.status(201).json({
       success: true,
       message: "Proposal created successfully",
-      data: withLiveSettings(proposal.toObject(), settings),
+      data: proposal,
     });
   } catch (error: any) {
     console.error("Create proposal error:", error);
@@ -700,7 +228,6 @@ export const updateProposal = async (
 ): Promise<void> => {
   try {
     const { id } = req.params;
-    const updates = req.body as Record<string, any>;
     const userId = req.user?.userId;
 
     if (!isValidProposalId(id)) {
@@ -711,32 +238,17 @@ export const updateProposal = async (
       return;
     }
 
-    delete updates._id;
-    delete updates.createdAt;
-    delete updates.userId;
-    delete updates.proposalSetting;
-    delete updates.isCopy;
-
-    // Enforce state machine logic when updating a proposal
-    if (updates.status === "unsubmitted") {
-      updates.isDraft = true;
-      updates.isActive = false; // Drafts are offline by default
-      updates.isCopy = false;   // Editing a copy graduates it from the Saved tab
-    } else if (updates.status === "submitted") {
-      updates.isDraft = false;
-      updates.isActive = true;  // Submitted proposals go live
-      updates.isCopy = false;   // Publishing a copy graduates it from the Saved tab
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
     }
+    const result = await updateOwnedProposal({
+      proposalId: id,
+      ownerUserId: userId,
+      updates: req.body as Record<string, unknown>,
+    });
 
-    const proposal = await Proposal.findOneAndUpdate(
-      { _id: id, userId },
-      { $set: updates },
-      { new: true, runValidators: true },
-    )
-      .select(DETAIL_PROPOSAL_SELECT)
-      .lean();
-
-    if (!proposal) {
+    if (result.kind === "not_found") {
       res.status(404).json({
         success: false,
         message: "Proposal not found",
@@ -744,12 +256,10 @@ export const updateProposal = async (
       return;
     }
 
-    const settings = await getSettingsByUserId(userId, { createIfMissing: true });
-
     res.status(200).json({
       success: true,
       message: "Proposal updated successfully",
-      data: withLiveSettings(proposal, settings),
+      data: result.proposal,
     });
   } catch (error: any) {
     console.error("Update proposal error:", error);
@@ -789,49 +299,34 @@ export const updateProposalStatus = async (
       return;
     }
 
-    // "unsubmitted" keeps isDraft:true; any other status clears it
-    // Publishing a copy (submitted/approved) auto-promotes it to a real proposal
-    const allowed = ["unsubmitted", "submitted", "reviewed", "approved", "rejected"];
-    if (!allowed.includes(status)) {
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+
+    const result = await updateOwnedProposalStatus({
+      proposalId: id,
+      ownerUserId: userId,
+      status,
+    });
+
+    if (result.kind === "invalid_status") {
       res.status(400).json({
         success: false,
-        message: `Invalid status. Must be one of: ${allowed.join(", ")}`,
+        message: `Invalid status. Must be one of: ${PROPOSAL_STATUSES.join(", ")}`,
       });
       return;
     }
 
-    const isPublishing = status !== "unsubmitted";
-
-    // When a copy gets published: clear isCopy → it graduates to a real proposal
-    const statusUpdate: Record<string, any> = {
-      status,
-      isDraft: !isPublishing,
-      ...(isPublishing && {
-        isCopy: false,     // no longer a copy — it's a real proposal now
-        isActive: true,    // goes live
-        isOpen: true,
-      }),
-    };
-
-    const proposal = await Proposal.findOneAndUpdate(
-      { _id: id, userId },
-      { $set: statusUpdate },
-      { new: true },
-    )
-      .select(DETAIL_PROPOSAL_SELECT)
-      .lean();
-
-    if (!proposal) {
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "Proposal not found" });
       return;
     }
 
-    const settings = await getSettingsByUserId(userId, { createIfMissing: true });
-
     res.status(200).json({
       success: true,
-      message: `Proposal status updated to "${status}"`,
-      data: withLiveSettings(proposal, settings),
+      message: `Proposal status updated to "${result.status}"`,
+      data: result.proposal,
     });
   } catch (error) {
     console.error("Update status error:", error);
@@ -857,60 +352,36 @@ export const updateProposalMeta = async (
       return;
     }
 
-    // Fetch first so we can enforce copy restrictions
-    const existing = await Proposal.findOne({ _id: id, userId }).select("isCopy").lean();
-    if (!existing) {
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+
+    const result = await updateOwnedProposalMeta({
+      proposalId: id,
+      ownerUserId: userId,
+      metadata: { isActive, isFavorite, isAccepted, isOpen, viewsCount, isDraft },
+    });
+
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "Proposal not found" });
       return;
     }
 
-    const isCopyProposal = (existing as any).isCopy === true;
-
-    const updates: Record<string, any> = {};
-    if (typeof isActive === "boolean") {
-      // Copies are always offline until published via status route
-      if (!isCopyProposal) updates.isActive = isActive;
-    }
-    if (typeof isFavorite === "boolean") {
-      // Copies cannot be favourited
-      if (!isCopyProposal) updates.isFavorite = isFavorite;
-    }
-    if (typeof isAccepted === "boolean") updates.isAccepted = isAccepted;
-    if (typeof isOpen === "boolean") {
-      if (!isCopyProposal) updates.isOpen = isOpen;
-    }
-    if (typeof isDraft === "boolean") updates.isDraft = isDraft;
-    if (typeof viewsCount === "number" && viewsCount >= 0) updates.viewsCount = viewsCount;
-
-    if (Object.keys(updates).length === 0) {
+    if (result.kind === "no_valid_fields") {
       res.status(400).json({
         success: false,
-        message: isCopyProposal
+        message: result.copyRestricted
           ? "Copies cannot be favourited or toggled active. Publish the copy first."
           : "No valid fields provided.",
       });
       return;
     }
 
-    const proposal = await Proposal.findOneAndUpdate(
-      { _id: id, userId },
-      { $set: updates },
-      { new: true, runValidators: true },
-    )
-      .select(DETAIL_PROPOSAL_SELECT)
-      .lean();
-
-    if (!proposal) {
-      res.status(404).json({ success: false, message: "Proposal not found" });
-      return;
-    }
-
-    const settings = await getSettingsByUserId(userId, { createIfMissing: true });
-
     res.status(200).json({
       success: true,
       message: "Proposal metadata updated",
-      data: withLiveSettings(proposal, settings),
+      data: result.proposal,
     });
   } catch (error) {
     console.error("Update proposal meta error:", error);
@@ -938,39 +409,24 @@ export const incrementProposalViews = async (
       return;
     }
 
-    const proposal = await Proposal.findOneAndUpdate(
-      { _id: id, userId },
-      { $inc: { viewsCount: 1 } },
-      { new: true },
-    )
-      .select(DETAIL_PROPOSAL_SELECT)
-      .lean();
-
-    if (!proposal) {
-      res.status(404).json({ success: false, message: "Proposal not found" });
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
       return;
     }
+    const result = await incrementOwnedProposalViews({
+      proposalId: id,
+      ownerUserId: userId,
+    });
 
-    const settings = await getSettingsByUserId(userId);
-
-    if (userId) {
-      const proposalTitle = proposal.event?.eventName?.trim() || "Untitled Proposal";
-      await createNotification({
-        userId,
-        proposalId: String(proposal._id),
-        type: "proposal_view",
-        title: "Proposal viewed",
-        message: `"${proposalTitle}" received a new view. Total views: ${proposal.viewsCount}.`,
-        metadata: {
-          viewsCount: proposal.viewsCount,
-        },
-      });
+    if (result.kind === "not_found") {
+      res.status(404).json({ success: false, message: "Proposal not found" });
+      return;
     }
 
     res.status(200).json({
       success: true,
       message: "Proposal views incremented",
-      data: withLiveSettings(proposal, settings),
+      data: result.proposal,
     });
   } catch (error) {
     console.error("Increment proposal views error:", error);
@@ -994,13 +450,17 @@ export const deleteProposal = async (
       return;
     }
 
-    const proposal = await Proposal.findOneAndUpdate(
-      { _id: id, userId: req.user?.userId, isArchived: { $ne: true } },
-      { $set: { isArchived: true, archivedAt: new Date() } },
-      { new: true },
-    ).lean();
+    const userId = req.user?.userId;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const result = await archiveOwnedProposal({
+      proposalId: id,
+      ownerUserId: userId,
+    });
 
-    if (!proposal) {
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "Proposal not found" });
       return;
     }
@@ -1031,15 +491,17 @@ export const restoreProposal = async (
       return;
     }
 
-    const proposal = await Proposal.findOneAndUpdate(
-      { _id: id, userId: req.user?.userId, isArchived: true },
-      { $set: { isArchived: false }, $unset: { archivedAt: "" } },
-      { new: true },
-    )
-      .select(DETAIL_PROPOSAL_SELECT)
-      .lean();
+    const userId = req.user?.userId;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const result = await restoreOwnedProposal({
+      proposalId: id,
+      ownerUserId: userId,
+    });
 
-    if (!proposal) {
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "Archived proposal not found" });
       return;
     }
@@ -1070,13 +532,17 @@ export const permanentlyDeleteProposal = async (
       return;
     }
 
-    const proposal = await Proposal.findOneAndDelete({
-      _id: id,
-      userId: req.user?.userId,
-      isArchived: true,
-    }).lean();
+    const userId = req.user?.userId;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const result = await permanentlyDeleteOwnedProposal({
+      proposalId: id,
+      ownerUserId: userId,
+    });
 
-    if (!proposal) {
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "Archived proposal not found" });
       return;
     }
@@ -1115,53 +581,24 @@ export const copyProposal = async (
       return;
     }
 
-    const source = await Proposal.findOne({ _id: id, userId }).lean();
-    if (!source) {
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const result = await copyOwnedProposal({
+      proposalId: id,
+      ownerUserId: userId,
+      overrides: { eventName, startDate, endDate, templateId, isDraft },
+    });
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "Source proposal not found" });
       return;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { _id, createdAt, updatedAt, __v, ...sourceData } = source as any;
-
-    const copyData: Record<string, any> = {
-      ...sourceData,
-      userId,
-      // ── Copy lifecycle state ──────────────────────────────────────────────
-      // isCopy:true  = lives in "Saved" tab, offline, cannot be favoured/shared
-      // When the user publishes it, isCopy is auto-cleared → becomes a live proposal
-      status: "unsubmitted",
-      isDraft: isDraft ?? false,
-      isActive: false,      // offline until published
-      isFavorite: false,    // copies cannot be favourited
-      isAccepted: false,
-      isOpen: false,
-      isArchived: false,
-      archivedAt: null,
-      isCopy: true,
-      viewsCount: 0,
-    };
-
-    if (templateId) copyData.templateId = templateId;
-
-    if (eventName || startDate || endDate) {
-      copyData.event = {
-        ...(copyData.event ?? {}),
-        ...(eventName ? { eventName } : {}),
-        ...(startDate ? { startDate } : {}),
-        ...(endDate ? { endDate } : {}),
-      };
-    }
-
-    const copy = new Proposal(copyData);
-    await copy.save();
-
-    const settings = await getSettingsByUserId(userId, { createIfMissing: true });
-
     res.status(201).json({
       success: true,
       message: "Proposal copied successfully",
-      data: withLiveSettings(copy.toObject(), settings),
+      data: result.proposal,
     });
   } catch (error: any) {
     console.error("Copy proposal error:", error);
@@ -1183,31 +620,33 @@ export const uploadProposalFiles = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const userId = req.user?.userId || "anonymous";
+    const userId = req.user?.userId;
     const files = req.files as Record<string, Express.Multer.File[]> | undefined;
 
-    if (!files || Object.keys(files).length === 0) {
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const uploadFiles = Object.values(files ?? {})
+      .flat()
+      .map(({ fieldname, originalname, path }) => ({
+        fieldname,
+        originalname,
+        path,
+      }));
+    const result = await uploadOwnedProposalFiles({
+      ownerUserId: userId,
+      files: uploadFiles,
+    });
+    if (result.kind === "no_files") {
       res.status(400).json({ success: false, message: "No files uploaded" });
       return;
     }
 
-    const { DO_FOLDER_NAME = "DXG-RFP-Tool" } = process.env;
-    const results: Array<{ fieldname: string; originalname: string; url: string }> = [];
-
-    for (const fieldname of Object.keys(files)) {
-      for (const file of files[fieldname]) {
-        const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
-        const objectKey = `${DO_FOLDER_NAME}/proposals/${userId}/${Date.now()}-${safeName}`;
-
-        const url = await uploadToSpaces(file.path, objectKey);
-        results.push({ fieldname, originalname: file.originalname, url });
-      }
-    }
-
     res.status(200).json({
       success: true,
-      message: `${results.length} file(s) uploaded successfully`,
-      data: results,
+      message: `${result.files.length} file(s) uploaded successfully`,
+      data: result.files,
     });
   } catch (error) {
     console.error("Upload proposal files error:", error);

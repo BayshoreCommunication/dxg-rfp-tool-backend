@@ -1,0 +1,9 @@
+{
+  "contractRelease": "proposal.v1",
+  "generatedAt": null,
+  "schemas": {
+    "proposal.v1.schema.json": "6a486146cc74c494c3bf719b05c680a18735b2ad974bf792538a472d0a1aef7d",
+    "proposal-extraction-patch.v1.schema.json": "086fc8c0b863fcce2f9da5ae9e69cd0d4081aaf8b5fcb24bb6525f9f2e70a09a",
+    "proposal-public.v1.schema.json": "a9f70d0dba5ab4a453e1469eccc5b3f2a78291e53ada915b28bad041bd82c3aa"
+  }
+}

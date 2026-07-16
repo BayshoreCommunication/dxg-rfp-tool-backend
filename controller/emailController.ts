@@ -1,11 +1,16 @@
-import crypto from "crypto";
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth";
-import EmailCampaign from "../modal/emailModel";
-import Proposal from "../modal/proposalsModel";
-import VendorResponse from "../modal/vendorResponseModel";
-import { sendCustomEmail } from "../utils/emailService";
+import {
+  deleteOwnedEmailCampaignById,
+  deleteOwnedEmailCampaignsByProposal,
+  getOwnedEmailStats,
+  listOwnedEmailCampaigns,
+  sendOwnedEmailCampaign,
+  trackEmailOpen,
+  trackProposalClick,
+  trackVendorResponseClick,
+} from "../src/modules/email/composition";
 
 const EMAIL_REGEX = /^\S+@\S+\.\S+$/;
 
@@ -129,147 +134,59 @@ export const sendProposalEmailCampaign = async (
       message?: string;
     };
 
-    if (!proposalId) {
+    const result = await sendOwnedEmailCampaign({
+      ownerUserId: userId,
+      proposalId,
+      recipientEmails,
+      subject,
+      message,
+    });
+    if (result.kind === "proposal_id_required") {
       res.status(400).json({
         success: false,
         message: "Proposal id is required.",
       });
       return;
     }
-
-    const recipients = cleanEmailList(recipientEmails);
-    if (recipients.length === 0) {
+    if (result.kind === "recipients_required") {
       res.status(400).json({
         success: false,
         message: "At least one valid recipient email is required.",
       });
       return;
     }
-
-    const proposal = await Proposal.findOne({
-      _id: proposalId,
-      userId,
-    }).select("_id event contact");
-
-    if (!proposal) {
+    if (result.kind === "proposal_not_found") {
       res.status(404).json({
         success: false,
         message: "Proposal not found.",
       });
       return;
     }
-
-    const proposalTitle =
-      proposal.event?.eventName?.trim() || "Untitled Proposal";
-    const proposalSlug = `${toSlug(proposalTitle) || "proposal"}-${proposal._id}`;
-    const proposalUrl = buildProposalPublicUrl(proposalSlug);
-    const vendorResponseUrl = buildVendorResponseUrl(proposalSlug);
-    const finalSubject =
-      subject?.trim() || `Proposal for ${proposalTitle} - DXG RFP Tool`;
-    const defaultMessage = `Hi,
-
-Please review the proposal and let us know your feedback.
-
-Best regards,
-DXG Team`;
-    const finalMessage = cleanEmailMessage(message?.trim() || defaultMessage);
-    const proposalReference = `#${String(proposal._id).slice(-8).toUpperCase()}`;
-
-    const recipientDocs = recipients.map((email) => ({
-      email,
-      trackingId: crypto.randomBytes(16).toString("hex"),
-      status: "failed" as const,
-    }));
-
-    const campaign = await EmailCampaign.create({
-      userId,
-      proposalId: proposal._id,
-      proposalTitle,
-      proposalSlug,
-      subject: finalSubject,
-      message: finalMessage,
-      recipients: recipientDocs,
-      totalRecipients: recipientDocs.length,
-      sentCount: 0,
-      openedCount: 0,
-      clickedCount: 0,
-    });
-
-    let sentCount = 0;
-
-    for (const recipient of campaign.recipients) {
-      try {
-        const openUrl = buildTrackingOpenUrl(recipient.trackingId);
-        const clickUrl = buildTrackingClickUrl(
-          recipient.trackingId,
-          proposalUrl,
-        );
-        const vendorRespClickUrl = buildVendorResponseTrackingClickUrl(
-          recipient.trackingId,
-          vendorResponseUrl,
-        );
-        const html = buildProposalEmailHtml({
-          title: proposalTitle,
-          message: finalMessage,
-          proposalUrl,
-          trackingOpenUrl: openUrl,
-          trackingClickUrl: clickUrl,
-          proposalReference,
-          vendorResponseTrackingClickUrl: vendorRespClickUrl,
-        });
-
-        await sendCustomEmail({
-          to: recipient.email,
-          subject: finalSubject,
-          html,
-          text: `${finalMessage}\n\nView proposal: ${proposalUrl}`,
-        });
-
-        recipient.status = "sent";
-        recipient.sentAt = new Date();
-        recipient.errorMessage = undefined;
-        sentCount += 1;
-      } catch (error) {
-        recipient.status = "failed";
-        recipient.errorMessage =
-          error instanceof Error ? error.message : "Unknown send error";
-      }
-    }
-
-    campaign.sentCount = sentCount;
-    await campaign.save();
-
-    const failedCount = Math.max(0, campaign.totalRecipients - sentCount);
-    const failedRecipients = campaign.recipients
-      .filter((entry) => entry.status === "failed")
-      .map((entry) => ({
-        email: entry.email,
-        errorMessage: entry.errorMessage || "Unknown send error",
-      }));
-
-    if (sentCount === 0) {
+    if (result.kind === "all_failed") {
       res.status(502).json({
         success: false,
         message:
           "Email campaign created, but delivery failed for all recipients. Check SMTP configuration.",
-        data: campaign,
-        sentCount,
-        failedCount,
-        failedRecipients,
+        data: result.campaign,
+        sentCount: result.sentCount,
+        failedCount: result.failedCount,
+        failedRecipients: result.failedRecipients,
       });
       return;
     }
 
     const partialDeliveryNote =
-      failedCount > 0 ? ` Partial delivery: ${failedCount} failed.` : "";
+      result.failedCount > 0
+        ? ` Partial delivery: ${result.failedCount} failed.`
+        : "";
 
     res.status(201).json({
       success: true,
-      message: `Email campaign processed. ${sentCount}/${campaign.totalRecipients} emails sent.${partialDeliveryNote}`,
-      data: campaign,
-      sentCount,
-      failedCount,
-      failedRecipients,
+      message: `Email campaign processed. ${result.sentCount}/${result.totalRecipients} emails sent.${partialDeliveryNote}`,
+      data: result.campaign,
+      sentCount: result.sentCount,
+      failedCount: result.failedCount,
+      failedRecipients: result.failedRecipients,
     });
   } catch (error) {
     console.error("Send proposal email campaign error:", error);
@@ -292,74 +209,21 @@ export const getEmailCampaigns = async (
       return;
     }
 
-    const { proposalId, page = "1", limit = "20" } = req.query;
-    const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10) || 20));
-    const skip = (pageNum - 1) * limitNum;
-
-    const filter: Record<string, unknown> = { userId };
-    if (proposalId && typeof proposalId === "string") {
-      filter.proposalId = proposalId;
-    }
-
-    const [campaigns, total] = await Promise.all([
-      EmailCampaign.find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      EmailCampaign.countDocuments(filter),
-    ]);
-
-    // Count vendor responses per campaign by matching each campaign's
-    // recipient trackingIds against VendorResponse.emailTrackingId.
-    // This prevents all campaigns for the same proposal sharing one count.
-    const trackingToCampaign: Record<string, string> = {};
-    for (const campaign of campaigns) {
-      for (const recipient of campaign.recipients) {
-        if (recipient.trackingId) {
-          trackingToCampaign[recipient.trackingId] = String(campaign._id);
-        }
-      }
-    }
-
-    const allTrackingIds = Object.keys(trackingToCampaign);
-    const vendorResponsesByCampaign: Record<string, number> = {};
-
-    if (allTrackingIds.length > 0) {
-      const matchedResponses = await VendorResponse.find({
-        emailTrackingId: { $in: allTrackingIds },
-      })
-        .select("emailTrackingId")
-        .lean();
-
-      for (const resp of matchedResponses) {
-        const tid = resp.emailTrackingId;
-        if (tid) {
-          const campaignId = trackingToCampaign[tid];
-          if (campaignId) {
-            vendorResponsesByCampaign[campaignId] =
-              (vendorResponsesByCampaign[campaignId] ?? 0) + 1;
-          }
-        }
-      }
-    }
-
-    const data = campaigns.map((c) => ({
-      ...c,
-      vendorResponseCount: vendorResponsesByCampaign[String(c._id)] ?? 0,
-    }));
+    const { proposalId, page, limit } = req.query;
+    const result = await listOwnedEmailCampaigns({
+      ownerUserId: userId,
+      query: {
+        proposalId: typeof proposalId === "string" ? proposalId : undefined,
+        page: typeof page === "string" ? page : undefined,
+        limit: typeof limit === "string" ? limit : undefined,
+      },
+    });
 
     res.status(200).json({
       success: true,
       message: "Email campaigns fetched successfully",
-      data,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages: Math.ceil(total / limitNum),
-      },
+      data: result.campaigns,
+      pagination: result.pagination,
     });
   } catch (error) {
     console.error("Get email campaigns error:", error);
@@ -391,12 +255,12 @@ export const deleteEmailCampaignsByProposal = async (
       return;
     }
 
-    const result = await EmailCampaign.deleteMany({
-      userId,
-      proposalId: new mongoose.Types.ObjectId(proposalId),
+    const result = await deleteOwnedEmailCampaignsByProposal({
+      ownerUserId: userId,
+      proposalId,
     });
 
-    if (!result.deletedCount) {
+    if (result.kind === "not_found") {
       res.status(404).json({
         success: false,
         message: "No email campaign found for this proposal.",
@@ -439,12 +303,12 @@ export const deleteEmailCampaignById = async (
       return;
     }
 
-    const deleted = await EmailCampaign.findOneAndDelete({
-      _id: campaignId,
-      userId: new mongoose.Types.ObjectId(userId),
+    const result = await deleteOwnedEmailCampaignById({
+      campaignId,
+      ownerUserId: userId,
     });
 
-    if (!deleted) {
+    if (result.kind === "not_found") {
       res.status(404).json({
         success: false,
         message: "Email campaign not found.",
@@ -455,7 +319,7 @@ export const deleteEmailCampaignById = async (
     res.status(200).json({
       success: true,
       message: "Email campaign deleted successfully.",
-      data: { campaignId: deleted._id },
+      data: { campaignId: result.campaignId },
     });
   } catch (error) {
     console.error("Delete email campaign by id error:", error);
@@ -483,9 +347,6 @@ export const getEmailStats = async (
     }
 
     const { proposalId } = req.query;
-    const matchStage: Record<string, unknown> = {
-      userId: new mongoose.Types.ObjectId(userId),
-    };
     if (proposalId && typeof proposalId === "string") {
       if (!mongoose.isValidObjectId(proposalId)) {
         res.status(400).json({
@@ -494,87 +355,16 @@ export const getEmailStats = async (
         });
         return;
       }
-      matchStage.proposalId = new mongoose.Types.ObjectId(proposalId);
     }
-
-    const [summary] = await EmailCampaign.aggregate<{
-      totalCampaigns: number;
-      totalRecipients: number;
-      totalSent: number;
-      totalOpened: number;
-      totalClicked: number;
-    }>([
-      { $match: matchStage },
-      {
-        $group: {
-          _id: null,
-          totalCampaigns: { $sum: 1 },
-          totalRecipients: { $sum: "$totalRecipients" },
-          totalSent: { $sum: "$sentCount" },
-          totalOpened: { $sum: "$openedCount" },
-          totalClicked: { $sum: "$clickedCount" },
-        },
-      },
-    ]);
-
-    const byProposal = await EmailCampaign.aggregate<{
-      proposalId: string;
-      proposalTitle: string;
-      totalSent: number;
-      totalOpened: number;
-      totalClicked: number;
-    }>([
-      { $match: matchStage },
-      {
-        $group: {
-          _id: "$proposalId",
-          proposalTitle: { $first: "$proposalTitle" },
-          totalSent: { $sum: "$sentCount" },
-          totalOpened: { $sum: "$openedCount" },
-          totalClicked: { $sum: "$clickedCount" },
-        },
-      },
-      { $sort: { totalSent: -1 } },
-      { $limit: 20 },
-      {
-        $project: {
-          _id: 0,
-          proposalId: { $toString: "$_id" },
-          proposalTitle: 1,
-          totalSent: 1,
-          totalOpened: 1,
-          totalClicked: 1,
-        },
-      },
-    ]);
-
-    const totals = summary || {
-      totalCampaigns: 0,
-      totalRecipients: 0,
-      totalSent: 0,
-      totalOpened: 0,
-      totalClicked: 0,
-    };
-
-    const openRate =
-      totals.totalSent > 0
-        ? Number(((totals.totalOpened / totals.totalSent) * 100).toFixed(2))
-        : 0;
-    const clickRate =
-      totals.totalSent > 0
-        ? Number(((totals.totalClicked / totals.totalSent) * 100).toFixed(2))
-        : 0;
+    const data = await getOwnedEmailStats({
+      ownerUserId: userId,
+      proposalId: typeof proposalId === "string" ? proposalId : undefined,
+    });
 
     res.status(200).json({
       success: true,
       message: "Email stats fetched successfully",
-      data: {
-        ...totals,
-        openRate,
-        clickRate,
-        totalViews: totals.totalOpened,
-        byProposal,
-      },
+      data,
     });
   } catch (error) {
     console.error("Get email stats error:", error);
@@ -597,21 +387,7 @@ export const markEmailOpened = async (
       return;
     }
 
-    const campaign = await EmailCampaign.findOne({
-      "recipients.trackingId": trackingId,
-    });
-
-    if (campaign) {
-      const recipient = campaign.recipients.find(
-        (entry) => entry.trackingId === trackingId,
-      );
-
-      if (recipient && !recipient.openedAt) {
-        recipient.openedAt = new Date();
-        campaign.openedCount += 1;
-        await campaign.save();
-      }
-    }
+    await trackEmailOpen(trackingId);
 
     const transparentGif = Buffer.from(
       "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==",
@@ -640,30 +416,10 @@ export const markEmailClicked = async (
     const redirectParam =
       typeof req.query.redirect === "string" ? req.query.redirect : "";
 
-    const campaign = await EmailCampaign.findOne({
-      "recipients.trackingId": trackingId,
+    const redirectUrl = await trackProposalClick({
+      trackingId,
+      fallbackRedirect: redirectParam,
     });
-
-    let redirectUrl = getFrontendBaseUrl();
-
-    if (campaign) {
-      const recipient = campaign.recipients.find(
-        (entry) => entry.trackingId === trackingId,
-      );
-
-      if (recipient && !recipient.clickedAt) {
-        recipient.clickedAt = new Date();
-        campaign.clickedCount += 1;
-        await campaign.save();
-      }
-
-      const proposalUrl = buildProposalPublicUrl(campaign.proposalSlug);
-      redirectUrl = proposalUrl;
-    }
-
-    if (!campaign && /^https?:\/\//i.test(redirectParam)) {
-      redirectUrl = redirectParam;
-    }
 
     res.redirect(302, redirectUrl);
   } catch (error) {
@@ -681,36 +437,10 @@ export const markVendorResponseClicked = async (
     const redirectParam =
       typeof req.query.redirect === "string" ? req.query.redirect : "";
 
-    const campaign = await EmailCampaign.findOne({
-      "recipients.trackingId": trackingId,
+    const redirectUrl = await trackVendorResponseClick({
+      trackingId,
+      fallbackRedirect: redirectParam,
     });
-
-    let redirectUrl = getFrontendBaseUrl();
-
-    if (campaign) {
-      const recipient = campaign.recipients.find(
-        (entry) => entry.trackingId === trackingId,
-      );
-
-      if (recipient && !recipient.vendorResponseClickedAt) {
-        recipient.vendorResponseClickedAt = new Date();
-        campaign.vendorResponseClickCount =
-          (campaign.vendorResponseClickCount ?? 0) + 1;
-        await campaign.save();
-      }
-
-      const base = buildVendorResponseUrl(campaign.proposalSlug);
-      if (recipient?.email) {
-        const sep = base.includes("?") ? "&" : "?";
-        redirectUrl = `${base}${sep}email=${encodeURIComponent(recipient.email)}&tid=${encodeURIComponent(trackingId)}`;
-      } else {
-        redirectUrl = base;
-      }
-    }
-
-    if (!campaign && /^https?:\/\//i.test(redirectParam)) {
-      redirectUrl = redirectParam;
-    }
 
     res.redirect(302, redirectUrl);
   } catch (error) {

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "legacy-proposal-extraction-result.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "event": { "type": "object" },
+    "venueSchedule": { "type": "object" },
+    "roomByRoom": {
+      "oneOf": [
+        { "type": "object" },
+        { "type": "array", "items": { "type": "object" } }
+      ]
+    },
+    "production": { "type": "object" },
+    "hybridVirtual": { "type": "object" },
+    "contentCreative": { "type": "object" },
+    "videoRecordingStep": { "type": "object" },
+    "venue": { "type": "object" },
+    "budget": { "type": "object" },
+    "uploads": { "type": "object" },
+    "contact": { "type": "object" }
+  }
+}

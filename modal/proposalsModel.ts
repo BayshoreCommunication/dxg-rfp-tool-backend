@@ -1,6 +1,7 @@
 import mongoose, { Document, Schema } from "mongoose";
 
 export interface IProposal extends Document {
+  organizationId?: mongoose.Types.ObjectId;
   userId?: mongoose.Types.ObjectId;
   status: "unsubmitted" | "submitted" | "reviewed" | "approved" | "rejected";
   isDraft: boolean;
@@ -65,6 +66,7 @@ export interface IProposal extends Document {
 
 const proposalSchema = new Schema<IProposal>(
   {
+    organizationId: { type: Schema.Types.ObjectId, ref: "Organization", index: true },
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
@@ -163,6 +165,7 @@ const proposalSchema = new Schema<IProposal>(
 );
 
 proposalSchema.index({ userId: 1, createdAt: -1 });
+proposalSchema.index({ organizationId: 1, userId: 1, createdAt: -1 });
 proposalSchema.index({ status: 1 });
 proposalSchema.index({ "contact.contactEmail": 1 });
 proposalSchema.index({ "event.eventName": 1 });

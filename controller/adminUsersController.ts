@@ -1,19 +1,25 @@
-import bcrypt from "bcryptjs";
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
-import User from "../modal/userModel";
+import {
+  createAdministrativeUser,
+  deleteAdministrativeUser,
+  listAdministrativeUsers,
+  updateAdministrativeUser,
+} from "../src/modules/admin/composition";
 
 const isSuperAdminRole = (role?: string): boolean => {
   const normalized = String(role || "").toLowerCase().trim().replace(/[\s-]/g, "_");
   return normalized === "super_admin" || normalized === "superadmin";
 };
 
-const isAdminRole = (role?: string): boolean => {
-  const normalized = String(role || "").toLowerCase().trim().replace(/[\s-]/g, "_");
-  return normalized === "admin" || normalized === "super_admin" || normalized === "superadmin";
-};
-
 const ALLOWED_ROLES = ["admin", "super_admin"] as const;
+
+const validationMessage = (code: string): string => {
+  if (code === "required") return "Name, email, and password are required.";
+  if (code === "invalid_role") return `Role must be one of: ${ALLOWED_ROLES.join(", ")}.`;
+  if (code === "empty_name") return "Name cannot be empty.";
+  return "Password must be at least 6 characters.";
+};
 
 // GET /api/admin-users
 export const getAdminUsers = async (
@@ -26,11 +32,7 @@ export const getAdminUsers = async (
       return;
     }
 
-    const admins = await User.find({
-      role: { $in: ["admin", "super_admin", "superadmin"] },
-    })
-      .select("-password")
-      .sort({ createdAt: -1 });
+    const admins = await listAdministrativeUsers();
 
     res.status(200).json({
       success: true,
@@ -58,50 +60,20 @@ export const createAdminUser = async (
       return;
     }
 
-    const { name, email, password, role } = req.body as {
-      name?: string;
-      email?: string;
-      password?: string;
-      role?: string;
-    };
-
-    if (!name?.trim() || !email?.trim() || !password?.trim()) {
-      res.status(400).json({ success: false, message: "Name, email, and password are required." });
+    const result = await createAdministrativeUser(req.body ?? {});
+    if (result.kind === "validation") {
+      res.status(400).json({ success: false, message: validationMessage(result.code) });
       return;
     }
-
-    if (!ALLOWED_ROLES.includes(role as (typeof ALLOWED_ROLES)[number])) {
-      res.status(400).json({
-        success: false,
-        message: `Role must be one of: ${ALLOWED_ROLES.join(", ")}.`,
-      });
-      return;
-    }
-
-    if (password.trim().length < 6) {
-      res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
-      return;
-    }
-
-    const existing = await User.findOne({ email: email.toLowerCase().trim() });
-    if (existing) {
+    if (result.kind === "email_conflict") {
       res.status(409).json({ success: false, message: "Email is already in use." });
       return;
     }
 
-    const user = await User.create({
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
-      password: password.trim(),
-      role,
-    });
-
-    const safeUser = await User.findById(user._id).select("-password");
-
     res.status(201).json({
       success: true,
       message: "Admin user created successfully.",
-      data: safeUser,
+      data: result.user,
     });
   } catch (error) {
     console.error("Create admin user error:", error);
@@ -125,65 +97,23 @@ export const updateAdminUser = async (
     }
 
     const { id } = req.params;
-    const { name, phone, role, password } = req.body as {
-      name?: string;
-      phone?: string;
-      role?: string;
-      password?: string;
-    };
-
-    const user = await User.findById(id).select("+password");
-    if (!user) {
+    const result = await updateAdministrativeUser(id, req.body ?? {});
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "Admin user not found." });
       return;
     }
-
-    if (!isAdminRole(user.role)) {
+    if (result.kind === "non_admin_target") {
       res.status(400).json({ success: false, message: "Target user is not an admin." });
       return;
     }
-
-    if (name !== undefined) {
-      const trimmed = name.trim();
-      if (!trimmed) {
-        res.status(400).json({ success: false, message: "Name cannot be empty." });
-        return;
-      }
-      user.name = trimmed;
+    if (result.kind === "validation") {
+      res.status(400).json({ success: false, message: validationMessage(result.code) });
+      return;
     }
-
-    if (phone !== undefined) {
-      user.phone = phone.trim();
-    }
-
-    if (role !== undefined) {
-      if (!ALLOWED_ROLES.includes(role as (typeof ALLOWED_ROLES)[number])) {
-        res.status(400).json({
-          success: false,
-          message: `Role must be one of: ${ALLOWED_ROLES.join(", ")}.`,
-        });
-        return;
-      }
-      user.role = role as (typeof ALLOWED_ROLES)[number];
-    }
-
-    if (password !== undefined) {
-      const trimmed = password.trim();
-      if (trimmed.length < 6) {
-        res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
-        return;
-      }
-      const salt = await bcrypt.genSalt(10);
-      user.password = await bcrypt.hash(trimmed, salt);
-    }
-
-    await user.save({ validateBeforeSave: false });
-
-    const safeUser = await User.findById(user._id).select("-password");
     res.status(200).json({
       success: true,
       message: "Admin user updated successfully.",
-      data: safeUser,
+      data: result.user,
     });
   } catch (error) {
     console.error("Update admin user error:", error);
@@ -208,23 +138,19 @@ export const deleteAdminUser = async (
 
     const { id } = req.params;
 
-    if (id === req.user.userId) {
+    const result = await deleteAdministrativeUser(req.user.userId, id);
+    if (result.kind === "self_delete") {
       res.status(400).json({ success: false, message: "You cannot delete your own account." });
       return;
     }
-
-    const user = await User.findById(id);
-    if (!user) {
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "Admin user not found." });
       return;
     }
-
-    if (!isAdminRole(user.role)) {
+    if (result.kind === "non_admin_target") {
       res.status(400).json({ success: false, message: "Target user is not an admin." });
       return;
     }
-
-    await user.deleteOne();
 
     res.status(200).json({
       success: true,

@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import mongoose, { Document, Schema } from "mongoose";
 
 export interface IUser extends Document {
+  organizationId?: mongoose.Types.ObjectId;
   name: string;
   email: string;
   phone?: string;
@@ -18,6 +19,11 @@ export interface IUser extends Document {
 
 const userSchema = new Schema<IUser>(
   {
+    organizationId: {
+      type: Schema.Types.ObjectId,
+      ref: "Organization",
+      index: true,
+    },
     name: {
       type: String,
       required: [true, "Name is required"],
@@ -79,6 +85,8 @@ userSchema.pre("save", async function (next) {
   this.password = await bcrypt.hash(this.password, salt);
   next();
 });
+
+userSchema.index({ organizationId: 1, email: 1 });
 
 // Compare password method
 userSchema.methods.comparePassword = async function (

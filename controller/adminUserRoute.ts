@@ -1,8 +1,9 @@
 import { Response } from "express";
-import path from "path";
 import { AuthRequest } from "../middleware/auth";
-import User from "../modal/userModel";
-import { uploadToSpaces } from "../utils/uploadToSpaces";
+import {
+  getAdminSelfProfile,
+  updateAdminSelfProfile,
+} from "../src/modules/admin/composition";
 
 const isAdminRole = (role?: string): boolean => {
   const normalized = String(role || "").toLowerCase().trim();
@@ -32,7 +33,7 @@ export const getSignedInAdminProfile = async (
       return;
     }
 
-    const user = await User.findById(userId).select("-password");
+    const user = await getAdminSelfProfile(userId);
     if (!user) {
       res.status(404).json({ success: false, message: "User not found." });
       return;
@@ -51,26 +52,6 @@ export const getSignedInAdminProfile = async (
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }
-};
-
-type UpdateAdminProfilePayload = {
-  name?: string;
-  phone?: string;
-  avatar?: string;
-  oldPassword?: string;
-  password?: string;
-  newPassword?: string;
-};
-
-const buildAdminAvatarKey = (userId: string, originalName: string) => {
-  const folder = process.env.DO_FOLDER_NAME
-    ? process.env.DO_FOLDER_NAME.replace(/^\/+|\/+$/g, "")
-    : "";
-  const ext = path.extname(originalName).toLowerCase() || ".png";
-  const fileName = `avatar-${Date.now()}${ext}`;
-  const basePath = `admin/${userId}`;
-
-  return folder ? `${folder}/${basePath}/${fileName}` : `${basePath}/${fileName}`;
 };
 
 export const updateSignedInAdminProfile = async (
@@ -92,72 +73,40 @@ export const updateSignedInAdminProfile = async (
       return;
     }
 
-    const { name, phone, avatar, oldPassword, password, newPassword } =
-      (req.body || {}) as UpdateAdminProfilePayload;
-
-    const nextPassword = (newPassword || password || "").trim();
-    const hasPasswordChange = Boolean(nextPassword);
-
-    const user = await User.findById(userId).select("+password");
-    if (!user) {
+    const result = await updateAdminSelfProfile({
+      userId,
+      body: (req.body ?? {}) as Record<string, unknown>,
+      file: req.file
+        ? { localPath: req.file.path, originalName: req.file.originalname }
+        : undefined,
+    });
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "User not found." });
       return;
     }
-
-    if (hasPasswordChange) {
-      if (!oldPassword || !oldPassword.trim()) {
-        res.status(400).json({
-          success: false,
-          message: "Old password is required to change password.",
-        });
-        return;
-      }
-
-      const isOldPasswordValid = await user.comparePassword(oldPassword);
-      if (!isOldPasswordValid) {
-        res.status(400).json({
-          success: false,
-          message: "Old password does not match.",
-        });
-        return;
-      }
-
-      user.password = nextPassword;
+    if (result.kind === "old_password_required") {
+      res.status(400).json({
+        success: false,
+        message: "Old password is required to change password.",
+      });
+      return;
     }
-
-    if (name !== undefined) {
-      const trimmedName = String(name).trim();
-      if (!trimmedName) {
-        res.status(400).json({
-          success: false,
-          message: "Name cannot be empty.",
-        });
-        return;
-      }
-      user.name = trimmedName;
+    if (result.kind === "wrong_old_password") {
+      res.status(400).json({ success: false, message: "Old password does not match." });
+      return;
     }
-
-    if (phone !== undefined) {
-      user.phone = String(phone).trim();
+    if (result.kind === "invalid_password") {
+      res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
+      return;
     }
-
-    if (avatar !== undefined) {
-      user.avatar = String(avatar).trim();
+    if (result.kind === "empty_name") {
+      res.status(400).json({ success: false, message: "Name cannot be empty." });
+      return;
     }
-
-    if (req.file) {
-      const objectKey = buildAdminAvatarKey(userId, req.file.originalname);
-      const avatarUrl = await uploadToSpaces(req.file.path, objectKey);
-      user.avatar = avatarUrl;
-    }
-
-    await user.save();
-
-    const safeUser = await User.findById(user._id).select("-password");
     res.status(200).json({
       success: true,
       message: "Admin profile updated successfully.",
-      data: safeUser,
+      data: result.user,
     });
   } catch (error) {
     console.error("Update signed-in admin profile error:", error);

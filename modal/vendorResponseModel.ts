@@ -2,6 +2,11 @@ import mongoose, { Schema } from "mongoose";
 
 const vendorDocumentSchema = new Schema(
   {
+    organizationId: {
+      type: Schema.Types.ObjectId,
+      ref: "Organization",
+      index: true,
+    },
     name: { type: String, trim: true },
     url: { type: String, trim: true },
   },
@@ -48,6 +53,7 @@ const vendorResponseSchema = new Schema(
 );
 
 vendorResponseSchema.index({ proposalOwnerId: 1, createdAt: -1 });
+vendorResponseSchema.index({ organizationId: 1, proposalOwnerId: 1, createdAt: -1 });
 vendorResponseSchema.index({ proposalOwnerId: 1, isRead: 1 });
 vendorResponseSchema.index({ proposalId: 1, email: 1 }, { unique: true });
 vendorResponseSchema.index({ emailTrackingId: 1 }, { unique: true, sparse: true });

@@ -1,16 +1,19 @@
 import { NextFunction, Request, Response } from "express";
 import { TokenPayload, verifyAccessToken } from "../config/jwt";
+import Organization from "../modal/organizationModel";
+import User from "../modal/userModel";
+import { runWithTenant } from "../src/modules/shared/tenancy/tenantContext";
 
 // Extend Express Request to include user
 export interface AuthRequest extends Request {
   user?: TokenPayload;
 }
 
-export const authenticate = (
+export const authenticate = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
-): void => {
+): Promise<void> => {
   try {
     const authHeader = req.headers.authorization;
 
@@ -26,8 +29,18 @@ export const authenticate = (
 
     try {
       const decoded = verifyAccessToken(token);
-      req.user = decoded;
-      next();
+      const user = await User.findById(decoded.userId).select("organizationId isBlocked").lean();
+      if (!user || user.isBlocked || !user.organizationId) {
+        res.status(403).json({ success: false, message: "Active organization membership required" });
+        return;
+      }
+      const organization = await Organization.findOne({ _id: user.organizationId, status: "active" }).select("_id").lean();
+      if (!organization) {
+        res.status(403).json({ success: false, message: "Organization is inactive or unavailable" });
+        return;
+      }
+      req.user = { ...decoded, organizationId: String(user.organizationId) };
+      runWithTenant({ organizationId: String(user.organizationId), userId: decoded.userId }, next);
     } catch (error) {
       res.status(401).json({
         success: false,

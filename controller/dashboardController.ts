@@ -1,8 +1,7 @@
 import mongoose from "mongoose";
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
-import EmailCampaign from "../modal/emailModel";
-import Proposal from "../modal/proposalsModel";
+import { getOwnedDashboardOverview } from "../src/modules/dashboard/composition";
 
 export const getDashboardOverview = async (
   req: AuthRequest,
@@ -20,59 +19,12 @@ export const getDashboardOverview = async (
       return;
     }
 
-    const userObjectId = new mongoose.Types.ObjectId(userId);
-
-    const [
-      totalProposals,
-      emailAgg,
-      proposalViewsAgg,
-      latestProposals,
-    ] = await Promise.all([
-      Proposal.countDocuments({ userId: userObjectId }),
-      EmailCampaign.aggregate<{
-        totalEmailSent: number;
-        totalEmailClicked: number;
-      }>([
-        { $match: { userId: userObjectId } },
-        {
-          $group: {
-            _id: null,
-            totalEmailSent: { $sum: "$sentCount" },
-            totalEmailClicked: { $sum: "$clickedCount" },
-          },
-        },
-      ]),
-      Proposal.aggregate<{ totalProposalViews: number }>([
-        { $match: { userId: userObjectId } },
-        {
-          $group: {
-            _id: null,
-            totalProposalViews: { $sum: "$viewsCount" },
-          },
-        },
-      ]),
-      Proposal.find({ userId: userObjectId })
-        .sort({ createdAt: -1 })
-        .limit(5)
-        .select("_id status isActive isFavorite viewsCount createdAt event contact"),
-    ]);
-
-    const totalEmailSent = emailAgg[0]?.totalEmailSent || 0;
-    const totalEmailClicked = emailAgg[0]?.totalEmailClicked || 0;
-    const totalProposalViews = proposalViewsAgg[0]?.totalProposalViews || 0;
+    const data = await getOwnedDashboardOverview(userId);
 
     res.status(200).json({
       success: true,
       message: "Dashboard overview fetched successfully",
-      data: {
-        totals: {
-          totalProposals,
-          totalEmailSent,
-          totalEmailClicked,
-          totalProposalViews,
-        },
-        latestProposals,
-      },
+      data,
     });
   } catch (error) {
     console.error("Get dashboard overview error:", error);
