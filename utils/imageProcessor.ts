@@ -17,7 +17,7 @@ export interface ImageProcessOptions {
  * Convert image to WebP format using Sharp
  * @param inputPath - Path to the original image file
  * @param outputDir - Directory where the WebP image will be saved
- * @param filename - Name for the output file (without extension)
+ * @param filename - Name for the output file 
  * @param options - Image processing options
  * @returns Path to the converted WebP image
  */
