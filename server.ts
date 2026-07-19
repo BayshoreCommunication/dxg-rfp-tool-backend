@@ -20,9 +20,11 @@ import settingsRoutes from "./routes/settingsRoute";
 import userRoutes from "./routes/usersRoute";
 import vendorResponseRoutes from "./routes/vendorResponseRoute";
 import documentSourcesRoutes from "./routes/documentSourcesRoute";
+import jobsRoutes from "./routes/jobsRoute";
 import { startCronJobs } from "./utils/cronJobs";
 import { initializeNotificationWebSocketServer } from "./utils/notificationService";
 import { getUploadsDir } from "./utils/paths";
+import { checkQueue } from "./src/modules/durableJobs/queue";
 
 console.log("Loaded SMTP_MAIL:", process.env.SMTP_MAIL ? "***" : "UNDEFINED");
 console.log(
@@ -97,13 +99,15 @@ app.get("/health", async (_req: Request, res: Response) => {
     try { postgres = await checkPostgres(); }
     catch { postgres = { enabled: true, ready: false, migrationVersion: null, error: "unavailable" }; }
   }
-  const isHealthy = mongoose.connection.readyState === 1 && (!postgres.enabled || postgres.ready);
+  const queue = await checkQueue();
+  const isHealthy = mongoose.connection.readyState === 1 && (!postgres.enabled || postgres.ready) && (!queue.enabled || queue.ready);
 
   res.status(isHealthy ? 200 : 503).json({
     status: isHealthy ? "OK" : "ERROR",
     timestamp: new Date().toISOString(),
     database: dbStatus,
     postgres,
+    queue,
     environment: process.env.NODE_ENV || "development",
   });
 });
@@ -134,6 +138,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/proposals", proposalRoutes);
 app.use("/api/public-access", publicAccessRoutes);
 app.use("/api/v1", documentSourcesRoutes);
+app.use("/api/v1", jobsRoutes);
 
 // Email campaign routes
 app.use("/api/emails", emailRoutes);

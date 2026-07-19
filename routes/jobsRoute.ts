@@ -1,0 +1,12 @@
+import {Router} from "express";
+import {authenticate,authorizeAction} from "../middleware/auth";
+import {cancelJob,createSourceScanJob,getJob,listJobs,queueHealth,retryJob} from "../controller/jobsController";
+import {securityRateLimit} from "../middleware/securityRateLimit";
+const router=Router();const mutationLimit=securityRateLimit({name:"durable-job-mutation",limit:60,windowMs:15*60_000});
+router.post("/sources/:sourceId/scan-jobs",authenticate,authorizeAction("proposal:write"),mutationLimit,createSourceScanJob);
+router.get("/jobs",authenticate,authorizeAction("proposal:read"),listJobs);
+router.get("/jobs/:jobId",authenticate,authorizeAction("proposal:read"),getJob);
+router.post("/jobs/:jobId/cancel",authenticate,authorizeAction("proposal:write"),mutationLimit,cancelJob);
+router.post("/admin/jobs/:jobId/retry",authenticate,authorizeAction("security:admin"),mutationLimit,retryJob);
+router.get("/admin/queues/health",authenticate,authorizeAction("security:admin"),queueHealth);
+export default router;

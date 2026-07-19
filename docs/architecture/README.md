@@ -4,6 +4,8 @@ This document is the Slice 1A baseline for evolving the existing Express/MongoDB
 
 Current increment runbook: [Private document ingestion](./PRIVATE_DOCUMENT_INGESTION.md).
 
+Durable execution runbook: [Durable jobs](./DURABLE_JOBS.md).
+
 ## Target modular-monolith boundaries
 
 | Boundary | Responsibility |

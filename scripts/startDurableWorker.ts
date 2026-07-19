@@ -1,0 +1,11 @@
+import "../config/env";
+import {closePostgres} from "../config/postgres";
+import {durableJobRepository} from "../src/modules/durableJobs/composition";
+import {closeQueue} from "../src/modules/durableJobs/queue";
+import {durableJobsEnabled} from "../src/modules/durableJobs/redis";
+import {createSourceSecurityWorker} from "../src/modules/durableJobs/worker";
+if(!durableJobsEnabled())throw new Error("DURABLE_JOBS_ENABLED must be true to start a worker");
+const worker=createSourceSecurityWorker(durableJobRepository);
+const shutdown=async()=>{await worker.close();await closeQueue();await closePostgres();process.exit(0);};
+process.on("SIGTERM",()=>{void shutdown();});process.on("SIGINT",()=>{void shutdown();});
+console.log("Source-security worker started");

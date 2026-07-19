@@ -6,7 +6,7 @@ export default tseslint.config(
     ignores: ["dist/**", "node_modules/**", "contracts/generated/**"],
   },
   {
-    files: ["src/**/*.ts", "contracts/**/*.ts", "config/postgres.ts", "scripts/migrateProposalV1.ts", "scripts/migrateDxgOrganization.ts", "scripts/migrateOrganizationMemberships.ts", "scripts/migratePostgres.ts", "scripts/backfillPostgresProposalReferences.ts", "scripts/verifyDocumentIngestionE2E.ts"],
+    files: ["src/**/*.ts", "contracts/**/*.ts", "config/postgres.ts", "scripts/migrateProposalV1.ts", "scripts/migrateDxgOrganization.ts", "scripts/migrateOrganizationMemberships.ts", "scripts/migratePostgres.ts", "scripts/backfillPostgresProposalReferences.ts", "scripts/verifyDocumentIngestionE2E.ts", "scripts/verifyDurableJobsE2E.ts", "scripts/startDurableWorker.ts", "scripts/startDurableDispatcher.ts"],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     rules: {
       "@typescript-eslint/consistent-type-imports": "error",
