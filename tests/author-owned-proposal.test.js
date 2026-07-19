@@ -37,6 +37,9 @@ const createDependencies = (capture = {}) => ({
       return { branding: { brandName: "DXG" } };
     },
   },
+  references: {
+    synchronize: async (input) => { capture.referenceSync = input; },
+  },
 });
 
 test("create strips client-controlled system fields and normalizes drafts", async () => {
@@ -95,6 +98,8 @@ test("full update protects ownership fields and applies submitted lifecycle", as
     runValidators: true,
   });
   assert.equal(result.kind, "updated");
+  assert.equal(capture.referenceSync.proposal._id, "proposal-001");
+  assert.equal(capture.referenceSync.ownerUserId, "user-001");
 });
 
 test("missing or differently owned full update remains not found", async () => {

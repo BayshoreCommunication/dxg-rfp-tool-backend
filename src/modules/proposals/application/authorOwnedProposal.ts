@@ -1,10 +1,12 @@
 import type { ProposalSettingsRepository } from "../domain/ports/proposalSettingsRepository";
 import type { ProposalWriteRepository } from "../domain/ports/proposalWriteRepository";
+import type { ProposalReferenceSynchronizer } from "../domain/ports/proposalReferenceSynchronizer";
 import { withLiveSettings } from "./proposalPresentation";
 
 type AuthorDependencies = {
   proposals: ProposalWriteRepository;
   settings: ProposalSettingsRepository;
+  references?: ProposalReferenceSynchronizer;
 };
 
 const removeSystemFields = (input: Record<string, unknown>) => {
@@ -42,6 +44,7 @@ export const createCreateOwnedProposal = (dependencies: AuthorDependencies) =>
       ownerUserId: input.ownerUserId,
       proposal: proposalData,
     });
+    await dependencies.references?.synchronize({ proposal, ownerUserId: input.ownerUserId, eventType: "proposal.reference.updated" });
     const settings = await settingsForResponse(dependencies, input.ownerUserId);
     return withLiveSettings(proposal, settings);
   };
@@ -70,6 +73,7 @@ export const createUpdateOwnedProposal = (dependencies: AuthorDependencies) =>
       runValidators: true,
     });
     if (!proposal) return { kind: "not_found" as const };
+    await dependencies.references?.synchronize({ proposal, ownerUserId: input.ownerUserId, eventType: "proposal.reference.updated" });
     const settings = await settingsForResponse(dependencies, input.ownerUserId);
     return {
       kind: "updated" as const,
@@ -137,6 +141,7 @@ export const createCopyOwnedProposal = (dependencies: AuthorDependencies) =>
       ownerUserId: input.ownerUserId,
       proposal: copyData,
     });
+    await dependencies.references?.synchronize({ proposal, ownerUserId: input.ownerUserId, eventType: "proposal.reference.updated" });
     const settings = await settingsForResponse(dependencies, input.ownerUserId);
     return {
       kind: "copied" as const,

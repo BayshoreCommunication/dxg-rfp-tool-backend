@@ -5,6 +5,7 @@ import http from "http";
 import mongoose from "mongoose";
 import morgan from "morgan";
 import connectDB from "./config/db";
+import { checkPostgres, postgresEnabled } from "./config/postgres";
 import authRoutes from "./routes/authRoute";
 import adminRoutes from "./routes/adminRoute";
 import adminUserRoutes from "./routes/adminUserRoute";
@@ -85,15 +86,23 @@ app.get("/", (_req: Request, res: Response) => {
 });
 
 // Health check with database status
-app.get("/health", (_req: Request, res: Response) => {
+app.get("/health", async (_req: Request, res: Response) => {
   const dbStatus =
     mongoose.connection.readyState === 1 ? "connected" : "disconnected";
-  const isHealthy = mongoose.connection.readyState === 1;
+  let postgres: Awaited<ReturnType<typeof checkPostgres>> | { enabled: true; ready: false; migrationVersion: null; error: string } = {
+    enabled: false, ready: false, migrationVersion: null,
+  };
+  if (postgresEnabled()) {
+    try { postgres = await checkPostgres(); }
+    catch { postgres = { enabled: true, ready: false, migrationVersion: null, error: "unavailable" }; }
+  }
+  const isHealthy = mongoose.connection.readyState === 1 && (!postgres.enabled || postgres.ready);
 
   res.status(isHealthy ? 200 : 503).json({
     status: isHealthy ? "OK" : "ERROR",
     timestamp: new Date().toISOString(),
     database: dbStatus,
+    postgres,
     environment: process.env.NODE_ENV || "development",
   });
 });

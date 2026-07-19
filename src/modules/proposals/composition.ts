@@ -24,6 +24,7 @@ import { mongoProposalWriteRepository } from "./infrastructure/mongo/mongoPropos
 import { mongoPublicProposalAccessRepository } from "./infrastructure/mongo/mongoPublicProposalAccessRepository";
 import { proposalNotificationAdapter } from "./infrastructure/notifications/proposalNotificationAdapter";
 import { spacesProposalFileStorage } from "./infrastructure/storage/spacesProposalFileStorage";
+import { postgresProposalReferenceSynchronizer } from "./infrastructure/references/postgresProposalReferenceSynchronizer";
 
 export const getOwnedProposal = createGetOwnedProposal({
   proposals: mongoProposalReadRepository,
@@ -38,6 +39,7 @@ export const listOwnedProposals = createListOwnedProposals({
 const mutationDependencies = {
   proposals: mongoProposalWriteRepository,
   settings: mongoProposalSettingsRepository,
+  references: postgresProposalReferenceSynchronizer,
 };
 
 export const updateOwnedProposalStatus =
