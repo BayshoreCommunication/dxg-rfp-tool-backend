@@ -64,3 +64,4 @@ Keep the feature disabled until migration `003` is applied, the bucket is privat
 5. Verify cross-tenant reads return zero with the non-superuser role.
 6. Reconcile pending uploads with storage and investigate orphans before deletion.
 
+For an isolated local verification target, configure the named `rfpilot-private-test` bucket and run `npm run verify:document-ingestion`. The verifier refuses other bucket names and covers signed upload, anonymous denial, clean scan, EICAR block, scanner outage/retry, and deletion.

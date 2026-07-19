@@ -7,7 +7,7 @@
     "dev": "nodemon",
     "build": "tsc",
     "start": "node dist/server.js",
-    "lint": "eslint src contracts config/postgres.ts scripts/migrateProposalV1.ts scripts/migrateDxgOrganization.ts scripts/migrateOrganizationMemberships.ts scripts/migratePostgres.ts scripts/backfillPostgresProposalReferences.ts --max-warnings=0",
+    "lint": "eslint src contracts config/postgres.ts scripts/migrateProposalV1.ts scripts/migrateDxgOrganization.ts scripts/migrateOrganizationMemberships.ts scripts/migratePostgres.ts scripts/backfillPostgresProposalReferences.ts scripts/verifyDocumentIngestionE2E.ts --max-warnings=0",
     "type-check": "tsc --noEmit",
     "test": "node --test --require ts-node/register tests/*.test.js",
     "contracts:generate": "node scripts/generateContracts.mjs",
@@ -20,7 +20,8 @@
     "migrate:postgres": "ts-node scripts/migratePostgres.ts",
     "backfill:postgres-proposals": "ts-node scripts/backfillPostgresProposalReferences.ts",
     "create-super-user": "ts-node scripts/createSuperUser.ts",
-    "test-image-upload": "ts-node scripts/testImageUpload.ts"
+    "test-image-upload": "ts-node scripts/testImageUpload.ts",
+    "verify:document-ingestion": "ts-node scripts/verifyDocumentIngestionE2E.ts"
   },
   "keywords": [
     "express",
