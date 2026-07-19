@@ -19,6 +19,7 @@ import publicAccessRoutes from "./routes/publicAccessRoute";
 import settingsRoutes from "./routes/settingsRoute";
 import userRoutes from "./routes/usersRoute";
 import vendorResponseRoutes from "./routes/vendorResponseRoute";
+import documentSourcesRoutes from "./routes/documentSourcesRoute";
 import { startCronJobs } from "./utils/cronJobs";
 import { initializeNotificationWebSocketServer } from "./utils/notificationService";
 import { getUploadsDir } from "./utils/paths";
@@ -132,6 +133,7 @@ app.use("/api/users", userRoutes);
 // Proposal routes
 app.use("/api/proposals", proposalRoutes);
 app.use("/api/public-access", publicAccessRoutes);
+app.use("/api/v1", documentSourcesRoutes);
 
 // Email campaign routes
 app.use("/api/emails", emailRoutes);

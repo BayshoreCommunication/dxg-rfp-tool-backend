@@ -2,6 +2,8 @@
 
 This document is the Slice 1A baseline for evolving the existing Express/MongoDB service into the RFPilot AI Intelligence Layer. Migration is incremental: existing routes remain compatible while new `/api/v1` modules and workers adopt the target boundaries.
 
+Current increment runbook: [Private document ingestion](./PRIVATE_DOCUMENT_INGESTION.md).
+
 ## Target modular-monolith boundaries
 
 | Boundary | Responsibility |
