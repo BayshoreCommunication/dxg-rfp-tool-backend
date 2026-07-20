@@ -1,0 +1,5 @@
+import crypto from"node:crypto";
+export const CONTEXT_FIXTURES=["synthetic-conference-simple","synthetic-conference-medium","invalid-output","prompt-injection"]as const;export type ContextFixture=typeof CONTEXT_FIXTURES[number];
+export class ProposalContextError extends Error{constructor(public readonly code:string,message:string,public readonly status=422){super(message);}}
+export const contextEnabled=()=>process.env.NODE_ENV==="test"&&process.env.PROPOSAL_CONTEXT_ENABLED==="true"&&process.env.PROPOSAL_CONTEXT_PROVIDER==="mock";
+export const contextInput=(value:Record<string,unknown>)=>{const fixture=String(value.fixture||"")as ContextFixture;if(!CONTEXT_FIXTURES.includes(fixture))throw new ProposalContextError("INVALID_CONTEXT_FIXTURE","Fixture is not approved for Slice 2D.",422);if(value.sourceId)throw new ProposalContextError("SOURCE_CLASSIFICATION_NOT_ALLOWED","Private-source model processing is not authorized in Slice 2D.",422);return{fixture,inputChecksum:crypto.createHash("sha256").update(`proposal-context:${fixture}:v1`).digest("hex")};};

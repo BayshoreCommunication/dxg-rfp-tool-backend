@@ -13,6 +13,8 @@ export interface IProposal extends Document {
   archivedAt?: Date | null;
   isCopy: boolean;
   viewsCount: number;
+  version: number;
+  candidateApplicationIds: string[];
   proposalSettings?: Record<string, unknown>;
   event: {
     eventName: string;
@@ -86,6 +88,8 @@ const proposalSchema = new Schema<IProposal>(
     archivedAt: { type: Date, default: null },
     isCopy: { type: Boolean, default: false, index: true },
     viewsCount: { type: Number, default: 0, min: 0 },
+    version: { type: Number, default: 1, min: 1 },
+    candidateApplicationIds: { type: [String], default: [], select: false },
 
     proposalSettings: { type: Schema.Types.Mixed, default: {} },
 

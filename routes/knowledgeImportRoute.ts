@@ -1,0 +1,12 @@
+import{Router}from"express";import{archiveBatch,attachSource,completeUpload,createBatch,createParseJob,createUploadSession,getBatch,listBatches,listFragments}from"../controller/knowledgeImportController";import{authenticate,authorizeAction}from"../middleware/auth";import{securityRateLimit}from"../middleware/securityRateLimit";
+const router=Router(),mutate=securityRateLimit({name:"knowledge-import-mutation",limit:60,windowMs:15*60_000});
+router.post("/knowledge/import-batches",authenticate,authorizeAction("knowledge:write"),mutate,createBatch);
+router.get("/knowledge/import-batches",authenticate,authorizeAction("knowledge:read"),listBatches);
+router.get("/knowledge/import-batches/:batchId",authenticate,authorizeAction("knowledge:read"),getBatch);
+router.post("/knowledge/import-batches/:batchId/archive",authenticate,authorizeAction("knowledge:write"),mutate,archiveBatch);
+router.post("/knowledge/import-documents/:documentId/parse-jobs",authenticate,authorizeAction("knowledge:write"),mutate,createParseJob);
+router.post("/knowledge/import-batches/:batchId/sources",authenticate,authorizeAction("knowledge:write"),mutate,attachSource);
+router.get("/knowledge/import-documents/:documentId/fragments",authenticate,authorizeAction("knowledge:read"),listFragments);
+router.post("/knowledge/import-batches/:batchId/upload-sessions",authenticate,authorizeAction("knowledge:write"),mutate,createUploadSession);
+router.post("/knowledge/import-sources/:sourceId/complete",authenticate,authorizeAction("knowledge:write"),mutate,completeUpload);
+export default router;

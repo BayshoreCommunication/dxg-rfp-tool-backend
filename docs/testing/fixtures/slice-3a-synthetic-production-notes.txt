@@ -1,0 +1,30 @@
+SYNTHETIC TEST DATA — NOT A REAL CLIENT DOCUMENT
+
+Related event: DXG Future Leaders Summit 2027
+
+Production notes:
+- Six event rooms are expected: one general session room and five breakout rooms.
+- The general session room should support approximately 350 in-person attendees.
+- General session requires speech reinforcement, presentation playback, stage lighting, and image magnification.
+- Three operated cameras are requested for the general session.
+- A confidence monitor and speaker timer are requested at the stage.
+- The client plans to provide presentation laptops, but the final quantity is not confirmed.
+- Breakout rooms require basic presentation audio and displays.
+- The event will include remote speakers and approximately 100 virtual attendees.
+- Closed captions are requested in English.
+- Recordings should include the final program feed and isolated camera recordings where available.
+
+Content and creative notes:
+- The client will provide the event logo and brand guide later.
+- An opening animation and lower-third speaker graphics may be required.
+- Final speaker presentations are expected 48 hours before each session.
+
+Items requiring clarification:
+- Confirm the exact number and capacity of breakout rooms.
+- Confirm streaming platform and technical-rehearsal owner.
+- Confirm LED wall versus projection for the general session.
+- Confirm internet bandwidth and dedicated network availability.
+- Confirm labor jurisdiction, access times, and loading restrictions.
+- Confirm budget range and whether alternate pricing is required.
+
+This file intentionally supplements the event brief and contains unresolved questions. It is a fixed synthetic fixture for multi-source testing only.

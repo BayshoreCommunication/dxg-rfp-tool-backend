@@ -1,6 +1,9 @@
 import type {DurableJob,QueueMessage} from "./domain";
 export interface JobRepository {
  createSourceScan(input:{organizationMongoId:string;actorUserMongoId:string;sourceId:string;idempotencyKey:string;correlationId:string}):Promise<{job:DurableJob;created:boolean}>;
+ createAiTest(input:{organizationMongoId:string;actorUserMongoId:string;operation:string;fixture:string;evidenceReferences:string[];idempotencyKey:string;correlationId:string}):Promise<{job:DurableJob;created:boolean}>;
+ createKnowledgeParse(input:{organizationMongoId:string;actorUserMongoId:string;documentId:string;idempotencyKey:string;correlationId:string}):Promise<{job:DurableJob;created:boolean}>;
+ createKnowledgeIndex(input:{organizationMongoId:string;actorUserMongoId:string;releaseId:string;idempotencyKey:string;correlationId:string}):Promise<{job:DurableJob;created:boolean}>;
  get(organizationMongoId:string,jobId:string):Promise<DurableJob>;
  list(organizationMongoId:string,limit:number):Promise<DurableJob[]>;
  cancel(input:{organizationMongoId:string;jobId:string;actorUserMongoId:string;correlationId:string}):Promise<DurableJob>;
@@ -14,4 +17,3 @@ export interface JobRepository {
  markOutboxFailed(eventId:string,code:string):Promise<void>;
  reconcile(limit:number):Promise<QueueMessage[]>;
 }
-

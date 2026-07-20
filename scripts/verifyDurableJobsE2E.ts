@@ -1,3 +1,4 @@
+import "../config/env";
 import crypto from "node:crypto";
 import {postgresPool,closePostgres} from "../config/postgres";
 import {documentIngestion} from "../src/modules/documentIngestion/composition";

@@ -1,4 +1,5 @@
 import "./config/env"; // must be first — loads .env before any module reads process.env
+import "./config/observability";
 import cors from "cors";
 import express, { Application, NextFunction, Request, Response } from "express";
 import http from "http";
@@ -21,10 +22,19 @@ import userRoutes from "./routes/usersRoute";
 import vendorResponseRoutes from "./routes/vendorResponseRoute";
 import documentSourcesRoutes from "./routes/documentSourcesRoute";
 import jobsRoutes from "./routes/jobsRoute";
+import aiGatewayRoutes from "./routes/aiGatewayRoute";
+import knowledgeImportRoutes from "./routes/knowledgeImportRoute";
+import knowledgeReviewRoutes from "./routes/knowledgeReviewRoute";
+import knowledgeRetrievalRoutes from "./routes/knowledgeRetrievalRoute";
+import proposalContextRoutes from "./routes/proposalContextRoute";
+import candidateApplicationRoutes from "./routes/candidateApplicationRoute";
+import proposalDraftRoutes from "./routes/proposalDraftRoute";
+import proposalWorkflowRoutes from "./routes/proposalWorkflowRoute";
 import { startCronJobs } from "./utils/cronJobs";
 import { initializeNotificationWebSocketServer } from "./utils/notificationService";
 import { getUploadsDir } from "./utils/paths";
 import { checkQueue } from "./src/modules/durableJobs/queue";
+import {correlationMiddleware} from "./middleware/observability";
 
 console.log("Loaded SMTP_MAIL:", process.env.SMTP_MAIL ? "***" : "UNDEFINED");
 console.log(
@@ -39,7 +49,8 @@ const PORT = process.env.PORT || 8000;
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan("dev"));
+if(process.env.OBSERVABILITY_ENABLED!=="true")app.use(morgan("dev"));
+app.use(correlationMiddleware);
 
 // Prevent any proxy / CDN / browser from caching API responses
 app.use((_req: Request, res: Response, next: NextFunction) => {
@@ -108,6 +119,7 @@ app.get("/health", async (_req: Request, res: Response) => {
     database: dbStatus,
     postgres,
     queue,
+    observability: { enabled: process.env.OBSERVABILITY_ENABLED === "true", exporter: process.env.OBSERVABILITY_ENABLED === "true" ? "local_otlp" : "disabled" },
     environment: process.env.NODE_ENV || "development",
   });
 });
@@ -139,6 +151,14 @@ app.use("/api/proposals", proposalRoutes);
 app.use("/api/public-access", publicAccessRoutes);
 app.use("/api/v1", documentSourcesRoutes);
 app.use("/api/v1", jobsRoutes);
+app.use("/api/v1", aiGatewayRoutes);
+app.use("/api/v1", knowledgeImportRoutes);
+app.use("/api/v1", knowledgeReviewRoutes);
+app.use("/api/v1", knowledgeRetrievalRoutes);
+app.use("/api/v1", proposalContextRoutes);
+app.use("/api/v1", candidateApplicationRoutes);
+app.use("/api/v1", proposalDraftRoutes);
+app.use("/api/v1", proposalWorkflowRoutes);
 
 // Email campaign routes
 app.use("/api/emails", emailRoutes);

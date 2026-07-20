@@ -1,0 +1,1 @@
+import type{QueueMessage}from"./domain";import{proposalDraftRepository}from"../proposalDraft/postgresProposalDraftRepository";export const handleProposalDraft=(message:QueueMessage)=>proposalDraftRepository.execute({organizationMongoId:message.organizationMongoId,actorUserMongoId:message.actorUserMongoId,runId:message.inputReference});

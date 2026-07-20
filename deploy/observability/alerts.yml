@@ -1,0 +1,18 @@
+groups:
+  - name: rfpilot-test
+    rules:
+      - alert: RFPilotApiElevatedErrors
+        expr: sum(rate(rfpilot_api_requests_total{statusClass="5xx"}[5m])) / clamp_min(sum(rate(rfpilot_api_requests_total[5m])), 0.001) > 0.05 and sum(increase(rfpilot_api_requests_total[5m])) >= 20
+        for: 5m
+        labels: {severity: high}
+        annotations: {runbook: "docs/runbooks/API_AND_DEPENDENCIES.md"}
+      - alert: RFPilotJobFailure
+        expr: increase(rfpilot_jobs_outcomes_total{outcome="failure"}[5m]) > 0
+        for: 1m
+        labels: {severity: high}
+        annotations: {runbook: "docs/runbooks/DURABLE_JOBS.md"}
+      - alert: RFPilotAiValidationRegression
+        expr: sum(increase(rfpilot_ai_outcomes_total{outcome="rejected"}[15m])) / clamp_min(sum(increase(rfpilot_ai_outcomes_total[15m])), 1) > 0.10 and sum(increase(rfpilot_ai_outcomes_total[15m])) >= 20
+        for: 5m
+        labels: {severity: high}
+        annotations: {runbook: "docs/runbooks/AI_GATEWAY.md"}

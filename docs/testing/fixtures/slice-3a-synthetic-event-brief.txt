@@ -1,0 +1,36 @@
+SYNTHETIC TEST DATA — NOT A REAL CLIENT DOCUMENT
+
+Event name: DXG Future Leaders Summit 2027
+Event format: Hybrid
+Event type: Leadership Conference
+Event objectives: Bring emerging leaders together for practical learning, collaboration, and professional networking.
+Primary audience: Managers, team leads, and leadership-program participants
+Estimated total attendance: 450
+Estimated in-person attendance: 350
+Estimated virtual attendance: 100
+
+Event dates:
+- Start: May 12, 2027
+- End: May 14, 2027
+
+Venue:
+- Name: Synthetic Harbor Convention Center
+- City: Baltimore
+- State: Maryland
+- Status: Tentatively held
+- Union venue: Not sure
+
+Schedule summary:
+- Load-in: May 11, 2027 at 8:00 AM
+- Rehearsal: May 11, 2027 at 4:00 PM
+- Show start: May 12, 2027 at 9:00 AM
+- Show end: May 14, 2027 at 4:30 PM
+- Strike: May 14, 2027 at 5:00 PM
+
+Known information gaps:
+- Final venue address has not been confirmed.
+- Venue AV contact has not been selected.
+- Approved AV budget has not been provided.
+- Final union requirements are unknown.
+
+This file is a fixed synthetic fixture for the isolated RFPilot test environment.

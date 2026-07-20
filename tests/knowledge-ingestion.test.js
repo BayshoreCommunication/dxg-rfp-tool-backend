@@ -1,0 +1,12 @@
+require("ts-node/register");
+const test=require("node:test");const assert=require("node:assert/strict");
+const{validateBatch,KnowledgeIngestionError}=require("../src/modules/knowledgeIngestion/domain");
+const{deterministicParser}=require("../src/modules/knowledgeIngestion/deterministicParser");
+const valid={name:"Synthetic price sheets",sourceType:"price_sheet",classification:"synthetic",intendedUse:"Deterministic parser acceptance test",currency:"usd",observedFrom:"2025-01-01",observedTo:"2025-12-31"};
+test("knowledge batch normalizes bounded metadata",()=>{assert.deepEqual(validateBatch(valid),{name:valid.name,description:null,sourceType:"price_sheet",market:null,currency:"USD",classification:"synthetic",intendedUse:valid.intendedUse,observedFrom:"2025-01-01",observedTo:"2025-12-31",notes:null});});
+test("restricted classification fails before persistence",()=>{assert.throws(()=>validateBatch({...valid,classification:"restricted"}),e=>e instanceof KnowledgeIngestionError&&e.code==="INVALID_BATCH");});
+test("invalid observed range is rejected without inference",()=>{assert.throws(()=>validateBatch({...valid,observedFrom:"2026-01-01",observedTo:"2025-01-01"}),e=>e.code==="INVALID_DATE_RANGE");});
+test("currency must be an ISO-shaped code",()=>{assert.throws(()=>validateBatch({...valid,currency:"dollars"}),e=>e.code==="INVALID_CURRENCY");});
+test("text parser creates immutable-style fragments with exact coordinates and checksum",async()=>{const result=await deterministicParser.parse(Buffer.from("First fact\n\nSecond fact"),"text/plain");assert.equal(result.parserVersion,"deterministic-v1");assert.equal(result.fragments.length,2);assert.deepEqual(result.fragments[0].coordinates,{characterStart:0,characterEnd:10});assert.match(result.fragments[0].checksum,/^[0-9a-f]{64}$/);});
+test("CSV parser preserves quoted commas and row coordinates",async()=>{const result=await deterministicParser.parse(Buffer.from('item,price\n"LED wall, 4K",1200'),"text/csv");assert.equal(result.fragments[1].content,"1:LED wall, 4K\n2:1200");assert.deepEqual(result.fragments[1].coordinates,{row:2,columnStart:1,columnEnd:2});});
+test("unsupported source types fail closed",async()=>{await assert.rejects(()=>deterministicParser.parse(Buffer.from("image"),"image/png"),e=>e.code==="UNSUPPORTED_PARSER");});

@@ -6,6 +6,38 @@ Current increment runbook: [Private document ingestion](./PRIVATE_DOCUMENT_INGES
 
 Durable execution runbook: [Durable jobs](./DURABLE_JOBS.md).
 
+Provider-neutral mock AI runbook: [AI gateway](./AI_GATEWAY.md).
+
+Governed knowledge retrieval design: [Slice 2C knowledge retrieval](./KNOWLEDGE_RETRIEVAL.md).
+
+Client approval pack: [Slice 2C retrieval approval](../approval-packs/SLICE_2C_KNOWLEDGE_RETRIEVAL_APPROVAL.md).
+
+Test operation and recovery: [Slice 2C retrieval runbook](../runbooks/KNOWLEDGE_RETRIEVAL.md).
+
+Test-environment verification: [Slice 2C evidence](../evidence/SLICE_2C_TEST_EVIDENCE.md).
+
+Proposal context and requirement extraction: [Slice 2D design](./PROPOSAL_CONTEXT_EXTRACTION.md).
+
+Test operation and recovery: [Slice 2D runbook](../runbooks/PROPOSAL_CONTEXT_TEST.md).
+
+Test-environment verification: [Slice 2D evidence](../evidence/SLICE_2D_TEST_EVIDENCE.md).
+
+Client approval pack: [Slice 2D proposal context approval](../approval-packs/SLICE_2D_PROPOSAL_CONTEXT_APPROVAL.md).
+
+Human review and controlled application: [Slice 2E design](./CANDIDATE_REVIEW_APPLICATION.md).
+
+Client approval pack: [Slice 2E candidate application approval](../approval-packs/SLICE_2E_CANDIDATE_APPLICATION_APPROVAL.md).
+
+Cited AI proposal drafting: [Slice 2F design](./AI_PROPOSAL_DRAFT_GENERATION.md).
+
+Client approval pack: [Slice 2F draft generation approval](../approval-packs/SLICE_2F_AI_DRAFT_GENERATION_APPROVAL.md).
+
+Five-step proposal workflow and multi-source intake: [Slice 3A design](./FIVE_STEP_PROPOSAL_WORKFLOW.md).
+
+Client approval pack: [Slice 3A five-step workflow approval](../approval-packs/SLICE_3A_FIVE_STEP_WORKFLOW_APPROVAL.md).
+
+Content-free operational telemetry: [Observability](./OBSERVABILITY.md).
+
 ## Target modular-monolith boundaries
 
 | Boundary | Responsibility |
