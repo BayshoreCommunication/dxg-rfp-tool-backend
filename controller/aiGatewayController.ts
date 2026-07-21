@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { Response } from "express";
 import type { AuthRequest } from "../middleware/auth";
+import { aiEnvironment, aiRuntimeAuthorized } from "../config/aiEnvironment";
 import { aiGatewayRepository } from "../src/modules/aiGateway/composition";
 import {
   AI_OPERATIONS,
@@ -153,6 +154,14 @@ export const listBudgets = metadata(aiGatewayRepository.budgets);
 export const pilotStatus = async (req: AuthRequest, res: Response) => {
   try {
     context(req);
-    res.json({ data: { enabled: process.env.NODE_ENV === "test" && process.env.LIVE_AI_PILOT_ENABLED === "true", provider: "openai", model: LIVE_AI_MODEL, credentialConfigured: Boolean(process.env.OPENAI_API_KEY), syntheticEnabled: process.env.LIVE_AI_SYNTHETIC_ENABLED === "true", nonConfidentialEnabled: process.env.LIVE_AI_NON_CONFIDENTIAL_ENABLED === "true", proposalSourceEnabled: process.env.LIVE_AI_PROPOSAL_SOURCE_ENABLED === "true", killSwitch: process.env.LIVE_AI_KILL_SWITCH === "true", inputTokenLimit: LIVE_AI_INPUT_TOKEN_LIMIT, outputTokenLimit: LIVE_AI_OUTPUT_TOKEN_LIMIT, commercialSpendCap: null, proposalMutation: false, publication: false } });
+    res.json({ data: { enabled: aiRuntimeAuthorized() && process.env.LIVE_AI_PILOT_ENABLED === "true", aiEnvironment: aiEnvironment() || "disabled", provider: "openai", model: LIVE_AI_MODEL, credentialConfigured: Boolean(process.env.OPENAI_API_KEY), syntheticEnabled: process.env.LIVE_AI_SYNTHETIC_ENABLED === "true", nonConfidentialEnabled: process.env.LIVE_AI_NON_CONFIDENTIAL_ENABLED === "true", proposalSourceEnabled: process.env.LIVE_AI_PROPOSAL_SOURCE_ENABLED === "true", killSwitch: process.env.LIVE_AI_KILL_SWITCH === "true", inputTokenLimit: LIVE_AI_INPUT_TOKEN_LIMIT, outputTokenLimit: LIVE_AI_OUTPUT_TOKEN_LIMIT, commercialSpendCap: null, proposalMutation: false, publication: false } });
+  } catch (error) { handle(res, error); }
+};
+
+export const usageReport = async (req: AuthRequest, res: Response) => {
+  try {
+    const ctx = context(req);
+    const { aiUsageReport } = await import("../src/modules/aiGateway/usageReport");
+    res.json({ data: await aiUsageReport({ organizationMongoId: ctx.organizationMongoId, days: Number(req.query.days) || undefined }) });
   } catch (error) { handle(res, error); }
 };

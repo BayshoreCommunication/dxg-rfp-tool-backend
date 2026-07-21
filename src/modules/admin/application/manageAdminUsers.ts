@@ -44,7 +44,7 @@ export const createCreateAdminUser = (repository: AdminUserRepository) =>
     const password = typeof input.password === "string" ? input.password.trim() : "";
     if (!name || !email || !password) return { kind: "validation", code: "required" };
     if (!allowedRole(input.role)) return { kind: "validation", code: "invalid_role" };
-    if (password.length < 6) return { kind: "validation", code: "short_password" };
+    if (password.length < 8) return { kind: "validation", code: "short_password" };
     if (await repository.emailExists(email)) return { kind: "email_conflict" };
     const user = await repository.create({ name, email, password, role: input.role });
     return { kind: "created", user };
@@ -82,7 +82,7 @@ export const createUpdateAdminUser = (
   }
   if (input.password !== undefined) {
     const password = typeof input.password === "string" ? input.password.trim() : "";
-    if (password.length < 6) return { kind: "validation", code: "short_password" };
+    if (password.length < 8) return { kind: "validation", code: "short_password" };
     patch.passwordHash = await passwordHasher.hash(password);
   }
   const user = await repository.update(id, patch);

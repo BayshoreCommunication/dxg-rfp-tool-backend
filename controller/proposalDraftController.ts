@@ -4,6 +4,8 @@ import type { AuthRequest } from "../middleware/auth";
 import { durableJobDispatcher } from "../src/modules/durableJobs/composition";
 import {
   parseDraftInput,
+  parseSectionDecision,
+  parseSectionKey,
   proposalDraftEnabled,
   ProposalDraftError,
 } from "../src/modules/proposalDraft/domain";
@@ -116,6 +118,61 @@ export const latestProposalDraft = async (req: AuthRequest, res: Response) => {
         ...c,
         proposalMongoId: proposalId(req.params.proposalId),
       }),
+    });
+  } catch (e) {
+    handle(res, e);
+  }
+};
+
+export const decideDraftSection = async (req: AuthRequest, res: Response) => {
+  try {
+    const c = context(req);
+    const decision = parseSectionDecision(req.body as Record<string, unknown>);
+    res.json({
+      data: await proposalDraftRepository.decideSection({
+        ...c,
+        proposalMongoId: proposalId(req.params.proposalId),
+        runId: runId(req.params.runId),
+        sectionKey: parseSectionKey(req.params.sectionKey),
+        decision: decision.decision,
+        reason: decision.reason,
+      }),
+    });
+  } catch (e) {
+    handle(res, e);
+  }
+};
+
+/* Regenerate one section as a NEW scoped run linked to its parent. The parent
+   run and its sections stay immutable; the UI overlays the newest scoped run. */
+export const regenerateDraftSection = async (req: AuthRequest, res: Response) => {
+  try {
+    const c = context(req);
+    const parentRunId = runId(req.params.runId);
+    const sectionKey = parseSectionKey(req.params.sectionKey);
+    const parsed = parseDraftInput({
+      expectedProposalVersion: (req.body as Record<string, unknown>)?.expectedProposalVersion,
+      fixture: "synthetic-proposal-draft",
+    });
+    const parent = await proposalDraftRepository.read({
+      ...c,
+      proposalMongoId: proposalId(req.params.proposalId),
+      runId: parentRunId,
+    });
+    if (parent.run.status !== "succeeded")
+      throw new ProposalDraftError("DRAFT_RUN_NOT_REVIEWABLE", "Only completed drafts can be regenerated.", 409);
+    const r = await proposalDraftRepository.create({
+      ...c,
+      ...parsed,
+      live: parent.run.provider === "openai",
+      proposalMongoId: proposalId(req.params.proposalId),
+      idempotencyKey: key(req),
+      sectionScope: sectionKey,
+      parentRunId,
+    });
+    void durableJobDispatcher.dispatch().catch(() => undefined);
+    res.status(r.created ? 202 : 200).json({
+      data: { runId: r.run.id, jobId: r.run.job_id, status: r.run.job_status, sectionScope: sectionKey, parentRunId, created: r.created },
     });
   } catch (e) {
     handle(res, e);

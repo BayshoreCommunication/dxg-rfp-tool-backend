@@ -463,3 +463,16 @@ Implementation must not begin until DXG explicitly approves:
 4. per-field human selection with no automatic/bulk application;
 5. the cross-store idempotency and reconciliation design; and
 6. the continued exclusion of drafting, retrieval, live/confidential processing, publication, production, and external telemetry.
+
+## Full-schema mapping (M3 addendum)
+
+`canonicalMapping.ts` now declares 112 approved scalar paths across event,
+venueSchedule, hybridVirtual, contentCreative, videoRecording, venueTechnical,
+confidentiality and budgetPreferences (previously 4), each with a typed
+normalizer (text/enum/yes-no-notsure/date/time/count/amperage/currency) and a
+faithful legacy-wizard `mongoValue` reversal derived from the v1 contract and
+the legacy adapter. Arrays (rooms, audiences, deliverable lists) remain
+deferred and are documented in the file. `extractionPathEnum` feeds the live
+extraction structured-output schema, so the model can only propose paths a
+reviewer can actually apply; every application still passes normalization,
+review decisions, overwrite confirmation and the Mongo version CAS.

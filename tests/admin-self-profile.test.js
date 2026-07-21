@@ -36,7 +36,7 @@ test("admin profile update returns missing before password or upload work", asyn
     passwords: { async hash() { effects += 1; } },
   }));
   assert.deepEqual(await update({
-    userId: "missing", body: { password: "secret" },
+    userId: "missing", body: { password: "secret-01" },
     file: { localPath: "/tmp/a", originalName: "a.png" },
   }), { kind: "not_found" });
   assert.equal(effects, 0);
@@ -45,7 +45,7 @@ test("admin profile update returns missing before password or upload work", asyn
 test("admin password change requires and verifies old password before hashing", async () => {
   let hashes = 0;
   const missingOld = createUpdateAdminSelfProfile(dependencies());
-  assert.deepEqual(await missingOld({ userId: "a1", body: { password: "newpass" } }), {
+  assert.deepEqual(await missingOld({ userId: "a1", body: { password: "newpass-1" } }), {
     kind: "old_password_required",
   });
 
@@ -58,7 +58,7 @@ test("admin password change requires and verifies old password before hashing", 
     passwords: { async hash() { hashes += 1; return "hash"; } },
   }));
   assert.deepEqual(await wrongOld({
-    userId: "a1", body: { oldPassword: "wrong", newPassword: "newpass" },
+    userId: "a1", body: { oldPassword: "wrong", newPassword: "newpass-1" },
   }), { kind: "wrong_old_password" });
   assert.equal(hashes, 0);
 });
@@ -83,12 +83,12 @@ test("admin profile hashes once and ignores unsupported account fields", async (
       async update(_id, patch) { persisted = patch; return { id: "a1" }; },
     },
     passwordVerifier: { async verify() { return true; } },
-    passwords: { async hash(password) { hashes += 1; assert.equal(password, "newpass"); return "one-hash"; } },
+    passwords: { async hash(password) { hashes += 1; assert.equal(password, "newpass-1"); return "one-hash"; } },
   }));
   assert.deepEqual(await update({
     userId: "a1",
     body: {
-      oldPassword: "oldpass", newPassword: "newpass", name: " Admin ",
+      oldPassword: "oldpass-1", newPassword: "newpass-1", name: " Admin ",
       role: "super_admin", email: "changed@example.com", isBlocked: false,
     },
   }), { kind: "updated", user: { id: "a1" } });

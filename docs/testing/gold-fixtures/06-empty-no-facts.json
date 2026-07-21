@@ -1,0 +1,12 @@
+{
+  "name": "empty-no-facts",
+  "description": "No extractable facts: friendly correspondence with no proposal requirements. The pipeline must return zero candidates rather than inventing fields.",
+  "evidence": [
+    { "id": "gold-empty-1", "text": "Hello, just checking in ahead of our call next week." },
+    { "id": "gold-empty-2", "text": "Thanks again for the great conversation; no updates on the event yet." }
+  ],
+  "expected": {
+    "candidates": [],
+    "allowAdditional": false
+  }
+}

@@ -20,7 +20,7 @@ test("registration requires verified signup OTP before account lookup", async ()
     tokens: { issue() { throw new Error("must not issue"); } },
   });
   assert.deepEqual(await register({
-    name: "New", email: " NEW@example.com ", password: "secret1",
+    name: "New", email: " NEW@example.com ", password: "secret-01",
   }), { kind: "unverified" });
   assert.equal(accountReads, 0);
   assert.equal(hashes, 0);
@@ -34,7 +34,7 @@ test("registration detects normalized email conflict before password hashing", a
     passwordHasher: { async hash() { hashes += 1; return "hash"; } },
     tokens: { issue() { throw new Error("must not issue"); } },
   });
-  assert.deepEqual(await register({ name: "New", email: "USED@EXAMPLE.COM", password: "secret1" }), {
+  assert.deepEqual(await register({ name: "New", email: "USED@EXAMPLE.COM", password: "secret-01" }), {
     kind: "email_conflict",
   });
   assert.equal(hashes, 0);
@@ -58,11 +58,11 @@ test("registration hashes once, creates a customer, consumes OTP, then issues to
     tokens: { issue(input) { events.push(["token", input]); return { accessToken: "t", expiresAt: 2, expiresIn: 1 }; } },
   });
   const result = await register({
-    name: "  New User ", email: " NEW@example.com ", phone: "123", password: "secret1",
+    name: "  New User ", email: " NEW@example.com ", phone: "123", password: "secret-01",
   });
   assert.equal(result.kind, "created");
   assert.deepEqual(events, [
-    ["hash", "secret1"],
+    ["hash", "secret-01"],
     ["create", { name: "New User", email: "new@example.com", phone: "123", company: undefined, passwordHash: "one-hash" }],
     ["consume", "new@example.com", "signup"],
     ["token", { userId: "u1", email: "new@example.com", role: "customer" }],
@@ -79,7 +79,7 @@ test("password reset requires verified authorization before account or hash work
     },
     passwordHasher: { async hash() { sideEffects += 1; return "hash"; } },
   });
-  assert.deepEqual(await reset({ email: "a@b.com", newPassword: "secret1" }), {
+  assert.deepEqual(await reset({ email: "a@b.com", newPassword: "secret-01" }), {
     kind: "unauthorized",
   });
   assert.equal(sideEffects, 0);
@@ -98,11 +98,11 @@ test("password reset hashes once and consumes authorization only after persisten
     },
     passwordHasher: { async hash(password) { events.push(["hash", password]); return "one-hash"; } },
   });
-  assert.deepEqual(await reset({ email: " USER@example.com ", newPassword: "secret1" }), {
+  assert.deepEqual(await reset({ email: " USER@example.com ", newPassword: "secret-01" }), {
     kind: "reset",
   });
   assert.deepEqual(events, [
-    ["hash", "secret1"],
+    ["hash", "secret-01"],
     ["replace", "user@example.com", "one-hash"],
     ["consume", "user@example.com", "forgot-password"],
   ]);

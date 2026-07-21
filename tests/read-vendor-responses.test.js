@@ -62,6 +62,80 @@ test("invalid vendor-response paging uses safe defaults", async () => {
   assert.equal(repositoryInput.unreadOnly, false);
 });
 
+test("private document urls are presigned while legacy urls pass through", async () => {
+  const signer = {
+    presignDocumentUrl: async (url) =>
+      url.includes("/vendor-responses-private/")
+        ? `${url}?signed=short-lived`
+        : url,
+  };
+  const list = createListOwnedVendorResponses(
+    {
+      listOwned: async () => ({
+        responses: [
+          {
+            _id: "response-001",
+            documents: [
+              {
+                name: "quote.pdf",
+                url: "https://bucket.region.digitaloceanspaces.com/DXG/vendor-responses-private/p1/1-0-quote.pdf",
+              },
+              {
+                name: "legacy.pdf",
+                url: "https://bucket.region.digitaloceanspaces.com/DXG/vendor-responses/p1/1-0-legacy.pdf",
+              },
+            ],
+          },
+        ],
+        total: 1,
+        unreadCount: 0,
+      }),
+    },
+    signer,
+  );
+
+  const result = await list({ ownerUserId: "planner-001", query: {} });
+
+  assert.equal(
+    result.responses[0].documents[0].url,
+    "https://bucket.region.digitaloceanspaces.com/DXG/vendor-responses-private/p1/1-0-quote.pdf?signed=short-lived",
+  );
+  assert.equal(
+    result.responses[0].documents[1].url,
+    "https://bucket.region.digitaloceanspaces.com/DXG/vendor-responses/p1/1-0-legacy.pdf",
+  );
+});
+
+test("detail read presigns private documents on the marked-read record", async () => {
+  const getResponse = createGetOwnedVendorResponse(
+    {
+      markOwnedRead: async () => ({
+        _id: "response-001",
+        documents: [
+          {
+            name: "quote.pdf",
+            url: "https://bucket.region.digitaloceanspaces.com/DXG/vendor-responses-private/p1/1-0-quote.pdf",
+          },
+        ],
+      }),
+    },
+    {
+      presignDocumentUrl: async (url) => `${url}?signed=1`,
+    },
+  );
+
+  const result = await getResponse({
+    responseId: "response-001",
+    ownerUserId: "planner-001",
+  });
+
+  assert.equal(result.kind, "found");
+  assert.equal(
+    result.response.documents[0].url,
+    "https://bucket.region.digitaloceanspaces.com/DXG/vendor-responses-private/p1/1-0-quote.pdf?signed=1",
+  );
+});
+
 test("vendor-response detail read is owner-scoped and hides cross-owner records", async () => {
   let repositoryInput;
   const getResponse = createGetOwnedVendorResponse({

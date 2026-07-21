@@ -105,7 +105,7 @@ test("new submission normalizes data, scopes storage, and notifies planner", asy
   assert.deepEqual(capture.upload, {
     localPath: "/tmp/quote",
     objectKey:
-      "DXG/vendor-responses/proposal-001/123456-0-quote__final_.pdf",
+      "DXG/vendor-responses-private/proposal-001/123456-0-quote__final_.pdf",
   });
   assert.equal(capture.create.email, "sales@av.example");
   assert.equal(capture.create.vendorName, "AV Partners");
@@ -148,6 +148,53 @@ test("existing submission updates without creating planner notification", async 
   assert.equal(capture.notification, undefined);
   assert.equal(capture.confirmation.isUpdate, true);
   assert.equal(capture.confirmation.proposalTitle, "Original Summit");
+});
+
+test("infected upload rejects the submission before storage or persistence", async () => {
+  const capture = {};
+  const deps = dependencies(capture);
+  const cleaned = [];
+  deps.storage.cleanup = async (path) => {
+    cleaned.push(path);
+  };
+  deps.malwareScan = async (path) =>
+    path === "/tmp/malware" ? "infected" : "clean";
+  const submit = createSubmitVendorResponse(deps);
+
+  const result = await submit({
+    proposalId: "proposal-001",
+    vendorName: "AV Partners",
+    submittedBy: "Avery",
+    email: "vendor@example.com",
+    files: [
+      { originalname: "quote.pdf", path: "/tmp/clean-quote" },
+      { originalname: "payload.pdf", path: "/tmp/malware" },
+    ],
+  });
+
+  assert.deepEqual(result, { kind: "infected", fileName: "payload.pdf" });
+  assert.deepEqual(cleaned.sort(), ["/tmp/clean-quote", "/tmp/malware"]);
+  assert.equal(capture.upload, undefined);
+  assert.equal(capture.create, undefined);
+  assert.equal(capture.notification, undefined);
+});
+
+test("clean scan outcome lets the submission proceed to storage", async () => {
+  const capture = {};
+  const deps = dependencies(capture);
+  deps.malwareScan = async () => "clean";
+  const submit = createSubmitVendorResponse(deps);
+
+  const result = await submit({
+    proposalId: "proposal-001",
+    vendorName: "AV Partners",
+    submittedBy: "Avery",
+    email: "vendor@example.com",
+    files: [{ originalname: "quote.pdf", path: "/tmp/quote" }],
+  });
+
+  assert.equal(result.kind, "created");
+  assert.equal(capture.create.documents.length, 1);
 });
 
 test("failed attachment upload is cleaned up and submission can continue", async () => {

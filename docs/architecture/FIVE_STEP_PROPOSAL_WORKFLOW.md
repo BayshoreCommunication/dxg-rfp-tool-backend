@@ -314,3 +314,14 @@ Rollback disables the new workflow feature flag and retains the current proposal
 5. Confirm existing publication remains the only Step 5 execution path.
 6. Approve the feature-flagged, isolated-test rollout and proposed success criteria.
 
+
+## M4 addendum — Step 4 guidance
+
+Step 4 is no longer permanently gated. With `GUIDANCE_ENABLED=true`, the
+deterministic guidance engine (`src/modules/guidance/`, migration 019
+`guidance_reports`) computes completeness per section from the 112 approved
+canonical paths plus ~12 rule-based schedule/production/budget/risk checks
+(no model calls, every finding carries field paths). Workflow readiness for
+step 4 derives from the latest report: available → in_progress (blocking
+findings) → complete. Endpoints: `POST /api/v1/proposals/:id/guidance-reports`
+and `GET .../guidance-reports/latest`, owner-scoped and audited.

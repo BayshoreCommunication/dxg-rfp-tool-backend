@@ -3,7 +3,7 @@ import type { PasswordHasher, PasswordVerifier } from "./passwordHasher";
 
 export const bcryptPasswordHasher: PasswordHasher = {
   async hash(password) {
-    return bcrypt.hash(password, await bcrypt.genSalt(10));
+    return bcrypt.hash(password, await bcrypt.genSalt(12));
   },
 };
 

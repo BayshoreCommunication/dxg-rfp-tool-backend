@@ -72,7 +72,7 @@ export const createUpdateUserProfile = (
   if (actorId !== targetId && !isPrivilegedUserRole(actorRole)) return { kind: "forbidden" };
   const target = await repository.findById(targetId);
   if (!target) return { kind: "not_found" };
-  if (typeof input.password === "string" && input.password && input.password.length < 6) {
+  if (typeof input.password === "string" && input.password && input.password.length < 8) {
     return { kind: "invalid_password" };
   }
   const requestedEmail = typeof input.email === "string" && input.email
@@ -96,7 +96,7 @@ export const createUpdatePrimaryAdmin = (
   const target = await repository.findPrimaryAdmin(configuredEmail);
   if (!target) return { kind: "not_found" };
   if (target.id !== actorId) return { kind: "forbidden" };
-  if (typeof input.password === "string" && input.password && input.password.length < 6) {
+  if (typeof input.password === "string" && input.password && input.password.length < 8) {
     return { kind: "invalid_password" };
   }
   const requestedEmail = typeof input.email === "string" && input.email

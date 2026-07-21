@@ -8,15 +8,21 @@ import {
   createSubmitVendorResponse,
 } from "./application/submitVendorResponse";
 import { mongoVendorSubmissionRepository } from "./infrastructure/mongo/mongoVendorSubmissionRepository";
-import { spacesVendorDocumentStorage } from "./infrastructure/storage/spacesVendorDocumentStorage";
+import {
+  spacesVendorDocumentStorage,
+  spacesVendorDocumentUrlSigner,
+} from "./infrastructure/storage/spacesVendorDocumentStorage";
+import { vendorUploadMalwareScan } from "./infrastructure/security/vendorUploadMalwareScan";
 import { vendorResponseNotificationAdapter } from "./infrastructure/notifications/vendorResponseNotificationAdapter";
 import { vendorConfirmationEmailAdapter } from "./infrastructure/email/vendorConfirmationEmailAdapter";
 
 export const listOwnedVendorResponses = createListOwnedVendorResponses(
   mongoVendorResponseReadRepository,
+  spacesVendorDocumentUrlSigner,
 );
 export const getOwnedVendorResponse = createGetOwnedVendorResponse(
   mongoVendorResponseReadRepository,
+  spacesVendorDocumentUrlSigner,
 );
 export const checkVendorResponse = createCheckVendorResponse(
   mongoVendorSubmissionRepository,
@@ -27,4 +33,5 @@ export const submitPublicVendorResponse = createSubmitVendorResponse({
   notifier: vendorResponseNotificationAdapter,
   confirmation: vendorConfirmationEmailAdapter,
   folderName: process.env.DO_FOLDER_NAME || "rfp-tool",
+  malwareScan: vendorUploadMalwareScan,
 });

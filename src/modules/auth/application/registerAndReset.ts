@@ -32,7 +32,7 @@ export const createRegisterCustomer = (dependencies: {
   const email = typeof input.email === "string" ? input.email.toLowerCase().trim() : "";
   const password = typeof input.password === "string" ? input.password : "";
   if (!name || !email || !password) return { kind: "validation" };
-  if (password.length < 6) return { kind: "invalid_password" };
+  if (password.length < 8) return { kind: "invalid_password" };
   if (!await dependencies.otps.hasVerified(email, "signup")) return { kind: "unverified" };
   if (await dependencies.accounts.emailExists(email)) return { kind: "email_conflict" };
 
@@ -66,7 +66,7 @@ export const createResetPassword = (dependencies: {
   const email = typeof input.email === "string" ? input.email.toLowerCase().trim() : "";
   const password = typeof input.newPassword === "string" ? input.newPassword : "";
   if (!email || !password) return { kind: "validation" };
-  if (password.length < 6) return { kind: "invalid_password" };
+  if (password.length < 8) return { kind: "invalid_password" };
   if (!await dependencies.otps.hasVerified(email, "forgot-password")) {
     return { kind: "unauthorized" };
   }

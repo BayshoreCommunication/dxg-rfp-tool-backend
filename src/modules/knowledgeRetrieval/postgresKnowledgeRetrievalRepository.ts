@@ -2,10 +2,9 @@
 import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
-import {
-  deterministicEmbedding,
-  vectorLiteral,
-} from "./deterministicEmbedding";
+import { vectorLiteral } from "./deterministicEmbedding";
+import { embedTexts } from "./embeddingProvider";
+import { aiEnvironment } from "../../../config/aiEnvironment";
 import {
   KnowledgeRetrievalError,
   retrievalFingerprint,
@@ -31,14 +30,19 @@ const tenant = async (c: PoolClient, external: string) => {
   ]);
   return r.rows[0].id;
 };
+// The embedding provider is selected through the governed release registry:
+// KNOWLEDGE_EMBEDDING_PROVIDER only chooses among ACTIVE policy/release rows
+// for the current AI environment; nothing outside the registry can run.
 const policy = async (c: PoolClient) => {
+  const provider = process.env.KNOWLEDGE_EMBEDDING_PROVIDER === "openai" ? "openai" : "mock";
   const r = await c.query<any>(
-    `SELECT p.*,m.provider,m.model,m.dimension,m.version model_version FROM rfpilot.knowledge_retrieval_policies p JOIN rfpilot.embedding_model_releases m ON m.id=p.embedding_model_release_id WHERE p.environment='test' AND p.purpose='retrieval_test' AND p.classification='synthetic' AND p.active AND m.active AND p.effective_from<=now() AND (p.effective_until IS NULL OR p.effective_until>now()) ORDER BY p.approved_at DESC LIMIT 1`,
+    `SELECT p.*,m.provider,m.model,m.dimension,m.version model_version,m.allowed_classifications FROM rfpilot.knowledge_retrieval_policies p JOIN rfpilot.embedding_model_releases m ON m.id=p.embedding_model_release_id WHERE p.environment=$1 AND m.provider=$2 AND p.active AND m.active AND p.effective_from<=now() AND (p.effective_until IS NULL OR p.effective_until>now()) ORDER BY p.approved_at DESC LIMIT 1`,
+    [aiEnvironment() || "test", provider],
   );
   if (!r.rows[0])
     throw new KnowledgeRetrievalError(
       "RETRIEVAL_POLICY_NOT_FOUND",
-      "No active Slice 2C retrieval policy is available.",
+      "No active retrieval policy is available for this environment and provider.",
       503,
     );
   return r.rows[0];
@@ -89,10 +93,11 @@ export const knowledgeRetrievalRepository = {
           "Release is not currently eligible.",
           409,
         );
-      if (release.rows[0].classification !== "synthetic")
+      const allowedClassifications: string[] = p.allowed_classifications ?? ["synthetic"];
+      if (!allowedClassifications.includes(release.rows[0].classification))
         throw new KnowledgeRetrievalError(
           "CLASSIFICATION_NOT_ALLOWED",
-          "Only synthetic releases may be semantically indexed in Slice 2C.",
+          "This release classification is not approved for the active embedding release.",
           422,
         );
       const fragments = await c.query<any>(
@@ -111,7 +116,12 @@ export const knowledgeRetrievalRepository = {
           fragments.rowCount,
         ],
       );
-      for (const f of fragments.rows)
+      const vectors = await embedTexts(
+        { provider: p.provider, model: p.model, dimension: p.dimension },
+        fragments.rows.map((f) => f.content),
+      );
+      for (let i = 0; i < fragments.rows.length; i++) {
+        const f = fragments.rows[i];
         await c.query(
           `INSERT INTO rfpilot.knowledge_fragment_embeddings(organization_id,release_id,fragment_id,embedding_model_release_id,fragment_checksum,embedding) VALUES($1,$2,$3,$4,$5,$6::vector) ON CONFLICT DO NOTHING`,
           [
@@ -120,9 +130,10 @@ export const knowledgeRetrievalRepository = {
             f.id,
             p.embedding_model_release_id,
             f.fragment_checksum,
-            vectorLiteral(deterministicEmbedding(f.content)),
+            vectorLiteral(vectors[i]),
           ],
         );
+      }
       await c.query(
         "UPDATE rfpilot.knowledge_index_runs SET status='succeeded',indexed_fragment_count=$2,completed_at=now(),updated_at=now() WHERE id=$1",
         [run.rows[0].id, fragments.rowCount],
@@ -164,7 +175,7 @@ export const knowledgeRetrievalRepository = {
   async retrieve(input: {
     organizationMongoId: string;
     actorUserMongoId: string;
-    fixture: RetrievalFixture;
+    fixture: RetrievalFixture | "free_text";
     query: string;
     filters: RetrievalFilters;
     limit: number;
@@ -177,6 +188,7 @@ export const knowledgeRetrievalRepository = {
         p = await policy(c),
         fingerprint = retrievalFingerprint({
           fixture: input.fixture,
+          ...(input.fixture === "free_text" ? { query: input.query } : {}),
           filters: input.filters,
           limit: input.limit,
         });
@@ -193,7 +205,9 @@ export const knowledgeRetrievalRepository = {
           );
         return loadResults(c, existing.rows[0].id, p.version);
       }
-      const vector = vectorLiteral(deterministicEmbedding(input.query));
+      const vector = vectorLiteral(
+        (await embedTexts({ provider: p.provider, model: p.model, dimension: p.dimension }, [input.query]))[0],
+      );
       const rows = await c.query<any>(
         `WITH eligible AS (
  SELECT f.id fragment_id,f.content,f.coordinates,f.checksum,doc.id document_id,r.id release_id,b.source_type,b.market,b.currency,

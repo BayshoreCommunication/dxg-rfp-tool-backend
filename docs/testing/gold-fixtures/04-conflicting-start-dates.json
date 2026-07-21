@@ -1,0 +1,18 @@
+{
+  "name": "conflicting-start-dates",
+  "description": "Conflicting values: two evidence fragments assert different event start dates. The pipeline must preserve both candidates or surface a conflict issue; it must never silently pick a winner.",
+  "expectConflict": true,
+  "evidence": [
+    { "id": "gold-conflict-1", "text": "The client intake form states the event start date is 2026-10-05." },
+    { "id": "gold-conflict-2", "text": "The venue hold letter states the event start date is 2026-10-12." },
+    { "id": "gold-conflict-3", "text": "The event is named Synthetic Conflict Congress." }
+  ],
+  "expected": {
+    "candidates": [
+      { "path": "/content/event/eventName", "value": "Synthetic Conflict Congress" },
+      { "path": "/content/event/startDate", "value": "2026-10-05" },
+      { "path": "/content/event/startDate", "value": "2026-10-12" }
+    ],
+    "allowAdditional": false
+  }
+}

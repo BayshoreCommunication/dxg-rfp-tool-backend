@@ -2,6 +2,7 @@ import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import multer from "multer";
 import { extractProposalDocument } from "../src/modules/extraction/composition";
+import { safeLog } from "../src/shared/observability/safeTelemetry";
 
 /* ─── Multer — memory storage (no disk writes) ─── */
 export const extractUpload = multer({
@@ -35,9 +36,16 @@ export const extractProposal = async (
     }
 
     const { buffer, mimetype } = req.file;
+    const startedAt = Date.now();
     const result = await extractProposalDocument({
       buffer,
       mimetype,
+    });
+    safeLog("info", "legacy_extraction_completed", {
+      outcome: result.kind,
+      durationMs: Date.now() - startedAt,
+      provider: "openai",
+      model: "gpt-4o",
     });
     if (result.kind === "empty_document") {
       res.status(422).json({ success: false, message: result.message });
@@ -63,10 +71,10 @@ export const extractProposal = async (
     });
   } catch (error) {
     console.error("Extract proposal error:", error);
+    safeLog("error", "legacy_extraction_failed", { provider: "openai", model: "gpt-4o" });
     res.status(500).json({
       success: false,
       message: "Error extracting proposal data from document.",
-      error: error instanceof Error ? error.message : "Unknown error",
     });
   }
 };

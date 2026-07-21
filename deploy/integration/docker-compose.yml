@@ -1,0 +1,42 @@
+# Isolated real-service stack for the integration test suite (tests-integration/).
+#
+# Always run under the dedicated compose project name so networks/volumes never
+# collide with local dev services or the observability stack:
+#
+#   docker compose -p rfpilotintg -f deploy/integration/docker-compose.yml up -d --wait
+#   docker compose -p rfpilotintg -f deploy/integration/docker-compose.yml down -v
+#
+# (Wrapped by `npm run integration:up` / `npm run integration:down`.)
+#
+# Ports are intentionally non-default (55432/56379/57017) and bound to loopback
+# so the suite can never accidentally target a real database.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_PASSWORD: rfpilot_test
+      POSTGRES_DB: rfpilot_test
+    ports: ["127.0.0.1:55432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rfpilot_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7
+    ports: ["127.0.0.1:56379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mongo:
+    image: mongo:7
+    ports: ["127.0.0.1:57017:27017"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

@@ -8,6 +8,8 @@ import { ProposalDraftError } from "./domain";
 import { deterministicProposalDraft } from "./deterministicDraftProvider";
 import { liveProposalDraft } from "../liveAi/operations";
 import { LIVE_AI_MODEL } from "../liveAi/openAiProvider";
+import { knowledgeRetrievalRepository } from "../knowledgeRetrieval/postgresKnowledgeRetrievalRepository";
+import { retrievalEnabled } from "../knowledgeRetrieval/domain";
 const tenant = async (c: PoolClient, x: string) => {
     await c.query("SELECT set_config('app.organization_mongo_id',$1,true)", [
       x,
@@ -52,6 +54,8 @@ export const proposalDraftRepository = {
     idempotencyKey: string;
     correlationId: string;
     live?: boolean;
+    sectionScope?: string | null;
+    parentRunId?: string | null;
   }) {
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, input.organizationMongoId),
@@ -77,7 +81,7 @@ export const proposalDraftRepository = {
         ],
       );
       const run = await c.query<any>(
-        "INSERT INTO rfpilot.proposal_draft_runs(id,organization_id,proposal_reference_id,job_id,actor_external_user_id,status,expected_proposal_version,fixture,idempotency_key,correlation_id,retention_until,provider,model) VALUES($1,$2,$3,$4,$5,'queued',$6,$7,$8,$9,now()+interval '30 days',$10,$11) RETURNING *",
+        "INSERT INTO rfpilot.proposal_draft_runs(id,organization_id,proposal_reference_id,job_id,actor_external_user_id,status,expected_proposal_version,fixture,idempotency_key,correlation_id,retention_until,provider,model,section_scope,parent_run_id) VALUES($1,$2,$3,$4,$5,'queued',$6,$7,$8,$9,now()+interval '30 days',$10,$11,$12,$13) RETURNING *",
         [
           runId,
           org,
@@ -90,6 +94,8 @@ export const proposalDraftRepository = {
           input.correlationId,
           input.live ? "openai" : "mock",
           input.live ? LIVE_AI_MODEL : "deterministic-v1",
+          input.sectionScope ?? null,
+          input.parentRunId ?? null,
         ],
       );
       const payload = {
@@ -169,9 +175,44 @@ export const proposalDraftRepository = {
         409,
       );
     }
-    const live = meta.provider === "openai" ? await liveProposalDraft(proposal) : null;
-    const output = live?.draft ?? deterministicProposalDraft(proposal),
-      paragraphCount = output.sections.reduce(
+    const sectionScope = meta.section_scope || null;
+    // Governed knowledge grounding: approved fragments join the evidence set as
+    // cited /knowledge/ entries. Retrieval failure never fails the draft.
+    let knowledgeEvidence: Array<{ id: string; text: string }> = [];
+    if (meta.provider === "openai" && process.env.KNOWLEDGE_IN_DRAFT_ENABLED === "true" && retrievalEnabled()) {
+      try {
+        const query = [proposal?.event?.eventName, proposal?.event?.eventFormat, proposal?.event?.eventObjectives]
+          .filter((value: unknown) => typeof value === "string" && value)
+          .join(" ")
+          .slice(0, 300);
+        if (query.trim().length >= 2) {
+          const retrieved = await knowledgeRetrievalRepository.retrieve({
+            organizationMongoId: input.organizationMongoId,
+            actorUserMongoId: input.actorUserMongoId,
+            fixture: "free_text",
+            query,
+            filters: { sourceTypes: [], market: null, currency: null },
+            limit: 5,
+            idempotencyKey: `draft-knowledge:${meta.id}`,
+            correlationId: meta.correlation_id,
+          });
+          knowledgeEvidence = retrieved.results.map((item: any) => ({
+            id: `/knowledge/${item.releaseId}/${item.fragmentId}`,
+            text: String(item.content).slice(0, 2000),
+          }));
+        }
+      } catch {
+        knowledgeEvidence = [];
+      }
+    }
+    const live = meta.provider === "openai" ? await liveProposalDraft(proposal, { runType: "proposal_draft", runId: meta.id, organizationId: meta.organization_id }, sectionScope, knowledgeEvidence) : null;
+    const generated = live?.draft ?? deterministicProposalDraft(proposal);
+    // A scoped regeneration persists only the requested section; gaps are kept
+    // when they reference the scoped section or the run produced no content.
+    const output = sectionScope
+      ? { sections: generated.sections.filter((s) => s.key === sectionScope), gaps: generated.gaps }
+      : generated;
+    const paragraphCount = output.sections.reduce(
         (n, s) => n + s.paragraphs.length,
         0,
       ),
@@ -256,7 +297,7 @@ export const proposalDraftRepository = {
       await tenant(c, input.organizationMongoId);
       const p = await owned(c, input.proposalMongoId, input.actorUserMongoId),
         run = await c.query<any>(
-          `SELECT * FROM rfpilot.proposal_draft_runs WHERE proposal_reference_id=$1 ${input.runId ? "AND id=$2" : "AND status='succeeded' AND retention_until>now() ORDER BY created_at DESC LIMIT 1"}`,
+          `SELECT * FROM rfpilot.proposal_draft_runs WHERE proposal_reference_id=$1 ${input.runId ? "AND id=$2" : "AND status='succeeded' AND section_scope IS NULL AND retention_until>now() ORDER BY created_at DESC LIMIT 1"}`,
           [p, ...(input.runId ? [input.runId] : [])],
         );
       if (!run.rows[0])
@@ -272,13 +313,66 @@ export const proposalDraftRepository = {
         gaps = await c.query<any>(
           "SELECT code,paths,ordinal FROM rfpilot.proposal_draft_gaps WHERE run_id=$1 ORDER BY ordinal",
           [run.rows[0].id],
+        ),
+        decisions = await c.query<any>(
+          "SELECT section_key,decision,reason,updated_at FROM rfpilot.proposal_draft_section_decisions WHERE run_id=$1",
+          [run.rows[0].id],
+        ),
+        regenerations = await c.query<any>(
+          "SELECT id,section_scope,status,created_at FROM rfpilot.proposal_draft_runs WHERE parent_run_id=$1 ORDER BY created_at DESC",
+          [run.rows[0].id],
         );
+      const decisionBySection = new Map<string, any>(decisions.rows.map((d: any) => [d.section_key, d]));
       return {
         run: run.rows[0],
-        sections: sections.rows,
+        sections: sections.rows.map((section: any) => ({
+          ...section,
+          decision: decisionBySection.get(section.key)?.decision ?? null,
+          decisionReason: decisionBySection.get(section.key)?.reason ?? null,
+        })),
         gaps: gaps.rows,
+        regenerations: regenerations.rows,
         proposalMutation: false,
       };
+    });
+  },
+  decideSection(input: {
+    organizationMongoId: string;
+    actorUserMongoId: string;
+    proposalMongoId: string;
+    runId: string;
+    sectionKey: string;
+    decision: "accepted" | "rejected";
+    reason: string;
+    correlationId: string;
+  }) {
+    return withPostgresTransaction(async (c) => {
+      const org = await tenant(c, input.organizationMongoId);
+      const p = await owned(c, input.proposalMongoId, input.actorUserMongoId);
+      const run = await c.query<any>(
+        "SELECT id,status FROM rfpilot.proposal_draft_runs WHERE id=$1 AND proposal_reference_id=$2 FOR UPDATE",
+        [input.runId, p],
+      );
+      if (!run.rows[0]) throw new ProposalDraftError("DRAFT_RUN_NOT_FOUND", "Draft run was not found.", 404);
+      if (run.rows[0].status !== "succeeded")
+        throw new ProposalDraftError("DRAFT_RUN_NOT_REVIEWABLE", "Only completed drafts can be reviewed.", 409);
+      const section = await c.query<any>(
+        "SELECT id FROM rfpilot.proposal_draft_sections WHERE run_id=$1 AND key=$2",
+        [input.runId, input.sectionKey],
+      );
+      if (!section.rows[0]) throw new ProposalDraftError("INVALID_SECTION_KEY", "Draft section was not found.", 404);
+      const result = await c.query<any>(
+        `INSERT INTO rfpilot.proposal_draft_section_decisions(id,organization_id,run_id,section_key,decision,decided_by_external_user_id,reason)
+         VALUES($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT(run_id,section_key) DO UPDATE SET decision=EXCLUDED.decision,reason=EXCLUDED.reason,decided_by_external_user_id=EXCLUDED.decided_by_external_user_id,updated_at=now()
+         RETURNING section_key,decision,reason,updated_at`,
+        [uuidv7(), org, input.runId, input.sectionKey, input.decision, input.actorUserMongoId, input.reason],
+      );
+      await c.query(
+        "INSERT INTO rfpilot.audit_events(id,organization_id,actor_external_user_id,action,target_type,target_id,decision,correlation_id,metadata) VALUES($1,$2,$3,'draft_section_decided','proposal_draft_run',$4,'allowed',$5,$6::jsonb)",
+        [uuidv7(), org, input.actorUserMongoId, input.runId, input.correlationId, JSON.stringify({ sectionKey: input.sectionKey, outcome: input.decision })],
+      );
+      return result.rows[0];
     });
   },
 };

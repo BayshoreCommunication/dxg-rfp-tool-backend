@@ -384,3 +384,27 @@ KNOWLEDGE_RETRIEVAL_QUERY_TIMEOUT_MS=500
 ## Success Criteria
 
 Slice 2C is complete only when the isolated test environment proves that synthetic queries return relevant, currently eligible, tenant-scoped fragments with valid citations; forbidden content never appears; jobs recover safely; telemetry remains content-free; and no proposal or live model is invoked.
+
+## M4 addendum — real embeddings and open governed retrieval
+
+- Embedding execution is selected through the release registry: the active
+  `embedding_model_releases` row (provider/model/dimension) drives
+  `embeddingProvider.embedTexts`. `KNOWLEDGE_EMBEDDING_PROVIDER=openai|mock`
+  only chooses among ACTIVE registry rows for the current `AI_ENVIRONMENT`;
+  the OpenAI path (`text-embedding-3-small`, 1536-dim, migration 019) is
+  additionally gated by environment authorization, a kill switch
+  (`KNOWLEDGE_EMBEDDING_KILL_SWITCH`) and the credential.
+- Storage moved to `vector(1536)`; the mock release zero-pads its 16-dim
+  vectors (cosine-preserving) so both releases share the column.
+- Retrieval now accepts governed free-text queries (2–300 chars) in addition
+  to the contract-test fixtures. Query text is never persisted: the audit log
+  records the label `free_text` plus a request fingerprint.
+- Indexing classification is registry-driven: a release may be indexed only if
+  its batch classification is within the embedding release's
+  `allowed_classifications` (openai release ships with synthetic+internal).
+- Draft grounding: with `KNOWLEDGE_IN_DRAFT_ENABLED=true`, live drafting
+  retrieves top-5 approved fragments (query built from event name, format and
+  objectives) and passes them as additional untrusted evidence with
+  `/knowledge/<releaseId>/<fragmentId>` ids; the citation whitelist and the
+  relaxed draft-citation CHECK make knowledge citations first-class and
+  traceable. Retrieval failure never fails a draft.

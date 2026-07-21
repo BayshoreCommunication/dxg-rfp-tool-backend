@@ -198,7 +198,7 @@ export const signUp = async (req: Request, res: Response): Promise<void> => {
       return;
     }
     if (result.kind === "invalid_password") {
-      res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
+      res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
       return;
     }
     if (result.kind === "unverified") {
@@ -365,7 +365,7 @@ export const signUpAdmin = async (req: Request, res: Response): Promise<void> =>
     }
 
     if (result.kind === "invalid_password") {
-      res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
+      res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
       return;
     }
     if (result.kind === "invalid_secret") {
@@ -673,7 +673,7 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
       return;
     }
     if (result.kind === "invalid_password") {
-      res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
+      res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
       return;
     }
 

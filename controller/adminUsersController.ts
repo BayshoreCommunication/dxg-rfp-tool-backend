@@ -18,7 +18,7 @@ const validationMessage = (code: string): string => {
   if (code === "required") return "Name, email, and password are required.";
   if (code === "invalid_role") return `Role must be one of: ${ALLOWED_ROLES.join(", ")}.`;
   if (code === "empty_name") return "Name cannot be empty.";
-  return "Password must be at least 6 characters.";
+  return "Password must be at least 8 characters.";
 };
 
 // GET /api/admin-users

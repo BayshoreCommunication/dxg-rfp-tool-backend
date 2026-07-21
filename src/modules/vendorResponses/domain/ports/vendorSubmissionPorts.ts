@@ -3,6 +3,13 @@ export interface VendorDocumentStorage {
   cleanup(localPath: string): Promise<void>;
 }
 
+export type VendorUploadScanOutcome = "clean" | "infected" | "skipped";
+
+/** Optional inline malware scan of an uploaded file before it is stored. */
+export type VendorUploadMalwareScan = (
+  localPath: string,
+) => Promise<VendorUploadScanOutcome>;
+
 export interface VendorResponseNotifier {
   notifyPlanner(input: {
     ownerUserId: string;

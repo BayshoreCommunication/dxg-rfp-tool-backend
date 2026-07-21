@@ -55,7 +55,7 @@ export const createUpdateAdminSelfProfile = (dependencies: {
       ? input.body.oldPassword.trim()
       : "";
     if (!oldPassword) return { kind: "old_password_required" };
-    if (nextPassword.length < 6) return { kind: "invalid_password" };
+    if (nextPassword.length < 8) return { kind: "invalid_password" };
     if (!await dependencies.passwordVerifier.verify(oldPassword, credentials.passwordHash)) {
       return { kind: "wrong_old_password" };
     }

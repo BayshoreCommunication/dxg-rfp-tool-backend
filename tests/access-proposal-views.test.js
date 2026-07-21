@@ -5,6 +5,9 @@ const {
   createIncrementLegacyPublicProposalViews,
   createIncrementOwnedProposalViews,
 } = require("../src/modules/proposals/application/accessProposalViews");
+const {
+  redactProposalForPublicView,
+} = require("../src/modules/proposals/infrastructure/mongo/mongoPublicProposalAccessRepository");
 
 const proposal = {
   _id: "proposal-001",
@@ -116,6 +119,61 @@ test("ownerless legacy record neither queries settings nor sends notification", 
 
   assert.equal(result.kind, "incremented");
   assert.equal(sideEffects, 0);
+});
+
+test("public projection strips internal owner metadata but keeps template fields", () => {
+  const redacted = redactProposalForPublicView({
+    _id: "proposal-001",
+    userId: "user-001",
+    organizationId: "org-001",
+    candidateApplicationIds: ["app-1"],
+    isDraft: false,
+    isFavorite: true,
+    isAccepted: false,
+    isOpen: true,
+    isArchived: false,
+    archivedAt: null,
+    isCopy: false,
+    status: "submitted",
+    isActive: true,
+    viewsCount: 7,
+    createdAt: "2026-07-15T00:00:00.000Z",
+    event: { eventName: "DXG Summit" },
+    venueSchedule: { venueName: "Hall A" },
+    roomByRoom: [{ roomFunction: "General Session" }],
+    budget: { estimatedAvBudget: "$50k-$100k" },
+    uploads: { ndaRequired: "NO" },
+    contact: { contactFirstName: "Ada" },
+    proposalSettings: { defaultCurrency: "$" },
+  });
+
+  for (const internal of [
+    "userId",
+    "organizationId",
+    "candidateApplicationIds",
+    "isDraft",
+    "isFavorite",
+    "isAccepted",
+    "isOpen",
+    "isArchived",
+    "archivedAt",
+    "isCopy",
+  ]) {
+    assert.equal(internal in redacted, false, `${internal} must be redacted`);
+  }
+  // Everything the vendor-facing template renders must survive redaction.
+  assert.equal(redacted._id, "proposal-001");
+  assert.equal(redacted.status, "submitted");
+  assert.equal(redacted.isActive, true);
+  assert.equal(redacted.viewsCount, 7);
+  assert.equal(redacted.createdAt, "2026-07-15T00:00:00.000Z");
+  assert.deepEqual(redacted.event, { eventName: "DXG Summit" });
+  assert.deepEqual(redacted.venueSchedule, { venueName: "Hall A" });
+  assert.deepEqual(redacted.roomByRoom, [{ roomFunction: "General Session" }]);
+  assert.deepEqual(redacted.budget, { estimatedAvBudget: "$50k-$100k" });
+  assert.deepEqual(redacted.uploads, { ndaRequired: "NO" });
+  assert.deepEqual(redacted.contact, { contactFirstName: "Ada" });
+  assert.deepEqual(redacted.proposalSettings, { defaultCurrency: "$" });
 });
 
 test("authenticated view increment preserves ownership in persistence", async () => {

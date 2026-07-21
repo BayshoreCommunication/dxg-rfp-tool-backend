@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 type SpacesConfig = {
   bucket: string;
@@ -56,12 +57,8 @@ const getContentType = (filePath: string): string => {
   return contentTypes[ext] || "application/octet-stream";
 };
 
-export const uploadToSpaces = async (
-  filePath: string,
-  objectKey: string
-): Promise<string> => {
+const createSpacesClient = () => {
   const { bucket, region, key, secret } = getSpacesConfig();
-
   const client = new S3Client({
     region,
     endpoint: `https://${region}.digitaloceanspaces.com`,
@@ -70,6 +67,15 @@ export const uploadToSpaces = async (
       secretAccessKey: secret,
     },
   });
+  return { bucket, region, client };
+};
+
+const putObjectFromFile = async (
+  filePath: string,
+  objectKey: string,
+  acl?: "public-read"
+): Promise<string> => {
+  const { bucket, region, client } = createSpacesClient();
 
   const fileBuffer = await fs.promises.readFile(filePath);
   const contentType = getContentType(filePath);
@@ -79,7 +85,7 @@ export const uploadToSpaces = async (
       Bucket: bucket,
       Key: objectKey,
       Body: fileBuffer,
-      ACL: "public-read",
+      ...(acl ? { ACL: acl } : {}),
       ContentType: contentType,
     })
   );
@@ -92,4 +98,41 @@ export const uploadToSpaces = async (
   }
 
   return `https://${bucket}.${region}.digitaloceanspaces.com/${objectKey}`;
+};
+
+// Public web assets (avatars, logos, email assets). Object is world-readable.
+export const uploadToSpaces = (
+  filePath: string,
+  objectKey: string
+): Promise<string> => putObjectFromFile(filePath, objectKey, "public-read");
+
+// Private uploads (e.g. vendor-response documents). No public-read ACL —
+// the object is only reachable via short-lived presigned GET URLs.
+export const uploadPrivateToSpaces = (
+  filePath: string,
+  objectKey: string
+): Promise<string> => putObjectFromFile(filePath, objectKey);
+
+// Derive the object key from a canonical Spaces URL we generated at upload time.
+export const spacesObjectKeyFromUrl = (url: string): string | null => {
+  try {
+    const pathname = new URL(url).pathname;
+    const objectKey = decodeURIComponent(pathname.replace(/^\/+/, ""));
+    return objectKey || null;
+  } catch {
+    return null;
+  }
+};
+
+// Short-lived presigned GET URL for a private object.
+export const presignSpacesGetUrl = async (
+  objectKey: string,
+  expiresSeconds: number
+): Promise<string> => {
+  const { bucket, client } = createSpacesClient();
+  return getSignedUrl(
+    client,
+    new GetObjectCommand({ Bucket: bucket, Key: objectKey }),
+    { expiresIn: expiresSeconds }
+  );
 };

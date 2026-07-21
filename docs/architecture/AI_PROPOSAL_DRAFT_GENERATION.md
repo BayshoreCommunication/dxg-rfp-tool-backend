@@ -382,3 +382,23 @@ Implementation must not begin until:
 
 1. DXG formally accepts Slice 2E; and
 2. DXG approves the Slice 2F design and explicitly authorizes isolated test implementation.
+
+## Section lifecycle (M3 addendum)
+
+Migration `018_draft_section_lifecycle` adds a human decision overlay and scoped
+regeneration on top of the immutable draft artifacts:
+
+- `proposal_draft_section_decisions` records one `accepted`/`rejected` decision
+  per `(run, section_key)` with the deciding user and an optional reason;
+  decisions are upserts, audited, and only allowed on succeeded runs.
+- `proposal_draft_runs.section_scope` + `parent_run_id` support regenerating a
+  single section as a NEW run linked to its parent. The parent's sections stay
+  immutable; readers overlay the newest succeeded scoped child. `GET
+  /draft-runs/latest` always returns the latest FULL draft (scoped children are
+  listed under `regenerations` and fetched by id).
+- Scoped live runs narrow the structured-output schema so the model can only
+  return the requested section; deterministic runs filter after generation.
+
+Endpoints: `PUT .../draft-runs/:runId/sections/:sectionKey/decision` and
+`POST .../draft-runs/:runId/sections/:sectionKey/regenerate-jobs` (idempotent,
+rate-limited, owner + version guarded like all draft mutations).

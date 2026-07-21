@@ -206,8 +206,8 @@ export const proposalContextRepository = {
       if(run.provider==="openai"&&run.source_id){
         const linked=await c.query<{source_id:string}>("SELECT source_id FROM rfpilot.proposal_context_run_sources WHERE run_id=$1 ORDER BY ordinal",[run.id]),sourceIds=linked.rows.length?linked.rows.map(x=>x.source_id):[run.source_id],sources=[];
         for(const sourceId of sourceIds){const source=await postgresDocumentRepository.get(input.organizationMongoId,sourceId);if(source.proposalMongoId!==run.proposal_mongo_id||source.status!=="ready"||source.confidentiality!=="non_confidential")throw new ProposalContextError("SOURCE_NOT_ELIGIBLE","A selected source is no longer eligible for live AI processing.",409);const object=await s3PrivateDocumentStorage.read({objectKey:source.objectKey,maxBytes:Number(process.env.DOCUMENT_MAX_FILE_BYTES||50*1024*1024)}),parsed=await deterministicParser.parse(object.bytes,source.mimeType);sources.push({sourceId,fragments:parsed.fragments});}
-        live=await liveMultiSourceRequirementExtraction(run.proposal_mongo_id,sources);
-      }else if(run.provider==="openai")live=await liveRequirementExtraction(run.proposal_mongo_id,run.fixture);
+        live=await liveMultiSourceRequirementExtraction(run.proposal_mongo_id,sources,{runType:"proposal_context",runId:run.id,organizationId:run.organization_id});
+      }else if(run.provider==="openai")live=await liveRequirementExtraction(run.proposal_mongo_id,run.fixture,{runType:"proposal_context",runId:run.id,organizationId:run.organization_id});
       const candidate = live?.candidate ?? proposalContextModel.extract(run.proposal_mongo_id, run.fixture);
       if ("invalid" in candidate)
         throw new ProposalContextError(

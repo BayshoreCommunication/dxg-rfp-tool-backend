@@ -1,6 +1,7 @@
 import "./config/env"; // must be first — loads .env before any module reads process.env
 import "./config/observability";
 import cors from "cors";
+import helmet from "helmet";
 import express, { Application, NextFunction, Request, Response } from "express";
 import http from "http";
 import mongoose from "mongoose";
@@ -27,6 +28,11 @@ import knowledgeImportRoutes from "./routes/knowledgeImportRoute";
 import knowledgeReviewRoutes from "./routes/knowledgeReviewRoute";
 import knowledgeRetrievalRoutes from "./routes/knowledgeRetrievalRoute";
 import proposalContextRoutes from "./routes/proposalContextRoute";
+import conversationsRoutes from "./routes/conversationsRoute";
+import guidanceRoutes from "./routes/guidanceRoute";
+import pricingRoutes from "./routes/pricingRoute";
+import investmentRoutes from "./routes/investmentRoute";
+import vendorAnalysisRoutes from "./routes/vendorAnalysisRoute";
 import candidateApplicationRoutes from "./routes/candidateApplicationRoute";
 import proposalDraftRoutes from "./routes/proposalDraftRoute";
 import proposalWorkflowRoutes from "./routes/proposalWorkflowRoute";
@@ -46,7 +52,22 @@ const app: Application = express();
 const PORT = process.env.PORT || 8000;
 
 // Middleware
-app.use(cors());
+app.use(helmet());
+
+// CORS allowlist: configured app origins only. Tracking pixels/redirects are
+// plain GETs and remain unaffected; server-to-server calls have no Origin.
+const corsAllowlist = [
+  process.env.FRONTEND_URL,
+  process.env.ADMIN_URL,
+  ...(process.env.CORS_ALLOWED_ORIGINS || "").split(","),
+  ...(process.env.NODE_ENV !== "production" ? ["http://localhost:3000", "http://localhost:3001"] : []),
+].map((value) => (value || "").trim().replace(/\/$/, "")).filter(Boolean);
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || corsAllowlist.includes(origin)) return callback(null, true);
+    callback(null, false);
+  },
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 if(process.env.OBSERVABILITY_ENABLED!=="true")app.use(morgan("dev"));
@@ -156,6 +177,11 @@ app.use("/api/v1", knowledgeImportRoutes);
 app.use("/api/v1", knowledgeReviewRoutes);
 app.use("/api/v1", knowledgeRetrievalRoutes);
 app.use("/api/v1", proposalContextRoutes);
+app.use("/api/v1", conversationsRoutes);
+app.use("/api/v1", guidanceRoutes);
+app.use("/api/v1", pricingRoutes);
+app.use("/api/v1", investmentRoutes);
+app.use("/api/v1", vendorAnalysisRoutes);
 app.use("/api/v1", candidateApplicationRoutes);
 app.use("/api/v1", proposalDraftRoutes);
 app.use("/api/v1", proposalWorkflowRoutes);

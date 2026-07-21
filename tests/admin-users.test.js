@@ -14,16 +14,16 @@ test("admin creation validates and normalizes before persistence", async () => {
     async emailExists(email) { existsEmail = email; return false; },
     async create(input) { created = input; return { id: "a", ...input, password: undefined }; },
   });
-  assert.deepEqual(await create({ name: " ", email: "x", password: "123456", role: "admin" }), {
+  assert.deepEqual(await create({ name: " ", email: "x", password: "12345678", role: "admin" }), {
     kind: "validation", code: "required",
   });
   const result = await create({
-    name: "  Admin One ", email: " ADMIN@EXAMPLE.COM ", password: " secret ", role: "admin",
+    name: "  Admin One ", email: " ADMIN@EXAMPLE.COM ", password: " secret-01 ", role: "admin",
   });
   assert.equal(result.kind, "created");
   assert.equal(existsEmail, "admin@example.com");
   assert.deepEqual(created, {
-    name: "Admin One", email: "admin@example.com", password: "secret", role: "admin",
+    name: "Admin One", email: "admin@example.com", password: "secret-01", role: "admin",
   });
 });
 
@@ -32,7 +32,7 @@ test("admin creation reports normalized email conflicts", async () => {
     async emailExists(email) { assert.equal(email, "used@example.com"); return true; },
   });
   assert.deepEqual(await create({
-    name: "Admin", email: " USED@example.com ", password: "123456", role: "super_admin",
+    name: "Admin", email: " USED@example.com ", password: "12345678", role: "super_admin",
   }), { kind: "email_conflict" });
 });
 
@@ -42,7 +42,7 @@ test("admin update rejects non-admin targets and invalid changes", async () => {
     async findById() { return { id: "u", role: "customer" }; },
     async update() { updates += 1; },
   }, { async hash() { throw new Error("must not hash"); } });
-  assert.deepEqual(await update("u", { password: "123456" }), { kind: "non_admin_target" });
+  assert.deepEqual(await update("u", { password: "12345678" }), { kind: "non_admin_target" });
   assert.equal(updates, 0);
 });
 
@@ -53,9 +53,9 @@ test("admin password update hashes once at the application security port", async
     async findById() { return { id: "a", role: "admin" }; },
     async update(_id, value) { patch = value; return { id: "a" }; },
   }, {
-    async hash(password) { hashes += 1; assert.equal(password, "newpass"); return "hashed-once"; },
+    async hash(password) { hashes += 1; assert.equal(password, "newpass-1"); return "hashed-once"; },
   });
-  assert.deepEqual(await update("a", { password: " newpass ", phone: " 123 " }), {
+  assert.deepEqual(await update("a", { password: " newpass-1 ", phone: " 123 " }), {
     kind: "updated", user: { id: "a" },
   });
   assert.equal(hashes, 1);

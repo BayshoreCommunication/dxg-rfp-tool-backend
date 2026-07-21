@@ -10,6 +10,7 @@ import {
   listRuns,
   listSchemas,
   pilotStatus,
+  usageReport,
 } from "../controller/aiGatewayController";
 const router = Router();
 const testLimit = securityRateLimit({
@@ -59,6 +60,12 @@ router.get(
   authenticate,
   authorizeAction("security:admin"),
   pilotStatus,
+);
+router.get(
+  "/ai/usage-report",
+  authenticate,
+  authorizeAction("organization:manage"),
+  usageReport,
 );
 router.get(
   "/ai/budgets",

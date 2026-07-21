@@ -86,6 +86,13 @@ export const submitVendorResponse = async (
       res.status(404).json({ success: false, message: "Proposal not found." });
       return;
     }
+    if (result.kind === "infected") {
+      res.status(422).json({
+        success: false,
+        message: "One or more uploaded files failed the malware scan and the submission was rejected.",
+      });
+      return;
+    }
     if (result.kind === "invalid") {
       const labels = {
         vendorName: "Vendor name",

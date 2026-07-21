@@ -22,6 +22,29 @@ const ownsProposal = async (proposalId:string, _organizationId:string, userId:st
   if(result.kind==="not_found") throw new DocumentIngestionError("PROPOSAL_NOT_FOUND","Proposal was not found.",404);
 };
 
+/* Pasted notes enter through the exact same private-source boundary as file
+   uploads: presigned PUT into quarantine, size/content verification, then the
+   caller queues the standard security scan job before the source is usable. */
+export const createProposalNotes = async(req:AuthRequest,res:Response)=>{try{
+  const ctx=context(req); await ownsProposal(req.params.id,ctx.organizationMongoId,ctx.userMongoId);
+  const body=req.body as Record<string,unknown>;
+  const text=typeof body.text==="string"?body.text.replace(/\r\n/g,"\n").trim():"";
+  if(!text||text.length>200_000)throw new DocumentIngestionError("INVALID_NOTES","Notes must be between 1 and 200000 characters.",422);
+  if(text.includes("\u0000"))throw new DocumentIngestionError("INVALID_NOTES","Notes contain unsupported characters.",422);
+  const title=typeof body.title==="string"&&body.title.trim()?body.title.trim().slice(0,80):"Pasted notes";
+  const filename=`${title.replace(/[^A-Za-z0-9 _-]/g,"").trim().replace(/\s+/g,"-").toLowerCase()||"pasted-notes"}.txt`;
+  const bytes=Buffer.from(text,"utf8");
+  const idempotencyKey=String(req.headers["idempotency-key"]||"");
+  const session=await documentIngestion.createUpload({...ctx,proposalMongoId:req.params.id,filename,mimeType:"text/plain",sizeBytes:bytes.length,classification:String(body.classification||"confidential"),idempotencyKey});
+  if(session.created){
+    const put=await fetch(session.uploadUrl,{method:"PUT",headers:{"content-type":"text/plain"},body:bytes});
+    if(!put.ok)throw new DocumentIngestionError("STORAGE_UNAVAILABLE","Notes could not be stored. Please try again.",503);
+  }
+  const source=await documentIngestion.complete({...ctx,sourceId:session.source.id});
+  const {objectKey:_privateKey,...safeSource}=source as Record<string,unknown>;
+  res.status(session.created?201:200).json({data:{source:safeSource,created:session.created}});
+}catch(error){handle(res,error);}};
+
 export const createDocumentUploadSession = async(req:AuthRequest,res:Response)=>{try{
   const ctx=context(req); await ownsProposal(req.params.id,ctx.organizationMongoId,ctx.userMongoId);
   const body=req.body as Record<string,unknown>; const result=await documentIngestion.createUpload({...ctx,proposalMongoId:req.params.id,filename:String(body.filename||""),mimeType:String(body.mimeType||""),sizeBytes:Number(body.sizeBytes),classification:String(body.classification||"confidential"),idempotencyKey:String(req.headers["idempotency-key"]||"")});

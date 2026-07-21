@@ -96,7 +96,7 @@ export const updateSignedInAdminProfile = async (
       return;
     }
     if (result.kind === "invalid_password") {
-      res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
+      res.status(400).json({ success: false, message: "Password must be at least 8 characters." });
       return;
     }
     if (result.kind === "empty_name") {
