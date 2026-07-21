@@ -5,6 +5,7 @@ import { durableJobDispatcher } from "../src/modules/durableJobs/composition";
 import {
   contextEnabled,
   contextInput,
+  sourceContextInput,
   ProposalContextError,
 } from "../src/modules/proposalContext/domain";
 import { proposalContextRepository } from "../src/modules/proposalContext/postgresProposalContextRepository";
@@ -76,6 +77,15 @@ const handle = (res: Response, error: unknown) => {
       status,
       code,
     });
+};
+
+export const createSourceProposalContextJob = async (req: AuthRequest,res: Response) => {
+  try {
+    if(process.env.LIVE_AI_PROPOSAL_SOURCE_ENABLED!=="true")throw new ProposalContextError("LIVE_AI_SOURCE_DISABLED","Live AI proposal-source processing is disabled.",503);
+    const ctx=requestContext(req),input=sourceContextInput(req.body as Record<string,unknown>),result=await proposalContextRepository.create({...ctx,...input,live:true,proposalMongoId:proposalId(req.params.proposalId),idempotencyKey:idempotencyKey(req)});
+    void durableJobDispatcher.dispatch().catch(()=>undefined);
+    res.status(result.created?202:200).json({data:{jobId:result.job.id,runId:result.runId,status:result.job.status,created:result.created,statusUrl:`/api/v1/jobs/${result.job.id}`,resultUrl:`/api/v1/proposals/${req.params.proposalId}/context-runs/${result.runId}`}});
+  } catch(error){handle(res,error);}
 };
 
 export const createProposalContextJob = async (

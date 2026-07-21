@@ -24,7 +24,7 @@ const ownsProposal = async (proposalId:string, _organizationId:string, userId:st
 
 export const createDocumentUploadSession = async(req:AuthRequest,res:Response)=>{try{
   const ctx=context(req); await ownsProposal(req.params.id,ctx.organizationMongoId,ctx.userMongoId);
-  const body=req.body as Record<string,unknown>; const result=await documentIngestion.createUpload({...ctx,proposalMongoId:req.params.id,filename:String(body.filename||""),mimeType:String(body.mimeType||""),sizeBytes:Number(body.sizeBytes),idempotencyKey:String(req.headers["idempotency-key"]||"")});
+  const body=req.body as Record<string,unknown>; const result=await documentIngestion.createUpload({...ctx,proposalMongoId:req.params.id,filename:String(body.filename||""),mimeType:String(body.mimeType||""),sizeBytes:Number(body.sizeBytes),classification:String(body.classification||"confidential"),idempotencyKey:String(req.headers["idempotency-key"]||"")});
   res.status(result.created?201:200).json({data:result});
 }catch(error){handle(res,error);}};
 export const completeDocumentUpload=async(req:AuthRequest,res:Response)=>{try{res.json({data:await documentIngestion.complete({...context(req),sourceId:sourceId(req.params.sourceId)})});}catch(error){handle(res,error);}};

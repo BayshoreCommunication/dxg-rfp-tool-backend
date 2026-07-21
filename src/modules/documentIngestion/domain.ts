@@ -12,6 +12,7 @@ export type DocumentStatus = "pending_upload" | "uploaded" | "scanning" | "ready
 export type DocumentSource = {
   id: string;
   proposalMongoId: string | null;
+  confidentiality: "non_confidential"|"internal"|"confidential"|"restricted";
   status: DocumentStatus;
   originalFilename: string;
   mimeType: string;
@@ -61,4 +62,3 @@ export const detectMimeType = (bytes: Buffer, declared: AllowedDocumentMime): Al
   }
   return null;
 };
-

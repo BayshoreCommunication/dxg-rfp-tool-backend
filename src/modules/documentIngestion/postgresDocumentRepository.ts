@@ -6,11 +6,12 @@ import type { DocumentRepository } from "./ports";
 
 type Row = {
   id: string; proposal_mongo_id: string | null; status: DocumentSource["status"];
+  confidentiality: DocumentSource["confidentiality"];
   original_filename: string; declared_mime_type: string; expected_size_bytes: string;
   actual_size_bytes: string | null; sha256: string | null; duplicate_source_id: string | null;
   retention_until: Date | null; legal_hold: boolean; created_at: Date; updated_at: Date; object_key: string;
 };
-const select = `SELECT s.id, p.external_mongo_id proposal_mongo_id, s.status, o.original_filename,
+const select = `SELECT s.id, p.external_mongo_id proposal_mongo_id, s.status,s.confidentiality, o.original_filename,
  o.declared_mime_type, o.expected_size_bytes, o.actual_size_bytes, o.sha256,
  (SELECT o2.source_id::text FROM rfpilot.document_objects o2 WHERE o2.organization_id=s.organization_id AND o2.sha256=o.sha256 AND o2.source_id<>s.id ORDER BY o2.created_at LIMIT 1) duplicate_source_id,
  s.retention_until, s.legal_hold, s.created_at, s.updated_at, o.object_key
@@ -18,6 +19,7 @@ const select = `SELECT s.id, p.external_mongo_id proposal_mongo_id, s.status, o.
  LEFT JOIN rfpilot.proposal_references p ON p.id=s.proposal_reference_id`;
 const map = (row: Row): DocumentSource & { objectKey: string } => ({
   id: row.id, proposalMongoId: row.proposal_mongo_id, status: row.status,
+  confidentiality:row.confidentiality,
   originalFilename: row.original_filename, mimeType: row.declared_mime_type,
   expectedSizeBytes: Number(row.expected_size_bytes), actualSizeBytes: row.actual_size_bytes === null ? null : Number(row.actual_size_bytes),
   sha256: row.sha256?.trim() ?? null, duplicateSourceId: row.duplicate_source_id,
@@ -50,8 +52,8 @@ export const postgresDocumentRepository: DocumentRepository = {
     if (!proposal.rows[0]) throw new DocumentIngestionError("PROPOSAL_NOT_FOUND", "Proposal reference is unavailable.", 404);
     const sourceId = input.objectKey.split("/")[2];
     const objectId = uuidv7();
-    await client.query(`INSERT INTO rfpilot.document_sources(id,organization_id,proposal_reference_id,uploader_external_user_id,retention_until)
-      VALUES($1,$2,$3,$4,$5)`, [sourceId, organizationId, proposal.rows[0].id, input.userMongoId, input.retentionUntil]);
+    await client.query(`INSERT INTO rfpilot.document_sources(id,organization_id,proposal_reference_id,uploader_external_user_id,retention_until,confidentiality)
+      VALUES($1,$2,$3,$4,$5,$6)`, [sourceId, organizationId, proposal.rows[0].id, input.userMongoId, input.retentionUntil,input.confidentiality]);
     await client.query(`INSERT INTO rfpilot.document_objects(id,organization_id,source_id,object_key,original_filename,safe_filename,declared_mime_type,expected_size_bytes)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [objectId, organizationId, sourceId, input.objectKey, input.originalFilename.slice(0,255), input.safeFilename, input.mimeType, input.expectedSizeBytes]);
     await client.query(`INSERT INTO rfpilot.outbox_events(id,organization_id,aggregate_type,aggregate_id,event_type,idempotency_key,payload)

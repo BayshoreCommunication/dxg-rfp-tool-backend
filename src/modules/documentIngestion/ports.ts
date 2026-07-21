@@ -4,6 +4,7 @@ export type CreateSourceInput = {
   organizationMongoId: string; userMongoId: string; proposalMongoId: string;
   originalFilename: string; safeFilename: string; mimeType: AllowedDocumentMime;
   expectedSizeBytes: number; objectKey: string; retentionUntil: Date | null; idempotencyKey: string; correlationId: string;
+  confidentiality: "non_confidential"|"confidential";
 };
 
 export interface DocumentRepository {

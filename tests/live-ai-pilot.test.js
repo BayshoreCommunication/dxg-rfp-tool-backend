@@ -64,3 +64,11 @@ test("live provider secret remains server-only", () => {
   assert.equal(dashboard.includes("OPENAI_API_KEY"), false);
   assert.equal(admin.includes("OPENAI_API_KEY"), false);
 });
+test("proposal-source live AI requires explicit classification and preserves source evidence",()=>{
+  const migration=fs.readFileSync(path.join(root,"migrations/postgres/014_live_proposal_sources.up.sql"),"utf8"),repository=fs.readFileSync(path.join(root,"src/modules/proposalContext/postgresProposalContextRepository.ts"),"utf8"),controller=fs.readFileSync(path.join(root,"controller/proposalContextController.ts"),"utf8"),operations=fs.readFileSync(path.join(root,"src/modules/liveAi/operations.ts"),"utf8");
+  assert.ok(migration.includes("source_id uuid REFERENCES rfpilot.document_sources"));
+  for(const boundary of ["status='ready'","confidentiality='non_confidential'","proposal_reference_id=$3","deleted_at IS NULL"])assert.ok(repository.includes(boundary),boundary);
+  assert.ok(controller.includes("LIVE_AI_PROPOSAL_SOURCE_ENABLED"));
+  assert.ok(operations.includes("sourceVersionId:`source:${sourceId}`"));
+  assert.equal(repository.includes("Proposal.update"),false);
+});

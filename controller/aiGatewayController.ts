@@ -153,6 +153,6 @@ export const listBudgets = metadata(aiGatewayRepository.budgets);
 export const pilotStatus = async (req: AuthRequest, res: Response) => {
   try {
     context(req);
-    res.json({ data: { enabled: process.env.NODE_ENV === "test" && process.env.LIVE_AI_PILOT_ENABLED === "true", provider: "openai", model: LIVE_AI_MODEL, credentialConfigured: Boolean(process.env.OPENAI_API_KEY), syntheticEnabled: process.env.LIVE_AI_SYNTHETIC_ENABLED === "true", nonConfidentialEnabled: process.env.LIVE_AI_NON_CONFIDENTIAL_ENABLED === "true", killSwitch: process.env.LIVE_AI_KILL_SWITCH === "true", inputTokenLimit: LIVE_AI_INPUT_TOKEN_LIMIT, outputTokenLimit: LIVE_AI_OUTPUT_TOKEN_LIMIT, commercialSpendCap: null, proposalMutation: false, publication: false } });
+    res.json({ data: { enabled: process.env.NODE_ENV === "test" && process.env.LIVE_AI_PILOT_ENABLED === "true", provider: "openai", model: LIVE_AI_MODEL, credentialConfigured: Boolean(process.env.OPENAI_API_KEY), syntheticEnabled: process.env.LIVE_AI_SYNTHETIC_ENABLED === "true", nonConfidentialEnabled: process.env.LIVE_AI_NON_CONFIDENTIAL_ENABLED === "true", proposalSourceEnabled: process.env.LIVE_AI_PROPOSAL_SOURCE_ENABLED === "true", killSwitch: process.env.LIVE_AI_KILL_SWITCH === "true", inputTokenLimit: LIVE_AI_INPUT_TOKEN_LIMIT, outputTokenLimit: LIVE_AI_OUTPUT_TOKEN_LIMIT, commercialSpendCap: null, proposalMutation: false, publication: false } });
   } catch (error) { handle(res, error); }
 };

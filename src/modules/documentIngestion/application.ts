@@ -9,13 +9,14 @@ export const createDocumentIngestion = (deps: { repository: DocumentRepository; 
   const uploadTtlSeconds = deps.uploadTtlSeconds ?? 900;
   const now = deps.now ?? (() => new Date());
   return {
-    async createUpload(input: { organizationMongoId: string; userMongoId: string; proposalMongoId: string; filename: string; mimeType: string; sizeBytes: number; idempotencyKey: string; correlationId: string }) {
+    async createUpload(input: { organizationMongoId: string; userMongoId: string; proposalMongoId: string; filename: string; mimeType: string; sizeBytes: number; classification?: string; idempotencyKey: string; correlationId: string }) {
       const valid = validateUpload(input.filename, input.mimeType, input.sizeBytes, maxBytes);
       if (!input.idempotencyKey) throw new DocumentIngestionError("IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required.", 400);
+      const confidentiality=input.classification==="non_confidential"?"non_confidential":"confidential";
       const sourceId = uuidv7();
       const extension = path.extname(valid.filename).toLowerCase();
       const objectKey = `quarantine/${input.organizationMongoId}/${sourceId}/original${extension}`;
-      const result = await deps.repository.create({ ...input, originalFilename: input.filename, safeFilename: valid.filename, mimeType: valid.mimeType, expectedSizeBytes: input.sizeBytes, objectKey, retentionUntil: null, idempotencyKey: input.idempotencyKey, correlationId: input.correlationId });
+      const result = await deps.repository.create({ ...input, confidentiality, originalFilename: input.filename, safeFilename: valid.filename, mimeType: valid.mimeType, expectedSizeBytes: input.sizeBytes, objectKey, retentionUntil: null, idempotencyKey: input.idempotencyKey, correlationId: input.correlationId });
       const upload = await deps.storage.createUpload({ objectKey: result.objectKey, contentType: valid.mimeType, sizeBytes: result.source.expectedSizeBytes, expiresSeconds: uploadTtlSeconds });
       return { source: result.source, created: result.created, ...upload, requiredHeaders: { "content-type": valid.mimeType } };
     },

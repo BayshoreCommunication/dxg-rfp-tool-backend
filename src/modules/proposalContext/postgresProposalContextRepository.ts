@@ -9,8 +9,11 @@ import {
 } from "../../../contracts/proposal/v1/validators";
 import { proposalContextModel } from "./composition";
 import { ProposalContextError, type ContextFixture } from "./domain";
-import { liveRequirementExtraction } from "../liveAi/operations";
+import { liveRequirementExtraction, liveSourceRequirementExtraction } from "../liveAi/operations";
 import { LIVE_AI_MODEL } from "../liveAi/openAiProvider";
+import { postgresDocumentRepository } from "../documentIngestion/postgresDocumentRepository";
+import { s3PrivateDocumentStorage } from "../documentIngestion/s3PrivateDocumentStorage";
+import { deterministicParser } from "../knowledgeIngestion/deterministicParser";
 const tenant = async (c: PoolClient, external: string) => {
   await c.query("SELECT set_config('app.organization_mongo_id',$1,true)", [
     external,
@@ -71,7 +74,8 @@ export const proposalContextRepository = {
     organizationMongoId: string;
     actorUserMongoId: string;
     proposalMongoId: string;
-    fixture: ContextFixture;
+    fixture?: ContextFixture;
+    sourceId?: string;
     inputChecksum: string;
     idempotencyKey: string;
     correlationId: string;
@@ -80,7 +84,11 @@ export const proposalContextRepository = {
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, input.organizationMongoId),
         p = await proposal(c, input.proposalMongoId, input.actorUserMongoId),
-        key = `proposal_context_extract:${input.live ? "live:" : ""}${input.idempotencyKey}`;
+        key = `proposal_context_extract:${input.sourceId ? "source:" : input.live ? "live:" : ""}${input.idempotencyKey}`;
+      if(input.sourceId){
+        const source=await c.query<{id:string}>("SELECT id FROM rfpilot.document_sources WHERE id=$1 AND organization_id=$2 AND proposal_reference_id=$3 AND status='ready' AND confidentiality='non_confidential' AND deleted_at IS NULL",[input.sourceId,org,p.id]);
+        if(!source.rows[0])throw new ProposalContextError("SOURCE_NOT_ELIGIBLE","Only ready, explicitly non-confidential sources for this proposal may be processed.",409);
+      }
       const existing = await c.query<any>(
         `SELECT j.*,r.id run_id FROM rfpilot.ai_jobs j JOIN rfpilot.proposal_context_runs r ON r.job_id=j.id WHERE j.organization_id=$1 AND j.idempotency_key=$2`,
         [org, key],
@@ -114,7 +122,7 @@ export const proposalContextRepository = {
         ],
       );
       await c.query(
-        "INSERT INTO rfpilot.proposal_context_runs(id,organization_id,proposal_reference_id,job_id,actor_external_user_id,fixture,status,input_checksum,correlation_id,retention_until,provider,model) VALUES($1,$2,$3,$4,$5,$6,'queued',$7,$8,now()+($9||' days')::interval,$10,$11)",
+        "INSERT INTO rfpilot.proposal_context_runs(id,organization_id,proposal_reference_id,job_id,actor_external_user_id,fixture,source_id,status,input_checksum,correlation_id,retention_until,provider,model) VALUES($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9,now()+($10||' days')::interval,$11,$12)",
         [
           runId,
           org,
@@ -122,6 +130,7 @@ export const proposalContextRepository = {
           jobId,
           input.actorUserMongoId,
           input.fixture,
+          input.sourceId ?? null,
           input.inputChecksum,
           input.correlationId,
           String(Number(process.env.PROPOSAL_CONTEXT_RETENTION_DAYS) || 30),
@@ -154,7 +163,7 @@ export const proposalContextRepository = {
         action: "proposal.context.create",
         id: runId,
         correlation: input.correlationId,
-        metadata: { fixture: input.fixture },
+        metadata: { fixture: input.fixture, sourceId: input.sourceId },
       });
       return { job: job.rows[0], runId, created: true };
     });
@@ -192,7 +201,14 @@ export const proposalContextRepository = {
         "UPDATE rfpilot.proposal_context_runs SET status='running',started_at=now(),updated_at=now() WHERE id=$1",
         [run.id],
       );
-      const live = run.provider === "openai" ? await liveRequirementExtraction(run.proposal_mongo_id, run.fixture) : null;
+      let live=null;
+      if(run.provider==="openai"&&run.source_id){
+        const source=await postgresDocumentRepository.get(input.organizationMongoId,run.source_id);
+        if(source.proposalMongoId!==run.proposal_mongo_id||source.status!=="ready"||source.confidentiality!=="non_confidential")throw new ProposalContextError("SOURCE_NOT_ELIGIBLE","The selected source is no longer eligible for live AI processing.",409);
+        const object=await s3PrivateDocumentStorage.read({objectKey:source.objectKey,maxBytes:Number(process.env.DOCUMENT_MAX_FILE_BYTES||50*1024*1024)});
+        const parsed=await deterministicParser.parse(object.bytes,source.mimeType);
+        live=await liveSourceRequirementExtraction(run.proposal_mongo_id,run.source_id,parsed.fragments);
+      }else if(run.provider==="openai")live=await liveRequirementExtraction(run.proposal_mongo_id,run.fixture);
       const candidate = live?.candidate ?? proposalContextModel.extract(run.proposal_mongo_id, run.fixture);
       if ("invalid" in candidate)
         throw new ProposalContextError(
