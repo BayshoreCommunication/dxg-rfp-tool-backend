@@ -58,8 +58,6 @@ export const mongoGoogleAccountRepository: GoogleAccountRepository = {
           googleId: identity.subject,
           role: "customer",
           isBlocked: false,
-          createdAt: now,
-          updatedAt: now,
         },
       },
       { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true },

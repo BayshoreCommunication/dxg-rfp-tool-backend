@@ -36,6 +36,10 @@ Five-step proposal workflow and multi-source intake: [Slice 3A design](./FIVE_ST
 
 Client approval pack: [Slice 3A five-step workflow approval](../approval-packs/SLICE_3A_FIVE_STEP_WORKFLOW_APPROVAL.md).
 
+Controlled live-provider pilot: [Slice 3B design](./LIVE_AI_PROVIDER_PILOT.md).
+
+Client approval pack: [Slice 3B live-AI pilot approval](../approval-packs/SLICE_3B_LIVE_AI_PILOT_APPROVAL.md).
+
 Content-free operational telemetry: [Observability](./OBSERVABILITY.md).
 
 ## Target modular-monolith boundaries

@@ -1,7 +1,7 @@
 # Slice 3A Test-Environment Evidence
 
 **Date:** July 20, 2026  
-**Status:** Automated and authenticated manual test evidence complete; formal DXG acceptance pending
+**Status:** Formally accepted by DXG
 
 ## Implemented boundary
 
@@ -46,6 +46,10 @@ The workflow repository was executed against existing isolated test records and 
 
 ## Authenticated manual evidence
 
-DXG completed the authenticated browser scenarios in [the manual test guide](../testing/SLICE_3A_MANUAL_TEST_GUIDE.md) on July 20, 2026 and reported that manual testing passed. This closes the remaining test checkpoint. Formal Slice 3A acceptance remains pending.
+DXG completed the authenticated browser scenarios in [the manual test guide](../testing/SLICE_3A_MANUAL_TEST_GUIDE.md) on July 20, 2026 and reported that manual testing passed. This closed the remaining test checkpoint.
+
+## Formal acceptance
+
+DXG formally accepted the Slice 3A implementation and isolated test-environment evidence on July 20, 2026. DXG confirmed that authoritative step recovery, private multi-source status, controlled candidate application, cited read-only drafting, manual editing, and the existing publication handoff operate as approved.
 
 Live-provider or confidential-data AI processing, AI-generated clarification questions, DXG knowledge or pricing retrieval, investment guidance, generated-prose application, automatic proposal mutation or publication, production provisioning, and external telemetry or alerts remain gated.
