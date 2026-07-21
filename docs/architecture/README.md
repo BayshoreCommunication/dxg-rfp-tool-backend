@@ -40,6 +40,8 @@ Controlled live-provider pilot: [Slice 3B design](./LIVE_AI_PROVIDER_PILOT.md).
 
 Governed live extraction from uploaded proposal sources: [Slice 3C design](./LIVE_AI_PROPOSAL_SOURCES.md).
 
+Multi-source extraction and deterministic conflicts: [Slice 3D design](./MULTI_SOURCE_EXTRACTION_AND_CONFLICTS.md).
+
 Client approval pack: [Slice 3B live-AI pilot approval](../approval-packs/SLICE_3B_LIVE_AI_PILOT_APPROVAL.md).
 
 Content-free operational telemetry: [Observability](./OBSERVABILITY.md).
