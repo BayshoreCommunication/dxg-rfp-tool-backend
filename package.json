@@ -37,7 +37,9 @@
     "observability:down": "docker compose -p rfpilotobs -f deploy/observability/docker-compose.yml down -v",
     "integration:up": "docker compose -p rfpilotintg -f deploy/integration/docker-compose.yml up -d --wait",
     "integration:down": "docker compose -p rfpilotintg -f deploy/integration/docker-compose.yml down -v",
-    "test:integration": "INTEGRATION=1 node --test --require ts-node/register --test-concurrency=1 tests-integration/*.test.ts"
+    "test:integration": "INTEGRATION=1 node --test --require ts-node/register --test-concurrency=1 tests-integration/*.test.ts",
+    "dev:worker": "nodemon --quiet --watch src --watch config --watch modal --watch contracts --ext ts --exec ts-node scripts/startDurableWorker.ts",
+    "dev:dispatcher": "nodemon --quiet --watch src --watch config --ext ts --exec ts-node scripts/startDurableDispatcher.ts"
   },
   "keywords": [
     "express",

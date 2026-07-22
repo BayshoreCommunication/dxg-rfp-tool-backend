@@ -49,7 +49,15 @@ const enumeration = (options: readonly EnumOption[], message: string) => ({
   normalize: (value: unknown): string => {
     const key = enumKey(value);
     const match = options.find((option) => enumKey(option.canonical) === key || (option.aliases ?? []).some((alias) => enumKey(alias) === key));
-    return match ? match.canonical : invalid(message);
+    if (match) return match.canonical;
+    // Extraction returns prose ("Human captioner preferred"), not tokens, so a
+    // value that clearly contains exactly one option's wording still resolves.
+    const contained = options.filter((option) =>
+      [option.canonical, ...(option.aliases ?? [])].some((candidate) => {
+        const token = enumKey(candidate);
+        return token.length > 2 && (key.includes(token) || token.includes(key));
+      }));
+    return contained.length === 1 ? contained[0].canonical : invalid(message);
   },
   mongoValue: (value: unknown): string => options.find((option) => option.canonical === String(value))!.mongo,
 });
@@ -145,10 +153,10 @@ const mappings: Record<string, Mapping> = {
     t("venueAddress", "address", 500),
     t("venueType", "venueType", 150),
     pick("venueConfirmedStatus", "confirmationStatus", [
-      { canonical: "contract_signed", mongo: "CONTRACT_SIGNED" },
-      { canonical: "verbal_confirmation", mongo: "VERBAL_CONFIRM", aliases: ["verbal_confirm"] },
-      { canonical: "strong_preference", mongo: "STRONG_PREF", aliases: ["strong_pref"] },
-      { canonical: "not_selected", mongo: "NOT_SELECTED" },
+      { canonical: "contract_signed", mongo: "CONTRACT_SIGNED", aliases: ["contract signed", "signed", "confirmed", "booked", "contracted"] },
+      { canonical: "verbal_confirmation", mongo: "VERBAL_CONFIRM", aliases: ["verbal_confirm", "verbal", "verbally confirmed", "verbal hold"] },
+      { canonical: "strong_preference", mongo: "STRONG_PREF", aliases: ["strong_pref", "preferred", "leading option", "shortlisted"] },
+      { canonical: "not_selected", mongo: "NOT_SELECTED", aliases: ["undecided", "tbd", "not chosen", "still deciding"] },
     ], "Venue confirmation status is invalid."),
     yn("isUnionVenue", "unionVenue"),
     t("unionJurisdictionOther", "unionJurisdictionOther", 500),
@@ -180,8 +188,8 @@ const mappings: Record<string, Mapping> = {
     yn("closedCaptions.closedCaptions", "closedCaptions/required"),
     t("closedCaptions.captionLanguageOther", "closedCaptions/languageOther", 100),
     pick("closedCaptions.captionType", "closedCaptions/type", [
-      { canonical: "ai", mongo: "AI" },
-      { canonical: "human", mongo: "Human" },
+      { canonical: "ai", mongo: "AI", aliases: ["automatic", "automated", "asr", "machine"] },
+      { canonical: "human", mongo: "Human", aliases: ["human captioner", "live captioner", "cart", "stenographer"] },
     ], "Caption type is invalid."),
     yn("onDemandRecording", "onDemandRecording"),
     yn("sponsorOverlays", "sponsorOverlays"),

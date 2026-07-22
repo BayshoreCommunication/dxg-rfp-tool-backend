@@ -1,0 +1,2 @@
+ALTER TABLE rfpilot.candidate_applications DROP CONSTRAINT candidate_applications_selected_count_check;
+ALTER TABLE rfpilot.candidate_applications ADD CONSTRAINT candidate_applications_selected_count_check CHECK(selected_count BETWEEN 1 AND 25);

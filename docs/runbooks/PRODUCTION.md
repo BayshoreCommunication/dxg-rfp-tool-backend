@@ -8,7 +8,7 @@
 | dxg-rfp-worker | npm run worker:source-security (ts-node) | Durable job execution (scans, parsing, extraction, drafting, vendor analysis) |
 | dxg-rfp-dispatcher | npm run worker:dispatcher (ts-node) | Outbox → Redis publisher + reconciler |
 
-Worker/dispatcher run via ts-node npm scripts (`scripts/` is excluded from the TS build). The Vercel serverless
+Worker/dispatcher run via ts-node npm scripts (`scripts/` is excluded from the TS build). Production must use `worker:source-security` / `worker:dispatcher`; the `dev:worker` / `dev:dispatcher` variants add nodemon reloading and depend on a devDependency. The Vercel serverless
 config (`vercel.json`) serves the stateless REST surface only — WebSockets,
 crons, workers and the dispatcher REQUIRE the PM2 deployment. Do not enable AI
 flags on a serverless-only deployment.

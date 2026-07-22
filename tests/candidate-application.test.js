@@ -1,3 +1,4 @@
+const fs = require("node:fs"), path = require("node:path");
 const test=require("node:test"),assert=require("node:assert/strict");const{normalizeCandidate,approvedCandidatePaths,extractionPathEnum}=require("../src/modules/candidateApplication/canonicalMapping");const{parseReview,parseApplication,CandidateApplicationError,candidateApplicationEnabled}=require("../src/modules/candidateApplication/domain");
 test("legacy-shaped fixture candidates normalize to canonical and allowlisted Mongo paths",()=>{assert.deepEqual(normalizeCandidate("/content/event/eventName"," Test "),{sourcePath:"/content/event/eventName",canonicalPath:"/content/event/name",mongoPath:"event.eventName",canonicalValue:"Test",mongoValue:"Test"});assert.equal(normalizeCandidate("/content/event/eventFormat","Hybrid").canonicalValue,"hybrid");assert.equal(normalizeCandidate("/content/venueSchedule/numberOfEventRooms","6").canonicalValue,6);for(const path of["/content/event/eventName","/content/event/eventFormat","/content/event/eventObjectives","/content/venueSchedule/numberOfEventRooms"])assert.ok(approvedCandidatePaths.includes(path));});
 test("unapproved, operator and prototype paths fail closed",()=>{for(const path of["/content/event/theme","/content/$where","/content/__proto__/x","event.eventName"])assert.throws(()=>normalizeCandidate(path,"x"),CandidateApplicationError);});
@@ -89,4 +90,31 @@ test("every mapping normalizes at least one valid sample end to end",()=>{
   assert.ok(normalized.mongoPath.length>0,path);
   assert.notEqual(normalized.mongoValue,undefined,path);
  }
+});
+
+test("review read survives candidates whose value the mapping rejects", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "controller", "candidateApplicationController.ts"), "utf8");
+  // One unusable model value must not fail the whole review: normalization is
+  // per-operation and failures are reported as invalidOperations.
+  assert.ok(source.includes("invalidOperations"), "failures must be reported to the client");
+  assert.ok(source.includes("catch(error)"), "normalization must be guarded per operation");
+  const normalizeAt = source.indexOf("normalizeCandidate(operation.path");
+  const catchAt = source.indexOf("catch(error)", normalizeAt);
+  assert.ok(normalizeAt > -1 && catchAt > normalizeAt, "the guard must wrap the normalize call");
+  assert.ok(source.includes("usable.map(x=>x.mongoPath)"), "the snapshot must only request paths that normalized");
+});
+
+test("enum fields accept the prose an extraction actually returns", () => {
+  const { normalizeCandidate } = require("../src/modules/candidateApplication/canonicalMapping");
+  const cases = [
+    ["/content/venueSchedule/venueConfirmedStatus", "Confirmed", "CONTRACT_SIGNED"],
+    ["/content/venueSchedule/venueConfirmedStatus", "Contract signed", "CONTRACT_SIGNED"],
+    ["/content/venueSchedule/venueConfirmedStatus", "verbal confirmation", "VERBAL_CONFIRM"],
+    ["/content/hybridVirtual/closedCaptions/captionType", "Human captioner preferred", "Human"],
+    ["/content/hybridVirtual/closedCaptions/captionType", "AI", "AI"],
+  ];
+  for (const [path, value, expected] of cases)
+    assert.equal(normalizeCandidate(path, value).mongoValue, expected, `${value} -> ${expected}`);
+  // Ambiguous or unrelated prose must still be rejected rather than guessed.
+  assert.throws(() => normalizeCandidate("/content/venueSchedule/venueConfirmedStatus", "maybe next year"), /invalid/i);
 });
