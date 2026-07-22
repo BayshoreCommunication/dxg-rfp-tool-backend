@@ -4,8 +4,9 @@
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
-what is owed to the client. Architecture detail lives in `docs/architecture/`;
-this file is the map.
+what is owed to the client. Start with `docs/README.md`; the current system map
+is `docs/ARCHITECTURE.md`, with component history under `docs/architecture/`.
+This file remains the authority for current implementation status.
 
 ---
 

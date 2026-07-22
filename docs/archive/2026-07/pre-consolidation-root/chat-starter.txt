@@ -1,0 +1,33 @@
+You are picking up the RFPilot AI project — an AI intelligence layer for an
+event-AV RFP platform, built for DXG Agency under a signed Scope of Work.
+
+FIRST: read /Users/swoptechnologies/Desktop/rfp/dxg-rfp-tool-backend/docs/PROJECT_STATE.md
+It is the maintained handoff document: what exists across the three repos, how
+to run it, the milestones already delivered, the design decisions that are easy
+to misread, known gaps, what is owed to the client, and the class of bug that
+kept recurring. Read it before touching anything.
+
+Repos (all on branch `ai-agent`, which is ahead of the default branch):
+  ~/Desktop/rfp/dxg-rfp-tool-backend    Express + TS, MongoDB + Postgres/pgvector + Redis + S3
+  ~/Desktop/rfp/dxg-rfp-tool-dashboard  Next.js 16 planner app
+  ~/Desktop/rfp/dxg-rfp-tool-admin      Next.js 16 back office
+Client docs: ~/Downloads/RFPilot-AI-Scope-of-Work.pdf and the pricing workbook
+~/Downloads/RFPilot_AV_Pricing_Engine - Claude.xlsx (proprietary — never commit it).
+
+How I work:
+- Commit and push to `ai-agent`; do not create new branches unless I ask.
+- Verify changes by driving the running app in the browser, not only by tests —
+  several real bugs this project only surfaced that way. I am signed in already;
+  ask me if a session is needed.
+- Run the full suites before pushing: backend `npm run ci`, dashboard `npm test`
+  plus `npx tsc --noEmit` and `npm run lint`.
+- Locally the API and workers are separate processes: `npm run dev`,
+  `npm run dev:worker`, `npm run dev:dispatcher`. Workers do not pick up backend
+  changes unless the dev: variants are running.
+- Tell me plainly when something is broken, when a change shifts a governance
+  boundary, or when you disagree with an approach — don't just comply.
+
+Never remove: tenant isolation, private/quarantined storage, malware scanning,
+citation validation, durable job processing, or human control of publication.
+
+My next task: <describe it here>

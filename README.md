@@ -1,5 +1,8 @@
 # DXG RFP Tool Backend
 
+> For cross-repository architecture, current AI status, client commitments, and
+> the documentation map, start with [docs/README.md](docs/README.md).
+
 Express + TypeScript + MongoDB API for the DXG RFP platform. This service handles authentication, admin/user profile management, proposal CRUD, AI-assisted proposal extraction, email campaign tracking, settings, and dashboard summaries.
 
 ## Tech Stack
@@ -36,7 +39,9 @@ npm install
 
 ### 2. Create your environment file
 
-Create `backend/.env` and add the variables your environment needs.
+Copy `.env.example` to `.env` and add the variables your environment needs.
+Use `.env.local` only for optional machine-specific overrides; it is loaded
+after `.env` and takes precedence.
 
 Example:
 
@@ -210,7 +215,7 @@ Protected routes expect a Bearer token:
 Authorization: Bearer <accessToken>
 ```
 
-JWT generation and verification live in [config/jwt.ts](d:/Dxg-rfp-tool/backend/config/jwt.ts).
+JWT generation and verification live in [`config/jwt.ts`](config/jwt.ts).
 
 ## Uploads
 
@@ -223,8 +228,8 @@ This backend supports:
 
 Important upload-related files:
 
-- [middleware/upload.ts](d:/Dxg-rfp-tool/backend/middleware/upload.ts)
-- [utils/uploadToSpaces.ts](d:/Dxg-rfp-tool/backend/utils/uploadToSpaces.ts)
+- [`middleware/upload.ts`](middleware/upload.ts)
+- [`utils/uploadToSpaces.ts`](utils/uploadToSpaces.ts)
 
 ## AI Extraction
 
@@ -232,7 +237,7 @@ The extraction endpoint uses OpenAI to parse uploaded files into structured prop
 
 Implementation:
 
-- [controller/extractController.ts](d:/Dxg-rfp-tool/backend/controller/extractController.ts)
+- [`controller/extractController.ts`](controller/extractController.ts)
 
 ## Email Delivery
 
@@ -247,8 +252,8 @@ If SMTP settings are not configured, the service can fall back to an Ethereal te
 
 Implementation:
 
-- [utils/emailService.ts](d:/Dxg-rfp-tool/backend/utils/emailService.ts)
-- [routes/emailRoute.ts](d:/Dxg-rfp-tool/backend/routes/emailRoute.ts)
+- [`utils/emailService.ts`](utils/emailService.ts)
+- [`routes/emailRoute.ts`](routes/emailRoute.ts)
 
 ## Background Jobs
 
@@ -256,7 +261,7 @@ On startup, the backend begins a recurring proposal expiration check. The curren
 
 Implementation:
 
-- [utils/cronJobs.ts](d:/Dxg-rfp-tool/backend/utils/cronJobs.ts)
+- [`utils/cronJobs.ts`](utils/cronJobs.ts)
 
 ## Project Structure
 
