@@ -1,0 +1,232 @@
+# RFPilot AI — Project State & Handoff
+
+**Last updated:** 2026-07-22 · **Branch:** `ai-agent` (all three repos) · **Status:** audit roadmap M1–M6 complete, DXG pricing engine imported, conversational workspace shipped.
+
+This is the single document to read before picking the project up. It records
+what exists, why it is built the way it is, what is deliberately not done, and
+what is owed to the client. Architecture detail lives in `docs/architecture/`;
+this file is the map.
+
+---
+
+## 1. What the product is
+
+RFPilot lets event planners create AV production RFPs, send them to vendors,
+and review responses. The work in this repo is the **AI Intelligence Layer**
+from the client SOW (`RFPilot-AI-Scope-of-Work.pdf`), whose four workstreams
+are: a knowledge/pricing foundation, in-build recommendations, an investment
+guidance engine, and vendor proposal analysis.
+
+The intended experience — confirmed against a reference video from the client —
+is a ChatGPT/Claude-style workspace: upload files or type details, get
+requirements extracted, answer a few high-impact questions, receive a cited
+draft plus readiness and investment guidance, then publish. Humans keep control
+of publication.
+
+### Three repositories
+
+| Repo | Role | Stack |
+|---|---|---|
+| `dxg-rfp-tool-backend` | REST API, workers, all AI | Express, TypeScript, MongoDB + PostgreSQL(+pgvector) + Redis, S3 |
+| `dxg-rfp-tool-dashboard` | Planner app | Next.js 16 App Router, NextAuth v5, Tailwind |
+| `dxg-rfp-tool-admin` | Back office (knowledge, pricing, users) | Next.js 16 |
+
+---
+
+## 2. How to run it
+
+```bash
+# backend — three processes, all required for AI features
+npm run dev            # API (nodemon)
+npm run dev:worker     # durable job worker  (nodemon; prod uses worker:source-security)
+npm run dev:dispatcher # outbox -> Redis     (nodemon; prod uses worker:dispatcher)
+
+# dashboard / admin
+npm run dev
+```
+
+Infrastructure: MongoDB, PostgreSQL 16 + pgvector, Redis, an S3-compatible
+private bucket, and optionally ClamAV on `CLAMAV_HOST:3310`.
+
+**Gotcha that cost real debugging time:** the API reloads on save, the workers
+historically did not, so backend changes applied on some paths and not others.
+Use the `dev:` variants. Production keeps the plain scripts because nodemon is
+a devDependency (PM2 runs all three; see `docs/runbooks/PRODUCTION.md`).
+
+### Feature flags
+
+Everything AI is deny-by-default. `AI_ENVIRONMENT` (`test|staging|production`)
+authorizes the runtime; unset falls back to the historical `NODE_ENV==="test"`
+behaviour. On top of that: `CONVERSATIONS_ENABLED`, `PROPOSAL_CONTEXT_ENABLED`,
+`PROPOSAL_DRAFT_ENABLED`, `CANDIDATE_APPLICATION_ENABLED`,
+`PROPOSAL_WORKFLOW_ENABLED`, `KNOWLEDGE_*`, `GUIDANCE_ENABLED`,
+`INVESTMENT_GUIDANCE_ENABLED`, `PRICING_CORPUS_ENABLED`,
+`VENDOR_ANALYSIS_ENABLED`, `LIVE_AI_*` (+ kill switches). Dashboard mirrors:
+`NEXT_PUBLIC_CONVERSATIONS_ENABLED`, `NEXT_PUBLIC_PROPOSAL_WORKFLOW_ENABLED`,
+`NEXT_PUBLIC_VENDOR_ANALYSIS_ENABLED`; admin: `NEXT_PUBLIC_PRICING_ENABLED`.
+
+Model is pinned to the dated snapshot `gpt-5.4-mini-2026-03-17`.
+
+---
+
+## 3. What was built (milestones M1–M6)
+
+Delivered against an independent audit of the original codebase. Each milestone
+is committed on `ai-agent`.
+
+- **M1 — Unblock & de-risk.** The whole governed AI surface was hard-gated to
+  `NODE_ENV==="test"` and returned 503 in production, while the *ungoverned*
+  legacy `gpt-4o` endpoint was the only live AI. Replaced with `AI_ENVIRONMENT`;
+  governed the legacy endpoint; declared `openai` directly (it was resolving
+  transitively through unused langchain packages); pinned the model snapshot;
+  added the `ai_provider_attempts` billing ledger (pre-call row + idempotency
+  fingerprint) to close a duplicate-charge window. Security: admin app no longer
+  leaks its bearer token to the browser, CORS allowlist, Helmet, Redis-backed
+  rate limits, fail-closed public grants, private+scanned vendor uploads,
+  redacted public proposal payload, password/bcrypt hardening.
+- **M2 — Conversational slice.** Migration 017: conversations, messages,
+  attachments, clarification questions. Idempotent message endpoint, SSE event
+  stream, pasted-notes intake through the same scan boundary, and the first
+  workspace UI.
+- **M3 — Full-schema application.** The candidate whitelist went from **4 paths
+  to 112**, generated against the canonical contract with typed normalizers;
+  `extractionPathEnum` feeds the model's structured output so it can only
+  propose fields a reviewer can apply. Migration 018 added draft section
+  decisions and scoped regeneration.
+- **M4 — Knowledge & guidance.** Real OpenAI embeddings behind a release
+  registry (migration 019), open governed retrieval, knowledge fragments cited
+  in drafts as `/knowledge/...`, and a deterministic guidance engine
+  (completeness + ~12 rules) that unlocked workflow step 4.
+- **M5 — Pricing & vendor analysis.** Migration 020: pricing records and expert
+  rules with an approval workflow; a deterministic investment engine with
+  provenance and explicit refusals; a vendor-response analysis durable job
+  producing cited findings with human-escalation flags.
+- **M6 — Hardening.** A real docker-compose integration suite (25 tests against
+  live Postgres/Redis/Mongo), the gold evaluation harness as a release gate,
+  cross-store purge propagation, `/api/v1/ai/usage-report`, PM2 config for all
+  three processes, and the production runbook.
+
+### The DXG pricing engine (client workbook)
+
+The founder supplied `RFPilot_AV_Pricing_Engine` (baseline v3): 433 line items
+across 10 categories, 22 regional factors, 13 modifiers, 13 confidence rules.
+
+- **Imported** via `npx ts-node scripts/importPricingWorkbook.ts <workbook.xlsx>`
+  (idempotent on category+subcategory+item label). Migration 022 added
+  subcategory/spec/unit_label/quantity_dimension/calibration_tier plus the
+  factor tables. **The workbook is deliberately NOT in git** — DXG proprietary
+  data per SOW §10; the operator supplies the path.
+- **The investment engine was rebuilt on his model**: package templates select
+  the median-priced approved record per component (it previously summed an
+  entire category, which was harmless with 18 demo rows and nonsense with 149
+  audio SKUs), then applies `base × regional × multi-day(equipment) ×
+  union(labor) × in-house(equipment) + service charge(subtotal)`.
+- **Acceptance:** reproduces his own worked example (13 Chicago breakouts) at
+  **$54,060 against his $54,366 — 0.56%**. That is the strongest acceptance
+  evidence the project has; lead with it.
+
+### The conversational workspace
+
+Lives at **`/proposals/{id}/assistant`** (one surface, one implementation).
+`add-new-proposal` is the "start something new" entry and redirects there once
+a proposal exists. The editor keeps its stepper and review panels and links to
+the assistant.
+
+Flow: type or attach → sources scan → extraction auto-runs → safe candidates
+auto-apply (empty field, confidence ≥ 0.8, single candidate for that path) →
+guided key questions with typed controls (date picker, choice pills, number) →
+progress card with real completeness → generate cited draft → readiness and
+investment guidance.
+
+---
+
+## 4. Design decisions worth knowing
+
+- **MongoDB stays authoritative for proposal content**; PostgreSQL owns the AI
+  domain (runs, evidence, reviews, knowledge, pricing, audit, outbox); Redis
+  carries references only, never content.
+- **Human control boundary moved deliberately.** Originally every extracted
+  field required explicit approval. Now AI writes into *empty* draft fields
+  automatically; conflicts, filled fields and low-confidence values still need
+  review, and submission/publication remain manual. Per-file "non-confidential"
+  consent was also removed from the workspace (org-wide flags and kill switches
+  still apply). **This is a policy change from the signed pilot design and DXG
+  should be told explicitly.**
+- **Never fabricate a number.** Investment guidance refuses categories the
+  corpus cannot support, with a concrete ask. All 433 imported records are
+  `calibration_tier = 'baseline'`, so every estimate says it rests on national
+  baseline figures, not DXG actuals.
+- **Prompt injection:** source content is data, never instructions; strict JSON
+  schemas; citations validated against a whitelist of supplied evidence ids.
+- **Idempotency everywhere** — messages, jobs, applications, provider attempts.
+
+---
+
+## 5. Known issues & deferred work
+
+**Owed to the client**
+1. **Written provider comparison** (SOW §4). DXG's stated preference is
+   Anthropic; OpenAI was chosen. The gold harness's first live run scored
+   **recall 87.5% against the 90% gate** (precision 93.3%, citations and schema
+   100%, zero fabrications) — that result is the key input.
+2. **Three questions for Ace:** does the service charge compound on the
+   in-house subtotal (the engine assumes yes, matching his 1.40 × 1.22
+   scenario)? Can the questionnaire gain **projector lumens** and an
+   **in-house-vs-outside-AV** flag (worth ~20 confidence points on every
+   estimate)? And confirmation of the auto-apply policy change above.
+
+**Product gaps**
+- **Typed conversation is not extracted.** Facts a planner types in chat are
+  stored as messages only; only files feed extraction. The guided questions
+  partially compensate. This is the biggest remaining gap against "type
+  requirements conversationally".
+- Stepper and assistant can disagree — the stepper counts gaps from extraction
+  runs, questions now also come from empty fields.
+- Completeness scores against all ~120 canonical fields, so it reads harshly
+  (~9% for a real proposal). Weighting toward RFP-relevant fields would help.
+- Rooms/arrays are not extracted (only scalar fields are mapped).
+- Invalid extracted candidates are reported by the API (`invalidOperations`)
+  but not rendered anywhere.
+- Report envelope: confidence/assumptions/scenarios ride inside the
+  `line_items` JSONB as `payloadVersion: 2`; promoting them to real columns is
+  a small migration.
+- Vendor analysis has no attempt-ledger coverage; bid-vs-bid pricing comparison
+  and exportable client-ready reports are unbuilt.
+
+**Testing**
+- Unit suites are strong (backend 320, dashboard 267) and there is a real
+  integration suite, but there are still no browser E2E tests, no load tests,
+  and no production smoke tests. Several bugs this cycle were found only by
+  driving the real UI — keep doing that.
+
+---
+
+## 6. Class of bug to watch for
+
+Repeatedly, the failure mode was **stale assumptions from the 4-field era**
+surviving into the 112-field world, each hidden behind a generic error:
+
+- `selected_count` capped at 25 and item `ordinal` at 0–24 → applying 46 fields
+  failed (migrations 023/024).
+- The review endpoint normalized all candidates eagerly, so two unmappable
+  values broke the whole request — and with it version lookup and auto-apply.
+- Enum fields only accepted exact tokens while extraction returns prose
+  ("Confirmed", "Human captioner preferred").
+- Clarification questions could only exist against an extraction run, so a
+  conversation-only proposal was asked nothing (migration 025).
+- Completion state lived in session-local React state and vanished on refresh.
+
+When something "doesn't work", check for a limit or gate written when the
+feature was smaller, and prefer per-item resilience over all-or-nothing.
+
+---
+
+## 7. Suggested next steps
+
+1. Draft the provider comparison and close the recall gap (prompt tuning,
+   `gpt-5.4` full tier, or benchmark Claude through the existing port).
+2. Extract from typed conversation, not just files.
+3. Real-asset acceptance run with the SOW test RFP and vendor responses,
+   reviewed by the founder — the contractual acceptance test.
+4. Add the two questionnaire fields; promote the report envelope to columns.
+5. Merge `ai-agent` to the default branch and stand up staging per the runbook.
