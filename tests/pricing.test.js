@@ -10,6 +10,7 @@ const {
   PricingError,
   PRICING_CATEGORIES,
   PRICING_UNITS,
+  CALIBRATION_TIERS,
   DAY_TYPES,
 } = require("../src/modules/pricing/domain");
 
@@ -163,15 +164,47 @@ test("pricing corpus is gated by environment authorization and flag", () => {
   withEnv({ AI_ENVIRONMENT: "staging", NODE_ENV: "production", PRICING_CORPUS_ENABLED: "false" }, () => assert.equal(pricingEnabled(), false));
 });
 
-test("domain enums mirror the migration 020 CHECK constraints", () => {
-  const migration = fs.readFileSync(path.join(__dirname, "..", "migrations", "postgres", "020_pricing_and_vendor_analysis.up.sql"), "utf8");
-  assert.ok(migration.includes("CREATE TABLE rfpilot.pricing_records"));
-  assert.ok(migration.includes("CREATE TABLE rfpilot.expert_rules"));
-  assert.equal((migration.match(/FORCE ROW LEVEL SECURITY/g) || []).length, 5);
-  assert.ok(migration.includes("CHECK(amount_low_minor<=amount_mid_minor AND amount_mid_minor<=amount_high_minor)"));
+test("domain enums mirror the pricing CHECK constraints across migrations", () => {
+  const base = fs.readFileSync(path.join(__dirname, "..", "migrations", "postgres", "020_pricing_and_vendor_analysis.up.sql"), "utf8");
+  const engine = fs.readFileSync(path.join(__dirname, "..", "migrations", "postgres", "022_pricing_engine_import.up.sql"), "utf8");
+  // Migration 022 widened the category and unit constraints for the imported
+  // DXG engine, so the effective allow-list spans both files.
+  const migration = `${base}\n${engine}`;
+  assert.ok(base.includes("CREATE TABLE rfpilot.pricing_records"));
+  assert.ok(base.includes("CREATE TABLE rfpilot.expert_rules"));
+  assert.equal((base.match(/FORCE ROW LEVEL SECURITY/g) || []).length, 5);
+  assert.ok(base.includes("CHECK(amount_low_minor<=amount_mid_minor AND amount_mid_minor<=amount_high_minor)"));
   for (const category of PRICING_CATEGORIES) assert.ok(migration.includes(`'${category}'`), category);
   for (const unit of PRICING_UNITS) assert.ok(migration.includes(`'${unit}'`), unit);
-  for (const dayType of DAY_TYPES) assert.ok(migration.includes(`'${dayType}'`), dayType);
+  for (const dayType of DAY_TYPES) assert.ok(base.includes(`'${dayType}'`), dayType);
+});
+
+test("engine import migration adds tenant-scoped factor tables and calibration tier", () => {
+  const engine = fs.readFileSync(path.join(__dirname, "..", "migrations", "postgres", "022_pricing_engine_import.up.sql"), "utf8");
+  for (const value of [
+    "rfpilot.pricing_regional_factors",
+    "rfpilot.pricing_modifiers",
+    "rfpilot.pricing_confidence_rules",
+    "calibration_tier text NOT NULL DEFAULT 'baseline'",
+    "quantity_dimension",
+    "scope text NOT NULL CHECK(scope IN('labor','equipment','subtotal'))",
+    "UNIQUE(organization_id,market)",
+    "UNIQUE(organization_id,kind,condition_key)",
+  ])
+    assert.ok(engine.includes(value), value);
+  assert.equal((engine.match(/FORCE ROW LEVEL SECURITY/g) || []).length, 3);
+  assert.equal((engine.match(/current_organization_id\(\)/g) || []).length, 6);
+  for (const tier of CALIBRATION_TIERS) assert.ok(engine.includes(`'${tier}'`), tier);
+});
+
+test("workbook import maps units to a pricing basis and quantity dimension", () => {
+  const script = fs.readFileSync(path.join(__dirname, "..", "scripts", "importPricingWorkbook.ts"), "utf8");
+  // Faithful round-trip of the workbook's 30+ unit spellings: a "per X/day"
+  // rate becomes unit=per_day plus the quantity dimension X.
+  for (const value of ["const parseUnit", "^per (.+)\\/day$", '"sq ft": "sq_ft"', "multiplier", "calibration_tier", "quantity_dimension"])
+    assert.ok(script.includes(value), value);
+  assert.ok(script.includes("Demo data%"), "hand-seeded demo figures must be retired on import");
+  assert.ok(!script.includes("RFPilot_AV_Pricing_Engine"), "the proprietary workbook path must not be hardcoded");
 });
 
 test("pricing routes wire approval permissions on status endpoints", () => {

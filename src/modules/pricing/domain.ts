@@ -11,9 +11,14 @@ export const pricingEnabled = () => aiRuntimeAuthorized() && process.env.PRICING
 // 422 before it ever reaches the database.
 export const PRICING_CATEGORIES = [
   "audio", "video", "lighting", "staging", "led_wall", "projection", "breakout_room", "general_session",
-  "labor", "rigging", "power", "trucking_freight", "travel_per_diem", "venue_fee", "insurance", "service_charge_tax", "other",
+  "labor", "rigging", "power", "trucking_freight", "travel_per_diem", "venue_fee", "insurance", "service_charge_tax",
+  // Added with the DXG pricing engine import (migration 022).
+  "streaming_hybrid", "furnishings", "production_management", "connectivity", "expendables", "other",
 ] as const;
-export const PRICING_UNITS = ["per_day", "per_event", "per_hour", "per_person", "per_room", "flat"] as const;
+export const PRICING_UNITS = ["per_day", "per_event", "per_hour", "per_person", "per_room", "flat", "multiplier"] as const;
+// Baseline national estimates must stay visibly distinct from figures
+// calibrated against, or taken from, real DXG jobs.
+export const CALIBRATION_TIERS = ["baseline", "calibrated", "actual"] as const;
 export const DAY_TYPES = ["standard", "overtime", "holiday", "any"] as const;
 export const CONDITION_OPS = ["eq", "neq", "gte", "lte", "contains", "filled", "empty"] as const;
 export const EFFECT_KINDS = ["recommendation", "cost_factor", "ancillary_flag"] as const;
