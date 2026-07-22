@@ -66,6 +66,13 @@ export interface IProposal extends Document {
   updatedAt: Date;
 }
 
+// Contact details are only mandatory once a proposal leaves the draft stage:
+// assisted/lazy creation starts an unsubmitted draft with no contact yet, and
+// the final submit step still enforces these fields.
+function contactRequired(this: { status?: string; isDraft?: boolean }): boolean {
+  return !(this.isDraft === true && (this.status ?? "unsubmitted") === "unsubmitted");
+}
+
 const proposalSchema = new Schema<IProposal>(
   {
     organizationId: { type: Schema.Types.ObjectId, ref: "Organization", index: true },
@@ -133,12 +140,12 @@ const proposalSchema = new Schema<IProposal>(
     contact: {
       contactFirstName: {
         type: String,
-        required: [true, "First name is required"],
+        required: [contactRequired, "First name is required"],
         trim: true,
       },
       contactLastName: {
         type: String,
-        required: [true, "Last name is required"],
+        required: [contactRequired, "Last name is required"],
         trim: true,
       },
       contactTitle: { type: String, trim: true },
@@ -146,13 +153,13 @@ const proposalSchema = new Schema<IProposal>(
       organizationLegalName: { type: String, trim: true },
       contactEmail: {
         type: String,
-        required: [true, "Contact email is required"],
+        required: [contactRequired, "Contact email is required"],
         trim: true,
         lowercase: true,
       },
       contactPhone: {
         type: String,
-        required: [true, "Contact phone is required"],
+        required: [contactRequired, "Contact phone is required"],
         trim: true,
       },
       contactPhoneExt: { type: String, trim: true },

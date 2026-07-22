@@ -1,13 +1,15 @@
 import crypto from "node:crypto";
 import type { Response } from "express";
 import type { AuthRequest } from "../middleware/auth";
-import { conversationsEnabled, parseMessageInput, parseQuestionUpdate, ConversationError } from "../src/modules/conversations/domain";
+import { answerTargetPath, conversationsEnabled, parseMessageInput, parseQuestionUpdate, ConversationError } from "../src/modules/conversations/domain";
 import { conversationRepository } from "../src/modules/conversations/postgresConversationRepository";
+import { applyAnswerToProposalField, type AppliedAnswerField } from "../src/modules/conversations/answerFieldWriter";
 import { contextEnabled, sourceContextInput } from "../src/modules/proposalContext/domain";
 import { proposalContextRepository } from "../src/modules/proposalContext/postgresProposalContextRepository";
 import { proposalDraftEnabled, parseDraftInput } from "../src/modules/proposalDraft/domain";
 import { proposalDraftRepository } from "../src/modules/proposalDraft/postgresProposalDraftRepository";
 import { durableJobDispatcher } from "../src/modules/durableJobs/composition";
+import { appendChatReply } from "../src/modules/conversations/chatReply";
 import { safeLog } from "../src/shared/observability/safeTelemetry";
 
 const context = (req: AuthRequest) => {
@@ -79,6 +81,8 @@ export const postConversationMessage = async (req: AuthRequest, res: Response) =
     }
     const exchange = await conversationRepository.appendExchange({ ...ctx, proposalMongoId, idempotencyKey: key, content: input.content, intent: input.intent, sourceIds: input.sourceIds, run });
     if (run) void durableJobDispatcher.dispatch().catch(() => undefined);
+    if (input.intent === "chat" && exchange.created)
+      await appendChatReply(ctx, proposalMongoId, (exchange as { organizationId?: string }).organizationId, exchange.message.id);
     safeLog("info", "conversation_message_created", { outcome: exchange.created ? "created" : "duplicate", operation: input.intent });
     res.status(exchange.created ? 201 : 200).json({ data: { ...exchange, run } });
   } catch (error) { handle(res, error); }
@@ -88,14 +92,33 @@ export const patchConversationQuestion = async (req: AuthRequest, res: Response)
   try {
     const ctx = context(req);
     const update = parseQuestionUpdate(req.body as Record<string, unknown>);
+    const proposalMongoId = proposalId(req.params.proposalId);
+    const targetQuestionId = questionId(req.params.questionId);
+    // Answers to single whitelisted-field questions are also written into the
+    // proposal as human data entry. normalizeCandidate rejects invalid values
+    // with a friendly 422 BEFORE the question is resolved, so the UI re-asks.
+    let appliedField: AppliedAnswerField | null = null;
+    if (update.status === "answered") {
+      const question = await conversationRepository.readQuestion({ ...ctx, proposalMongoId, questionId: targetQuestionId });
+      const targetPath = question.status === "open" ? answerTargetPath(question.paths) : null;
+      if (targetPath)
+        appliedField = await applyAnswerToProposalField({
+          organizationMongoId: ctx.organizationMongoId,
+          actorUserMongoId: ctx.actorUserMongoId,
+          proposalMongoId,
+          path: targetPath,
+          answer: update.answer,
+        });
+    }
     const result = await conversationRepository.updateQuestion({
       ...ctx,
-      proposalMongoId: proposalId(req.params.proposalId),
-      questionId: questionId(req.params.questionId),
+      proposalMongoId,
+      questionId: targetQuestionId,
       status: update.status,
       answer: update.answer,
+      appliedPath: appliedField?.path ?? null,
     });
-    res.json({ data: result });
+    res.json({ data: { ...result, appliedField } });
   } catch (error) { handle(res, error); }
 };
 

@@ -2,7 +2,17 @@
 import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
-import { ConversationError, questionPrompt, runStatusMessage, type MessageIntent } from "./domain";
+import {
+  ConversationError,
+  IMPORTANT_FIELD_QUESTIONS,
+  MAX_OPEN_FIELD_QUESTIONS,
+  fieldQuestionCode,
+  isCatchAllIssue,
+  questionImpact,
+  questionPrompt,
+  runStatusMessage,
+  type MessageIntent,
+} from "./domain";
 
 type Ctx = { organizationMongoId: string; actorUserMongoId: string; correlationId: string };
 
@@ -85,13 +95,36 @@ const syncQuestions = async (c: PoolClient, org: string, proposalRefId: string, 
     "SELECT code,severity,paths FROM rfpilot.proposal_context_issues WHERE run_id=$1 ORDER BY ordinal",
     [runId],
   );
-  for (const issue of issues.rows) {
-    await c.query(
+  const insertQuestion = (code: string, severity: string, paths: string[], prompt: string) =>
+    c.query<{ id: string }>(
       `INSERT INTO rfpilot.clarification_questions(id,organization_id,proposal_reference_id,conversation_id,context_run_id,issue_code,severity,canonical_paths,prompt)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)
-       ON CONFLICT(proposal_reference_id,context_run_id,issue_code) DO NOTHING`,
-      [uuidv7(), org, proposalRefId, conversationId, runId, issue.code, issue.severity, JSON.stringify(issue.paths || []), questionPrompt(issue.code, issue.paths || [])],
+       ON CONFLICT(proposal_reference_id,context_run_id,issue_code) DO NOTHING
+       RETURNING id`,
+      [uuidv7(), org, proposalRefId, conversationId, runId, code, severity, JSON.stringify(paths), prompt.slice(0, 1000)],
     );
+  for (const issue of issues.rows) {
+    const paths = issue.paths || [];
+    if (isCatchAllIssue(issue.code, paths)) {
+      // A broad "missing fields" issue never becomes one giant card. It is
+      // exploded into individual questions — one whitelisted high-impact field
+      // each, in whitelist priority order, capped at MAX_OPEN_FIELD_QUESTIONS
+      // open at once. As earlier ones get answered or dismissed, later
+      // whitelist fields are backfilled on the next sync.
+      const open = await c.query<{ n: number }>(
+        "SELECT count(*)::int n FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND context_run_id=$2 AND status='open' AND issue_code LIKE 'MISSING_FIELD:%'",
+        [proposalRefId, runId],
+      );
+      let budget = MAX_OPEN_FIELD_QUESTIONS - Number(open.rows[0]?.n ?? 0);
+      for (const field of IMPORTANT_FIELD_QUESTIONS) {
+        if (budget <= 0) break;
+        if (!paths.includes(field.path)) continue;
+        const inserted = await insertQuestion(fieldQuestionCode(field.path), issue.severity, [field.path], field.prompt);
+        if (inserted.rows[0]) budget -= 1;
+      }
+      continue;
+    }
+    await insertQuestion(issue.code, issue.severity, paths, questionPrompt(issue.code, paths));
   }
 };
 
@@ -141,7 +174,7 @@ export const conversationRepository = {
       return {
         conversation: { id: conversation.id, title: conversation.title, status: conversation.status, messageCount: conversation.message_count, updatedAt: conversation.updated_at },
         messages: rows.map((row) => messagePayload(row, attachments)),
-        questions: questions.rows.map((q) => ({ id: q.id, code: q.issue_code, severity: q.severity, paths: q.canonical_paths, prompt: q.prompt, status: q.status, contextRunId: q.context_run_id, createdAt: q.created_at })),
+        questions: questions.rows.map((q) => ({ id: q.id, code: q.issue_code, severity: q.severity, paths: q.canonical_paths, prompt: q.prompt, status: q.status, impact: questionImpact(Array.isArray(q.canonical_paths) ? q.canonical_paths : []), contextRunId: q.context_run_id, createdAt: q.created_at })),
       };
     });
   },
@@ -197,11 +230,47 @@ export const conversationRepository = {
       await c.query("UPDATE rfpilot.conversations SET message_count=$2,updated_at=now() WHERE id=$1", [conversation.id, ordinal]);
       await audit(c, org, ctx.actorUserMongoId, "conversation_message_created", "conversation", conversation.id, ctx.correlationId, { intent: ctx.intent, runType: ctx.run?.runType ?? null });
       const message = await c.query<any>("SELECT * FROM rfpilot.conversation_messages WHERE id=$1", [userMessageId]);
-      return { created: true, message: messagePayload(message.rows[0], []), assistantMessageId, conversationId: conversation.id };
+      return { created: true, message: messagePayload(message.rows[0], []), assistantMessageId, conversationId: conversation.id, organizationId: org };
     });
   },
 
-  async updateQuestion(ctx: Ctx & { proposalMongoId: string; questionId: string; status: "answered" | "dismissed"; answer: string }) {
+  // Direct assistant turn with no backing run (e.g. the live chat reply).
+  async appendAssistantMessage(ctx: Ctx & { proposalMongoId: string; content: string }) {
+    return withPostgresTransaction(async (c) => {
+      const org = await tenant(c, ctx.organizationMongoId);
+      const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
+      const conversation = await getOrCreateConversation(c, org, proposalRefId, ctx.actorUserMongoId);
+      await c.query("SELECT id FROM rfpilot.conversations WHERE id=$1 FOR UPDATE", [conversation.id]);
+      const count = await c.query<{ n: number }>("SELECT message_count n FROM rfpilot.conversations WHERE id=$1", [conversation.id]);
+      const ordinal = Number(count.rows[0]?.n ?? 0) + 1;
+      const id = uuidv7();
+      await c.query(
+        `INSERT INTO rfpilot.conversation_messages(id,organization_id,conversation_id,ordinal,role,kind,content,status,actor_external_user_id)
+         VALUES($1,$2,$3,$4,'assistant','status',$5,'complete',$6)`,
+        [id, org, conversation.id, ordinal, ctx.content.slice(0, 4000), ctx.actorUserMongoId],
+      );
+      await c.query("UPDATE rfpilot.conversations SET message_count=$2,updated_at=now() WHERE id=$1", [conversation.id, ordinal]);
+      return { id, ordinal };
+    });
+  },
+
+  // Lightweight lookup used before answering so a single-field question's
+  // answer can also be written into the proposal (human data entry).
+  async readQuestion(ctx: Ctx & { proposalMongoId: string; questionId: string }) {
+    return withPostgresTransaction(async (c) => {
+      await tenant(c, ctx.organizationMongoId);
+      const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
+      const question = await c.query<{ id: string; issue_code: string; canonical_paths: string[]; status: string }>(
+        "SELECT id,issue_code,canonical_paths,status FROM rfpilot.clarification_questions WHERE id=$1 AND proposal_reference_id=$2",
+        [ctx.questionId, proposalRefId],
+      );
+      if (!question.rows[0]) throw new ConversationError("QUESTION_NOT_FOUND", "Clarification question was not found.", 404);
+      const row = question.rows[0];
+      return { id: row.id, code: row.issue_code, paths: Array.isArray(row.canonical_paths) ? row.canonical_paths : [], status: row.status };
+    });
+  },
+
+  async updateQuestion(ctx: Ctx & { proposalMongoId: string; questionId: string; status: "answered" | "dismissed"; answer: string; appliedPath?: string | null }) {
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, ctx.organizationMongoId);
       const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
@@ -230,7 +299,7 @@ export const conversationRepository = {
         "UPDATE rfpilot.clarification_questions SET status=$2,answered_message_id=$3,answered_by_external_user_id=$4,updated_at=now() WHERE id=$1",
         [ctx.questionId, ctx.status, answeredMessageId, ctx.actorUserMongoId],
       );
-      await audit(c, org, ctx.actorUserMongoId, "clarification_question_updated", "clarification_question", ctx.questionId, ctx.correlationId, { outcome: ctx.status });
+      await audit(c, org, ctx.actorUserMongoId, "clarification_question_updated", "clarification_question", ctx.questionId, ctx.correlationId, { outcome: ctx.status, appliedPath: ctx.appliedPath ?? null });
       return { id: ctx.questionId, status: ctx.status, answeredMessageId };
     });
   },

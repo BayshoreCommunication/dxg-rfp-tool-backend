@@ -9,7 +9,14 @@ const {
   runStatusMessage,
   conversationsEnabled,
   ConversationError,
+  IMPORTANT_FIELD_QUESTIONS,
+  MAX_OPEN_FIELD_QUESTIONS,
+  isCatchAllIssue,
+  fieldQuestionCode,
+  questionImpact,
+  answerTargetPath,
 } = require("../src/modules/conversations/domain");
+const { approvedCandidatePaths, normalizeCandidate } = require("../src/modules/candidateApplication/canonicalMapping");
 
 const root = path.join(__dirname, "..");
 
@@ -54,6 +61,78 @@ test("question prompts are plain language for known and unknown codes", () => {
   const fallback = questionPrompt("MISSING_LOAD_IN_TIME", ["/content/venueSchedule/loadInTime"]);
   assert.match(fallback, /missing load in time/);
   assert.match(fallback, /loadInTime/);
+});
+
+test("important-field whitelist only contains approved candidate paths with plain prompts", () => {
+  assert.ok(IMPORTANT_FIELD_QUESTIONS.length >= 8);
+  const seen = new Set();
+  for (const field of IMPORTANT_FIELD_QUESTIONS) {
+    assert.ok(approvedCandidatePaths.includes(field.path), `${field.path} must be an approved candidate path`);
+    assert.ok(!seen.has(field.path), `${field.path} listed twice`);
+    seen.add(field.path);
+    assert.ok(field.prompt.length > 0 && field.prompt.length <= 1000, field.path);
+    assert.ok(["schedule", "cost", "production", "scope"].includes(field.impact), field.path);
+    assert.ok(fieldQuestionCode(field.path).length <= 100, field.path);
+  }
+  // Cost drivers and schedule anchors are present.
+  for (const path of [
+    "/content/event/startDate",
+    "/content/event/endDate",
+    "/content/venueSchedule/numberOfEventRooms",
+    "/content/venueSchedule/isUnionVenue",
+    "/content/budget/proposalSubmissionDueDate",
+    "/content/venue/riggingRequired",
+    "/content/venue/powerDropsRequired",
+  ])
+    assert.ok(seen.has(path), path);
+});
+
+test("catch-all detection targets broad missing-field issues, not small conflicts", () => {
+  const manyPaths = Array.from({ length: 12 }, (_, i) => `/content/event/field${i}`);
+  assert.equal(isCatchAllIssue("SOME_ISSUE", manyPaths), true, "more than 8 paths explodes");
+  assert.equal(isCatchAllIssue("MISSING_SUPPORTED_FIELDS", ["/content/event/startDate"]), true);
+  assert.equal(isCatchAllIssue("MISSING_FIELDS", []), true);
+  assert.equal(isCatchAllIssue("missing-fields", []), true);
+  assert.equal(isCatchAllIssue("CROSS_SOURCE_CONFLICT", ["/content/event/startDate"]), false);
+  assert.equal(isCatchAllIssue("MISSING_ROOM_COUNT", ["/content/venueSchedule/numberOfEventRooms"]), false);
+  assert.equal(MAX_OPEN_FIELD_QUESTIONS, 5);
+});
+
+test("answer targeting and impact tags only apply to single whitelisted-field questions", () => {
+  assert.equal(answerTargetPath(["/content/venueSchedule/numberOfEventRooms"]), "/content/venueSchedule/numberOfEventRooms");
+  assert.equal(answerTargetPath(["/content/event/startDate", "/content/event/endDate"]), null);
+  assert.equal(answerTargetPath(["/content/event/eventName"]), null, "non-whitelisted paths stay chat-only");
+  assert.equal(answerTargetPath([]), null);
+  assert.equal(questionImpact(["/content/venueSchedule/isUnionVenue"]), "cost");
+  assert.equal(questionImpact(["/content/event/startDate"]), "schedule");
+  assert.equal(questionImpact(["/content/event/eventName"]), null);
+});
+
+test("whitelisted answers normalize through the candidate mapping as human data entry", () => {
+  const rooms = normalizeCandidate("/content/venueSchedule/numberOfEventRooms", "6");
+  assert.equal(rooms.mongoPath, "venueSchedule.numberOfEventRooms");
+  assert.equal(rooms.mongoValue, "6");
+  const union = normalizeCandidate("/content/venueSchedule/isUnionVenue", "yes");
+  assert.equal(union.mongoValue, "YES");
+  const start = normalizeCandidate("/content/event/startDate", "2026-09-01");
+  assert.equal(start.mongoValue, "2026-09-01");
+  assert.throws(() => normalizeCandidate("/content/event/startDate", "next Tuesday"), /YYYY-MM-DD/);
+  assert.throws(() => normalizeCandidate("/content/venueSchedule/numberOfEventRooms", "lots"), /between 1 and 200/);
+});
+
+test("catch-all explosion and answer field writing are wired into repository and controller", () => {
+  const repository = fs.readFileSync(path.join(root, "src/modules/conversations/postgresConversationRepository.ts"), "utf8");
+  // The catch-all card is never inserted: explosion happens before the generic insert.
+  assert.ok(repository.includes("isCatchAllIssue"), "repository must detect catch-all issues");
+  assert.ok(repository.includes("MISSING_FIELD:"), "repository must count open exploded questions");
+  assert.ok(repository.includes("MAX_OPEN_FIELD_QUESTIONS"), "repository must cap open field questions");
+  assert.ok(repository.indexOf("isCatchAllIssue(issue.code") < repository.indexOf("insertQuestion(issue.code"), "explosion must be checked before the generic insert");
+  const controller = fs.readFileSync(path.join(root, "controller/conversationsController.ts"), "utf8");
+  assert.ok(controller.includes("applyAnswerToProposalField"), "controller must write single-field answers into the proposal");
+  assert.ok(controller.indexOf("applyAnswerToProposalField") < controller.indexOf("updateQuestion"), "field write must precede resolving the question so invalid values re-ask");
+  const writer = fs.readFileSync(path.join(root, "src/modules/conversations/answerFieldWriter.ts"), "utf8");
+  for (const guard of ["normalizeCandidate", "status: \"unsubmitted\"", "isDraft: true", "$ifNull: [\"$version\", 1]"])
+    assert.ok(writer.includes(guard), guard);
 });
 
 test("run status narration covers every lifecycle state", () => {
