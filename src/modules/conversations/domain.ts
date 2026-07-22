@@ -60,18 +60,47 @@ export const parseQuestionUpdate = (value: Record<string, unknown>) => {
 // approved candidate path from canonicalMapping.approvedCandidatePaths so an
 // answer can be written straight into the proposal. Order is priority order.
 export type ImportantFieldImpact = "schedule" | "cost" | "production" | "scope";
-export type ImportantFieldQuestion = { path: string; prompt: string; impact: ImportantFieldImpact };
+// The control the dashboard renders for a question. `options` are submitted
+// verbatim, so every option string MUST be accepted by
+// canonicalMapping.normalizeCandidate for that path (covered by tests).
+export type ImportantFieldAnswerType = "date" | "choice" | "number" | "text";
+export const ANSWER_TYPES: readonly ImportantFieldAnswerType[] = Object.freeze(["date", "choice", "number", "text"]);
+export type ImportantFieldQuestion = {
+  path: string;
+  prompt: string;
+  impact: ImportantFieldImpact;
+  answerType: ImportantFieldAnswerType;
+  options?: readonly string[];
+};
+const YES_NO = Object.freeze(["Yes", "No", "Not sure"]);
+// Mirrors streamingPlatformOptions in the dashboard wizard
+// (components/proposals/ProposalsProcess.tsx/HybridVirtualStep.tsx) so the
+// assistant and the form offer the same list.
+const STREAMING_PLATFORMS = Object.freeze([
+  "Client-Owned Platform",
+  "Attendee Hub (Cvent)",
+  "Zoom Webinar",
+  "ON24",
+  "Hopin",
+  "Webex Events",
+  "YouTube Live",
+  "Vendor Recommendation Needed",
+  "Other",
+]);
 export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Object.freeze([
-  { path: "/content/event/startDate", prompt: "When does the event start? (YYYY-MM-DD)", impact: "schedule" },
-  { path: "/content/event/endDate", prompt: "When does the event end? (YYYY-MM-DD)", impact: "schedule" },
-  { path: "/content/event/eventFormat", prompt: "Is the event in-person, hybrid, or virtual?", impact: "scope" },
-  { path: "/content/venueSchedule/numberOfEventRooms", prompt: "How many event rooms are required?", impact: "cost" },
-  { path: "/content/venueSchedule/isUnionVenue", prompt: "Is the venue a union venue? (yes / no / not sure)", impact: "cost" },
-  { path: "/content/budget/proposalSubmissionDueDate", prompt: "When is the proposal due? (YYYY-MM-DD)", impact: "schedule" },
-  { path: "/content/hybridVirtual/streamingPlatform", prompt: "Which streaming platform will the event use?", impact: "production" },
-  { path: "/content/videoRecordingStep/videoRecordingRequired", prompt: "Do you need video recording? (yes / no / not sure)", impact: "production" },
-  { path: "/content/venue/riggingRequired", prompt: "Does the venue require rigging? (yes / no / not sure)", impact: "cost" },
-  { path: "/content/venue/powerDropsRequired", prompt: "Are power drops required? (yes / no / not sure)", impact: "cost" },
+  // Asked first: the proposal is created with a placeholder title, and every
+  // downstream surface (breadcrumb, draft, exports) reads better once it is real.
+  { path: "/content/event/eventName", prompt: "What is this event called?", impact: "scope", answerType: "text" },
+  { path: "/content/event/startDate", prompt: "When does the event start? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
+  { path: "/content/event/endDate", prompt: "When does the event end? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
+  { path: "/content/event/eventFormat", prompt: "Is the event in-person, hybrid, or virtual?", impact: "scope", answerType: "choice", options: Object.freeze(["In-Person", "Hybrid", "Virtual"]) },
+  { path: "/content/venueSchedule/numberOfEventRooms", prompt: "How many event rooms are required?", impact: "cost", answerType: "number" },
+  { path: "/content/venueSchedule/isUnionVenue", prompt: "Is the venue a union venue? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
+  { path: "/content/budget/proposalSubmissionDueDate", prompt: "When is the proposal due? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
+  { path: "/content/hybridVirtual/streamingPlatform", prompt: "Which streaming platform will the event use?", impact: "production", answerType: "choice", options: STREAMING_PLATFORMS },
+  { path: "/content/videoRecordingStep/videoRecordingRequired", prompt: "Do you need video recording? (yes / no / not sure)", impact: "production", answerType: "choice", options: YES_NO },
+  { path: "/content/venue/riggingRequired", prompt: "Does the venue require rigging? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
+  { path: "/content/venue/powerDropsRequired", prompt: "Are power drops required? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
 ]);
 
 export const importantFieldQuestionByPath = (path: string): ImportantFieldQuestion | null =>
@@ -93,6 +122,15 @@ export const fieldQuestionCode = (path: string): string => `MISSING_FIELD:${path
 // Impact tag surfaced to the UI ("affects cost") for single-field questions.
 export const questionImpact = (paths: string[]): ImportantFieldImpact | null =>
   paths.length === 1 ? importantFieldQuestionByPath(paths[0])?.impact ?? null : null;
+
+// The answer control the UI should render for a question. Only single
+// whitelisted-field questions get a typed control; anything else stays a
+// free-text box.
+export const questionAnswerType = (paths: string[]): { answerType: ImportantFieldAnswerType; options?: readonly string[] } => {
+  const field = paths.length === 1 ? importantFieldQuestionByPath(paths[0]) : null;
+  if (!field) return { answerType: "text" };
+  return field.options ? { answerType: field.answerType, options: field.options } : { answerType: field.answerType };
+};
 
 // The canonical path an answer should be written to — only when the question
 // targets exactly one whitelisted field, so free-form answers stay chat-only.

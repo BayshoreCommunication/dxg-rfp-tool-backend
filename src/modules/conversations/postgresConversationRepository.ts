@@ -2,6 +2,7 @@
 import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
+import { syncFieldGapQuestions } from "./fieldGapQuestions";
 import {
   ConversationError,
   IMPORTANT_FIELD_QUESTIONS,
@@ -9,6 +10,7 @@ import {
   fieldQuestionCode,
   isCatchAllIssue,
   questionImpact,
+  questionAnswerType,
   questionPrompt,
   runStatusMessage,
   type MessageIntent,
@@ -151,6 +153,13 @@ export const conversationRepository = {
       const conversation = await getOrCreateConversation(c, org, proposalRefId, ctx.actorUserMongoId);
       await materializeRuns(c, conversation.id);
       await syncQuestions(c, org, proposalRefId, conversation.id);
+      // Key questions must also appear when there are no sources at all, so a
+      // proposal started by conversation still gets asked what matters.
+      await syncFieldGapQuestions(c, org, proposalRefId, conversation.id, {
+        organizationMongoId: ctx.organizationMongoId,
+        actorUserMongoId: ctx.actorUserMongoId,
+        proposalMongoId: ctx.proposalMongoId,
+      });
       const limit = Math.min(Math.max(ctx.limit ?? 200, 1), 500);
       const messages = await c.query<any>(
         "SELECT * FROM rfpilot.conversation_messages WHERE conversation_id=$1 ORDER BY ordinal DESC LIMIT $2",
@@ -174,7 +183,28 @@ export const conversationRepository = {
       return {
         conversation: { id: conversation.id, title: conversation.title, status: conversation.status, messageCount: conversation.message_count, updatedAt: conversation.updated_at },
         messages: rows.map((row) => messagePayload(row, attachments)),
-        questions: questions.rows.map((q) => ({ id: q.id, code: q.issue_code, severity: q.severity, paths: q.canonical_paths, prompt: q.prompt, status: q.status, impact: questionImpact(Array.isArray(q.canonical_paths) ? q.canonical_paths : []), contextRunId: q.context_run_id, createdAt: q.created_at })),
+        questions: questions.rows.map((q) => {
+          const paths: string[] = Array.isArray(q.canonical_paths) ? q.canonical_paths : [];
+          const { answerType, options } = questionAnswerType(paths);
+          return {
+            id: q.id,
+            code: q.issue_code,
+            severity: q.severity,
+            paths: q.canonical_paths,
+            prompt: q.prompt,
+            status: q.status,
+            impact: questionImpact(paths),
+            // The control the dashboard renders (date picker, choice pills,
+            // number or free text) plus the exact option strings to submit.
+            answerType,
+            options: options ? [...options] : [],
+            // Pairs an answered question with the answer message it produced so
+            // the thread can show what was asked above the answer.
+            answeredMessageId: q.answered_message_id ?? null,
+            contextRunId: q.context_run_id,
+            createdAt: q.created_at,
+          };
+        }),
       };
     });
   },
@@ -313,6 +343,13 @@ export const conversationRepository = {
       const conversation = await getOrCreateConversation(c, org, proposalRefId, ctx.actorUserMongoId);
       await materializeRuns(c, conversation.id);
       await syncQuestions(c, org, proposalRefId, conversation.id);
+      // Key questions must also appear when there are no sources at all, so a
+      // proposal started by conversation still gets asked what matters.
+      await syncFieldGapQuestions(c, org, proposalRefId, conversation.id, {
+        organizationMongoId: ctx.organizationMongoId,
+        actorUserMongoId: ctx.actorUserMongoId,
+        proposalMongoId: ctx.proposalMongoId,
+      });
       const pending = await c.query<{ n: number }>(
         "SELECT count(*)::int n FROM rfpilot.conversation_messages WHERE conversation_id=$1 AND status='pending'",
         [conversation.id],

@@ -14,6 +14,8 @@ const {
   isCatchAllIssue,
   fieldQuestionCode,
   questionImpact,
+  questionAnswerType,
+  ANSWER_TYPES,
   answerTargetPath,
 } = require("../src/modules/conversations/domain");
 const { approvedCandidatePaths, normalizeCandidate } = require("../src/modules/candidateApplication/canonicalMapping");
@@ -101,11 +103,85 @@ test("catch-all detection targets broad missing-field issues, not small conflict
 test("answer targeting and impact tags only apply to single whitelisted-field questions", () => {
   assert.equal(answerTargetPath(["/content/venueSchedule/numberOfEventRooms"]), "/content/venueSchedule/numberOfEventRooms");
   assert.equal(answerTargetPath(["/content/event/startDate", "/content/event/endDate"]), null);
-  assert.equal(answerTargetPath(["/content/event/eventName"]), null, "non-whitelisted paths stay chat-only");
+  assert.equal(answerTargetPath(["/content/event/eventTheme"]), null, "non-whitelisted paths stay chat-only");
+  // The event title is asked first, so it targets its field like any other.
+  assert.equal(answerTargetPath(["/content/event/eventName"]), "/content/event/eventName");
   assert.equal(answerTargetPath([]), null);
   assert.equal(questionImpact(["/content/venueSchedule/isUnionVenue"]), "cost");
   assert.equal(questionImpact(["/content/event/startDate"]), "schedule");
-  assert.equal(questionImpact(["/content/event/eventName"]), null);
+  assert.equal(questionImpact(["/content/event/eventTheme"]), null);
+  assert.equal(questionImpact(["/content/event/eventName"]), "scope");
+});
+
+test("every whitelisted question declares an answer control, and only choices carry options", () => {
+  for (const field of IMPORTANT_FIELD_QUESTIONS) {
+    assert.ok(ANSWER_TYPES.includes(field.answerType), `${field.path} needs a supported answerType`);
+    if (field.answerType === "choice") {
+      assert.ok(Array.isArray(field.options) && field.options.length >= 2, `${field.path} choice needs options`);
+      assert.ok(field.options.every((option) => typeof option === "string" && option.trim()), field.path);
+    } else {
+      assert.equal(field.options, undefined, `${field.path} must not carry options`);
+    }
+  }
+  // The mapping the dashboard depends on.
+  const byPath = Object.fromEntries(IMPORTANT_FIELD_QUESTIONS.map((field) => [field.path, field.answerType]));
+  assert.equal(byPath["/content/event/startDate"], "date");
+  assert.equal(byPath["/content/event/endDate"], "date");
+  assert.equal(byPath["/content/budget/proposalSubmissionDueDate"], "date");
+  assert.equal(byPath["/content/event/eventFormat"], "choice");
+  assert.equal(byPath["/content/venueSchedule/isUnionVenue"], "choice");
+  assert.equal(byPath["/content/videoRecordingStep/videoRecordingRequired"], "choice");
+  assert.equal(byPath["/content/venue/riggingRequired"], "choice");
+  assert.equal(byPath["/content/venue/powerDropsRequired"], "choice");
+  assert.equal(byPath["/content/hybridVirtual/streamingPlatform"], "choice");
+  assert.equal(byPath["/content/venueSchedule/numberOfEventRooms"], "number");
+  // The streaming platform pills must be the same list the wizard step offers.
+  const streaming = IMPORTANT_FIELD_QUESTIONS.find((f) => f.path === "/content/hybridVirtual/streamingPlatform");
+  assert.deepEqual([...streaming.options], [
+    "Client-Owned Platform",
+    "Attendee Hub (Cvent)",
+    "Zoom Webinar",
+    "ON24",
+    "Hopin",
+    "Webex Events",
+    "YouTube Live",
+    "Vendor Recommendation Needed",
+    "Other",
+  ]);
+});
+
+test("every choice option round-trips through the candidate normalizer for its own path", () => {
+  // A pill the UI shows is submitted verbatim, so it must be a value the
+  // proposal writer accepts — otherwise the answer bounces with a 422.
+  for (const field of IMPORTANT_FIELD_QUESTIONS.filter((f) => f.answerType === "choice"))
+    for (const option of field.options) {
+      const normalized = normalizeCandidate(field.path, option);
+      assert.equal(normalized.sourcePath, field.path);
+      assert.ok(normalized.mongoValue !== undefined, `${field.path} / ${option}`);
+    }
+  assert.equal(normalizeCandidate("/content/event/eventFormat", "In-Person").mongoValue, "In-Person");
+  assert.equal(normalizeCandidate("/content/venue/riggingRequired", "Not sure").mongoValue, "NOT_SURE");
+  assert.equal(normalizeCandidate("/content/hybridVirtual/streamingPlatform", "Vendor Recommendation Needed").mongoValue, "Vendor Recommendation Needed");
+});
+
+test("answer controls are only typed for single whitelisted-field questions", () => {
+  assert.deepEqual(questionAnswerType(["/content/event/startDate"]), { answerType: "date" });
+  assert.deepEqual(questionAnswerType(["/content/venueSchedule/numberOfEventRooms"]), { answerType: "number" });
+  assert.deepEqual(questionAnswerType(["/content/venueSchedule/isUnionVenue"]), { answerType: "choice", options: ["Yes", "No", "Not sure"] });
+  assert.equal(questionAnswerType(["/content/hybridVirtual/streamingPlatform"]).options.length, 9);
+  // Non-whitelisted, multi-path and empty questions stay free text.
+  assert.deepEqual(questionAnswerType(["/content/event/eventName"]), { answerType: "text" });
+  assert.deepEqual(questionAnswerType(["/content/event/startDate", "/content/event/endDate"]), { answerType: "text" });
+  assert.deepEqual(questionAnswerType([]), { answerType: "text" });
+});
+
+test("the conversation read payload carries the answer control alongside the impact tag", () => {
+  const repository = fs.readFileSync(path.join(root, "src/modules/conversations/postgresConversationRepository.ts"), "utf8");
+  for (const value of ["questionAnswerType", "answerType,", "options: options ? [...options] : []"])
+    assert.ok(repository.includes(value), value);
+  // The answer message pairing lets the thread show the question above the answer.
+  assert.ok(repository.includes("answeredMessageId: q.answered_message_id ?? null"), "read must expose answeredMessageId");
+  assert.ok(/SELECT[^;]*answered_message_id[^;]*FROM rfpilot\.clarification_questions/.test(repository), "the column must be selected");
 });
 
 test("whitelisted answers normalize through the candidate mapping as human data entry", () => {
@@ -168,4 +244,24 @@ test("SSE endpoint and message route are wired with authentication", () => {
   const controller = fs.readFileSync(path.join(root, "controller/conversationsController.ts"), "utf8");
   assert.ok(controller.includes("text/event-stream"));
   assert.ok(controller.indexOf("appendExchange") > controller.indexOf("proposalContextRepository.create"), "run creation must precede message append");
+});
+
+test("key questions are generated from empty high-impact fields, with no run required", () => {
+  const source = fs.readFileSync(path.join(root, "src/modules/conversations/fieldGapQuestions.ts"), "utf8");
+  // A proposal started by conversation alone must still be asked what matters.
+  assert.ok(source.includes("context_run_id"), "field-gap questions attach to no run");
+  assert.ok(source.includes("NULL,$5,'question'"), "the run reference must be inserted as NULL");
+  assert.ok(source.includes("MAX_OPEN_FIELD_QUESTIONS"), "open questions stay capped");
+  assert.ok(source.includes("status='superseded'"), "a field that gets filled retires its question");
+  assert.ok(source.includes("untitled proposal"), "the creation placeholder counts as empty");
+  const repository = fs.readFileSync(path.join(root, "src/modules/conversations/postgresConversationRepository.ts"), "utf8");
+  assert.equal((repository.match(/syncFieldGapQuestions\(/g) || []).length, 2, "wired into both read and snapshot");
+  const migration = fs.readFileSync(path.join(root, "migrations/postgres/025_field_gap_questions.up.sql"), "utf8");
+  assert.ok(migration.includes("ALTER COLUMN context_run_id DROP NOT NULL"));
+  assert.ok(migration.includes("WHERE context_run_id IS NULL"), "field-gap questions dedupe on a partial unique index");
+});
+
+test("the assistant never claims to be extracting when there are no sources", () => {
+  const operations = fs.readFileSync(path.join(root, "src/modules/liveAi/operations.ts"), "utf8");
+  assert.ok(operations.includes("When there are NO sources, never claim to be reading, extracting or processing anything"));
 });

@@ -292,3 +292,7 @@ export const approvedCandidatePaths = Object.freeze(Object.keys(mappings));
 
 // Consumed by the AI extraction schema as the closed enum of proposable candidate paths.
 export const extractionPathEnum: readonly string[] = approvedCandidatePaths;
+
+// Path metadata without value validation, for callers that need to locate a
+// field (e.g. checking whether it is already filled) rather than write to it.
+export const mongoPathFor = (path: string): string | null => mappings[path]?.mongoPath ?? null;
