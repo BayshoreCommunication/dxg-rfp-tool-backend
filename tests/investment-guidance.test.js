@@ -94,8 +94,9 @@ test("union factor lifts labor only", () => {
   assert.equal(result.basis.unionFactor, 1.25);
   const labor = lineFor(result, "gs_a1");
   const equipment = lineFor(result, "gs_line_array");
-  assert.equal(labor.midMinor, Math.round(10 * 1_000 * 1.25));
+  assert.equal(labor.midMinor, Math.round(10 * 1_000 * 1.25 * 1.1));
   assert.ok(factorKinds(labor).includes("union"));
+  assert.ok(factorKinds(labor).includes("overtime"));
   assert.equal(equipment.midMinor, 4 * 1_000);
   assert.ok(!factorKinds(equipment).includes("union"));
   const heavy = computeInvestmentGuidance(
@@ -169,7 +170,7 @@ test("cost-factor rules adjust matching lines on top of the modifier stack", () 
   const union = generalSessionOnly({ venueSchedule: { isUnionVenue: "YES" } });
   const result = computeInvestmentGuidance(union, [SPEAKER, A1], [rule], [], modifiers, confidenceRules);
   const labor = lineFor(result, "gs_a1");
-  assert.equal(labor.midMinor, Math.round(Math.round(10 * 1_000 * 1.25) * 1.1)); // union modifier first, then the rule
+  assert.equal(labor.midMinor, Math.round(Math.round(10 * 1_000 * 1.25 * 1.1) * 1.1)); // union + overtime first, then the rule
   assert.deepEqual(labor.provenance.ruleIds, ["rule-1"]);
   assert.ok(labor.appliedFactors.some((factor) => factor.kind === "expert_rule" && factor.factor === 1.1));
   assert.equal(lineFor(result, "gs_line_array").provenance.ruleIds.length, 0);
@@ -202,6 +203,58 @@ test("condition operators evaluate against proposal fields", () => {
   assert.equal(evaluateCondition(proposal, { path: "/content/event/startDate", op: "filled" }), true);
   assert.equal(evaluateCondition(proposal, { path: "/content/event/theme", op: "empty" }), true);
   assert.equal(evaluateCondition(proposal, { path: "/content/venueSchedule/isUnionVenue", op: "contains", value: "ye" }), true);
+});
+
+test("rehearsal days add the approved equipment hold factor", () => {
+  const rehearsal = generalSessionOnly({
+    venueSchedule: {
+      isUnionVenue: "NO",
+      rehearsalDate: "2026-05-03",
+    },
+  });
+  const result = computeInvestmentGuidance(
+    rehearsal,
+    [SPEAKER, A1],
+    [],
+    [],
+    modifiers,
+    confidenceRules,
+  );
+  assert.equal(result.basis.multiDayFactor, 1.5);
+  assert.equal(lineFor(result, "gs_line_array").midMinor, 4 * 1_000 * 1.5);
+  assert.match(result.basis.showDayEquipmentBasis, /rehearsal\/dark day/);
+});
+
+test("explicit stage, scenic and caption scope activates workbook-backed packages", () => {
+  const records = [
+    rate({ id: "deck", category: "staging", subcategory: "Stage Deck", itemLabel: "4' x 8' stage deck", quantityDimension: "deck" }),
+    rate({ id: "scenic", category: "staging", subcategory: "Scenic", itemLabel: "Custom hard scenic element", quantityDimension: "element" }),
+    rate({ id: "carpenter", category: "labor", subcategory: "Stage", itemLabel: "Scenic Carpenter", unit: "per_hour", quantityDimension: null }),
+    rate({ id: "caption", category: "labor", subcategory: "Accessibility", itemLabel: "Captioner / CART", unit: "per_hour", quantityDimension: null }),
+    rate({ id: "kit", category: "expendables", subcategory: "Consumables", itemLabel: "Consumables kit (misc)", unit: "per_event", quantityDimension: "show" }),
+    rate({ id: "batteries", category: "expendables", subcategory: "Consumables", itemLabel: "Batteries (show package)", unit: "per_event", quantityDimension: "show" }),
+  ];
+  const scoped = generalSessionOnly({
+    roomByRoom: [{
+      roomFunction: "General Session",
+      stageDimensions: "64 x 24",
+      scenicStageDesign: "Yes",
+    }],
+    hybridVirtual: {
+      closedCaptions: {
+        closedCaptions: "YES",
+        captionLanguages: ["English", "Spanish"],
+      },
+    },
+  });
+  const result = computeInvestmentGuidance(scoped, records, [], [], modifiers, []);
+
+  assert.equal(lineFor(result, "gs_stage_deck").quantity, 48);
+  assert.ok(lineFor(result, "scenic_element"));
+  assert.ok(lineFor(result, "scenic_carpenter"));
+  assert.equal(lineFor(result, "captioning_service").quantity, 20);
+  assert.ok(lineFor(result, "expendables_kit").implied);
+  assert.ok(lineFor(result, "show_batteries").implied);
 });
 
 // ---------------------------------------------------------------------------

@@ -516,7 +516,11 @@ export const signOut = async (req: AuthRequest, res: Response): Promise<void> =>
 export const refreshSession = async (req: Request, res: Response): Promise<void> => {
   const refreshToken = presentedRefreshToken(req);
   if (!refreshToken) {
-    res.status(401).json({ success: false, message: "Refresh session required" });
+    res.status(401).json({
+      success: false,
+      code: "REFRESH_SESSION_REQUIRED",
+      message: "Refresh session required",
+    });
     return;
   }
   const result = await authenticationSessions.rotate({
@@ -527,7 +531,12 @@ export const refreshSession = async (req: Request, res: Response): Promise<void>
   });
   if (result.kind !== "rotated") {
     clearRefreshCookie(res);
-    res.status(401).json({ success: false, message: "Refresh session is invalid or expired" });
+    res.status(401).json({
+      success: false,
+      code: "REFRESH_SESSION_EXPIRED",
+      reason: result.kind,
+      message: "Refresh session is invalid or expired",
+    });
     return;
   }
   setRefreshCookie(res, result.refreshToken, result.refreshExpiresAt);

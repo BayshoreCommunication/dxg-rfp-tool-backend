@@ -5,6 +5,7 @@ import {
   changePricingRecordStatus,
   createExpertRule,
   createPricingRecord,
+  deletePricingRecord,
   listExpertRules,
   listPricingRecords,
   updateExpertRule,
@@ -26,7 +27,7 @@ const approve = authorizeAction("knowledge:approve");
 // and are then rejected by input validation in the controller.
 const bodyStatus = (req: AuthRequest) => String((req.body as { status?: unknown } | undefined)?.status ?? "");
 const recordStatusAuthorization = (req: AuthRequest, res: Response, next: NextFunction) =>
-  (bodyStatus(req) === "retired" ? write : approve)(req, res, next);
+  (["draft", "retired"].includes(bodyStatus(req)) ? write : approve)(req, res, next);
 const ruleStatusAuthorization = (req: AuthRequest, res: Response, next: NextFunction) =>
   (bodyStatus(req) === "retired" ? write : approve)(req, res, next);
 
@@ -34,6 +35,7 @@ router.get("/knowledge/pricing-records", authenticate, read, listPricingRecords)
 router.post("/knowledge/pricing-records", authenticate, write, mutate, createPricingRecord);
 router.put("/knowledge/pricing-records/:recordId", authenticate, write, mutate, updatePricingRecord);
 router.post("/knowledge/pricing-records/:recordId/status", authenticate, recordStatusAuthorization, mutate, changePricingRecordStatus);
+router.delete("/knowledge/pricing-records/:recordId", authenticate, write, mutate, deletePricingRecord);
 
 router.get("/knowledge/expert-rules", authenticate, read, listExpertRules);
 router.post("/knowledge/expert-rules", authenticate, write, mutate, createExpertRule);

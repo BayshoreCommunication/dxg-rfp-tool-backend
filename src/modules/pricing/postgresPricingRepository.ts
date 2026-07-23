@@ -83,7 +83,7 @@ const lockedRule = async (c: PoolClient, ruleId: string) => {
   return r.rows[0];
 };
 
-const RECORD_TRANSITIONS: Record<string, readonly string[]> = { draft: ["approved", "retired"], approved: ["retired"], retired: [] };
+const RECORD_TRANSITIONS: Record<string, readonly string[]> = { draft: ["approved", "retired"], approved: ["retired"], retired: ["draft"] };
 const RULE_TRANSITIONS: Record<string, readonly string[]> = { draft: ["active", "retired"], active: ["retired"], retired: [] };
 
 export const pricingRepository = {
@@ -152,11 +152,31 @@ export const pricingRepository = {
       if (!(RECORD_TRANSITIONS[existing.status] || []).includes(status))
         throw new PricingError("INVALID_STATUS_TRANSITION", `A ${existing.status} pricing record cannot move to ${status}.`, 409);
       const r = await c.query<any>(
-        "UPDATE rfpilot.pricing_records SET status=$2,approved_by_external_user_id=CASE WHEN $2='approved' THEN $3::varchar ELSE approved_by_external_user_id END,updated_at=now() WHERE id=$1 RETURNING *",
+        "UPDATE rfpilot.pricing_records SET status=$2,approved_by_external_user_id=CASE WHEN $2='approved' THEN $3::varchar WHEN $2='draft' THEN NULL ELSE approved_by_external_user_id END,updated_at=now() WHERE id=$1 RETURNING *",
         [recordId, status, ctx.actorUserMongoId],
       );
       await audit(c, { org, actor: ctx.actorUserMongoId, action: "pricing_record_status_changed", target: "pricing_record", id: recordId, correlation: ctx.correlationId, metadata: { from: existing.status, to: status } });
       return presentRecord(r.rows[0]);
+    });
+  },
+
+  deleteRecord(ctx: Ctx, recordId: string) {
+    return withPostgresTransaction(async (c) => {
+      const org = await tenant(c, ctx.organizationMongoId);
+      const existing = await lockedRecord(c, recordId);
+      if (existing.status !== "retired")
+        throw new PricingError("PRICING_RECORD_NOT_DELETABLE", "Only retired pricing records may be permanently deleted.", 409);
+      await c.query("DELETE FROM rfpilot.pricing_records WHERE id=$1", [recordId]);
+      await audit(c, {
+        org,
+        actor: ctx.actorUserMongoId,
+        action: "pricing_record_deleted",
+        target: "pricing_record",
+        id: recordId,
+        correlation: ctx.correlationId,
+        metadata: { status: existing.status, category: existing.category, itemLabel: existing.item_label },
+      });
+      return { id: recordId, deleted: true };
     });
   },
 

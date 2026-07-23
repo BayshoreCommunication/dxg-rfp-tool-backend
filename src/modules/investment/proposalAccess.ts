@@ -59,6 +59,7 @@ export type TriState = "yes" | "no" | "unknown";
 
 export type ProposalFacts = {
   days: number;
+  rehearsalDays: number;
   datesStated: boolean;
   rooms: UnknownRecord[];
   roomDetailStated: boolean;
@@ -84,6 +85,27 @@ export type ProposalFacts = {
   internetRequested: boolean;
   internetAnswered: boolean;
   accessibilityAnswered: boolean;
+  captioningRequested: boolean;
+  captionLanguageCount: number;
+  interpretationRequested: boolean;
+  scenicRequested: boolean;
+  stageSqFt: number | null;
+  crewHoursPerDay: number | null;
+};
+
+const dateOnly = (value: unknown): string => text(value).slice(0, 10);
+const outsideShowDates = (date: string, start: string, end: string) =>
+  Boolean(date && start && end && (date < start || date > end));
+const durationHours = (start: unknown, end: unknown): number | null => {
+  const startAt = new Date(text(start)), endAt = new Date(text(end));
+  if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt <= startAt) return null;
+  return Math.min(Math.max((endAt.getTime() - startAt.getTime()) / 3_600_000, 1), 24);
+};
+const stageArea = (value: unknown): number | null => {
+  const dimensions = text(value).match(/(\d+(?:\.\d+)?)\s*(?:ft|feet|')?\s*[x×]\s*(\d+(?:\.\d+)?)/i);
+  if (!dimensions) return null;
+  const width = Number(dimensions[1]), depth = Number(dimensions[2]);
+  return width > 0 && depth > 0 ? Math.round(width * depth) : null;
 };
 
 export const readFacts = (proposal: UnknownRecord): ProposalFacts => {
@@ -123,6 +145,23 @@ export const readFacts = (proposal: UnknownRecord): ProposalFacts => {
     text(event.statementOfWork), text(event.eventProfile), text(event.sacredConstraints),
     ...rooms.map((room) => [text(room.ledWallSpecs), text(room.ledWallNotes), text(room.contentVideoNeeds), text(room.roomSetup)].join(" ")),
   ].join(" ");
+  const accessText = [text(venue.accessRequirements), text(venue.venueAccessRequirements), freeText].join(" ");
+  const captionLanguages = Array.isArray(captions.captionLanguages)
+    ? captions.captionLanguages.filter((language) => text(language)).length
+    : 0;
+  const showStart = dateOnly(event.startDate), showEnd = dateOnly(event.endDate);
+  const rehearsalDates = new Set(
+    [
+      dateOnly(venueSchedule.rehearsalDate),
+      ...rooms.map((room) => dateOnly(room.rehearsalDateTime)),
+    ].filter((date) => outsideShowDates(date, showStart, showEnd)),
+  );
+  const crewHours = roomValue(["showStartDateTime"])
+    .map((start, index) => durationHours(start, rooms[index]?.showEndDateTime))
+    .filter((hours): hours is number => hours !== null);
+  const stageSqFt = roomValue(["stageDimensions"])
+    .map(stageArea)
+    .find((area): area is number => area !== null) ?? null;
 
   const attendees = positive(event.attendees);
   const format = text(event.eventFormat);
@@ -130,6 +169,7 @@ export const readFacts = (proposal: UnknownRecord): ProposalFacts => {
 
   return {
     days: eventDays(proposal),
+    rehearsalDays: rehearsalDates.size,
     datesStated: filled(event.startDate) && filled(event.endDate),
     rooms,
     roomDetailStated: rooms.length > 0,
@@ -160,5 +200,11 @@ export const readFacts = (proposal: UnknownRecord): ProposalFacts => {
     internetRequested: isYes(venue.wirelessInternetRequired) || filled(venue.internetUseCases),
     internetAnswered: filled(venue.wirelessInternetRequired) || filled(venue.internetUseCases),
     accessibilityAnswered: filled(captions.closedCaptions) || filled(captions.captionLanguages) || filled(venue.accessRequirements) || filled(venue.venueAccessRequirements),
+    captioningRequested: isYes(captions.closedCaptions),
+    captionLanguageCount: Math.max(captionLanguages, isYes(captions.closedCaptions) ? 1 : 0),
+    interpretationRequested: /\binterpret(?:ation|er|ing)?\b|\bASL\b|assisted listening/i.test(accessText),
+    scenicRequested: rooms.some((room) => isYes(room.scenicStageDesign)),
+    stageSqFt,
+    crewHoursPerDay: crewHours.length ? Math.max(...crewHours) : null,
   };
 };

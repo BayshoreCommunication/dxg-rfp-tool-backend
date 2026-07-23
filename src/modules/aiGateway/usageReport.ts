@@ -30,6 +30,21 @@ export const aiUsageReport = async (input: { organizationMongoId: string; days?:
        FROM rfpilot.ai_provider_attempts WHERE organization_id=$1 GROUP BY provider`,
       [org.rows[0].id],
     );
+    const operations = await c.query<any>(
+      `SELECT run_type,operation,state,count(*)::int AS attempts,
+              coalesce(sum(input_tokens),0)::bigint AS input_tokens,
+              coalesce(sum(output_tokens),0)::bigint AS output_tokens
+       FROM rfpilot.ai_provider_attempts WHERE organization_id=$1 AND created_at>now()-($2||' days')::interval
+       GROUP BY run_type,operation,state ORDER BY run_type,operation,state`,
+      [org.rows[0].id, days],
+    );
+    const recentAttempts = await c.query<any>(
+      `SELECT id,run_type,run_id,attempt_number,state,provider,model,operation,
+              input_tokens,output_tokens,error_code,created_at,updated_at
+       FROM rfpilot.ai_provider_attempts WHERE organization_id=$1
+       ORDER BY created_at DESC LIMIT 50`,
+      [org.rows[0].id],
+    );
     return {
       windowDays: days,
       daily: daily.rows.map((row) => ({
@@ -39,6 +54,17 @@ export const aiUsageReport = async (input: { organizationMongoId: string; days?:
       totals: totals.rows.map((row) => ({
         provider: row.provider, attempts: row.attempts, succeeded: row.succeeded,
         failedOrOrphaned: row.failed_or_orphaned, inputTokens: Number(row.input_tokens), outputTokens: Number(row.output_tokens),
+      })),
+      operations: operations.rows.map((row) => ({
+        runType: row.run_type, operation: row.operation, state: row.state,
+        attempts: row.attempts, inputTokens: Number(row.input_tokens), outputTokens: Number(row.output_tokens),
+      })),
+      recentAttempts: recentAttempts.rows.map((row) => ({
+        id: row.id, runType: row.run_type, runId: row.run_id,
+        attemptNumber: row.attempt_number, state: row.state, provider: row.provider,
+        model: row.model, operation: row.operation, inputTokens: row.input_tokens,
+        outputTokens: row.output_tokens, errorCode: row.error_code,
+        createdAt: row.created_at, updatedAt: row.updated_at,
       })),
       note: "Token counts come from the provider attempt ledger; reconcile against the provider invoice. Vendor-analysis calls are not yet ledgered.",
     };

@@ -104,9 +104,28 @@ const selectComponent = (records: PricingRecord[], component: Component): Record
 type StackContext = {
   market: MarketMatch;
   modifiers: PricingModifier[];
-  multiDay: { factor: number; source: PricingModifier | null };
+  multiDay: { factor: number; source: PricingModifier | null; rehearsalSource: PricingModifier | null };
+  laborRules: { overtime: number; doubleTime: number };
   drivers: Drivers;
   currency: string;
+};
+
+const laborDayFactor = (
+  hours: number,
+  union: boolean,
+  rules: { overtime: number; doubleTime: number },
+) => {
+  if (hours <= 0) return 1;
+  const overtimeStarts = union ? 8 : 10;
+  const doubleTimeStarts = 12;
+  const straightHours = Math.min(hours, overtimeStarts);
+  const overtimeHours = Math.max(Math.min(hours, doubleTimeStarts) - overtimeStarts, 0);
+  const doubleTimeHours = Math.max(hours - doubleTimeStarts, 0);
+  return (
+    straightHours +
+    overtimeHours * rules.overtime +
+    doubleTimeHours * rules.doubleTime
+  ) / hours;
 };
 
 // Order matters and mirrors the workbook: base rate x regional x union x
@@ -125,9 +144,37 @@ const buildLine = (selection: Selection, context: StackContext, stack: StackChoi
     factor: context.market.factor,
   }];
   let multiplier = context.market.factor;
-  if (isEquipment && heldByDay && context.multiDay.factor !== 1 && context.multiDay.source) {
+  if (
+    isEquipment &&
+    heldByDay &&
+    context.multiDay.factor !== 1 &&
+    (context.multiDay.source || context.multiDay.rehearsalSource)
+  ) {
     multiplier *= context.multiDay.factor;
-    factors.push({ kind: "multi_day", label: `${context.multiDay.source.label} across ${context.drivers.days} show days`, factor: context.multiDay.factor });
+    factors.push({
+      kind: "multi_day",
+      label:
+        context.multiDay.source && context.multiDay.rehearsalSource
+          ? `${context.multiDay.source.label} plus ${context.multiDay.rehearsalSource.label}`
+          : `${(context.multiDay.source ?? context.multiDay.rehearsalSource)!.label}`,
+      factor: context.multiDay.factor,
+    });
+  }
+  if (!isEquipment && component.hoursPerPersonPerDay) {
+    const hours = component.hoursPerPersonPerDay(context.drivers);
+    const factor = laborDayFactor(
+      hours,
+      stack.unionKey !== BASELINE_UNION_KEY,
+      context.laborRules,
+    );
+    if (factor !== 1) {
+      multiplier *= factor;
+      factors.push({
+        kind: "overtime",
+        label: `Overtime and double-time rules across a ${hours}-hour call`,
+        factor,
+      });
+    }
   }
   if (!isEquipment && !component.unionExempt && union && union.factor !== 1) {
     multiplier *= union.factor;
@@ -213,7 +260,26 @@ export const computeInvestmentGuidance = (
 
   const market = matchMarket(facts, regionalFactors);
   const stack = appliedStackChoice(facts, market);
-  const context: StackContext = { market, modifiers, multiDay: multiDayFactor(facts.days, modifiers), drivers, currency: currency ?? "" };
+  const multiplierRate = (pattern: RegExp, fallback: number) => {
+    const record = usable.find(
+      (candidate) =>
+        candidate.category === "labor" &&
+        candidate.unit === "multiplier" &&
+        pattern.test(candidate.itemLabel),
+    );
+    return record ? record.amountMidMinor / 100 : fallback;
+  };
+  const context: StackContext = {
+    market,
+    modifiers,
+    multiDay: multiDayFactor(facts.days, modifiers, facts.rehearsalDays),
+    laborRules: {
+      overtime: multiplierRate(/^Overtime/i, 1.5),
+      doubleTime: multiplierRate(/^Double Time/i, 2),
+    },
+    drivers,
+    currency: currency ?? "",
+  };
 
   const activeTemplates = PACKAGE_TEMPLATES.filter((template) => template.applies(facts, drivers));
   const selections: Selection[] = [];
@@ -349,7 +415,12 @@ export const computeInvestmentGuidance = (
       serviceChargeFactor: stack.serviceCharge ? serviceChargeSource?.factor ?? 1 : 1,
       multiDayFactor: context.multiDay.factor,
       days: facts.days,
-      showDayEquipmentBasis: `Day 1 at full rate; each additional show day at the approved hold-over factor (${facts.days} show days).`,
+      showDayEquipmentBasis:
+        `Day 1 at full rate; each additional show day uses the approved hold-over factor` +
+        (facts.rehearsalDays > 0
+          ? `, plus ${facts.rehearsalDays} rehearsal/dark day${facts.rehearsalDays === 1 ? "" : "s"} at the approved hold rate`
+          : "") +
+        ` (${facts.days} show days).`,
     },
   };
 };

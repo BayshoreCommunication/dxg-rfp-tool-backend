@@ -1,11 +1,25 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
 import { CandidateApplicationError, type ReviewDecision } from "./domain";
 import { normalizeCandidate } from "./canonicalMapping";
 import { mongoProposalCandidateMutation } from "./mongoProposalCandidateMutation";
+
+export const requiresOverwriteConfirmation = (
+  current: unknown,
+  incoming: unknown,
+  overwriteConfirmed: boolean,
+) =>
+  current !== undefined &&
+  current !== null &&
+  current !== "" &&
+  !(typeof current === "string" && current.trim().toLowerCase() === "untitled proposal") &&
+  !isDeepStrictEqual(current, incoming) &&
+  !overwriteConfirmed;
+
 const tenant = async (c: PoolClient, external: string) => {
   await c.query("SELECT set_config('app.organization_mongo_id',$1,true)", [
     external,
@@ -385,12 +399,7 @@ export const candidateApplicationRepository = {
     }
     for (const x of normalized) {
       const current = snapshot.values[x.mongoPath];
-      if (
-        current !== undefined &&
-        current !== null &&
-        current !== "" &&
-        !x.overwriteConfirmed
-      ) {
+      if (requiresOverwriteConfirmation(current, x.mongoValue, x.overwriteConfirmed)) {
         await this.markConflict({
           organizationMongoId: input.organizationMongoId,
           applicationId: input.applicationId,

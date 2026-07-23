@@ -105,7 +105,8 @@ is committed on `ai-agent`.
 - **M6 — Hardening.** A real docker-compose integration suite (25 tests against
   live Postgres/Redis/Mongo), the gold evaluation harness as a release gate,
   cross-store purge propagation, `/api/v1/ai/usage-report`, PM2 config for all
-  three processes, and the production runbook.
+  three processes, the production runbook, and an admin AI Operations page for
+  runtime readiness, provider-attempt outcomes, token usage, and gateway runs.
 
 ### The DXG pricing engine (client workbook)
 

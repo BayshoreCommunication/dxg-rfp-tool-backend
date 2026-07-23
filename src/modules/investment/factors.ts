@@ -68,6 +68,7 @@ export const BASELINE_IN_HOUSE_KEY = "outside_independent_av_baseline";
 export const TYPICAL_IN_HOUSE_KEY = "hotel_in_house_typical";
 export const SERVICE_CHARGE_KEY = "service_charge_commission";
 export const DAY_TWO_KEY = "day_2_per_additional_show_day";
+export const REHEARSAL_KEY = "rehearsal_dark_day";
 
 export const appliedStackChoice = (facts: ProposalFacts, market: MarketMatch): StackChoice => ({
   unionKey: facts.unionVenue === "yes" ? unionConditionKey(market) : BASELINE_UNION_KEY,
@@ -77,10 +78,20 @@ export const appliedStackChoice = (facts: ProposalFacts, market: MarketMatch): S
 
 // Equipment is not billed at full rate every day: day 1 is full, each further
 // show day carries the day_2 hold-over factor. Labor is hours x days instead.
-export const multiDayFactor = (days: number, modifiers: PricingModifier[]): { factor: number; source: PricingModifier | null } => {
+export const multiDayFactor = (
+  days: number,
+  modifiers: PricingModifier[],
+  rehearsalDays = 0,
+): { factor: number; source: PricingModifier | null; rehearsalSource: PricingModifier | null } => {
   const source = findModifier(modifiers, "multi_day", DAY_TWO_KEY);
-  if (days <= 1 || !source) return { factor: 1, source: null };
-  return { factor: 1 + source.factor * (days - 1), source };
+  const rehearsalSource = findModifier(modifiers, "multi_day", REHEARSAL_KEY);
+  const showFactor = days > 1 && source ? source.factor * (days - 1) : 0;
+  const rehearsalFactor = rehearsalDays > 0 && rehearsalSource ? rehearsalSource.factor * rehearsalDays : 0;
+  return {
+    factor: 1 + showFactor + rehearsalFactor,
+    source: showFactor > 0 ? source : null,
+    rehearsalSource: rehearsalFactor > 0 ? rehearsalSource : null,
+  };
 };
 
 export type ConfidenceContext = {

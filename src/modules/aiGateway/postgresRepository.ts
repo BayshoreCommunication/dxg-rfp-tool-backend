@@ -1,26 +1,443 @@
-import type {PoolClient} from "pg";import {v7 as uuidv7} from "uuid";import {withPostgresTransaction} from "../../../config/postgres";
-import {AiGatewayError,type AiRun,type AiTestRequest} from "./domain";import type {AiGatewayRepository} from "./ports";
-type RunRow={id:string;operation:string;purpose:string;classification:string;provider:string;model:string;prompt_version:string;schema_version:string;status:AiRun["status"];input_tokens:number|null;output_tokens:number|null;cost_micros:string|null;reserved_cost_micros:string;latency_ms:number|null;finish_reason:string|null;output:unknown;correlation_id:string;created_at:Date;completed_at:Date|null;input_checksum:string|null};
-const map=(r:RunRow):AiRun=>({id:r.id,operation:r.operation,purpose:r.purpose,classification:r.classification,provider:r.provider,model:r.model,promptVersion:r.prompt_version,schemaVersion:r.schema_version,status:r.status,inputTokens:r.input_tokens,outputTokens:r.output_tokens,costMicros:r.cost_micros===null?null:Number(r.cost_micros),reservedCostMicros:Number(r.reserved_cost_micros),latencyMs:r.latency_ms,finishReason:r.finish_reason,output:r.output,correlationId:r.correlation_id,createdAt:r.created_at.toISOString(),completedAt:r.completed_at?.toISOString()??null});
-const tenant=async(c:PoolClient,mongoId:string)=>{await c.query("SELECT set_config('app.organization_mongo_id',$1,true)",[mongoId]);const r=await c.query<{id:string}>("SELECT id FROM rfpilot.organizations WHERE external_mongo_id=$1 AND status='active'",[mongoId]);if(!r.rows[0])throw new AiGatewayError("ORGANIZATION_NOT_READY","Organization data foundation is unavailable.",503);await c.query("SELECT set_config('app.organization_id',$1,true)",[r.rows[0].id]);return r.rows[0].id;};
-const run=async(c:PoolClient,id:string)=>{const r=await c.query<RunRow>("SELECT * FROM rfpilot.ai_runs WHERE id=$1",[id]);if(!r.rows[0])throw new AiGatewayError("AI_RUN_NOT_FOUND","AI run was not found.",404);return map(r.rows[0]);};
-const audit=(c:PoolClient,org:string,actor:string,action:string,id:string,decision:string,correlation:string,metadata:object={})=>c.query("INSERT INTO rfpilot.audit_events(id,organization_id,actor_external_user_id,action,target_type,target_id,decision,correlation_id,metadata) VALUES($1,$2,$3,$4,'ai_run',$5,$6,$7,$8::jsonb)",[uuidv7(),org,actor,action,id,decision,correlation,JSON.stringify(metadata)]);
-const periods=()=>[{type:"daily",start:new Date().toISOString().slice(0,10),limit:10_000_000},{type:"monthly",start:`${new Date().toISOString().slice(0,7)}-01`,limit:100_000_000}];
-const reconcile=async(c:PoolClient,org:string,runId:string,reserved:number,actual:number)=>{for(const p of periods())await c.query("UPDATE rfpilot.ai_budget_accounts SET reserved_micros=reserved_micros-$4,consumed_micros=consumed_micros+$5,updated_at=now() WHERE organization_id=$1 AND environment='test' AND period_type=$2 AND period_start=$3",[org,p.type,p.start,reserved,actual]);await c.query("INSERT INTO rfpilot.ai_budget_ledger(id,organization_id,run_id,entry_type,amount_micros) VALUES($1,$2,$3,'consume',$4),($5,$2,$3,'release',$6)",[uuidv7(),org,runId,actual,uuidv7(),Math.max(0,reserved-actual)]);};
-export const postgresAiGatewayRepository:AiGatewayRepository={
- getTestRequest(org,id){return withPostgresTransaction(async c=>{await tenant(c,org);const r=await c.query<{operation:AiTestRequest["operation"];fixture:AiTestRequest["fixture"];evidence_references:string[];idempotency_key:string;correlation_id:string}>("SELECT operation,fixture,evidence_references,idempotency_key,correlation_id FROM rfpilot.ai_test_requests WHERE id=$1",[id]);if(!r.rows[0])throw new AiGatewayError("AI_TEST_REQUEST_NOT_FOUND","AI test request was not found.",404);return{operation:r.rows[0].operation,fixture:r.rows[0].fixture,evidenceReferences:r.rows[0].evidence_references,idempotencyKey:r.rows[0].idempotency_key,correlationId:r.rows[0].correlation_id};});},
- prepare(context,input,inputChecksum){return withPostgresTransaction(async c=>{const org=await tenant(c,context.organizationMongoId);const existing=await c.query<RunRow>("SELECT * FROM rfpilot.ai_runs WHERE organization_id=$1 AND idempotency_key=$2",[org,input.idempotencyKey]);if(existing.rows[0]){if(existing.rows[0].input_checksum!==inputChecksum)throw new AiGatewayError("IDEMPOTENCY_CONFLICT","Idempotency key was used for different input.",409);return{existing:map(existing.rows[0])};}
-  const concurrent=await c.query<{count:string}>("SELECT count(*) count FROM rfpilot.ai_runs WHERE organization_id=$1 AND status IN('budget_reserved','started','validating')",[org]);if(Number(concurrent.rows[0].count)>=2)throw new AiGatewayError("AI_CONCURRENCY_EXCEEDED","Organization AI concurrency limit reached.",429);
-  const policy=await c.query<{id:string;provider:string;model:string;timeout_ms:number}>("SELECT id,provider,model,timeout_ms FROM rfpilot.ai_provider_policies WHERE (organization_id IS NULL OR organization_id=$1) AND environment='test' AND operation=$2 AND purpose=$3 AND classification=$4 AND active=true AND effective_from<=now() AND (effective_until IS NULL OR effective_until>now()) ORDER BY organization_id NULLS LAST LIMIT 1",[org,input.operation,input.purpose,input.classification]);if(!policy.rows[0])throw new AiGatewayError("AI_POLICY_DENIED","No approved provider policy matches this request.",403);
-  const prompt=await c.query<{id:string;version:string;max_input_bytes:number;max_output_bytes:number}>("SELECT id,version,max_input_bytes,max_output_bytes FROM rfpilot.prompt_releases WHERE stable_key='mock-contract-test' ORDER BY approved_at DESC LIMIT 1");const schema=await c.query<{id:string;version:string;schema_document:object}>("SELECT id,version,schema_document FROM rfpilot.output_schema_releases WHERE stable_key='mock-contract-result' ORDER BY approved_at DESC LIMIT 1");if(!prompt.rows[0]||!schema.rows[0])throw new AiGatewayError("AI_RELEASE_NOT_READY","Approved prompt or schema release is unavailable.",503);
-  const reservation=1_000_000;for(const p of periods()){await c.query("INSERT INTO rfpilot.ai_budget_accounts(id,organization_id,environment,period_type,period_start,limit_micros) VALUES($1,$2,'test',$3,$4,$5) ON CONFLICT(organization_id,environment,period_type,period_start) DO NOTHING",[uuidv7(),org,p.type,p.start,p.limit]);const updated=await c.query("UPDATE rfpilot.ai_budget_accounts SET reserved_micros=reserved_micros+$4,updated_at=now() WHERE organization_id=$1 AND environment='test' AND period_type=$2 AND period_start=$3 AND reserved_micros+consumed_micros+$4<=limit_micros",[org,p.type,p.start,reservation]);if(!updated.rowCount)throw new AiGatewayError("AI_BUDGET_EXCEEDED","Organization AI budget is exhausted.",429);}
-  const id=uuidv7();await c.query("INSERT INTO rfpilot.ai_runs(id,organization_id,provider,model,prompt_version,schema_version,status,correlation_id,operation,purpose,classification,policy_id,prompt_release_id,schema_release_id,idempotency_key,input_checksum,reserved_cost_micros) VALUES($1,$2,$3,$4,$5,$6,'started',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",[id,org,policy.rows[0].provider,policy.rows[0].model,prompt.rows[0].version,schema.rows[0].version,input.correlationId,input.operation,input.purpose,input.classification,policy.rows[0].id,prompt.rows[0].id,schema.rows[0].id,input.idempotencyKey,inputChecksum,reservation]);await c.query("INSERT INTO rfpilot.ai_budget_ledger(id,organization_id,run_id,entry_type,amount_micros) VALUES($1,$2,$3,'reserve',$4)",[uuidv7(),org,id,reservation]);await audit(c,org,context.actorUserMongoId,"ai.run.execute",id,"allowed",input.correlationId,{classification:"synthetic",provider:"mock"});return{runId:id,plan:{organizationId:org,policyId:policy.rows[0].id,promptId:prompt.rows[0].id,schemaId:schema.rows[0].id,provider:policy.rows[0].provider,model:policy.rows[0].model,promptVersion:prompt.rows[0].version,schemaVersion:schema.rows[0].version,timeoutMs:policy.rows[0].timeout_ms,schema:schema.rows[0].schema_document,maxInputBytes:prompt.rows[0].max_input_bytes,maxOutputBytes:prompt.rows[0].max_output_bytes,reservationMicros:reservation}};});},
- recordSuccess(context,id,result,latency){return withPostgresTransaction(async c=>{const org=await tenant(c,context.organizationMongoId);await reconcile(c,org,id,1_000_000,result.costMicros);await c.query("INSERT INTO rfpilot.ai_run_attempts(id,organization_id,run_id,attempt_number,provider,model,status,input_tokens,output_tokens,cost_micros,latency_ms,completed_at) SELECT $1,organization_id,id,1,provider,model,'succeeded',$3,$4,$5,$6,now() FROM rfpilot.ai_runs WHERE id=$2",[uuidv7(),id,result.inputTokens,result.outputTokens,result.costMicros,latency]);await c.query("INSERT INTO rfpilot.ai_validation_results(id,organization_id,run_id,validator,validator_version,outcome) VALUES($1,$2,$3,'json-schema-and-citations','1.0.0','passed')",[uuidv7(),org,id]);await c.query("UPDATE rfpilot.ai_runs SET status='succeeded',input_tokens=$2,output_tokens=$3,cost_micros=$4,latency_ms=$5,finish_reason=$6,output=$7::jsonb,completed_at=now() WHERE id=$1",[id,result.inputTokens,result.outputTokens,result.costMicros,latency,result.finishReason,JSON.stringify(result.output)]);return run(c,id);});},
- recordRejection(context,id,codes,result,latency){return withPostgresTransaction(async c=>{const org=await tenant(c,context.organizationMongoId);await reconcile(c,org,id,1_000_000,result.costMicros);await c.query("INSERT INTO rfpilot.ai_run_attempts(id,organization_id,run_id,attempt_number,provider,model,status,safe_code,input_tokens,output_tokens,cost_micros,latency_ms,completed_at) SELECT $1,organization_id,id,1,provider,model,'succeeded',$3,$4,$5,$6,$7,now() FROM rfpilot.ai_runs WHERE id=$2",[uuidv7(),id,codes[0],result.inputTokens,result.outputTokens,result.costMicros,latency]);await c.query("INSERT INTO rfpilot.ai_validation_results(id,organization_id,run_id,validator,validator_version,outcome,safe_codes) VALUES($1,$2,$3,'json-schema-and-citations','1.0.0','failed',$4::jsonb)",[uuidv7(),org,id,JSON.stringify(codes)]);await c.query("UPDATE rfpilot.ai_runs SET status='rejected',input_tokens=$2,output_tokens=$3,cost_micros=$4,latency_ms=$5,finish_reason=$6,completed_at=now() WHERE id=$1",[id,result.inputTokens,result.outputTokens,result.costMicros,latency,result.finishReason]);return run(c,id);});},
- recordFailure(context,id,code,latency){return withPostgresTransaction(async c=>{const org=await tenant(c,context.organizationMongoId);await reconcile(c,org,id,1_000_000,0);await c.query("UPDATE rfpilot.ai_runs SET status='failed',latency_ms=$2,finish_reason=$3,completed_at=now() WHERE id=$1",[id,latency,code]);});},
- get(org,id){return withPostgresTransaction(async c=>{await tenant(c,org);return run(c,id);});},list(org,limit){return withPostgresTransaction(async c=>{await tenant(c,org);const r=await c.query<RunRow>("SELECT * FROM rfpilot.ai_runs ORDER BY created_at DESC LIMIT $1",[limit]);return r.rows.map(map);});},
- policies(org){return withPostgresTransaction(async c=>{await tenant(c,org);return(await c.query("SELECT id,environment,operation,purpose,classification,provider,model,region,retention_mode,max_attempts,timeout_ms,active,effective_from,effective_until FROM rfpilot.ai_provider_policies ORDER BY operation")).rows;});},
- prompts(org){return withPostgresTransaction(async c=>{await tenant(c,org);return(await c.query("SELECT id,stable_key,version,operation,purpose,content_checksum,variables,max_input_bytes,max_output_bytes,approved_at FROM rfpilot.prompt_releases ORDER BY approved_at DESC")).rows;});},
- schemas(org){return withPostgresTransaction(async c=>{await tenant(c,org);return(await c.query("SELECT id,stable_key,version,schema_checksum,approved_at FROM rfpilot.output_schema_releases ORDER BY approved_at DESC")).rows;});},
- budgets(org){return withPostgresTransaction(async c=>{await tenant(c,org);return(await c.query("SELECT environment,period_type,period_start,limit_micros,reserved_micros,consumed_micros,(limit_micros-reserved_micros-consumed_micros) remaining_micros FROM rfpilot.ai_budget_accounts ORDER BY period_start DESC")).rows;});}
+import type { PoolClient } from 'pg';
+import { v7 as uuidv7 } from 'uuid';
+import { withPostgresTransaction } from '../../../config/postgres';
+import {
+  AiGatewayError,
+  type AiRun,
+  type AiTestRequest,
+} from './domain';
+import type { AiGatewayRepository } from './ports';
+type RunRow = {
+  id: string;
+  operation: string;
+  purpose: string;
+  classification: string;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  schema_version: string;
+  status: AiRun['status'];
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost_micros: string | null;
+  reserved_cost_micros: string;
+  latency_ms: number | null;
+  finish_reason: string | null;
+  output: unknown;
+  correlation_id: string;
+  created_at: Date;
+  completed_at: Date | null;
+  input_checksum: string | null;
+};
+const map = (r: RunRow): AiRun => ({
+  id: r.id,
+  operation: r.operation,
+  purpose: r.purpose,
+  classification: r.classification,
+  provider: r.provider,
+  model: r.model,
+  promptVersion: r.prompt_version,
+  schemaVersion: r.schema_version,
+  status: r.status,
+  inputTokens: r.input_tokens,
+  outputTokens: r.output_tokens,
+  costMicros: r.cost_micros === null ? null : Number(r.cost_micros),
+  reservedCostMicros: Number(r.reserved_cost_micros),
+  latencyMs: r.latency_ms,
+  finishReason: r.finish_reason,
+  output: r.output,
+  correlationId: r.correlation_id,
+  createdAt: r.created_at.toISOString(),
+  completedAt: r.completed_at?.toISOString() ?? null,
+});
+const tenant = async (c: PoolClient, mongoId: string) => {
+  await c.query(
+    "SELECT set_config('app.organization_mongo_id',$1,true)",
+    [mongoId],
+  );
+  const r = await c.query<{ id: string }>(
+    "SELECT id FROM rfpilot.organizations WHERE external_mongo_id=$1 AND status='active'",
+    [mongoId],
+  );
+  if (!r.rows[0])
+    throw new AiGatewayError(
+      'ORGANIZATION_NOT_READY',
+      'Organization data foundation is unavailable.',
+      503,
+    );
+  await c.query("SELECT set_config('app.organization_id',$1,true)", [
+    r.rows[0].id,
+  ]);
+  return r.rows[0].id;
+};
+const run = async (c: PoolClient, id: string) => {
+  const r = await c.query<RunRow>(
+    'SELECT * FROM rfpilot.ai_runs WHERE id=$1',
+    [id],
+  );
+  if (!r.rows[0])
+    throw new AiGatewayError(
+      'AI_RUN_NOT_FOUND',
+      'AI run was not found.',
+      404,
+    );
+  return map(r.rows[0]);
+};
+const audit = (
+  c: PoolClient,
+  org: string,
+  actor: string,
+  action: string,
+  id: string,
+  decision: string,
+  correlation: string,
+  metadata: object = {},
+) =>
+  c.query(
+    "INSERT INTO rfpilot.audit_events(id,organization_id,actor_external_user_id,action,target_type,target_id,decision,correlation_id,metadata) VALUES($1,$2,$3,$4,'ai_run',$5,$6,$7,$8::jsonb)",
+    [
+      uuidv7(),
+      org,
+      actor,
+      action,
+      id,
+      decision,
+      correlation,
+      JSON.stringify(metadata),
+    ],
+  );
+const periods = () => [
+  {
+    type: 'daily',
+    start: new Date().toISOString().slice(0, 10),
+    limit: 10_000_000,
+  },
+  {
+    type: 'monthly',
+    start: `${new Date().toISOString().slice(0, 7)}-01`,
+    limit: 100_000_000,
+  },
+];
+const reconcile = async (
+  c: PoolClient,
+  org: string,
+  runId: string,
+  reserved: number,
+  actual: number,
+) => {
+  for (const p of periods())
+    await c.query(
+      "UPDATE rfpilot.ai_budget_accounts SET reserved_micros=reserved_micros-$4,consumed_micros=consumed_micros+$5,updated_at=now() WHERE organization_id=$1 AND environment='test' AND period_type=$2 AND period_start=$3",
+      [org, p.type, p.start, reserved, actual],
+    );
+  await c.query(
+    "INSERT INTO rfpilot.ai_budget_ledger(id,organization_id,run_id,entry_type,amount_micros) VALUES($1,$2,$3,'consume',$4),($5,$2,$3,'release',$6)",
+    [
+      uuidv7(),
+      org,
+      runId,
+      actual,
+      uuidv7(),
+      Math.max(0, reserved - actual),
+    ],
+  );
+};
+export const postgresAiGatewayRepository: AiGatewayRepository = {
+  getTestRequest(org, id) {
+    return withPostgresTransaction(async (c) => {
+      await tenant(c, org);
+      const r = await c.query<{
+        operation: AiTestRequest['operation'];
+        fixture: AiTestRequest['fixture'];
+        evidence_references: string[];
+        idempotency_key: string;
+        correlation_id: string;
+      }>(
+        'SELECT operation,fixture,evidence_references,idempotency_key,correlation_id FROM rfpilot.ai_test_requests WHERE id=$1',
+        [id],
+      );
+      if (!r.rows[0])
+        throw new AiGatewayError(
+          'AI_TEST_REQUEST_NOT_FOUND',
+          'AI test request was not found.',
+          404,
+        );
+      return {
+        operation: r.rows[0].operation,
+        fixture: r.rows[0].fixture,
+        evidenceReferences: r.rows[0].evidence_references,
+        idempotencyKey: r.rows[0].idempotency_key,
+        correlationId: r.rows[0].correlation_id,
+      };
+    });
+  },
+  prepare(context, input, inputChecksum) {
+    return withPostgresTransaction(async (c) => {
+      const org = await tenant(c, context.organizationMongoId);
+      const existing = await c.query<RunRow>(
+        'SELECT * FROM rfpilot.ai_runs WHERE organization_id=$1 AND idempotency_key=$2',
+        [org, input.idempotencyKey],
+      );
+      if (existing.rows[0]) {
+        if (existing.rows[0].input_checksum !== inputChecksum)
+          throw new AiGatewayError(
+            'IDEMPOTENCY_CONFLICT',
+            'Idempotency key was used for different input.',
+            409,
+          );
+        return { existing: map(existing.rows[0]) };
+      }
+      const concurrent = await c.query<{ count: string }>(
+        "SELECT count(*) count FROM rfpilot.ai_runs WHERE organization_id=$1 AND status IN('budget_reserved','started','validating')",
+        [org],
+      );
+      if (Number(concurrent.rows[0].count) >= 2)
+        throw new AiGatewayError(
+          'AI_CONCURRENCY_EXCEEDED',
+          'Organization AI concurrency limit reached.',
+          429,
+        );
+      const policy = await c.query<{
+        id: string;
+        provider: string;
+        model: string;
+        timeout_ms: number;
+      }>(
+        "SELECT id,provider,model,timeout_ms FROM rfpilot.ai_provider_policies WHERE (organization_id IS NULL OR organization_id=$1) AND environment='test' AND operation=$2 AND purpose=$3 AND classification=$4 AND active=true AND effective_from<=now() AND (effective_until IS NULL OR effective_until>now()) ORDER BY organization_id NULLS LAST LIMIT 1",
+        [org, input.operation, input.purpose, input.classification],
+      );
+      if (!policy.rows[0])
+        throw new AiGatewayError(
+          'AI_POLICY_DENIED',
+          'No approved provider policy matches this request.',
+          403,
+        );
+      const prompt = await c.query<{
+        id: string;
+        version: string;
+        max_input_bytes: number;
+        max_output_bytes: number;
+      }>(
+        "SELECT id,version,max_input_bytes,max_output_bytes FROM rfpilot.prompt_releases WHERE stable_key='mock-contract-test' ORDER BY approved_at DESC LIMIT 1",
+      );
+      const schema = await c.query<{
+        id: string;
+        version: string;
+        schema_document: object;
+      }>(
+        "SELECT id,version,schema_document FROM rfpilot.output_schema_releases WHERE stable_key='mock-contract-result' ORDER BY approved_at DESC LIMIT 1",
+      );
+      if (!prompt.rows[0] || !schema.rows[0])
+        throw new AiGatewayError(
+          'AI_RELEASE_NOT_READY',
+          'Approved prompt or schema release is unavailable.',
+          503,
+        );
+      const reservation = 1_000_000;
+      for (const p of periods()) {
+        await c.query(
+          "INSERT INTO rfpilot.ai_budget_accounts(id,organization_id,environment,period_type,period_start,limit_micros) VALUES($1,$2,'test',$3,$4,$5) ON CONFLICT(organization_id,environment,period_type,period_start) DO NOTHING",
+          [uuidv7(), org, p.type, p.start, p.limit],
+        );
+        const updated = await c.query(
+          "UPDATE rfpilot.ai_budget_accounts SET reserved_micros=reserved_micros+$4,updated_at=now() WHERE organization_id=$1 AND environment='test' AND period_type=$2 AND period_start=$3 AND reserved_micros+consumed_micros+$4<=limit_micros",
+          [org, p.type, p.start, reservation],
+        );
+        if (!updated.rowCount)
+          throw new AiGatewayError(
+            'AI_BUDGET_EXCEEDED',
+            'Organization AI budget is exhausted.',
+            429,
+          );
+      }
+      const id = uuidv7();
+      await c.query(
+        "INSERT INTO rfpilot.ai_runs(id,organization_id,provider,model,prompt_version,schema_version,status,correlation_id,operation,purpose,classification,policy_id,prompt_release_id,schema_release_id,idempotency_key,input_checksum,reserved_cost_micros) VALUES($1,$2,$3,$4,$5,$6,'started',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
+        [
+          id,
+          org,
+          policy.rows[0].provider,
+          policy.rows[0].model,
+          prompt.rows[0].version,
+          schema.rows[0].version,
+          input.correlationId,
+          input.operation,
+          input.purpose,
+          input.classification,
+          policy.rows[0].id,
+          prompt.rows[0].id,
+          schema.rows[0].id,
+          input.idempotencyKey,
+          inputChecksum,
+          reservation,
+        ],
+      );
+      await c.query(
+        "INSERT INTO rfpilot.ai_budget_ledger(id,organization_id,run_id,entry_type,amount_micros) VALUES($1,$2,$3,'reserve',$4)",
+        [uuidv7(), org, id, reservation],
+      );
+      await audit(
+        c,
+        org,
+        context.actorUserMongoId,
+        'ai.run.execute',
+        id,
+        'allowed',
+        input.correlationId,
+        { classification: 'synthetic', provider: 'mock' },
+      );
+      return {
+        runId: id,
+        plan: {
+          organizationId: org,
+          policyId: policy.rows[0].id,
+          promptId: prompt.rows[0].id,
+          schemaId: schema.rows[0].id,
+          provider: policy.rows[0].provider,
+          model: policy.rows[0].model,
+          promptVersion: prompt.rows[0].version,
+          schemaVersion: schema.rows[0].version,
+          timeoutMs: policy.rows[0].timeout_ms,
+          schema: schema.rows[0].schema_document,
+          maxInputBytes: prompt.rows[0].max_input_bytes,
+          maxOutputBytes: prompt.rows[0].max_output_bytes,
+          reservationMicros: reservation,
+        },
+      };
+    });
+  },
+  recordSuccess(context, id, result, latency) {
+    return withPostgresTransaction(async (c) => {
+      const org = await tenant(c, context.organizationMongoId);
+      await reconcile(c, org, id, 1_000_000, result.costMicros);
+      await c.query(
+        "INSERT INTO rfpilot.ai_run_attempts(id,organization_id,run_id,attempt_number,provider,model,status,input_tokens,output_tokens,cost_micros,latency_ms,completed_at) SELECT $1,organization_id,id,1,provider,model,'succeeded',$3,$4,$5,$6,now() FROM rfpilot.ai_runs WHERE id=$2",
+        [
+          uuidv7(),
+          id,
+          result.inputTokens,
+          result.outputTokens,
+          result.costMicros,
+          latency,
+        ],
+      );
+      await c.query(
+        "INSERT INTO rfpilot.ai_validation_results(id,organization_id,run_id,validator,validator_version,outcome) VALUES($1,$2,$3,'json-schema-and-citations','1.0.0','passed')",
+        [uuidv7(), org, id],
+      );
+      await c.query(
+        "UPDATE rfpilot.ai_runs SET status='succeeded',input_tokens=$2,output_tokens=$3,cost_micros=$4,latency_ms=$5,finish_reason=$6,output=$7::jsonb,completed_at=now() WHERE id=$1",
+        [
+          id,
+          result.inputTokens,
+          result.outputTokens,
+          result.costMicros,
+          latency,
+          result.finishReason,
+          JSON.stringify(result.output),
+        ],
+      );
+      return run(c, id);
+    });
+  },
+  recordRejection(context, id, codes, result, latency) {
+    return withPostgresTransaction(async (c) => {
+      const org = await tenant(c, context.organizationMongoId);
+      await reconcile(c, org, id, 1_000_000, result.costMicros);
+      await c.query(
+        "INSERT INTO rfpilot.ai_run_attempts(id,organization_id,run_id,attempt_number,provider,model,status,safe_code,input_tokens,output_tokens,cost_micros,latency_ms,completed_at) SELECT $1,organization_id,id,1,provider,model,'succeeded',$3,$4,$5,$6,$7,now() FROM rfpilot.ai_runs WHERE id=$2",
+        [
+          uuidv7(),
+          id,
+          codes[0],
+          result.inputTokens,
+          result.outputTokens,
+          result.costMicros,
+          latency,
+        ],
+      );
+      await c.query(
+        "INSERT INTO rfpilot.ai_validation_results(id,organization_id,run_id,validator,validator_version,outcome,safe_codes) VALUES($1,$2,$3,'json-schema-and-citations','1.0.0','failed',$4::jsonb)",
+        [uuidv7(), org, id, JSON.stringify(codes)],
+      );
+      await c.query(
+        "UPDATE rfpilot.ai_runs SET status='rejected',input_tokens=$2,output_tokens=$3,cost_micros=$4,latency_ms=$5,finish_reason=$6,completed_at=now() WHERE id=$1",
+        [
+          id,
+          result.inputTokens,
+          result.outputTokens,
+          result.costMicros,
+          latency,
+          result.finishReason,
+        ],
+      );
+      return run(c, id);
+    });
+  },
+  recordFailure(context, id, code, latency) {
+    return withPostgresTransaction(async (c) => {
+      const org = await tenant(c, context.organizationMongoId);
+      await reconcile(c, org, id, 1_000_000, 0);
+      await c.query(
+        "UPDATE rfpilot.ai_runs SET status='failed',latency_ms=$2,finish_reason=$3,completed_at=now() WHERE id=$1",
+        [id, latency, code],
+      );
+    });
+  },
+  get(org, id) {
+    return withPostgresTransaction(async (c) => {
+      await tenant(c, org);
+      return run(c, id);
+    });
+  },
+  list(org, limit) {
+    return withPostgresTransaction(async (c) => {
+      await tenant(c, org);
+      const r = await c.query<RunRow>(
+        'SELECT * FROM rfpilot.ai_runs ORDER BY created_at DESC LIMIT $1',
+        [limit],
+      );
+      return r.rows.map(map);
+    });
+  },
+  policies(org) {
+    return withPostgresTransaction(async (c) => {
+      await tenant(c, org);
+      return (
+        await c.query(
+          'SELECT id,environment,operation,purpose,classification,provider,model,region,retention_mode,max_attempts,timeout_ms,active,effective_from,effective_until FROM rfpilot.ai_provider_policies ORDER BY operation',
+        )
+      ).rows;
+    });
+  },
+  prompts(org) {
+    return withPostgresTransaction(async (c) => {
+      await tenant(c, org);
+      return (
+        await c.query(
+          'SELECT id,stable_key,version,operation,purpose,content_checksum,variables,max_input_bytes,max_output_bytes,approved_at FROM rfpilot.prompt_releases ORDER BY approved_at DESC',
+        )
+      ).rows;
+    });
+  },
+  schemas(org) {
+    return withPostgresTransaction(async (c) => {
+      await tenant(c, org);
+      return (
+        await c.query(
+          'SELECT id,stable_key,version,schema_checksum,approved_at FROM rfpilot.output_schema_releases ORDER BY approved_at DESC',
+        )
+      ).rows;
+    });
+  },
+  budgets(org) {
+    return withPostgresTransaction(async (c) => {
+      await tenant(c, org);
+      return (
+        await c.query(
+          'SELECT environment,period_type,period_start,limit_micros,reserved_micros,consumed_micros,(limit_micros-reserved_micros-consumed_micros) remaining_micros FROM rfpilot.ai_budget_accounts ORDER BY period_start DESC',
+        )
+      ).rows;
+    });
+  },
 };

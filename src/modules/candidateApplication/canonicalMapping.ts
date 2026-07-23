@@ -48,12 +48,15 @@ const enumKey = (value: unknown): string => String(value).trim().toLowerCase().r
 const enumeration = (options: readonly EnumOption[], message: string) => ({
   normalize: (value: unknown): string => {
     const key = enumKey(value);
-    const match = options.find((option) => enumKey(option.canonical) === key || (option.aliases ?? []).some((alias) => enumKey(alias) === key));
+    const match = options.find((option) =>
+      enumKey(option.canonical) === key ||
+      enumKey(option.mongo) === key ||
+      (option.aliases ?? []).some((alias) => enumKey(alias) === key));
     if (match) return match.canonical;
     // Extraction returns prose ("Human captioner preferred"), not tokens, so a
     // value that clearly contains exactly one option's wording still resolves.
     const contained = options.filter((option) =>
-      [option.canonical, ...(option.aliases ?? [])].some((candidate) => {
+      [option.canonical, option.mongo, ...(option.aliases ?? [])].some((candidate) => {
         const token = enumKey(candidate);
         return token.length > 2 && (key.includes(token) || token.includes(key));
       }));
@@ -136,6 +139,7 @@ const mappings: Record<string, Mapping> = {
     t("eventWebsite", "website", 2048),
     day("startDate", "startDate"),
     day("endDate", "endDate"),
+    count("attendees", "attendeeCount"),
     t("eventType.eventType", "type", 150),
     t("eventType.eventTypeOther", "typeOther", 200),
     t("eventObjectives", "objectives", 10000),
@@ -227,6 +231,7 @@ const mappings: Record<string, Mapping> = {
     t("venueAvContactName", "avContact/name", 200),
     { mongo: "venueAvContactEmail", canonical: "avContact/email", normalize: normalizeEmail },
     t("venueAvContactPhone", "avContact/phone", 50),
+    yn("inHouseAvRequired", "inHouseAvRequired"),
     t("inHouseAvCompanyName", "inHouseAvCompanyName", 300),
     yn("riggingRequired", "riggingRequired"),
     t("riggingPlotOrSpecs", "riggingPlotOrSpecs", 5000),
@@ -267,8 +272,7 @@ const mappings: Record<string, Mapping> = {
 };
 
 // Deferred (intentionally unmapped) canonical fields:
-// - event.attendeeCount / event.attendeeBand: the legacy wizard stores event.attendees as a display
-//   band string ("< 100", "100 - 150", ...) so a numeric count cannot be reversed faithfully.
+// - event.attendeeBand: the current wizard stores event.attendees as a precise numeric count.
 // - venueSchedule.confirmationStatus "unknown" and closedCaptions.type "unknown": no legacy wizard
 //   representation exists; the normalizers reject those values.
 // - Arrays (event.primaryAudiences, event.toneDirections, venueSchedule.unionJurisdictions,

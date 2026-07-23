@@ -80,8 +80,11 @@ test("important-field whitelist only contains approved candidate paths with plai
   for (const path of [
     "/content/event/startDate",
     "/content/event/endDate",
+    "/content/event/attendees",
     "/content/venueSchedule/numberOfEventRooms",
+    "/content/venueSchedule/venueCity",
     "/content/venueSchedule/isUnionVenue",
+    "/content/venue/inHouseAvRequired",
     "/content/budget/proposalSubmissionDueDate",
     "/content/venue/riggingRequired",
     "/content/venue/powerDropsRequired",
@@ -97,7 +100,7 @@ test("catch-all detection targets broad missing-field issues, not small conflict
   assert.equal(isCatchAllIssue("missing-fields", []), true);
   assert.equal(isCatchAllIssue("CROSS_SOURCE_CONFLICT", ["/content/event/startDate"]), false);
   assert.equal(isCatchAllIssue("MISSING_ROOM_COUNT", ["/content/venueSchedule/numberOfEventRooms"]), false);
-  assert.equal(MAX_OPEN_FIELD_QUESTIONS, 5);
+  assert.equal(MAX_OPEN_FIELD_QUESTIONS, 10);
 });
 
 test("answer targeting and impact tags only apply to single whitelisted-field questions", () => {
@@ -129,12 +132,15 @@ test("every whitelisted question declares an answer control, and only choices ca
   assert.equal(byPath["/content/event/endDate"], "date");
   assert.equal(byPath["/content/budget/proposalSubmissionDueDate"], "date");
   assert.equal(byPath["/content/event/eventFormat"], "choice");
+  assert.equal(byPath["/content/event/attendees"], "number");
   assert.equal(byPath["/content/venueSchedule/isUnionVenue"], "choice");
+  assert.equal(byPath["/content/venue/inHouseAvRequired"], "choice");
   assert.equal(byPath["/content/videoRecordingStep/videoRecordingRequired"], "choice");
   assert.equal(byPath["/content/venue/riggingRequired"], "choice");
   assert.equal(byPath["/content/venue/powerDropsRequired"], "choice");
   assert.equal(byPath["/content/hybridVirtual/streamingPlatform"], "choice");
   assert.equal(byPath["/content/venueSchedule/numberOfEventRooms"], "number");
+  assert.equal(byPath["/content/venueSchedule/venueCity"], "text");
   // The streaming platform pills must be the same list the wizard step offers.
   const streaming = IMPORTANT_FIELD_QUESTIONS.find((f) => f.path === "/content/hybridVirtual/streamingPlatform");
   assert.deepEqual([...streaming.options], [

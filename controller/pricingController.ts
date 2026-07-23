@@ -86,8 +86,15 @@ export const changePricingRecordStatus = async (req: AuthRequest, res: Response)
   try {
     const ctx = context(req);
     res.json({
-      data: await pricingRepository.setRecordStatus(ctx, uuid(req.params.recordId), parseStatusChange(req.body, ["approved", "retired"])),
+      data: await pricingRepository.setRecordStatus(ctx, uuid(req.params.recordId), parseStatusChange(req.body, ["draft", "approved", "retired"])),
     });
+  } catch (error) { handle(res, error); }
+};
+
+export const deletePricingRecord = async (req: AuthRequest, res: Response) => {
+  try {
+    const ctx = context(req);
+    res.json({ data: await pricingRepository.deleteRecord(ctx, uuid(req.params.recordId)) });
   } catch (error) { handle(res, error); }
 };
 

@@ -149,6 +149,7 @@ test("expert rule key format is enforced", () => {
 });
 
 test("parseStatusChange only accepts allowed transitions", () => {
+  assert.equal(parseStatusChange({ status: "draft" }, ["draft", "approved", "retired"]), "draft");
   assert.equal(parseStatusChange({ status: "approved" }, ["approved", "retired"]), "approved");
   assert.equal(parseStatusChange({ status: "retired" }, ["approved", "retired"]), "retired");
   rejects(() => parseStatusChange({ status: "draft" }, ["approved", "retired"]), "INVALID_STATUS");
@@ -213,6 +214,7 @@ test("pricing routes wire approval permissions on status endpoints", () => {
   assert.ok(route.includes('authorizeAction("knowledge:write")'));
   assert.ok(route.includes('authorizeAction("knowledge:read")'));
   assert.ok(route.includes("/knowledge/pricing-records/:recordId/status"));
+  assert.ok(route.includes('router.delete("/knowledge/pricing-records/:recordId"'));
   assert.ok(route.includes("/knowledge/expert-rules/:ruleId/status"));
   assert.ok(route.includes('securityRateLimit({ name: "pricing-admin", limit: 120, windowMs: 15 * 60_000 })'));
 });

@@ -24,6 +24,7 @@ export type Component = {
   /** In-house AV markup never touches interpretation, captioning, connectivity or management. */
   inHouseExempt?: boolean;
   unionExempt?: boolean;
+  hoursPerPersonPerDay?: (drivers: Drivers) => number;
 };
 export type PackageTemplate = {
   key: string;
@@ -47,6 +48,8 @@ export type Drivers = {
   ledWallSqFt: number;
   cameras: number;
   coreCrewHours: number;
+  captionLanguages: number;
+  stageDecksFromScope: number;
 };
 
 // Documented planning defaults. Every one of these is echoed back as an
@@ -75,7 +78,12 @@ export const deriveDrivers = (facts: ProposalFacts): { drivers: Drivers; assumpt
 
   if (facts.breakoutRoomsDerived)
     assume("breakout_room_count", "Breakout room count derived", `${facts.declaredRoomCount} rooms were declared without a room-by-room breakdown; one is assumed to be the general session and ${facts.breakoutRoomCount} to be breakouts.`, "BREAKOUT_ROOM");
-  assume("breakout_tech_hours", "Breakout technician call", `${DRIVER_DEFAULTS.hoursPerBreakout} technician hours per breakout room per show day (standard call) - confirm the schedule.`, "BREAKOUT_ROOM");
+  const minimumCall = facts.unionVenue === "yes" ? 8 : 5;
+  const scheduledHours = facts.crewHoursPerDay === null ? null : Math.max(facts.crewHoursPerDay, minimumCall);
+  const crewHours = scheduledHours ?? DRIVER_DEFAULTS.coreCrewHours;
+  const breakoutHours = scheduledHours ?? DRIVER_DEFAULTS.hoursPerBreakout;
+  if (facts.crewHoursPerDay === null)
+    assume("breakout_tech_hours", "Breakout technician call", `${breakoutHours} technician hours per breakout room per show day (standard call) - confirm the schedule.`, "BREAKOUT_ROOM");
   if (facts.wirelessChannels === null)
     assume("breakout_wireless_channels", "Wireless channels per breakout", `${DRIVER_DEFAULTS.wirelessChannelsPerBreakout} wireless channels per breakout room - confirm the channel count.`, "BREAKOUT_ROOM");
   assume("breakout_sound_scale", "Breakout sound system size", `${DRIVER_DEFAULTS.speakerBoxesPerBreakout} powered speakers per breakout room - confirm room size and audience.`, "BREAKOUT_ROOM");
@@ -87,8 +95,11 @@ export const deriveDrivers = (facts: ProposalFacts): { drivers: Drivers; assumpt
     assume("general_session_audio_scale", "General session audio scale", `${DRIVER_DEFAULTS.lineArrayBoxes} main speakers assumed because the audience size is not stated.`, "GENERAL_SESSION");
   assume("general_session_mics", "General session wireless channels", `${DRIVER_DEFAULTS.generalSessionMics} wireless channels on the main stage - confirm presenter count.`, "GENERAL_SESSION");
   assume("general_session_lighting_rig", "General session lighting rig", `${DRIVER_DEFAULTS.ledWashFixtures} LED wash fixtures on ${DRIVER_DEFAULTS.trussFeet} ft of truss - confirm the lighting plot.`, "GENERAL_SESSION");
-  assume("general_session_stage", "General session stage size", `${DRIVER_DEFAULTS.stageDecks} stage decks (roughly ${DRIVER_DEFAULTS.stageDecks * 32} sq ft) - confirm stage dimensions.`, "GENERAL_SESSION");
-  assume("general_session_crew_call", "General session crew call", `${DRIVER_DEFAULTS.coreCrewHours} hours per core crew role per show day - confirm load-in, rehearsal and strike.`, "GENERAL_SESSION");
+  const stageDecks = facts.stageSqFt === null ? DRIVER_DEFAULTS.stageDecks : Math.max(1, Math.ceil(facts.stageSqFt / 32));
+  if (facts.stageSqFt === null)
+    assume("general_session_stage", "General session stage size", `${DRIVER_DEFAULTS.stageDecks} stage decks (roughly ${DRIVER_DEFAULTS.stageDecks * 32} sq ft) - confirm stage dimensions.`, "GENERAL_SESSION");
+  if (facts.crewHoursPerDay === null)
+    assume("general_session_crew_call", "General session crew call", `${crewHours} hours per core crew role per show day - confirm load-in, rehearsal and strike.`, "GENERAL_SESSION");
   if (facts.ledWallRequested && facts.ledWallSqFt === null)
     assume("led_wall_area", "LED wall area", `${DRIVER_DEFAULTS.ledWallSqFt} sq ft of LED assumed because no wall dimensions were given.`, "GENERAL_SESSION");
   if (facts.cameraCount === null)
@@ -99,17 +110,19 @@ export const deriveDrivers = (facts: ProposalFacts): { drivers: Drivers; assumpt
     drivers: {
       days: facts.days,
       breakoutRooms: facts.breakoutRoomCount,
-      hoursPerBreakout: DRIVER_DEFAULTS.hoursPerBreakout,
+      hoursPerBreakout: breakoutHours,
       wirelessChannelsPerBreakout: facts.wirelessChannels ?? DRIVER_DEFAULTS.wirelessChannelsPerBreakout,
       speakerBoxesPerBreakout: DRIVER_DEFAULTS.speakerBoxesPerBreakout,
       lineArrayBoxes,
       generalSessionMics: DRIVER_DEFAULTS.generalSessionMics,
       ledWashFixtures: DRIVER_DEFAULTS.ledWashFixtures,
       trussFeet: DRIVER_DEFAULTS.trussFeet,
-      stageDecks: DRIVER_DEFAULTS.stageDecks,
+      stageDecks,
       ledWallSqFt: facts.ledWallSqFt ?? DRIVER_DEFAULTS.ledWallSqFt,
       cameras: facts.cameraCount ?? DRIVER_DEFAULTS.cameras,
-      coreCrewHours: DRIVER_DEFAULTS.coreCrewHours,
+      coreCrewHours: crewHours,
+      captionLanguages: Math.max(facts.captionLanguageCount, 1),
+      stageDecksFromScope: stageDecks,
     },
     assumptions,
   };
@@ -128,7 +141,7 @@ const BREAKOUT_ROOM: PackageTemplate = {
     { key: "breakout_sound_system", label: "Room sound system", kind: "equipment", category: "audio", subcategory: "Speakers", dimension: "box", implied: true, driver: "boxes", quantity: (d) => d.breakoutRooms * d.speakerBoxesPerBreakout },
     { key: "breakout_audio_cabling", label: "Room audio cabling", kind: "equipment", category: "audio", subcategory: "Cabling", driver: "rooms", quantity: (d) => d.breakoutRooms },
     { key: "breakout_playback", label: "Playback laptop", kind: "equipment", category: "audio", subcategory: "Playback Computer", dimension: "each", driver: "rooms", quantity: (d) => d.breakoutRooms },
-    { key: "breakout_technician", label: "Breakout technician", kind: "labor", category: "labor", subcategory: "Stage", labelHint: /breakout technician/i, driver: "hours", quantity: (d) => d.breakoutRooms * d.hoursPerBreakout * d.days },
+    { key: "breakout_technician", label: "Breakout technician", kind: "labor", category: "labor", subcategory: "Stage", labelHint: /breakout technician/i, driver: "hours", quantity: (d) => d.breakoutRooms * d.hoursPerBreakout * d.days, hoursPerPersonPerDay: (d) => d.hoursPerBreakout },
   ],
 };
 
@@ -150,10 +163,10 @@ const GENERAL_SESSION: PackageTemplate = {
     { key: "gs_led_wash", label: "LED wash fixtures", kind: "equipment", category: "lighting", subcategory: "Fixture - LED Wash", dimension: "fixture", driver: "fixtures", quantity: (d) => d.ledWashFixtures },
     { key: "gs_truss", label: "Truss", kind: "equipment", category: "lighting", subcategory: "Truss", dimension: "linear_ft", driver: "linear_ft", quantity: (d) => d.trussFeet },
     { key: "gs_stage_deck", label: "Staging", kind: "equipment", category: "staging", subcategory: "Stage Deck", dimension: "deck", driver: "decks", quantity: (d) => d.stageDecks },
-    { key: "gs_a1", label: "A1 audio lead", kind: "labor", category: "labor", subcategory: "Audio", labelHint: /^A1\b/, driver: "hours", quantity: (d) => d.coreCrewHours * d.days },
-    { key: "gs_v1", label: "V1 video lead", kind: "labor", category: "labor", subcategory: "Video", labelHint: /^V1\b/, driver: "hours", quantity: (d) => d.coreCrewHours * d.days },
-    { key: "gs_l1", label: "L1 lighting lead", kind: "labor", category: "labor", subcategory: "Lighting", labelHint: /^L1\b/, driver: "hours", quantity: (d) => d.coreCrewHours * d.days },
-    { key: "gs_td", label: "Technical director", kind: "labor", category: "labor", subcategory: "Stage", labelHint: /technical director/i, driver: "hours", quantity: (d) => d.coreCrewHours * d.days },
+    { key: "gs_a1", label: "A1 audio lead", kind: "labor", category: "labor", subcategory: "Audio", labelHint: /^A1\b/, driver: "hours", quantity: (d) => d.coreCrewHours * d.days, hoursPerPersonPerDay: (d) => d.coreCrewHours },
+    { key: "gs_v1", label: "V1 video lead", kind: "labor", category: "labor", subcategory: "Video", labelHint: /^V1\b/, driver: "hours", quantity: (d) => d.coreCrewHours * d.days, hoursPerPersonPerDay: (d) => d.coreCrewHours },
+    { key: "gs_l1", label: "L1 lighting lead", kind: "labor", category: "labor", subcategory: "Lighting", labelHint: /^L1\b/, driver: "hours", quantity: (d) => d.coreCrewHours * d.days, hoursPerPersonPerDay: (d) => d.coreCrewHours },
+    { key: "gs_td", label: "Technical director", kind: "labor", category: "labor", subcategory: "Stage", labelHint: /technical director/i, driver: "hours", quantity: (d) => d.coreCrewHours * d.days, hoursPerPersonPerDay: (d) => d.coreCrewHours },
     { key: "gs_management", label: "Production management", kind: "labor", category: "production_management", subcategory: "Management", dimension: "each", inHouseExempt: true, unionExempt: true, driver: "days", quantity: (d) => d.days },
   ],
 };
@@ -166,7 +179,7 @@ const RECORDING: PackageTemplate = {
   components: [
     { key: "recording_camera", label: "Cameras", kind: "equipment", category: "video", subcategory: "Camera", dimension: "camera", driver: "cameras", quantity: (d) => d.cameras },
     { key: "recording_camera_support", label: "Camera support", kind: "equipment", category: "video", subcategory: "Camera Support", dimension: "each", implied: true, driver: "cameras", quantity: (d) => d.cameras },
-    { key: "recording_camera_operator", label: "Camera operators", kind: "labor", category: "labor", subcategory: "Video", labelHint: /camera operator/i, driver: "hours", quantity: (d) => d.cameras * d.coreCrewHours * d.days },
+    { key: "recording_camera_operator", label: "Camera operators", kind: "labor", category: "labor", subcategory: "Video", labelHint: /camera operator/i, driver: "hours", quantity: (d) => d.cameras * d.coreCrewHours * d.days, hoursPerPersonPerDay: (d) => d.coreCrewHours },
   ],
 };
 
@@ -178,7 +191,7 @@ const HYBRID: PackageTemplate = {
   components: [
     { key: "hybrid_encoder", label: "Encoder", kind: "equipment", category: "streaming_hybrid", subcategory: "Encoding", dimension: "each", driver: "each", quantity: () => 1 },
     { key: "hybrid_package", label: "Streaming package", kind: "equipment", category: "streaming_hybrid", subcategory: "Package", driver: "each", quantity: () => 1 },
-    { key: "hybrid_operator", label: "Streaming operator", kind: "labor", category: "labor", subcategory: "Streaming", driver: "hours", quantity: (d) => d.coreCrewHours * d.days },
+    { key: "hybrid_operator", label: "Streaming operator", kind: "labor", category: "labor", subcategory: "Streaming", driver: "hours", quantity: (d) => d.coreCrewHours * d.days, hoursPerPersonPerDay: (d) => d.coreCrewHours },
   ],
 };
 
@@ -192,4 +205,45 @@ const CONNECTIVITY: PackageTemplate = {
   ],
 };
 
-export const PACKAGE_TEMPLATES: PackageTemplate[] = [GENERAL_SESSION, BREAKOUT_ROOM, RECORDING, HYBRID, CONNECTIVITY];
+const SCENIC: PackageTemplate = {
+  key: "SCENIC",
+  label: "Scenic production",
+  category: "staging",
+  applies: (facts) => facts.scenicRequested,
+  components: [
+    { key: "scenic_element", label: "Custom scenic element", kind: "equipment", category: "staging", subcategory: "Scenic", dimension: "element", driver: "elements", quantity: () => 1 },
+    { key: "scenic_carpenter", label: "Scenic carpenter", kind: "labor", category: "labor", subcategory: "Stage", labelHint: /scenic carpenter/i, driver: "hours", quantity: (d) => d.coreCrewHours * d.days, hoursPerPersonPerDay: (d) => d.coreCrewHours },
+  ],
+};
+
+const CAPTIONING: PackageTemplate = {
+  key: "CAPTIONING",
+  label: "Live captioning",
+  category: "accessibility",
+  applies: (facts) => facts.captioningRequested,
+  components: [
+    { key: "captioning_service", label: "Live captioning / CART", kind: "labor", category: "labor", subcategory: "Accessibility", labelHint: /captioner|CART/i, inHouseExempt: true, unionExempt: true, driver: "hours", quantity: (d) => d.captionLanguages * d.coreCrewHours * d.days, hoursPerPersonPerDay: (d) => d.coreCrewHours },
+  ],
+};
+
+const EXPENDABLES: PackageTemplate = {
+  key: "EXPENDABLES",
+  label: "Show expendables",
+  category: "expendables",
+  applies: () => true,
+  components: [
+    { key: "expendables_kit", label: "Consumables kit", kind: "equipment", category: "expendables", subcategory: "Consumables", labelHint: /consumables kit/i, implied: true, inHouseExempt: true, driver: "shows", quantity: (d) => d.days },
+    { key: "show_batteries", label: "Batteries", kind: "equipment", category: "expendables", subcategory: "Consumables", labelHint: /batteries/i, implied: true, inHouseExempt: true, driver: "shows", quantity: (d) => d.days },
+  ],
+};
+
+export const PACKAGE_TEMPLATES: PackageTemplate[] = [
+  GENERAL_SESSION,
+  BREAKOUT_ROOM,
+  RECORDING,
+  HYBRID,
+  CONNECTIVITY,
+  SCENIC,
+  CAPTIONING,
+  EXPENDABLES,
+];
