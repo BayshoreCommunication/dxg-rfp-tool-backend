@@ -3,7 +3,13 @@ export interface VendorDocumentStorage {
   cleanup(localPath: string): Promise<void>;
 }
 
-export type VendorUploadScanOutcome = "clean" | "infected" | "skipped";
+/**
+ * "unavailable" means the scan could not be performed (scanner unconfigured,
+ * down, or errored) while scanning is required. It blocks the submission, the
+ * same as "infected". "skipped" now only occurs under the explicit
+ * VENDOR_UPLOAD_SCAN_REQUIRED=false exception.
+ */
+export type VendorUploadScanOutcome = "clean" | "infected" | "skipped" | "unavailable";
 
 /** Optional inline malware scan of an uploaded file before it is stored. */
 export type VendorUploadMalwareScan = (

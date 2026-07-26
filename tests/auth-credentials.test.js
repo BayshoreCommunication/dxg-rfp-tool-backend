@@ -116,11 +116,36 @@ test("admin signup hashes once, creates admin, and issues admin token", async ()
   });
   assert.equal((await signup({
     name: " Admin ", email: " ADMIN@E.COM ", phone: " 123 ", password: "secret",
-  })).kind, "created");
+    adminSecret: "the-secret",
+  }, "the-secret")).kind, "created");
   assert.deepEqual(created, {
     name: "Admin", email: "admin@e.com", phone: "123", passwordHash: "one-hash",
   });
   assert.deepEqual(issued, { userId: "a1", email: "admin@e.com", role: "admin" });
+});
+
+test("admin signup fails closed when no signup secret is configured", async () => {
+  let createdCount = 0;
+  const signup = createRegisterAdmin({
+    accounts: {
+      async emailExists() { return false; },
+      async createAdmin() { createdCount += 1; return { id: "a1", name: "n", email: "e", role: "admin" }; },
+    },
+    passwords: { async hash() { return "h"; } },
+    tokens: { issue() { return { accessToken: "t", expiresAt: 2, expiresIn: 1 }; } },
+  });
+  const attempt = { name: "Admin", email: "admin@e.com", password: "secret" };
+  // Unset, empty, and whitespace-only configuration must all refuse. An
+  // unconfigured secret previously skipped the check entirely, leaving admin
+  // account creation open to anyone who could reach the endpoint — and the
+  // variable was absent from .env.example, so unset was the documented setup.
+  for (const configured of [undefined, "", "   "]) {
+    assert.equal((await signup(attempt, configured)).kind, "invalid_secret");
+  }
+  // With a secret configured, a missing or wrong presented value still refuses.
+  assert.equal((await signup(attempt, "the-secret")).kind, "invalid_secret");
+  assert.equal((await signup({ ...attempt, adminSecret: "wrong" }, "the-secret")).kind, "invalid_secret");
+  assert.equal(createdCount, 0);
 });
 
 test("authenticated-user lookup delegates only the authenticated identifier", async () => {

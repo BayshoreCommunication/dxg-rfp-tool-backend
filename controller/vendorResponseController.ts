@@ -93,6 +93,16 @@ export const submitVendorResponse = async (
       });
       return;
     }
+    // Fail-closed: the scan could not be performed, so the files are refused
+    // rather than stored unscanned. 503 (not 422) because the submission is
+    // valid and retrying once the scanner is healthy is the correct action.
+    if (result.kind === "scan_unavailable") {
+      res.status(503).json({
+        success: false,
+        message: "Uploads cannot be virus-scanned right now, so the submission was not accepted. Please try again shortly.",
+      });
+      return;
+    }
     if (result.kind === "invalid") {
       const labels = {
         vendorName: "Vendor name",

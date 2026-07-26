@@ -36,7 +36,10 @@ router.post("/register", signUp);
 /* ─── Sign in ─── */
 router.post("/login", authAttemptLimit, signInWithCredentials);
 router.post("/google", authAttemptLimit, signInWithGoogle);
-router.post("/admin/signup", signUpAdmin);
+// Rate-limited like every other credential endpoint: the route is gated by
+// ADMIN_SIGNUP_SECRET, and an unlimited endpoint would let that secret be
+// brute-forced offline-fast.
+router.post("/admin/signup", authAttemptLimit, signUpAdmin);
 router.post("/admin/signin", authAttemptLimit, signInAdmin);
 router.post("/refresh", refreshLimit, refreshSession);
 

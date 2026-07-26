@@ -51,6 +51,12 @@ console.log(
 const app: Application = express();
 const PORT = process.env.PORT || 8000;
 
+// Production terminates TLS at nginx and proxies from loopback, so without this
+// every request reports req.ip === "127.0.0.1" and each IP-keyed rate limiter
+// collapses into one global bucket shared by all callers. One hop only —
+// trusting more would let a client forge X-Forwarded-For and evade limits.
+app.set("trust proxy", 1);
+
 // Middleware
 app.use(helmet());
 
