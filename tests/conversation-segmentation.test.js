@@ -122,3 +122,51 @@ test("whitespace-only turns are dropped without breaking the segment", () =>
     assert.equal(segmentText([turn("a", " x "), turn("b", "")]), "x");
     assert.equal(MIN_SEGMENT_CHARS, 40);
   }));
+
+const fs = require("node:fs"), path = require("node:path");
+const root = path.join(__dirname, "..");
+const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8");
+
+test("a chat message evaluates the segment boundary before replying", () => {
+  // intent:"chat" previously assigned no run and dispatched nothing, so typed
+  // requirements never reached MongoDB by any route.
+  const controller = read("controller/conversationsController.ts");
+  assert.ok(controller.includes("maybeExtractSegment("), "chat evaluates the boundary");
+  assert.ok(
+    controller.indexOf("maybeExtractSegment(") > controller.indexOf("appendExchange("),
+    "the message is stored before the segment is considered",
+  );
+});
+
+test("segment intake resolves the tenant before reading any tenant table", () => {
+  // The same ordering bug that made purgeProposalArtifacts a permanent no-op:
+  // reading a tenant table before the GUC is set means RLS filters everything
+  // and the segment silently never closes.
+  const intake = read("src/modules/conversations/segmentIntake.ts");
+  const guc = intake.indexOf("set_config('app.organization_id'");
+  const firstRead = intake.indexOf("FROM rfpilot.proposal_references");
+  assert.ok(guc > 0 && firstRead > 0);
+  assert.ok(guc < firstRead, "organization GUC precedes the first tenant-table read");
+  // Neither intake nor the chain may fail the caller.
+  assert.ok(intake.includes("} catch (error) {"), "intake swallows its own failures");
+});
+
+test("extraction chains only for conversation sources that cleared the gates", () => {
+  const chain = read("src/modules/conversations/segmentExtraction.ts");
+  for (const gate of [
+    'source.origin !== "conversation"',
+    "conversationExtractionEnabled()",
+    "contextEnabled()",
+    "LIVE_AI_PROPOSAL_SOURCE_ENABLED",
+    'source.status !== "ready"',
+    'source.confidentiality !== "non_confidential"',
+  ]) {
+    assert.ok(chain.includes(gate), `chain checks ${gate}`);
+  }
+  // Derived from the source id, so a redelivered scan job cannot start a second
+  // extraction run for the same segment.
+  assert.ok(chain.includes("`conversation-extract:${source.id}`"), "extraction run is idempotent");
+
+  const handler = read("src/modules/durableJobs/sourceSecurityHandler.ts");
+  assert.ok(handler.includes("chainConversationExtraction("), "the scan handler chains extraction");
+});

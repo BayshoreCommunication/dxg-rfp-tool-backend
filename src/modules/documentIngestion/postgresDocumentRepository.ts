@@ -9,17 +9,17 @@ type Row = {
   confidentiality: DocumentSource["confidentiality"];
   original_filename: string; declared_mime_type: string; expected_size_bytes: string;
   actual_size_bytes: string | null; sha256: string | null; duplicate_source_id: string | null;
-  retention_until: Date | null; legal_hold: boolean; created_at: Date; updated_at: Date; object_key: string;
+  retention_until: Date | null; legal_hold: boolean; created_at: Date; updated_at: Date; object_key: string; origin: "upload"|"notes"|"conversation";
 };
 const select = `SELECT s.id, p.external_mongo_id proposal_mongo_id, s.status,s.confidentiality, o.original_filename,
  o.declared_mime_type, o.expected_size_bytes, o.actual_size_bytes, o.sha256,
  (SELECT o2.source_id::text FROM rfpilot.document_objects o2 WHERE o2.organization_id=s.organization_id AND o2.sha256=o.sha256 AND o2.source_id<>s.id ORDER BY o2.created_at LIMIT 1) duplicate_source_id,
- s.retention_until, s.legal_hold, s.created_at, s.updated_at, o.object_key
+ s.retention_until, s.legal_hold, s.created_at, s.updated_at, o.object_key, s.origin
  FROM rfpilot.document_sources s JOIN rfpilot.document_objects o ON o.source_id=s.id
  LEFT JOIN rfpilot.proposal_references p ON p.id=s.proposal_reference_id`;
 const map = (row: Row): DocumentSource & { objectKey: string } => ({
   id: row.id, proposalMongoId: row.proposal_mongo_id, status: row.status,
-  confidentiality:row.confidentiality,
+  confidentiality:row.confidentiality, origin: row.origin,
   originalFilename: row.original_filename, mimeType: row.declared_mime_type,
   expectedSizeBytes: Number(row.expected_size_bytes), actualSizeBytes: row.actual_size_bytes === null ? null : Number(row.actual_size_bytes),
   sha256: row.sha256?.trim() ?? null, duplicateSourceId: row.duplicate_source_id,

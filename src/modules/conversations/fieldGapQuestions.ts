@@ -2,7 +2,14 @@ import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import Proposal from "../../../modal/proposalsModel";
 import { mongoPathFor } from "../candidateApplication/canonicalMapping";
-import { IMPORTANT_FIELD_QUESTIONS, MAX_OPEN_FIELD_QUESTIONS, fieldQuestionCode } from "./domain";
+import {
+  ADAPTIVE_VENUE_FIELD_PATHS,
+  IMPORTANT_FIELD_QUESTIONS,
+  MAX_ADAPTIVE_VENUE_QUESTIONS,
+  MAX_OPEN_FIELD_QUESTIONS,
+  fieldQuestionCode,
+  venueNeedsOperationalFollowUp,
+} from "./domain";
 
 /*
  * Questions used to originate only from an extraction run, so a proposal
@@ -29,8 +36,8 @@ export const syncFieldGapQuestions = async (
   input: { organizationMongoId: string; actorUserMongoId: string; proposalMongoId: string },
 ): Promise<void> => {
   // The canonical mapping owns path -> mongo path; no value validation here.
-  const mapped = IMPORTANT_FIELD_QUESTIONS.map((field) => ({ field, mongoPath: mongoPathFor(field.path) }));
-  const paths = mapped.map((item) => item.mongoPath).filter((path): path is string => Boolean(path));
+  const allMapped = IMPORTANT_FIELD_QUESTIONS.map((field) => ({ field, mongoPath: mongoPathFor(field.path) }));
+  const paths = allMapped.map((item) => item.mongoPath).filter((path): path is string => Boolean(path));
   const proposal = await Proposal.findOne({
     _id: input.proposalMongoId,
     userId: input.actorUserMongoId,
@@ -38,11 +45,34 @@ export const syncFieldGapQuestions = async (
   }).select(paths.join(" ")).lean<Record<string, unknown>>();
   if (!proposal) return;
 
-  const open = await c.query<{ n: number }>(
-    "SELECT count(*)::int n FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND status='open'",
+  const venueNamePath = mongoPathFor("/content/venueSchedule/venueName");
+  const venueStatusPath = mongoPathFor("/content/venueSchedule/venueConfirmedStatus");
+  const venueSelected = Boolean(
+    venueNamePath &&
+    venueNeedsOperationalFollowUp(
+      readPath(proposal, venueNamePath),
+      venueStatusPath ? readPath(proposal, venueStatusPath) : undefined,
+    ),
+  );
+  const questionLimit = venueSelected ? MAX_ADAPTIVE_VENUE_QUESTIONS : MAX_OPEN_FIELD_QUESTIONS;
+  const mapped = allMapped.slice(0, questionLimit);
+  if (!venueSelected) {
+    for (const path of ADAPTIVE_VENUE_FIELD_PATHS) {
+      await c.query(
+        "UPDATE rfpilot.clarification_questions SET status='superseded',updated_at=now() WHERE proposal_reference_id=$1 AND issue_code=$2 AND status='open'",
+        [proposalReferenceId, fieldQuestionCode(path)],
+      );
+    }
+  }
+
+  const asked = await c.query<{ n: number }>(
+    "SELECT count(*)::int n FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND status<>'superseded' AND issue_code LIKE 'MISSING_FIELD:%'",
     [proposalReferenceId],
   );
-  let budget = MAX_OPEN_FIELD_QUESTIONS - Number(open.rows[0]?.n ?? 0);
+  // The beginner intake has a lifetime question budget, not a moving
+  // "currently open" budget. Otherwise every answer frees a slot and the
+  // eight-question journey quietly grows to nine, ten, and beyond.
+  let budget = questionLimit - Number(asked.rows[0]?.n ?? 0);
 
   for (const { field, mongoPath } of mapped) {
     if (!mongoPath) continue;

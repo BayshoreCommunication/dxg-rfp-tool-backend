@@ -10,6 +10,7 @@ import { proposalDraftEnabled, parseDraftInput } from "../src/modules/proposalDr
 import { proposalDraftRepository } from "../src/modules/proposalDraft/postgresProposalDraftRepository";
 import { durableJobDispatcher } from "../src/modules/durableJobs/composition";
 import { appendChatReply } from "../src/modules/conversations/chatReply";
+import { maybeExtractSegment } from "../src/modules/conversations/segmentIntake";
 import { safeLog } from "../src/shared/observability/safeTelemetry";
 
 const context = (req: AuthRequest) => {
@@ -81,8 +82,20 @@ export const postConversationMessage = async (req: AuthRequest, res: Response) =
     }
     const exchange = await conversationRepository.appendExchange({ ...ctx, proposalMongoId, idempotencyKey: key, content: input.content, intent: input.intent, sourceIds: input.sourceIds, run });
     if (run) void durableJobDispatcher.dispatch().catch(() => undefined);
-    if (input.intent === "chat" && exchange.created)
-      await appendChatReply(ctx, proposalMongoId, (exchange as { organizationId?: string }).organizationId, exchange.message.id);
+    if (input.intent === "chat" && exchange.created) {
+      // What the planner typed is no longer a dead end: once the accumulated
+      // turns close into a segment, they are materialised as a scanned source
+      // and the scan chains extraction. Batched rather than per-message so a
+      // correction lands in the same run as what it corrects, where the
+      // conflict detector can see them disagree. Never blocks the reply.
+      await maybeExtractSegment({ ...ctx, proposalMongoId });
+      await appendChatReply(
+        ctx,
+        proposalMongoId,
+        (exchange as { organizationId?: string }).organizationId,
+        exchange.message.id,
+      );
+    }
     safeLog("info", "conversation_message_created", { outcome: exchange.created ? "created" : "duplicate", operation: input.intent });
     res.status(exchange.created ? 201 : 200).json({ data: { ...exchange, run } });
   } catch (error) { handle(res, error); }

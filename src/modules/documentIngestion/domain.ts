@@ -13,6 +13,9 @@ export type DocumentSource = {
   id: string;
   proposalMongoId: string | null;
   confidentiality: "non_confidential"|"internal"|"confidential"|"restricted";
+  // Surfaced so the UI can label a source the planner never explicitly added,
+  // and so the scan handler knows whether to chain extraction.
+  origin: "upload"|"notes"|"conversation";
   status: DocumentStatus;
   originalFilename: string;
   mimeType: string;

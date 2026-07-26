@@ -95,16 +95,22 @@ export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Obje
   { path: "/content/event/startDate", prompt: "When does the event start? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
   { path: "/content/event/endDate", prompt: "When does the event end? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
   { path: "/content/event/eventFormat", prompt: "Is the event in-person, hybrid, or virtual?", impact: "scope", answerType: "choice", options: Object.freeze(["In-Person", "Hybrid", "Virtual"]) },
+  { path: "/content/venueSchedule/venueName", prompt: "Which venue will host the event? Enter the venue name, or “Not selected” if it is still undecided.", impact: "cost", answerType: "text" },
   { path: "/content/event/attendees", prompt: "How many in-person attendees are expected?", impact: "cost", answerType: "number" },
   { path: "/content/venueSchedule/numberOfEventRooms", prompt: "How many event rooms are required?", impact: "cost", answerType: "number" },
   { path: "/content/venueSchedule/venueCity", prompt: "Which city will host the event?", impact: "cost", answerType: "text" },
+  // Asked only after a real venue is selected.
+  { path: "/content/venueSchedule/venueConfirmedStatus", prompt: "What is the venue status?", impact: "cost", answerType: "choice", options: Object.freeze(["Contract signed", "Verbally confirmed", "Preferred", "Not selected"]) },
   { path: "/content/venueSchedule/isUnionVenue", prompt: "Is the venue a union venue? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
   { path: "/content/venue/inHouseAvRequired", prompt: "Must the venue's in-house AV provider be used? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
+  { path: "/content/venue/riggingRequired", prompt: "Will this venue require rigging? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
+  { path: "/content/venue/powerDropsRequired", prompt: "Will dedicated power drops be required? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
+  { path: "/content/venueSchedule/loadInDate", prompt: "When can production load in? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
+  { path: "/content/venueSchedule/loadInTime", prompt: "What time can production load in? (HH:MM)", impact: "schedule", answerType: "text" },
+  { path: "/content/venue/venueAccessRequirements", prompt: "Are there loading dock, freight elevator, security, parking, or access restrictions?", impact: "production", answerType: "text" },
   { path: "/content/budget/proposalSubmissionDueDate", prompt: "When is the proposal due? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
   { path: "/content/hybridVirtual/streamingPlatform", prompt: "Which streaming platform will the event use?", impact: "production", answerType: "choice", options: STREAMING_PLATFORMS },
   { path: "/content/videoRecordingStep/videoRecordingRequired", prompt: "Do you need video recording? (yes / no / not sure)", impact: "production", answerType: "choice", options: YES_NO },
-  { path: "/content/venue/riggingRequired", prompt: "Does the venue require rigging? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
-  { path: "/content/venue/powerDropsRequired", prompt: "Are power drops required? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
 ]);
 
 export const importantFieldQuestionByPath = (path: string): ImportantFieldQuestion | null =>
@@ -117,10 +123,26 @@ export const CATCH_ALL_PATH_THRESHOLD = 8;
 export const isCatchAllIssue = (code: string, paths: string[]): boolean =>
   paths.length > CATCH_ALL_PATH_THRESHOLD || /missing[_-]?(supported[_-]?)?fields/i.test(code);
 
-// A beginner can produce a useful first draft after the seven highest-impact
+// A beginner can produce a useful first draft after the eight highest-impact
 // facts. Remaining fields become prioritized improvements after the draft
 // instead of an apparently endless intake interview.
-export const MAX_OPEN_FIELD_QUESTIONS = 7;
+export const MAX_OPEN_FIELD_QUESTIONS = 8;
+export const MAX_ADAPTIVE_VENUE_QUESTIONS = 16;
+export const ADAPTIVE_VENUE_FIELD_PATHS = Object.freeze(
+  IMPORTANT_FIELD_QUESTIONS
+    .slice(MAX_OPEN_FIELD_QUESTIONS, MAX_ADAPTIVE_VENUE_QUESTIONS)
+    .map((field) => field.path),
+);
+
+export const isSelectedVenueName = (value: unknown): boolean => {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 && !["not selected", "tbd", "undecided", "unknown", "n/a"].includes(normalized);
+};
+
+export const venueNeedsOperationalFollowUp = (name: unknown, confirmationStatus: unknown): boolean =>
+  isSelectedVenueName(name) &&
+  !(typeof confirmationStatus === "string" && ["not_selected", "not selected"].includes(confirmationStatus.trim().toLowerCase()));
 
 // Deterministic per-field issue code so the (proposal, run, issue_code) unique
 // key deduplicates exploded questions. Clamped to the 100-char column limit.

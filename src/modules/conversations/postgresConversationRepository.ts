@@ -113,30 +113,32 @@ const syncQuestions = async (c: PoolClient, org: string, proposalRefId: string, 
        RETURNING id`,
       [uuidv7(), org, proposalRefId, conversationId, runId, code, severity, JSON.stringify(paths), prompt.slice(0, 1000)],
     );
+  const asked = await c.query<{ n: number }>(
+    "SELECT count(*)::int n FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND context_run_id=$2 AND status<>'superseded'",
+    [proposalRefId, runId],
+  );
+  let questionBudget = MAX_OPEN_FIELD_QUESTIONS - Number(asked.rows[0]?.n ?? 0);
   for (const issue of issues.rows) {
+    if (questionBudget <= 0) break;
     const paths = issue.paths || [];
     if (isCatchAllIssue(issue.code, paths)) {
       // A broad "missing fields" issue never becomes one giant card. It is
       // exploded into individual questions — one whitelisted high-impact field
       // each, in whitelist priority order, capped at MAX_OPEN_FIELD_QUESTIONS
       // open at once. As earlier ones get answered or dismissed, later
-      // whitelist fields are not backfilled after every answer. The first seven
+      // whitelist fields are not backfilled after every answer. The first eight
       // create the minimum viable draft; later detail is requested as a
       // prioritized improvement rather than extending intake indefinitely.
-      const asked = await c.query<{ n: number }>(
-        "SELECT count(*)::int n FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND context_run_id=$2 AND status<>'superseded' AND issue_code LIKE 'MISSING_FIELD:%'",
-        [proposalRefId, runId],
-      );
-      let budget = MAX_OPEN_FIELD_QUESTIONS - Number(asked.rows[0]?.n ?? 0);
       for (const field of IMPORTANT_FIELD_QUESTIONS) {
-        if (budget <= 0) break;
+        if (questionBudget <= 0) break;
         if (!paths.includes(field.path)) continue;
         const inserted = await insertQuestion(fieldQuestionCode(field.path), issue.severity, [field.path], field.prompt);
-        if (inserted.rows[0]) budget -= 1;
+        if (inserted.rows[0]) questionBudget -= 1;
       }
       continue;
     }
-    await insertQuestion(issue.code, issue.severity, paths, questionPrompt(issue.code, paths));
+    const inserted = await insertQuestion(issue.code, issue.severity, paths, questionPrompt(issue.code, paths));
+    if (inserted.rows[0]) questionBudget -= 1;
   }
 };
 
