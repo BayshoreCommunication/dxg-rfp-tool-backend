@@ -1,7 +1,13 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { createSessionManager, hashOpaqueToken } = require("../src/modules/auth/application/manageSessions");
-const { generateAccessToken, verifyAccessToken } = require("../config/jwt");
+const {
+  generateAccessToken,
+  generateNotificationSocketTicket,
+  TOKEN_EXPIRY_MS,
+  verifyAccessToken,
+  verifyNotificationSocketTicket,
+} = require("../config/jwt");
 
 const account = {
   userId: "u1",
@@ -46,7 +52,21 @@ const setup = (overrides = {}) => {
       for (const record of records.values()) if (record.familyId === input.familyId) { record.status = "revoked"; count += 1; }
       return count;
     },
-    async revokeSession() { return 0; },
+    async revokeSession(input) {
+      calls.push(["revokeSession", input]);
+      let count = 0;
+      for (const record of records.values()) {
+        if (
+          record.sessionId === input.sessionId &&
+          record.userId === input.userId &&
+          record.status !== "revoked"
+        ) {
+          record.status = "revoked";
+          count += 1;
+        }
+      }
+      return count;
+    },
     async revokeAll() { return 0; },
     async listActive() { return []; },
     ...overrides.sessions,
@@ -71,6 +91,15 @@ test("begin stores only the refresh hash and returns one raw token", async () =>
   const created = calls.find(([kind]) => kind === "create")[1];
   assert.equal(created.tokenHash, hashOpaqueToken("refresh-1"));
   assert.equal(JSON.stringify(created).includes("refresh-1"), false);
+  assert.equal(
+    created.expiresAt.getTime() - fixedNow.getTime(),
+    30 * 24 * 60 * 60 * 1000,
+  );
+  assert.equal(
+    created.idleExpiresAt.getTime() - fixedNow.getTime(),
+    30 * 24 * 60 * 60 * 1000,
+  );
+  assert.equal(result.refreshExpiresAt, created.expiresAt.getTime());
   assert.equal(calls.at(-1)[1].action, "auth.session.created");
 });
 
@@ -110,7 +139,45 @@ test("inactive membership prevents rotation and revokes the family", async () =>
   assert.ok(calls.some(([kind, input]) => kind === "revokeFamily" && input.reason === "membership_inactive"));
 });
 
-test("session access tokens carry required claims and expire within fifteen minutes", () => {
+test("logout can revoke a session using only its refresh credential", async () => {
+  const { manager, calls, records } = setup();
+  const first = await manager.begin({ account, correlationId: "c1" });
+
+  assert.deepEqual(
+    await manager.revokePresented({
+      refreshToken: first.refreshToken,
+      correlationId: "c2",
+    }),
+    { kind: "revoked", revoked: 1 },
+  );
+  assert.equal(
+    records.get(hashOpaqueToken(first.refreshToken)).status,
+    "revoked",
+  );
+  assert.ok(
+    calls.some(
+      ([kind, input]) =>
+        kind === "revokeSession" &&
+        input.sessionId === first.sessionId &&
+        input.reason === "user_logout",
+    ),
+  );
+  assert.equal(JSON.stringify(calls).includes(first.refreshToken), false);
+});
+
+test("logout with an unknown refresh credential is idempotent", async () => {
+  const { manager, calls } = setup();
+  assert.deepEqual(
+    await manager.revokePresented({
+      refreshToken: "not-a-session",
+      correlationId: "c1",
+    }),
+    { kind: "not_found", revoked: 0 },
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("session access tokens carry required claims and use the configured lifetime", () => {
   const issuedAt = Date.now();
   const token = generateAccessToken({
     userId: "u1",
@@ -121,7 +188,9 @@ test("session access tokens carry required claims and expire within fifteen minu
     roles: ["planner"],
     rolesVersion: 1,
   });
-  assert.ok(token.expiresAt - issuedAt <= 15 * 60 * 1000 + 1000);
+  assert.ok(
+    Math.abs(token.expiresAt - issuedAt - TOKEN_EXPIRY_MS) <= 1000,
+  );
   assert.deepEqual(verifyAccessToken(token.accessToken), {
     userId: "u1",
     email: "planner@example.com",
@@ -131,4 +200,30 @@ test("session access tokens carry required claims and expire within fifteen minu
     roles: ["planner"],
     rolesVersion: 1,
   });
+});
+
+test("notification socket tickets are short-lived and cannot act as access tokens", () => {
+  const issuedAt = Date.now();
+  const issued = generateNotificationSocketTicket({
+    userId: "u1",
+    organizationId: "o1",
+    sessionId: "s1",
+  });
+
+  assert.ok(issued.expiresAt - issuedAt <= 31_000);
+  assert.deepEqual(verifyNotificationSocketTicket(issued.ticket), {
+    userId: "u1",
+    organizationId: "o1",
+    sessionId: "s1",
+  });
+  assert.throws(() => verifyAccessToken(issued.ticket));
+
+  const access = generateAccessToken({
+    userId: "u1",
+    email: "planner@example.com",
+    role: "customer",
+    organizationId: "o1",
+    sessionId: "s1",
+  });
+  assert.throws(() => verifyNotificationSocketTicket(access.accessToken));
 });

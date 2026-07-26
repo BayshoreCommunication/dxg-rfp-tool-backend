@@ -6,6 +6,7 @@ import {
 } from "./application/manageNotifications";
 import { mongoNotificationRepository } from "./infrastructure/mongo/mongoNotificationRepository";
 import { legacyNotificationRealtimeAdapter } from "./infrastructure/realtime/legacyNotificationRealtimeAdapter";
+import { generateNotificationSocketTicket } from "../../../config/jwt";
 
 export const listOwnedNotifications = createListOwnedNotifications(
   mongoNotificationRepository,
@@ -22,3 +23,6 @@ export const markAllOwnedNotificationsRead =
     repository: mongoNotificationRepository,
     realtime: legacyNotificationRealtimeAdapter,
   });
+
+export const issueNotificationSocketTicket =
+  generateNotificationSocketTicket;

@@ -68,6 +68,9 @@ DO_FOLDER_NAME=DXG-RFP-Tool
 
 FRONTEND_URL=http://localhost:3000
 BACKEND_URL=http://localhost:8000
+ACCESS_TOKEN_EXPIRE_MINUTES=10080
+REFRESH_TOKEN_EXPIRE_DAYS=30
+BFF_SHARED_SECRET=use-the-same-long-random-value-in-both-next-apps
 ADMIN_SIGNUP_SECRET=your-admin-signup-secret
 SUPER_USER_EMAIL=admin@example.com
 ```
@@ -88,6 +91,8 @@ The API starts on `http://localhost:8000` by default.
 - `npm run type-check` runs TypeScript without emitting files
 - `npm run create-super-user` creates the configured super user
 - `npm run test-image-upload` runs the upload test helper
+- `npm run verify:auth-refresh` verifies login, rotation, revocation, and
+  account-only signup against an isolated test backend/database
 
 ## Health and Base Routes
 
@@ -108,11 +113,16 @@ Base path: `/api/auth`
 - `POST /google`
 - `POST /admin/signup`
 - `POST /admin/signin`
+- `POST /refresh`
+- `POST /logout-session`
 - `POST /forgot-password/send-otp`
 - `POST /forgot-password/verify-otp`
 - `POST /forgot-password/reset`
 - `GET /me`
 - `POST /logout`
+- `POST /logout-all`
+- `GET /sessions`
+- `DELETE /sessions/:id`
 
 ### Users
 

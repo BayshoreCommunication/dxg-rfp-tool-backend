@@ -25,6 +25,7 @@ import {
   bcryptPasswordHasher,
   bcryptPasswordVerifier,
 } from "../../shared/security/bcryptPasswordHasher";
+import { REFRESH_TOKEN_EXPIRY_MS } from "../../../config/jwt";
 
 export const requestAuthenticationOtp = createRequestOtp({
   users: mongoAuthUserLookup,
@@ -80,6 +81,7 @@ export const authenticationSessions = createSessionManager({
   accounts: mongoSessionAccountLoader,
   accessTokens: jwtSessionAccessTokenIssuer,
   audit: mongoSecurityAuditWriter,
+  refreshTokenTtlMs: REFRESH_TOKEN_EXPIRY_MS,
 });
 
 export const beginAuthenticatedSession = async (input: {

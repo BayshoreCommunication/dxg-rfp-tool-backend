@@ -75,7 +75,10 @@ export const createRegisterAdmin = (dependencies: {
   const password = typeof input.password === "string" ? input.password : "";
   if (!name || !email || !password) return { kind: "validation" };
   if (password.length < 6) return { kind: "invalid_password" };
-  if (configuredSecret && String(input.adminSecret ?? "").trim() !== configuredSecret.trim()) {
+  if (
+    !configuredSecret?.trim() ||
+    String(input.adminSecret ?? "").trim() !== configuredSecret.trim()
+  ) {
     return { kind: "invalid_secret" };
   }
   if (await dependencies.accounts.emailExists(email)) return { kind: "email_conflict" };

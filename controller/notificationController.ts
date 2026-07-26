@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth";
 import {
   getOwnedUnreadCount,
+  issueNotificationSocketTicket,
   listOwnedNotifications,
   markAllOwnedNotificationsRead,
   markOwnedNotificationRead,
@@ -40,7 +41,7 @@ export const getNotifications = async (
       unreadCount: result.unreadCount,
       websocket: {
         path: "/api/notifications/ws",
-        auth: "Provide access token in the `token` query parameter.",
+        auth: "Request a short-lived ticket from POST /api/notifications/socket-ticket.",
       },
     });
   } catch (error) {
@@ -51,6 +52,32 @@ export const getNotifications = async (
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }
+};
+
+export const createNotificationSocketTicket = (
+  req: AuthRequest,
+  res: Response,
+): void => {
+  if (
+    !req.user?.userId ||
+    !req.user.organizationId ||
+    !req.user.sessionId
+  ) {
+    res.status(401).json({
+      success: false,
+      message: "Session-bound authentication required",
+    });
+    return;
+  }
+
+  res.status(200).json({
+    success: true,
+    data: issueNotificationSocketTicket({
+      userId: req.user.userId,
+      organizationId: req.user.organizationId,
+      sessionId: req.user.sessionId,
+    }),
+  });
 };
 
 export const getUnreadNotificationCount = async (
