@@ -1,4 +1,5 @@
 import { aiRuntimeAuthorized } from "../../../config/aiEnvironment";
+import { approvedCandidatePaths } from "../candidateApplication/canonicalMapping";
 
 export class ConversationError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 422) { super(message); }
@@ -116,7 +117,10 @@ export const CATCH_ALL_PATH_THRESHOLD = 8;
 export const isCatchAllIssue = (code: string, paths: string[]): boolean =>
   paths.length > CATCH_ALL_PATH_THRESHOLD || /missing[_-]?(supported[_-]?)?fields/i.test(code);
 
-export const MAX_OPEN_FIELD_QUESTIONS = 10;
+// A beginner can produce a useful first draft after the seven highest-impact
+// facts. Remaining fields become prioritized improvements after the draft
+// instead of an apparently endless intake interview.
+export const MAX_OPEN_FIELD_QUESTIONS = 7;
 
 // Deterministic per-field issue code so the (proposal, run, issue_code) unique
 // key deduplicates exploded questions. Clamped to the 100-char column limit.
@@ -136,9 +140,18 @@ export const questionAnswerType = (paths: string[]): { answerType: ImportantFiel
 };
 
 // The canonical path an answer should be written to — only when the question
-// targets exactly one whitelisted field, so free-form answers stay chat-only.
+// targets exactly one applicable field, so free-form answers stay chat-only.
+//
+// This used to require membership of IMPORTANT_FIELD_QUESTIONS, the 14-question
+// list the assistant asks proactively. That list was doing double duty as both
+// "questions we ask" and "answers we are willing to write", and only the first
+// is correct: a CROSS_SOURCE_CONFLICT question can name any of the ~114
+// whitelisted paths, so for roughly a hundred of them the planner answered and
+// nothing was written — the conflict stayed unresolved forever. The write guard
+// is normalizeCandidate, which rejects an invalid value with a 422 before the
+// question resolves; membership of the proactive list is not a safety property.
 export const answerTargetPath = (paths: string[]): string | null =>
-  paths.length === 1 && importantFieldQuestionByPath(paths[0]) ? paths[0] : null;
+  paths.length === 1 && approvedCandidatePaths.includes(paths[0]) ? paths[0] : null;
 
 // Plain-language prompts for machine issue codes shown as clarification cards.
 const QUESTION_PROMPTS: Record<string, string> = {

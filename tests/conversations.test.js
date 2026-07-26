@@ -100,13 +100,22 @@ test("catch-all detection targets broad missing-field issues, not small conflict
   assert.equal(isCatchAllIssue("missing-fields", []), true);
   assert.equal(isCatchAllIssue("CROSS_SOURCE_CONFLICT", ["/content/event/startDate"]), false);
   assert.equal(isCatchAllIssue("MISSING_ROOM_COUNT", ["/content/venueSchedule/numberOfEventRooms"]), false);
-  assert.equal(MAX_OPEN_FIELD_QUESTIONS, 10);
+  assert.equal(MAX_OPEN_FIELD_QUESTIONS, 7);
 });
 
 test("answer targeting and impact tags only apply to single whitelisted-field questions", () => {
   assert.equal(answerTargetPath(["/content/venueSchedule/numberOfEventRooms"]), "/content/venueSchedule/numberOfEventRooms");
   assert.equal(answerTargetPath(["/content/event/startDate", "/content/event/endDate"]), null);
-  assert.equal(answerTargetPath(["/content/event/eventTheme"]), null, "non-whitelisted paths stay chat-only");
+  // Any applicable path is writable, not just the 14 the assistant asks
+  // proactively. eventTheme is on the candidate whitelist but not in that list,
+  // and used to return null — so a CROSS_SOURCE_CONFLICT naming it could be
+  // answered and nothing was ever written. The write guard is normalizeCandidate,
+  // not membership of the proactive question set.
+  assert.ok(approvedCandidatePaths.includes("/content/event/eventTheme"));
+  assert.equal(answerTargetPath(["/content/event/eventTheme"]), "/content/event/eventTheme");
+  // Genuinely unmappable paths still stay chat-only.
+  assert.equal(answerTargetPath(["/content/event/notARealField"]), null);
+  assert.equal(answerTargetPath(["/content/roomByRoom/0/audio"]), null, "array paths are not applicable");
   // The event title is asked first, so it targets its field like any other.
   assert.equal(answerTargetPath(["/content/event/eventName"]), "/content/event/eventName");
   assert.equal(answerTargetPath([]), null);

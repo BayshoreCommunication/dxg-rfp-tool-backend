@@ -89,8 +89,16 @@ const latestSucceededContextRun = async (c: PoolClient, proposalRefId: string) =
 const syncQuestions = async (c: PoolClient, org: string, proposalRefId: string, conversationId: string) => {
   const runId = await latestSucceededContextRun(c, proposalRefId);
   if (!runId) return;
+  // Only field-gap questions are superseded by a newer run. A stale "what is
+  // the room count?" is fine to replace, but a blocking CROSS_SOURCE_CONFLICT
+  // is a decision the planner still owes: wiping it on the next run meant a
+  // conflict raised by one extraction was destroyed by the following one,
+  // leaving the proposal holding whichever value happened to land first with
+  // nothing on screen to say two sources had disagreed.
   await c.query(
-    "UPDATE rfpilot.clarification_questions SET status='superseded',updated_at=now() WHERE proposal_reference_id=$1 AND status='open' AND context_run_id<>$2",
+    `UPDATE rfpilot.clarification_questions SET status='superseded',updated_at=now()
+      WHERE proposal_reference_id=$1 AND status='open' AND context_run_id<>$2
+        AND issue_code LIKE 'MISSING_FIELD:%'`,
     [proposalRefId, runId],
   );
   const issues = await c.query<{ code: string; severity: string; paths: string[] }>(
@@ -112,12 +120,14 @@ const syncQuestions = async (c: PoolClient, org: string, proposalRefId: string, 
       // exploded into individual questions — one whitelisted high-impact field
       // each, in whitelist priority order, capped at MAX_OPEN_FIELD_QUESTIONS
       // open at once. As earlier ones get answered or dismissed, later
-      // whitelist fields are backfilled on the next sync.
-      const open = await c.query<{ n: number }>(
-        "SELECT count(*)::int n FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND context_run_id=$2 AND status='open' AND issue_code LIKE 'MISSING_FIELD:%'",
+      // whitelist fields are not backfilled after every answer. The first seven
+      // create the minimum viable draft; later detail is requested as a
+      // prioritized improvement rather than extending intake indefinitely.
+      const asked = await c.query<{ n: number }>(
+        "SELECT count(*)::int n FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND context_run_id=$2 AND status<>'superseded' AND issue_code LIKE 'MISSING_FIELD:%'",
         [proposalRefId, runId],
       );
-      let budget = MAX_OPEN_FIELD_QUESTIONS - Number(open.rows[0]?.n ?? 0);
+      let budget = MAX_OPEN_FIELD_QUESTIONS - Number(asked.rows[0]?.n ?? 0);
       for (const field of IMPORTANT_FIELD_QUESTIONS) {
         if (budget <= 0) break;
         if (!paths.includes(field.path)) continue;
@@ -180,12 +190,40 @@ export const conversationRepository = {
         "SELECT id,issue_code,severity,canonical_paths,prompt,status,answered_message_id,context_run_id,created_at FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND status IN('open','answered') ORDER BY created_at",
         [proposalRefId],
       );
+      // A conflict question asks "which value is correct?" — so it should offer
+      // the values that actually disagreed, not a free-text box the planner has
+      // to retype into. The candidates are already persisted per run, so this
+      // needs no new storage.
+      const conflicts = questions.rows.filter(
+        (q) => q.issue_code === "CROSS_SOURCE_CONFLICT" && q.context_run_id && (q.canonical_paths || []).length === 1,
+      );
+      const conflictOptions = new Map<string, string[]>();
+      if (conflicts.length) {
+        const candidateValues = await c.query<{ run_id: string; path: string; value: unknown }>(
+          `SELECT run_id,path,value FROM rfpilot.proposal_context_operations
+            WHERE run_id=ANY($1::uuid[]) AND path=ANY($2::text[]) ORDER BY ordinal`,
+          [
+            [...new Set(conflicts.map((q) => q.context_run_id))],
+            [...new Set(conflicts.map((q) => q.canonical_paths[0]))],
+          ],
+        );
+        for (const row of candidateValues.rows) {
+          const key = `${row.run_id}|${row.path}`;
+          const value = typeof row.value === "string" ? row.value : JSON.stringify(row.value);
+          const existing = conflictOptions.get(key) ?? [];
+          if (!existing.includes(value)) conflictOptions.set(key, [...existing, value]);
+        }
+      }
       return {
         conversation: { id: conversation.id, title: conversation.title, status: conversation.status, messageCount: conversation.message_count, updatedAt: conversation.updated_at },
         messages: rows.map((row) => messagePayload(row, attachments)),
         questions: questions.rows.map((q) => {
           const paths: string[] = Array.isArray(q.canonical_paths) ? q.canonical_paths : [];
-          const { answerType, options } = questionAnswerType(paths);
+          const conflicting = conflictOptions.get(`${q.context_run_id}|${paths[0]}`) ?? [];
+          const { answerType, options } =
+            conflicting.length > 1
+              ? { answerType: "choice" as const, options: conflicting }
+              : questionAnswerType(paths);
           return {
             id: q.id,
             code: q.issue_code,
