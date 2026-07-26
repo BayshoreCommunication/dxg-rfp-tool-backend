@@ -101,6 +101,30 @@ export const postConversationMessage = async (req: AuthRequest, res: Response) =
   } catch (error) { handle(res, error); }
 };
 
+/**
+ * Close the current transcript segment on request.
+ *
+ * Segments otherwise close on idle or turn count, which means a planner who has
+ * just finished describing their event has no way to say "use that now" — they
+ * would sit waiting for a timer. No Idempotency-Key header: the operation is
+ * already idempotent on the id of the message that closes the segment, so a
+ * double click reuses the existing source rather than creating a second one.
+ */
+export const postConversationSegment = async (req: AuthRequest, res: Response) => {
+  try {
+    const ctx = context(req);
+    const proposalMongoId = proposalId(req.params.proposalId);
+    const result = await maybeExtractSegment({ ...ctx, proposalMongoId, explicit: true });
+    safeLog("info", "conversation_segment_requested", {
+      outcome: result.created ? "created" : "skipped",
+      operation: result.reason,
+    });
+    // 200 with the reason either way: "nothing new to use yet" is a normal
+    // answer, not an error, and the UI needs to say which happened.
+    res.status(200).json({ data: result });
+  } catch (error) { handle(res, error); }
+};
+
 export const patchConversationQuestion = async (req: AuthRequest, res: Response) => {
   try {
     const ctx = context(req);
