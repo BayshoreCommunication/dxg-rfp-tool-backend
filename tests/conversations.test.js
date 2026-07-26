@@ -272,4 +272,18 @@ test("key questions are generated from empty high-impact fields, with no run req
 test("the assistant never claims to be extracting when there are no sources", () => {
   const operations = fs.readFileSync(path.join(root, "src/modules/liveAi/operations.ts"), "utf8");
   assert.ok(operations.includes("When there are NO sources, never claim to be reading, extracting or processing anything"));
+  assert.ok(operations.includes("never say that you recorded, captured, saved, added, or applied its details to the proposal"));
+  assert.ok(operations.includes("persistenceClaim"));
+});
+
+test("source extraction explicitly preserves discrete high-value facts embedded in prose", () => {
+  const operations = fs.readFileSync(path.join(root, "src/modules/liveAi/operations.ts"), "utf8");
+  for (const field of [
+    "in-person attendee count",
+    "virtual attendee count",
+    "event-room count",
+    "proposal response deadline",
+    "stated budget tier",
+  ])
+    assert.ok(operations.includes(field), field);
 });
