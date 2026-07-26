@@ -13,21 +13,44 @@ export const purgeProposalArtifacts = async (proposalMongoIds: string[]): Promis
   for (const proposalMongoId of proposalMongoIds) {
     try {
       await withPostgresTransaction(async (c) => {
+        // The tenant GUC has to be set before the first tenant-table read, not
+        // derived from it. This lookup previously ran first, so under a role
+        // that actually honours RLS current_organization_id() was NULL, the
+        // policy filtered every row, and the whole purge returned silently —
+        // after Mongo had already hard-deleted the proposal. Resolving the
+        // organization through the RLS-exempt organizations catalog first
+        // breaks that circular dependency.
+        const org = await c.query<{ organization_id: string }>(
+          `SELECT p.organization_id FROM rfpilot.proposal_references p WHERE p.external_mongo_id=$1`,
+          [proposalMongoId],
+        );
+        const organizationId = org.rows[0]?.organization_id;
+        if (!organizationId) return;
+        await c.query("SELECT set_config('app.organization_id',$1,true)", [organizationId]);
         const ref = await c.query<{ id: string; organization_id: string }>(
           "SELECT p.id,p.organization_id FROM rfpilot.proposal_references p WHERE p.external_mongo_id=$1",
           [proposalMongoId],
         );
         if (!ref.rows[0]) return;
-        await c.query("SELECT set_config('app.organization_id',$1,true)", [ref.rows[0].organization_id]);
-        const sources = await c.query<{ id: string; object_key: string }>(
-          "SELECT id,object_key FROM rfpilot.document_sources WHERE proposal_reference_id=$1 AND deleted_at IS NULL",
+        // object_key lives on document_objects, not document_sources. Selecting
+        // it from the wrong table raised 42703, aborting the transaction into
+        // the swallowed catch below — so no S3 delete, no tombstone, no audit
+        // event has ever run. LEFT JOIN because a source can exist before its
+        // object row does (upload session created, bytes never PUT).
+        const sources = await c.query<{ id: string; object_key: string | null }>(
+          `SELECT s.id, o.object_key
+             FROM rfpilot.document_sources s
+             LEFT JOIN rfpilot.document_objects o ON o.source_id = s.id
+            WHERE s.proposal_reference_id=$1 AND s.deleted_at IS NULL`,
           [ref.rows[0].id],
         );
         for (const source of sources.rows) {
-          try {
-            await s3PrivateDocumentStorage.delete(source.object_key);
-          } catch {
-            // Object may already be gone; the tombstone below still records intent.
+          if (source.object_key) {
+            try {
+              await s3PrivateDocumentStorage.delete(source.object_key);
+            } catch {
+              // Object may already be gone; the tombstone below still records intent.
+            }
           }
           await c.query("UPDATE rfpilot.document_sources SET deleted_at=now(),status='deleted',updated_at=now() WHERE id=$1", [source.id]);
         }
@@ -41,8 +64,15 @@ export const purgeProposalArtifacts = async (proposalMongoIds: string[]): Promis
         );
       });
       safeLog("info", "proposal_artifacts_purged", { outcome: "success" });
-    } catch {
-      safeLog("warn", "proposal_artifacts_purge_failed", { outcome: "failure" });
+    } catch (error) {
+      // Loud, and with the driver's error code. Mongo has already hard-deleted
+      // the proposal by the time this runs, so a failure here means storage
+      // objects and Postgres rows are orphaned with no other signal. A silent
+      // warn is how a permanently broken purge went unnoticed.
+      safeLog("error", "proposal_artifacts_purge_failed", {
+        outcome: "failure",
+        errorCode: (error as { code?: string } | null)?.code ?? "UNKNOWN",
+      });
     }
   }
 };

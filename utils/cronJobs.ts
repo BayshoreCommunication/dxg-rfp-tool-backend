@@ -82,16 +82,35 @@ export const purgeArchivedProposals = async () => {
       .lean<{ _id: unknown }[]>();
     if (!doomed.length) return;
     const ids = doomed.map((doc) => String(doc._id));
-    const result = await Proposal.deleteMany({ _id: { $in: ids } });
-    // Propagate the deletion to private storage and Postgres source rows so a
-    // Mongo purge never strands document bytes in other stores.
+    // Propagate to private storage and Postgres source rows BEFORE the Mongo
+    // delete. Done the other way round, a crash between the two steps strands
+    // document bytes with nothing left to identify them; this order leaves the
+    // authoritative record in place so the next run retries.
     const { purgeProposalArtifacts } = await import("../src/modules/dataFoundation/purgeProposalArtifacts");
     await purgeProposalArtifacts(ids);
+    const result = await Proposal.deleteMany({ _id: { $in: ids } });
     if (result.deletedCount > 0) {
       console.log(`[Cron] Purged ${result.deletedCount} archived proposal(s) older than 30 days`);
     }
   } catch (error) {
     console.error("[Cron] Archive purge error:", error);
+  }
+};
+
+const runRetentionSweep = async () => {
+  try {
+    const { sweepExpiredArtifacts, retentionSweepEnabled } = await import(
+      "../src/modules/dataFoundation/retentionSweeper"
+    );
+    if (!retentionSweepEnabled()) return;
+    const result = await sweepExpiredArtifacts();
+    const total = Object.values(result.deleted).reduce((sum, n) => sum + n, 0);
+    console.log(
+      `[Cron] Retention sweep ${result.dryRun ? "(dry run)" : "applied"}: ${total} row(s) across ${result.organizations} organization(s)`,
+      result.deleted,
+    );
+  } catch (error) {
+    console.error("[Cron] Retention sweep error:", error);
   }
 };
 
@@ -108,5 +127,13 @@ export const startCronJobs = () => {
   // Run archive purge once per day (24 hours)
   setInterval(() => {
     purgeArchivedProposals();
+  }, 24 * 60 * 60 * 1000);
+
+  // Retention enforcement, once per day. Deny-by-default and dry-run by
+  // default: RETENTION_SWEEP_ENABLED turns on reporting, RETENTION_SWEEP_APPLY
+  // is the separate decision to actually delete. Not run on startup — a
+  // deletion pass should happen on a predictable schedule, not on every deploy.
+  setInterval(() => {
+    void runRetentionSweep();
   }, 24 * 60 * 60 * 1000);
 };
