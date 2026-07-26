@@ -213,8 +213,10 @@ test("catch-all explosion and answer field writing are wired into repository and
   assert.ok(controller.includes("applyAnswerToProposalField"), "controller must write single-field answers into the proposal");
   assert.ok(controller.indexOf("applyAnswerToProposalField") < controller.indexOf("updateQuestion"), "field write must precede resolving the question so invalid values re-ask");
   const writer = fs.readFileSync(path.join(root, "src/modules/conversations/answerFieldWriter.ts"), "utf8");
-  for (const guard of ["normalizeCandidate", "status: \"unsubmitted\"", "isDraft: true", "$ifNull: [\"$version\", 1]"])
+  for (const guard of ["normalizeCandidate", "status: \"unsubmitted\"", "isDraft: true", "$ifNull: [\"$version\", 1]", "$cond", "$eq"])
     assert.ok(writer.includes(guard), guard);
+  for (const recoveryGuard of ["supersededByThisAnswer", "row.canonical_paths.includes(ctx.appliedPath)"])
+    assert.ok(repository.includes(recoveryGuard), recoveryGuard);
 });
 
 test("run status narration covers every lifecycle state", () => {

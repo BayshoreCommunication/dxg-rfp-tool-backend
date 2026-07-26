@@ -309,7 +309,18 @@ export const conversationRepository = {
         [ctx.questionId, proposalRefId],
       );
       if (!question.rows[0]) throw new ConversationError("QUESTION_NOT_FOUND", "Clarification question was not found.", 404);
-      if (question.rows[0].status !== "open")
+      const row = question.rows[0];
+      // A single-field answer is written to Mongo immediately before this
+      // transaction. The live snapshot synchronizer can observe that value and
+      // mark the question superseded in the narrow gap between those writes.
+      // Treat that state as this request's successful continuation when the
+      // applied path is exactly one of the question's canonical paths.
+      const supersededByThisAnswer = row.status === "superseded"
+        && ctx.status === "answered"
+        && !!ctx.appliedPath
+        && Array.isArray(row.canonical_paths)
+        && row.canonical_paths.includes(ctx.appliedPath);
+      if (row.status !== "open" && !supersededByThisAnswer)
         throw new ConversationError("QUESTION_NOT_OPEN", "This question has already been resolved.", 409);
       let answeredMessageId: string | null = null;
       if (ctx.status === "answered") {

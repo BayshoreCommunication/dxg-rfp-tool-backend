@@ -18,6 +18,8 @@ export const applyAnswerToProposalField = async (input: {
   answer: string;
 }): Promise<AppliedAnswerField | null> => {
   const normalized = normalizeCandidate(input.path, input.answer);
+  const currentValue = `$${normalized.mongoPath}`;
+  const currentVersion = { $ifNull: ["$version", 1] };
   const row = await Proposal.findOneAndUpdate(
     {
       _id: input.proposalMongoId,
@@ -30,7 +32,17 @@ export const applyAnswerToProposalField = async (input: {
     [{
       $set: {
         [normalized.mongoPath]: normalized.mongoValue,
-        version: { $add: [{ $ifNull: ["$version", 1] }, 1] },
+        // Mongo and the conversation repository live in different databases,
+        // so the question-resolution request may be retried after Mongo
+        // succeeded but Postgres did not. Re-applying the same answer must not
+        // keep advancing the proposal version on every retry.
+        version: {
+          $cond: [
+            { $eq: [currentValue, normalized.mongoValue] },
+            currentVersion,
+            { $add: [currentVersion, 1] },
+          ],
+        },
       },
     }],
     { new: true },
