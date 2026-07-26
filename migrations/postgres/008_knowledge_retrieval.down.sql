@@ -1,0 +1,11 @@
+DROP TRIGGER IF EXISTS knowledge_retrieval_results_no_mutation ON rfpilot.knowledge_retrieval_results;
+DROP TRIGGER IF EXISTS knowledge_retrieval_queries_no_mutation ON rfpilot.knowledge_retrieval_queries;
+DROP FUNCTION IF EXISTS rfpilot.reject_retrieval_evidence_mutation();
+DROP TRIGGER IF EXISTS knowledge_embeddings_no_mutation ON rfpilot.knowledge_fragment_embeddings;
+DROP FUNCTION IF EXISTS rfpilot.reject_embedding_mutation();
+DROP TABLE IF EXISTS rfpilot.knowledge_retrieval_results;
+DROP TABLE IF EXISTS rfpilot.knowledge_retrieval_queries;
+DROP TABLE IF EXISTS rfpilot.knowledge_fragment_embeddings;
+DROP TABLE IF EXISTS rfpilot.knowledge_index_runs;
+DROP TABLE IF EXISTS rfpilot.knowledge_retrieval_policies;
+DROP TABLE IF EXISTS rfpilot.embedding_model_releases;

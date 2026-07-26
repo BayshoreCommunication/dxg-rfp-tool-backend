@@ -2,10 +2,12 @@ import mongoose, { Document, Schema } from "mongoose";
 
 export interface IOtp extends Document {
   email: string;
-  otp: string;
+  codeHash: string;
   type: "signup" | "forgot-password";
   expiresAt: Date;
   verified: boolean;
+  attempts: number;
+  maxAttempts: number;
 }
 
 const otpSchema = new Schema<IOtp>({
@@ -15,9 +17,10 @@ const otpSchema = new Schema<IOtp>({
     lowercase: true,
     trim: true,
   },
-  otp: {
+  codeHash: {
     type: String,
     required: true,
+    select: false,
   },
   type: {
     type: String,
@@ -33,11 +36,13 @@ const otpSchema = new Schema<IOtp>({
     type: Boolean,
     default: false,
   },
+  attempts: { type: Number, min: 0, default: 0 },
+  maxAttempts: { type: Number, min: 1, default: 5 },
 });
 
 // Auto-delete expired OTPs via MongoDB TTL index
 otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-otpSchema.index({ email: 1, type: 1 });
+otpSchema.index({ email: 1, type: 1 }, { unique: true });
 
 const Otp = mongoose.model<IOtp>("Otp", otpSchema);
 export default Otp;

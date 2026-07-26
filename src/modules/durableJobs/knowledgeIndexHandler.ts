@@ -1,0 +1,2 @@
+import type{QueueMessage}from"./domain";import{knowledgeRetrievalRepository}from"../knowledgeRetrieval/postgresKnowledgeRetrievalRepository";
+export const handleKnowledgeIndex=async(message:QueueMessage)=>knowledgeRetrievalRepository.indexRelease({organizationMongoId:message.organizationMongoId,actorUserMongoId:message.actorUserMongoId,releaseId:message.inputReference,jobId:message.jobId,correlationId:message.correlationId});

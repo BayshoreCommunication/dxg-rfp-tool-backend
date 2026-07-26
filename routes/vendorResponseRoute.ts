@@ -8,10 +8,13 @@ import {
   getVendorResponseById,
   markVendorResponseRead,
 } from "../controller/vendorResponseController";
-import { authenticate } from "../middleware/auth";
+import { authenticate, authorizeAction } from "../middleware/auth";
 import { uploadVendorDocs } from "../middleware/upload";
+import { requirePublicGrant } from "../middleware/publicAccess";
+import { grantAndIpIdentity, securityRateLimit } from "../middleware/securityRateLimit";
 
 const router = Router();
+const publicGrantLimit = securityRateLimit({ name: "vendor-public", limit: 60, windowMs: 15 * 60_000, identity: grantAndIpIdentity });
 
 const validateResponseId = (req: Request, res: Response, next: NextFunction) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
@@ -22,9 +25,10 @@ const validateResponseId = (req: Request, res: Response, next: NextFunction) => 
 };
 
 /* Public routes — no authentication required */
-router.get("/check", checkVendorResponseExists);
+router.get("/check", publicGrantLimit, requirePublicGrant("vendor:submit"), checkVendorResponseExists);
 router.post(
   "/",
+  publicGrantLimit,
   (req: Request, res: Response, next: NextFunction) => {
     uploadVendorDocs(req, res, (err: unknown) => {
       if (err) {
@@ -40,12 +44,13 @@ router.post(
       next();
     });
   },
+  requirePublicGrant("vendor:submit"),
   submitVendorResponse,
 );
 
 /* Protected routes — planner dashboard */
-router.get("/", authenticate, getVendorResponses);
-router.get("/:id", authenticate, validateResponseId, getVendorResponseById);
-router.patch("/:id/read", authenticate, validateResponseId, markVendorResponseRead);
+router.get("/", authenticate, authorizeAction("vendor-response:read"), getVendorResponses);
+router.get("/:id", authenticate, authorizeAction("vendor-response:read"), validateResponseId, getVendorResponseById);
+router.patch("/:id/read", authenticate, authorizeAction("vendor-response:read"), validateResponseId, markVendorResponseRead);
 
 export default router;

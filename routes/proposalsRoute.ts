@@ -16,11 +16,13 @@ import {
   updateProposalStatus,
   uploadProposalFiles,
 } from "../controller/proposalsController";
-import { verifyAccessToken } from "../config/jwt";
-import { authenticate, type AuthRequest } from "../middleware/auth";
+import { authenticate, authorizeAction, type AuthRequest } from "../middleware/auth";
 import { uploadProposalDocs } from "../middleware/upload";
+import { requirePublicGrant } from "../middleware/publicAccess";
+import { grantAndIpIdentity, securityRateLimit } from "../middleware/securityRateLimit";
 
 const router = Router();
+const publicProposalLimit = securityRateLimit({ name: "proposal-public", limit: 120, windowMs: 15 * 60_000, identity: grantAndIpIdentity });
 
 const validateProposalId = (
   req: Request,
@@ -44,38 +46,35 @@ const validateProposalId = (
 const optionalAuth = (req: Request, _res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
-    try {
-      (req as AuthRequest).user = verifyAccessToken(authHeader.substring(7));
-    } catch {
-      // Invalid / expired token — continue as unauthenticated
-    }
+    void authenticate(req as AuthRequest, _res, next);
+    return;
   }
   next();
 };
 
 /* Protected static routes — must come BEFORE /:id wildcard */
-router.get("/", authenticate, getAllProposals);
-router.post("/", authenticate, createProposal);
-router.post("/upload-files", authenticate, uploadProposalDocs, uploadProposalFiles);
+router.get("/", authenticate, authorizeAction("proposal:read"), getAllProposals);
+router.post("/", authenticate, authorizeAction("proposal:write"), createProposal);
+router.post("/upload-files", authenticate, authorizeAction("proposal:write"), uploadProposalDocs, uploadProposalFiles);
 
 /* Routes accessible with or without auth — different controller per case */
-router.get("/:id", validateProposalId, optionalAuth, (req: Request, res: Response) => {
+router.get("/:id", validateProposalId, optionalAuth, publicProposalLimit, requirePublicGrant(["proposal:view", "vendor:submit"]), (req: Request, res: Response) => {
   if ((req as AuthRequest).user) return getProposalById(req as AuthRequest, res);
   return getProposalByIdPublic(req, res);
 });
 
-router.patch("/:id/views", validateProposalId, optionalAuth, (req: Request, res: Response) => {
+router.patch("/:id/views", validateProposalId, optionalAuth, publicProposalLimit, requirePublicGrant("proposal:view"), (req: Request, res: Response) => {
   if ((req as AuthRequest).user) return incrementProposalViews(req as AuthRequest, res);
   return incrementProposalViewsPublic(req, res);
 });
 
 /* Protected routes (require auth) */
-router.post("/:id/copy", authenticate, validateProposalId, copyProposal);
-router.put("/:id", authenticate, validateProposalId, updateProposal);
-router.patch("/:id/status", authenticate, validateProposalId, updateProposalStatus);
-router.patch("/:id/meta", authenticate, validateProposalId, updateProposalMeta);
-router.patch("/:id/restore", authenticate, validateProposalId, restoreProposal);
-router.delete("/:id/permanent", authenticate, validateProposalId, permanentlyDeleteProposal);
-router.delete("/:id", authenticate, validateProposalId, deleteProposal);
+router.post("/:id/copy", authenticate, authorizeAction("proposal:write"), validateProposalId, copyProposal);
+router.put("/:id", authenticate, authorizeAction("proposal:write"), validateProposalId, updateProposal);
+router.patch("/:id/status", authenticate, authorizeAction("proposal:publish"), validateProposalId, updateProposalStatus);
+router.patch("/:id/meta", authenticate, authorizeAction("proposal:write"), validateProposalId, updateProposalMeta);
+router.patch("/:id/restore", authenticate, authorizeAction("proposal:write"), validateProposalId, restoreProposal);
+router.delete("/:id/permanent", authenticate, authorizeAction("proposal:write"), validateProposalId, permanentlyDeleteProposal);
+router.delete("/:id", authenticate, authorizeAction("proposal:write"), validateProposalId, deleteProposal);
 
 export default router;

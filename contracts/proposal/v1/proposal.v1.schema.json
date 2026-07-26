@@ -1,0 +1,552 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rfpilot.dxg.com/contracts/proposal/v1/proposal.v1.schema.json",
+  "title": "ProposalV1",
+  "description": "Canonical internal RFPilot proposal resource.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "organizationId",
+    "ownerUserId",
+    "version",
+    "lifecycle",
+    "content",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "proposal.v1" },
+    "id": { "$ref": "#/$defs/identifier" },
+    "organizationId": { "$ref": "#/$defs/identifier" },
+    "ownerUserId": { "$ref": "#/$defs/identifier" },
+    "version": { "type": "integer", "minimum": 1 },
+    "lifecycle": { "$ref": "#/$defs/lifecycle" },
+    "content": { "$ref": "#/$defs/proposalContent" },
+    "presentation": { "$ref": "#/$defs/presentation" },
+    "createdAt": { "$ref": "#/$defs/dateTime" },
+    "updatedAt": { "$ref": "#/$defs/dateTime" }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "dateTime": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "localTime": {
+      "type": "string",
+      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+    },
+    "nullableBoolean": {
+      "type": ["boolean", "null"]
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 },
+      "uniqueItems": true
+    },
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amountMinor", "currency"],
+      "properties": {
+        "amountMinor": { "type": "integer" },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "unit"],
+      "properties": {
+        "value": { "type": "number", "minimum": 0 },
+        "unit": {
+          "type": "string",
+          "enum": ["in", "ft", "mm", "cm", "m", "amp", "px"]
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "favorite"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["draft", "submitted", "in_review", "approved", "rejected", "published", "archived"]
+        },
+        "favorite": { "type": "boolean" },
+        "copyOfProposalId": { "$ref": "#/$defs/identifier" },
+        "publishedAt": { "$ref": "#/$defs/dateTime" },
+        "archivedAt": { "$ref": "#/$defs/dateTime" }
+      }
+    },
+    "proposalContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "venueSchedule", "rooms", "contacts"],
+      "properties": {
+        "event": { "$ref": "#/$defs/event" },
+        "venueSchedule": { "$ref": "#/$defs/venueSchedule" },
+        "rooms": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/room" },
+          "maxItems": 200
+        },
+        "hybridVirtual": { "$ref": "#/$defs/hybridVirtual" },
+        "contentCreative": { "$ref": "#/$defs/contentCreative" },
+        "videoRecording": { "$ref": "#/$defs/videoRecording" },
+        "venueTechnical": { "$ref": "#/$defs/venueTechnical" },
+        "sourceReferences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sourceReference" },
+          "maxItems": 500
+        },
+        "vendorCoordination": { "$ref": "#/$defs/vendorCoordination" },
+        "confidentiality": { "$ref": "#/$defs/confidentiality" },
+        "budgetPreferences": { "$ref": "#/$defs/budgetPreferences" },
+        "contacts": { "$ref": "#/$defs/contacts" }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "format"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "edition": { "type": "string", "maxLength": 100 },
+        "theme": { "type": "string", "maxLength": 300 },
+        "website": { "type": "string", "format": "uri", "maxLength": 2048 },
+        "startDate": { "$ref": "#/$defs/date" },
+        "endDate": { "$ref": "#/$defs/date" },
+        "attendeeCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "attendeeBand": {
+          "type": "string",
+          "enum": ["lt_100", "100_199", "200_499", "500_999", "1000_plus", "unknown"]
+        },
+        "format": { "type": "string", "enum": ["in_person", "hybrid", "virtual"] },
+        "type": { "type": "string", "maxLength": 150 },
+        "typeOther": { "type": "string", "maxLength": 200 },
+        "primaryAudiences": { "$ref": "#/$defs/stringArray" },
+        "objectives": { "type": "string", "maxLength": 10000 },
+        "toneDirections": { "$ref": "#/$defs/stringArray" },
+        "sacredConstraints": { "type": "string", "maxLength": 10000 },
+        "organizationBackground": { "type": "string", "maxLength": 20000 },
+        "statementOfWork": { "type": "string", "maxLength": 30000 },
+        "eventProfile": { "type": "string", "maxLength": 20000 },
+        "rfpTimelineNotes": { "type": "string", "maxLength": 10000 }
+      }
+    },
+    "venueSchedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roomCount"],
+      "properties": {
+        "venueName": { "type": "string", "maxLength": 300 },
+        "city": { "type": "string", "maxLength": 150 },
+        "region": { "type": "string", "maxLength": 150 },
+        "address": { "type": "string", "maxLength": 500 },
+        "venueType": { "type": "string", "maxLength": 150 },
+        "confirmationStatus": {
+          "type": "string",
+          "enum": ["contract_signed", "verbal_confirmation", "strong_preference", "not_selected", "unknown"]
+        },
+        "unionVenue": { "$ref": "#/$defs/nullableBoolean" },
+        "unionJurisdictions": { "$ref": "#/$defs/stringArray" },
+        "unionJurisdictionOther": { "type": "string", "maxLength": 500 },
+        "loadIn": { "$ref": "#/$defs/localSchedulePoint" },
+        "rehearsal": { "$ref": "#/$defs/localSchedulePoint" },
+        "showStart": { "$ref": "#/$defs/localSchedulePoint" },
+        "showEnd": { "$ref": "#/$defs/localSchedulePoint" },
+        "strike": { "$ref": "#/$defs/localSchedulePoint" },
+        "roomCount": { "type": "integer", "minimum": 1, "maximum": 200 },
+        "timeZone": { "type": "string", "minLength": 1, "maxLength": 100 }
+      }
+    },
+    "localSchedulePoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date"],
+      "properties": {
+        "date": { "$ref": "#/$defs/date" },
+        "time": { "$ref": "#/$defs/localTime" }
+      }
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "function"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "function": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "location": { "type": "string", "maxLength": 200 },
+        "setup": { "type": "string", "maxLength": 100 },
+        "scheduleDate": { "$ref": "#/$defs/date" },
+        "estimatedAttendees": { "$ref": "#/$defs/nonNegativeInteger" },
+        "loadInAt": { "$ref": "#/$defs/dateTime" },
+        "rehearsalAt": { "$ref": "#/$defs/dateTime" },
+        "showStartAt": { "$ref": "#/$defs/dateTime" },
+        "showEndAt": { "$ref": "#/$defs/dateTime" },
+        "audio": { "$ref": "#/$defs/audioRequirements" },
+        "video": { "$ref": "#/$defs/videoRequirements" },
+        "lighting": { "$ref": "#/$defs/lightingRequirements" },
+        "production": { "$ref": "#/$defs/roomProduction" }
+      }
+    },
+    "audioRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "systemRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "systemAudienceCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "podiumMicRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "podiumMicCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "wirelessMicRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "wirelessMicCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "wirelessMicType": { "type": "string", "maxLength": 100 },
+        "recordingRequired": { "$ref": "#/$defs/nullableBoolean" }
+      }
+    },
+    "videoRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "displayRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "monitorCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "monitorSize": { "$ref": "#/$defs/measurement" },
+        "screenCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "screenSize": { "$ref": "#/$defs/measurement" },
+        "ledWallRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "ledWallWidth": { "$ref": "#/$defs/measurement" },
+        "ledWallHeight": { "$ref": "#/$defs/measurement" },
+        "ledWallPixelPitch": { "$ref": "#/$defs/measurement" },
+        "ledWallSpecs": { "type": "string", "maxLength": 2000 },
+        "ledWallShape": { "type": "string", "maxLength": 200 },
+        "ledWallSwitcher": { "type": "string", "maxLength": 150 },
+        "ledWallNotes": { "type": "string", "maxLength": 5000 },
+        "presentationLaptopsRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "presentationLaptopCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "clientLaptopsProvided": { "$ref": "#/$defs/nullableBoolean" },
+        "clientLaptopCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "videoPlaybackRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "videoPlaybackCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "videoPlaybackFormat": { "type": "string", "maxLength": 100 },
+        "aspectRatio": { "type": "string", "maxLength": 100 },
+        "audienceQaRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "audienceQaMethod": { "type": "string", "maxLength": 100 },
+        "camerasRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "cameraCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "videoRecordingRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "recordingType": { "type": "string", "maxLength": 150 },
+        "programConfidenceMonitorRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "programConfidenceMonitorCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "notesConfidenceMonitorRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "notesConfidenceMonitorCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "speakerTimerRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "teleprompterRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "teleprompterBilingual": { "$ref": "#/$defs/nullableBoolean" },
+        "teleprompterLanguages": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "lightingRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stageWashRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "stageDimensions": { "type": "string", "maxLength": 200 },
+        "backlighting": { "type": "string", "maxLength": 500 },
+        "scenicUplighting": { "type": "string", "maxLength": 500 },
+        "audienceLighting": { "type": "string", "maxLength": 500 },
+        "requirements": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "roomProduction": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scenicStageDesign": { "$ref": "#/$defs/nullableBoolean" },
+        "scenicNotes": { "type": "string", "maxLength": 5000 },
+        "unionLabor": { "$ref": "#/$defs/nullableBoolean" },
+        "unionLaborDetails": { "type": "string", "maxLength": 5000 },
+        "crewRoles": { "$ref": "#/$defs/stringArray" },
+        "crewQuantities": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/nonNegativeInteger" }
+        },
+        "otherRoles": { "type": "string", "maxLength": 2000 },
+        "contentVideoNeeds": { "type": "string", "maxLength": 5000 }
+      }
+    },
+    "hybridVirtual": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "virtualAttendeeCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "streamingPlatform": { "type": "string", "maxLength": 150 },
+        "streamingPlatformOther": { "type": "string", "maxLength": 150 },
+        "platformIntegrationWithAv": { "$ref": "#/$defs/nullableBoolean" },
+        "streamOwner": { "type": "string", "maxLength": 100 },
+        "remoteSpeakers": { "$ref": "#/$defs/remoteSpeakers" },
+        "liveVirtualQa": { "$ref": "#/$defs/nullableBoolean" },
+        "virtualOnlyBreakouts": { "$ref": "#/$defs/nullableBoolean" },
+        "dedicatedVirtualProducer": { "$ref": "#/$defs/nullableBoolean" },
+        "closedCaptions": { "$ref": "#/$defs/closedCaptions" },
+        "onDemandRecording": { "$ref": "#/$defs/nullableBoolean" },
+        "sponsorOverlays": { "$ref": "#/$defs/nullableBoolean" },
+        "virtualNetworking": { "$ref": "#/$defs/nullableBoolean" }
+      }
+    },
+    "remoteSpeakers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": { "$ref": "#/$defs/nullableBoolean" },
+        "count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "feedPlatform": { "type": "string", "maxLength": 150 },
+        "techRehearsalOwner": { "type": "string", "maxLength": 100 }
+      }
+    },
+    "closedCaptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": { "$ref": "#/$defs/nullableBoolean" },
+        "languages": { "$ref": "#/$defs/stringArray" },
+        "languageOther": { "type": "string", "maxLength": 100 },
+        "type": { "type": "string", "enum": ["ai", "human", "unknown"] }
+      }
+    },
+    "contentCreative": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "servicesRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "presentationTemplateOwner": { "type": "string", "maxLength": 100 },
+        "speakerSlideCollectionOwner": { "type": "string", "maxLength": 100 },
+        "motionGraphicsOwner": { "type": "string", "maxLength": 100 },
+        "lowerThirdsOwner": { "type": "string", "maxLength": 100 },
+        "eventLogoBrandStandardsOwner": { "type": "string", "maxLength": 100 },
+        "sizzleRecapOwner": { "type": "string", "maxLength": 100 },
+        "liveDataFeeds": { "$ref": "#/$defs/ownedRequirement" },
+        "sponsorRecognitionOwner": { "type": "string", "maxLength": 100 },
+        "socialMediaCaptureOwner": { "type": "string", "maxLength": 100 },
+        "virtualBackgroundOwner": { "type": "string", "maxLength": 100 },
+        "creativeDirectionNotes": { "type": "string", "maxLength": 10000 }
+      }
+    },
+    "ownedRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": { "$ref": "#/$defs/nullableBoolean" },
+        "owner": { "type": "string", "maxLength": 100 }
+      }
+    },
+    "videoRecording": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": { "$ref": "#/$defs/nullableBoolean" },
+        "cameraCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "cameraPositions": { "$ref": "#/$defs/stringArray" },
+        "imagRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "cameraOperatorCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "isoRecordings": { "type": "string", "maxLength": 500 },
+        "resolution": { "type": "string", "maxLength": 100 },
+        "recordingMedia": { "type": "string", "maxLength": 100 },
+        "editedDeliverable": { "$ref": "#/$defs/editedDeliverable" },
+        "rawFootageTurnover": { "$ref": "#/$defs/nullableBoolean" },
+        "deliverableFormats": { "$ref": "#/$defs/stringArray" },
+        "deliveryMethods": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "editedDeliverable": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": { "$ref": "#/$defs/nullableBoolean" },
+        "types": { "$ref": "#/$defs/stringArray" },
+        "turnaroundTime": { "type": "string", "maxLength": 200 },
+        "reelLengthPreference": { "type": "string", "maxLength": 200 }
+      }
+    },
+    "venueTechnical": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "avContact": { "$ref": "#/$defs/contactReference" },
+        "inHouseAvCompanyName": { "type": "string", "maxLength": 300 },
+        "riggingRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "riggingPlotOrSpecs": { "type": "string", "maxLength": 5000 },
+        "trussAndMotorsProvided": { "$ref": "#/$defs/nullableBoolean" },
+        "liftsProvided": { "$ref": "#/$defs/nullableBoolean" },
+        "powerDropsRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "powerDropAmperage": { "$ref": "#/$defs/measurement" },
+        "powerDropCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "wirelessInternetRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "internetUseCases": { "$ref": "#/$defs/stringArray" },
+        "coiRequirements": { "type": "string", "maxLength": 10000 },
+        "accessRequirements": { "type": "string", "maxLength": 10000 }
+      }
+    },
+    "contactReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "maxLength": 200 },
+        "email": { "type": "string", "format": "email", "maxLength": 320 },
+        "phone": { "type": "string", "maxLength": 50 }
+      }
+    },
+    "sourceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceId", "sourceVersionId", "category", "displayName"],
+      "properties": {
+        "sourceId": { "$ref": "#/$defs/identifier" },
+        "sourceVersionId": { "$ref": "#/$defs/identifier" },
+        "category": {
+          "type": "string",
+          "enum": ["brief", "brand_guide", "event_logo", "venue_document", "nda", "reference", "quote", "contract", "other"]
+        },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "externalUrl": { "type": "string", "format": "uri", "maxLength": 2048 }
+      }
+    },
+    "vendorCoordination": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "coVendors": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/coVendor" }
+        }
+      }
+    },
+    "coVendor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category"],
+      "properties": {
+        "category": {
+          "type": "string",
+          "enum": ["in_house_venue_av", "event_decorator", "registration_technology", "agency_of_record", "photographer", "other"]
+        },
+        "companyName": { "type": "string", "maxLength": 300 },
+        "contact": { "$ref": "#/$defs/contactReference" },
+        "status": { "type": "string", "maxLength": 100 },
+        "notes": { "type": "string", "maxLength": 5000 }
+      }
+    },
+    "confidentiality": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ndaRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "ndaType": { "type": "string", "maxLength": 200 },
+        "ndaSourceReferenceIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/identifier" },
+          "uniqueItems": true,
+          "maxItems": 20
+        }
+      }
+    },
+    "budgetPreferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "budgetBand": { "type": "string", "maxLength": 100 },
+        "budget": { "$ref": "#/$defs/money" },
+        "flexibility": { "type": "string", "maxLength": 500 },
+        "proposalFormats": { "$ref": "#/$defs/stringArray" },
+        "evaluationWeights": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "sustainabilityDeiNotes": { "type": "string", "maxLength": 5000 },
+        "vendorQuestionsDueDate": { "$ref": "#/$defs/date" },
+        "vendorAnswersDate": { "$ref": "#/$defs/date" },
+        "proposalDueDate": { "$ref": "#/$defs/date" },
+        "shortlistDate": { "$ref": "#/$defs/date" },
+        "vendorPresentation": { "$ref": "#/$defs/nullableBoolean" },
+        "vendorPresentationDate": { "$ref": "#/$defs/date" },
+        "vendorSelectionDate": { "$ref": "#/$defs/date" },
+        "decisionDate": { "$ref": "#/$defs/date" },
+        "competitiveBid": { "$ref": "#/$defs/nullableBoolean" },
+        "proposalCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "scoringNotes": { "type": "string", "maxLength": 5000 },
+        "producerCallRequested": { "$ref": "#/$defs/nullableBoolean" },
+        "referralSource": { "type": "string", "maxLength": 200 },
+        "referralSourceOther": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "contacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary"],
+      "properties": {
+        "primary": { "$ref": "#/$defs/proposalContact" },
+        "additional": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/proposalContact" },
+          "maxItems": 100
+        },
+        "preferredMethod": { "type": "string", "enum": ["email", "phone", "either"] },
+        "bestTimeToReach": { "type": "string", "maxLength": 500 },
+        "additionalNotes": { "type": "string", "maxLength": 10000 }
+      }
+    },
+    "proposalContact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["firstName", "lastName", "email"],
+      "properties": {
+        "firstName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "lastName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "fullName": { "type": "string", "maxLength": 200 },
+        "title": { "type": "string", "maxLength": 200 },
+        "organizationDisplayName": { "type": "string", "maxLength": 300 },
+        "organizationLegalName": { "type": "string", "maxLength": 300 },
+        "email": { "type": "string", "format": "email", "maxLength": 320 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "phoneExtension": { "type": "string", "maxLength": 20 },
+        "phoneType": { "type": "string", "maxLength": 50 },
+        "role": { "type": "string", "maxLength": 100 }
+      }
+    },
+    "presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "brandName": { "type": "string", "maxLength": 200 },
+        "linkPrefix": { "type": "string", "maxLength": 100 },
+        "font": { "type": "string", "maxLength": 100 },
+        "language": { "type": "string", "maxLength": 50 },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "dateFormat": { "type": "string", "maxLength": 50 },
+        "decimalPrecision": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "downloadPreviewEnabled": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: RFPilot
+    folder: RFPilot Test
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

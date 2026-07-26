@@ -1,6 +1,7 @@
 import mongoose, { Document, Schema } from "mongoose";
 
 export interface ISettings extends Document {
+  organizationId?: mongoose.Types.ObjectId;
   userId?: mongoose.Types.ObjectId;
   branding: {
     brandName: string;
@@ -35,6 +36,7 @@ export interface ISettings extends Document {
 
 const settingsSchema = new Schema<ISettings>(
   {
+    organizationId: { type: Schema.Types.ObjectId, ref: "Organization", index: true },
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
@@ -77,6 +79,7 @@ const settingsSchema = new Schema<ISettings>(
 );
 
 settingsSchema.index({ userId: 1 });
+settingsSchema.index({ organizationId: 1, userId: 1 });
 
 const Settings = mongoose.model<ISettings>("Settings", settingsSchema);
 

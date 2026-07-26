@@ -1,0 +1,11 @@
+import{Router}from"express";import{approveReview,decideFragment,listReleases,rejectReview,reviewDetail,revokeRelease,startReview,submitReview}from"../controller/knowledgeReviewController";import{authenticate,authorizeAction}from"../middleware/auth";import{securityRateLimit}from"../middleware/securityRateLimit";
+const router=Router(),mutate=securityRateLimit({name:"knowledge-review-mutation",limit:120,windowMs:15*60_000});
+router.get("/knowledge/import-batches/:batchId/review",authenticate,authorizeAction("knowledge:read"),reviewDetail);
+router.post("/knowledge/import-batches/:batchId/review-versions",authenticate,authorizeAction("knowledge:write"),mutate,startReview);
+router.patch("/knowledge/review-versions/:versionId/fragments/:fragmentId",authenticate,authorizeAction("knowledge:write"),mutate,decideFragment);
+router.post("/knowledge/review-versions/:versionId/submit",authenticate,authorizeAction("knowledge:write"),mutate,submitReview);
+router.post("/knowledge/review-versions/:versionId/approve",authenticate,authorizeAction("knowledge:approve"),mutate,approveReview);
+router.post("/knowledge/review-versions/:versionId/reject",authenticate,authorizeAction("knowledge:approve"),mutate,rejectReview);
+router.get("/knowledge/releases",authenticate,authorizeAction("knowledge:read"),listReleases);
+router.post("/knowledge/releases/:releaseId/revoke",authenticate,authorizeAction("organization:manage"),mutate,revokeRelease);
+export default router;

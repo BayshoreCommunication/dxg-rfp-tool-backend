@@ -1,0 +1,14 @@
+DROP TABLE IF EXISTS rfpilot.guidance_reports;
+ALTER TABLE rfpilot.proposal_draft_citations DROP CONSTRAINT IF EXISTS proposal_draft_citations_canonical_path_check;
+ALTER TABLE rfpilot.proposal_draft_citations ADD CONSTRAINT proposal_draft_citations_canonical_path_check CHECK(canonical_path~'^/content/');
+DELETE FROM rfpilot.knowledge_retrieval_policies WHERE id='50000000-0000-7000-8000-000000000002';
+DELETE FROM rfpilot.embedding_model_releases WHERE id='40000000-0000-7000-8000-000000000002';
+DROP INDEX IF EXISTS rfpilot.knowledge_embeddings_vector_idx;
+DROP TRIGGER IF EXISTS knowledge_embeddings_no_mutation ON rfpilot.knowledge_fragment_embeddings;
+DELETE FROM rfpilot.knowledge_fragment_embeddings;
+ALTER TABLE rfpilot.knowledge_fragment_embeddings ALTER COLUMN embedding TYPE vector(16);
+CREATE INDEX knowledge_embeddings_vector_idx ON rfpilot.knowledge_fragment_embeddings USING hnsw(embedding vector_cosine_ops);
+CREATE TRIGGER knowledge_embeddings_no_mutation BEFORE UPDATE OR DELETE ON rfpilot.knowledge_fragment_embeddings FOR EACH ROW EXECUTE FUNCTION rfpilot.reject_embedding_mutation();
+UPDATE rfpilot.embedding_model_releases SET dimension=16 WHERE stable_key='mock-knowledge-embedding';
+ALTER TABLE rfpilot.knowledge_retrieval_queries DROP CONSTRAINT IF EXISTS knowledge_retrieval_queries_fixture_check;
+ALTER TABLE rfpilot.knowledge_retrieval_queries ADD CONSTRAINT knowledge_retrieval_queries_fixture_check CHECK(fixture IN('breakout-room-schedule','general-session-production','no-match'));

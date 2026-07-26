@@ -1,0 +1,10 @@
+import "../config/env";
+import {closePostgres} from "../config/postgres";
+import {durableJobDispatcher} from "../src/modules/durableJobs/composition";
+import {closeQueue} from "../src/modules/durableJobs/queue";
+import {durableJobsEnabled} from "../src/modules/durableJobs/redis";
+if(!durableJobsEnabled())throw new Error("DURABLE_JOBS_ENABLED must be true to start the dispatcher");
+let stopping=false;const tick=async()=>{if(!stopping)await durableJobDispatcher.dispatch(50);};const reconcile=async()=>{if(!stopping)await durableJobDispatcher.reconcile(200);};
+const dispatchTimer=setInterval(()=>{void tick().catch(()=>undefined);},1000);const reconcileTimer=setInterval(()=>{void reconcile().catch(()=>undefined);},30000);void tick();
+const shutdown=async()=>{stopping=true;clearInterval(dispatchTimer);clearInterval(reconcileTimer);await closeQueue();await closePostgres();process.exit(0);};
+process.on("SIGTERM",()=>{void shutdown();});process.on("SIGINT",()=>{void shutdown();});console.log("Durable-job dispatcher started");

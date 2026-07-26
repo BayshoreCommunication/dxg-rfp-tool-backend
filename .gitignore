@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
 yarn.lock
 
 # Environment variables
@@ -10,6 +9,7 @@ yarn.lock
 
 # Build output
 build/
+dist/
 
 # Logs
 logs/

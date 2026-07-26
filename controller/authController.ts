@@ -1,20 +1,31 @@
 import { Request, Response } from "express";
-import { randomBytes } from "crypto";
-import { generateAccessToken, TokenPayload } from "../config/jwt";
+import crypto from "node:crypto";
 import { AuthRequest } from "../middleware/auth";
-import Otp from "../modal/otpModel";
-import User from "../modal/userModel";
 import {
-  generateOtp,
-  sendForgotPasswordOtpEmail,
-  sendSignupOtpEmail,
-} from "../utils/emailService";
+  authenticateGoogleIdentity,
+  authenticateWithCredentials,
+  getAuthenticatedUserAccount,
+  registerCustomerAccount,
+  registerAdminAccount,
+  requestAuthenticationOtp,
+  resetCustomerPassword,
+  verifyAuthenticationOtp,
+  beginAuthenticatedSession,
+  authenticationSessions,
+} from "../src/modules/auth/composition";
 
-/*─────────────────────────────────────────
-   Helper — build safe user response
-───────────────────────────────────────── */
-const userResponse = (user: any) => ({
-  _id: user._id,
+const applicationUserResponse = (user: {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  phone?: string;
+  company?: string;
+  avatar?: string;
+  createdAt?: Date;
+  organizationId?: string;
+}) => ({
+  _id: user.id,
   name: user.name,
   email: user.email,
   role: user.role,
@@ -24,14 +35,75 @@ const userResponse = (user: any) => ({
   createdAt: user.createdAt,
 });
 
-const isAdminRole = (role?: string): boolean => {
-  const normalizedRole = (role || "").toLowerCase().trim();
-  return (
-    normalizedRole === "admin" ||
-    normalizedRole === "superadmin" ||
-    normalizedRole === "super_admin"
-  );
+const refreshCookieName = () => process.env.NODE_ENV === "production"
+  ? "__Host-rfpilot_refresh"
+  : "rfpilot_refresh";
+const correlationId = (req: Request) => {
+  const supplied = req.headers["x-correlation-id"];
+  return typeof supplied === "string" && supplied.length <= 128
+    ? supplied
+    : crypto.randomUUID();
 };
+const setRefreshCookie = (res: Response, token: string, expiresAt: number) => {
+  res.cookie(refreshCookieName(), token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/",
+    expires: new Date(expiresAt),
+  });
+};
+const clearRefreshCookie = (res: Response) => {
+  res.clearCookie(refreshCookieName(), {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/",
+  });
+};
+const cookieValue = (req: Request, name: string) => {
+  const cookies = String(req.headers.cookie ?? "").split(";");
+  for (const cookie of cookies) {
+    const [key, ...value] = cookie.trim().split("=");
+    if (key === name) return decodeURIComponent(value.join("="));
+  }
+  return "";
+};
+const isAuthorizedBff = (req: Request) => {
+  const expected = process.env.BFF_SHARED_SECRET;
+  const supplied = req.headers["x-rfpilot-bff-key"];
+  if (!expected || typeof supplied !== "string") return false;
+  const left = Buffer.from(expected);
+  const right = Buffer.from(supplied);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+};
+const presentedRefreshToken = (req: Request) =>
+  cookieValue(req, refreshCookieName()) ||
+  (isAuthorizedBff(req) && typeof req.body?.refreshToken === "string"
+    ? req.body.refreshToken
+    : "");
+const createSession = async (req: Request, res: Response, user: {
+  id: string;
+  organizationId?: string;
+}) => {
+  if (!user.organizationId) throw new Error("User has no organization membership");
+  const session = await beginAuthenticatedSession({
+    userId: user.id,
+    organizationId: user.organizationId,
+    correlationId: correlationId(req),
+    userAgent: req.headers["user-agent"],
+    ip: req.ip,
+  });
+  setRefreshCookie(res, session.refreshToken, session.refreshExpiresAt);
+  return session;
+};
+const bffRefreshResponse = (req: Request, session: {
+  refreshToken: string;
+  refreshExpiresAt: number;
+}) => isAuthorizedBff(req) ? {
+  refreshToken: session.refreshToken,
+  refreshExpiresAt: session.refreshExpiresAt,
+} : {};
 
 /* ─────────────────────────────────────────
    POST /api/auth/send-otp
@@ -47,32 +119,13 @@ export const sendSignupOtp = async (req: Request, res: Response): Promise<void> 
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Spam check - don't allow re-registration
-    const existingUser = await User.findOne({ email: normalizedEmail });
-    if (existingUser) {
+    const result = await requestAuthenticationOtp(normalizedEmail, "signup");
+    if (result.kind === "account_exists") {
       res.status(409).json({
         success: false,
         message: "An account with this email already exists. Please sign in.",
       });
       return;
-    }
-
-    // Invalidate any existing OTPs for this email/type
-    await Otp.deleteMany({ email: normalizedEmail, type: "signup" });
-
-    const otp = generateOtp();
-    await Otp.create({
-      email: normalizedEmail,
-      otp,
-      type: "signup",
-    });
-
-    try {
-      await sendSignupOtpEmail(normalizedEmail, otp);
-    } catch (sendError) {
-      // Roll back OTP when delivery fails to avoid stale codes.
-      await Otp.deleteMany({ email: normalizedEmail, type: "signup" });
-      throw sendError;
     }
 
     res.status(200).json({
@@ -102,31 +155,25 @@ export const verifySignupOtp = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    const record = await Otp.findOne({
-      email: email.toLowerCase().trim(),
-      type: "signup",
-      verified: false,
-    });
-
-    if (!record) {
+    const result = await verifyAuthenticationOtp(
+      email.toLowerCase().trim(),
+      otp.trim(),
+      "signup",
+    );
+    if (result.kind === "not_found") {
       res.status(400).json({ success: false, message: "OTP not found or already used. Please request a new one." });
       return;
     }
 
-    if (new Date() > record.expiresAt) {
-      await record.deleteOne();
+    if (result.kind === "expired") {
       res.status(400).json({ success: false, message: "OTP has expired. Please request a new one." });
       return;
     }
 
-    if (record.otp !== otp.trim()) {
+    if (result.kind === "invalid") {
       res.status(400).json({ success: false, message: "Invalid OTP. Please try again." });
       return;
     }
-
-    // Mark as verified (frontend can now proceed to registration form)
-    record.verified = true;
-    await record.save();
 
     res.status(200).json({ success: true, message: "Email verified successfully" });
   } catch (error) {
@@ -145,21 +192,16 @@ export const verifySignupOtp = async (req: Request, res: Response): Promise<void
 ───────────────────────────────────────── */
 export const signUp = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, email, phone, company, password } = req.body;
-
-    if (!name || !email || !password) {
+    const result = await registerCustomerAccount(req.body ?? {});
+    if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Name, email, and password are required" });
       return;
     }
-
-    // Confirm OTP was verified for this email
-    const otpRecord = await Otp.findOne({
-      email: email.toLowerCase().trim(),
-      type: "signup",
-      verified: true,
-    });
-
-    if (!otpRecord) {
+    if (result.kind === "invalid_password") {
+      res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
+      return;
+    }
+    if (result.kind === "unverified") {
       res.status(403).json({
         success: false,
         message: "Email not verified. Please complete OTP verification first.",
@@ -167,32 +209,21 @@ export const signUp = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Double-check user doesn't exist
-    const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
-    if (existingUser) {
+    if (result.kind === "email_conflict") {
       res.status(409).json({ success: false, message: "User with this email already exists" });
       return;
     }
 
-    const user = await User.create({ name, email, phone, company, password, role: "customer" });
-
-    // Clean up OTP record
-    await otpRecord.deleteOne();
-
-    const tokenPayload: TokenPayload = {
-      userId: user._id.toString(),
-      email: user.email,
-      role: "customer",
-    };
-    const tokenData = generateAccessToken(tokenPayload);
-
+    const session = await createSession(req, res, result.user);
     res.status(201).json({
       success: true,
       message: "Account created successfully",
-      user: userResponse(user),
-      accessToken: tokenData.accessToken,
-      tokenExpiresAt: tokenData.expiresAt,
-      tokenExpiresIn: tokenData.expiresIn,
+      user: { ...result.user, _id: result.user.id, id: undefined },
+      accessToken: session.accessToken,
+      tokenExpiresAt: session.expiresAt,
+      tokenExpiresIn: session.expiresIn,
+      sessionId: session.sessionId,
+      ...bffRefreshResponse(req, session),
     });
   } catch (error) {
     console.error("Sign up error:", error);
@@ -210,16 +241,13 @@ export const signUp = async (req: Request, res: Response): Promise<void> => {
 ───────────────────────────────────────── */
 export const signInWithCredentials = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
+    const result = await authenticateWithCredentials(req.body ?? {}, "customer");
+    if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Email and password are required" });
       return;
     }
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() }).select("+password");
-
-    if (!user) {
+    if (result.kind === "not_found") {
       res.status(404).json({
         success: false,
         message: "No account found with this email. Please create an account first.",
@@ -228,8 +256,7 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
       return;
     }
 
-    const isPasswordValid = await user.comparePassword(password);
-    if (!isPasswordValid) {
+    if (result.kind === "wrong_password") {
       res.status(401).json({
         success: false,
         message: "Incorrect password. Please try again.",
@@ -238,7 +265,7 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
       return;
     }
 
-    if (user.isBlocked) {
+    if (result.kind === "blocked") {
       res.status(403).json({
         success: false,
         message: "Your account has been blocked. Please contact support.",
@@ -246,21 +273,21 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
       });
       return;
     }
+    if (result.kind === "not_admin") {
+      res.status(403).json({ success: false, message: "This account cannot use customer login." });
+      return;
+    }
 
-    const tokenPayload: TokenPayload = {
-      userId: user._id.toString(),
-      email: user.email,
-      role: "customer",
-    };
-    const tokenData = generateAccessToken(tokenPayload);
-
+    const session = await createSession(req, res, result.user);
     res.status(200).json({
       success: true,
       message: "Login successful",
-      user: userResponse(user),
-      accessToken: tokenData.accessToken,
-      tokenExpiresAt: tokenData.expiresAt,
-      tokenExpiresIn: tokenData.expiresIn,
+      user: applicationUserResponse(result.user),
+      accessToken: session.accessToken,
+      tokenExpiresAt: session.expiresAt,
+      tokenExpiresIn: session.expiresIn,
+      sessionId: session.sessionId,
+      ...bffRefreshResponse(req, session),
     });
   } catch (error) {
     console.error("Sign in error:", error);
@@ -278,86 +305,36 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
 ───────────────────────────────────────────── */
 export const signInWithGoogle = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, name, avatar, googleId } = req.body as {
-      email?: string;
-      name?: string;
-      avatar?: string;
-      googleId?: string;
-    };
-
-    if (!email || !email.trim()) {
-      res.status(400).json({ success: false, message: "Email is required" });
+    const result = await authenticateGoogleIdentity(req.body?.idToken);
+    if (result.kind === "validation") {
+      res.status(400).json({ success: false, message: "Google ID token is required" });
+      return;
+    }
+    if (result.kind === "invalid_identity") {
+      res.status(401).json({ success: false, message: "Invalid Google identity token" });
+      return;
+    }
+    if (result.kind === "blocked") {
+      res.status(403).json({
+        success: false,
+        message: "Your account has been suspended. Please contact support.",
+      });
       return;
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
-    const trimmedName = (name || "").trim();
-    const trimmedAvatar = (avatar || "").trim();
-    const trimmedGoogleId = (googleId || "").trim();
-
-    let user = await User.findOne({ email: normalizedEmail });
-    let isNewUser = false;
-
-    if (!user) {
-      const fallbackName = normalizedEmail.split("@")[0] || "Google User";
-      const generatedPassword = randomBytes(24).toString("hex");
-
-      user = await User.create({
-        name: trimmedName || fallbackName,
-        email: normalizedEmail,
-        avatar: trimmedAvatar || undefined,
-        password: generatedPassword,
-        googleId: trimmedGoogleId || undefined,
-      });
-      isNewUser = true;
-    } else {
-      let shouldSave = false;
-
-      if (trimmedAvatar && user.avatar !== trimmedAvatar) {
-        user.avatar = trimmedAvatar;
-        shouldSave = true;
-      }
-
-      if (trimmedName && (!user.name || user.name.trim() !== trimmedName)) {
-        user.name = trimmedName;
-        shouldSave = true;
-      }
-
-      if (trimmedGoogleId && user.googleId !== trimmedGoogleId) {
-        user.googleId = trimmedGoogleId;
-        shouldSave = true;
-      }
-
-      if (shouldSave) {
-        await user.save();
-      }
-
-      if (user.isBlocked) {
-        res.status(403).json({
-          success: false,
-          message: "Your account has been suspended. Please contact support.",
-        });
-        return;
-      }
-    }
-
-    const tokenPayload: TokenPayload = {
-      userId: user._id.toString(),
-      email: user.email,
-      role: String((user as any).role || "customer"),
-    };
-    const tokenData = generateAccessToken(tokenPayload);
-
+    const session = await createSession(req, res, result.user);
     res.status(200).json({
       success: true,
-      message: isNewUser
+      message: result.isNewUser
         ? "Google account created and signed in successfully"
         : "Google sign in successful",
-      isNewUser,
-      user: userResponse(user),
-      accessToken: tokenData.accessToken,
-      tokenExpiresAt: tokenData.expiresAt,
-      tokenExpiresIn: tokenData.expiresIn,
+      isNewUser: result.isNewUser,
+      user: applicationUserResponse(result.user),
+      accessToken: session.accessToken,
+      tokenExpiresAt: session.expiresAt,
+      tokenExpiresIn: session.expiresIn,
+      sessionId: session.sessionId,
+      ...bffRefreshResponse(req, session),
     });
   } catch (error) {
     console.error("Google sign in error:", error);
@@ -375,9 +352,11 @@ export const signInWithGoogle = async (req: Request, res: Response): Promise<voi
 ───────────────────────────────────────────── */
 export const signUpAdmin = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, email, phone, password, adminSecret } = req.body;
-
-    if (!name || !email || !password) {
+    const result = await registerAdminAccount(
+      req.body ?? {},
+      process.env.ADMIN_SIGNUP_SECRET,
+    );
+    if (result.kind === "validation") {
       res.status(400).json({
         success: false,
         message: "Name, email, and password are required",
@@ -385,11 +364,11 @@ export const signUpAdmin = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    const requiredSecret = process.env.ADMIN_SIGNUP_SECRET;
-    if (
-      requiredSecret &&
-      String(adminSecret || "").trim() !== String(requiredSecret).trim()
-    ) {
+    if (result.kind === "invalid_password") {
+      res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
+      return;
+    }
+    if (result.kind === "invalid_secret") {
       res.status(403).json({
         success: false,
         message: "Invalid admin signup secret.",
@@ -397,37 +376,23 @@ export const signUpAdmin = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    const normalizedEmail = String(email).toLowerCase().trim();
-    const existingUser = await User.findOne({ email: normalizedEmail });
-    if (existingUser) {
+    if (result.kind === "email_conflict") {
       res
         .status(409)
         .json({ success: false, message: "User with this email already exists" });
       return;
     }
 
-    const user = await User.create({
-      name: String(name).trim(),
-      email: normalizedEmail,
-      phone: phone ? String(phone).trim() : undefined,
-      password: String(password),
-      role: "admin",
-    });
-
-    const tokenPayload: TokenPayload = {
-      userId: user._id.toString(),
-      email: user.email,
-      role: "admin",
-    };
-    const tokenData = generateAccessToken(tokenPayload);
-
+    const session = await createSession(req, res, result.user);
     res.status(201).json({
       success: true,
       message: "Admin account created successfully",
-      user: userResponse(user),
-      accessToken: tokenData.accessToken,
-      tokenExpiresAt: tokenData.expiresAt,
-      tokenExpiresIn: tokenData.expiresIn,
+      user: applicationUserResponse(result.user),
+      accessToken: session.accessToken,
+      tokenExpiresAt: session.expiresAt,
+      tokenExpiresIn: session.expiresIn,
+      sessionId: session.sessionId,
+      ...bffRefreshResponse(req, session),
     });
   } catch (error) {
     console.error("Admin sign up error:", error);
@@ -445,16 +410,13 @@ export const signUpAdmin = async (req: Request, res: Response): Promise<void> =>
 ───────────────────────────────────────────── */
 export const signInAdmin = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
+    const result = await authenticateWithCredentials(req.body ?? {}, "admin");
+    if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Email and password are required" });
       return;
     }
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() }).select("+password");
-
-    if (!user) {
+    if (result.kind === "not_found") {
       res.status(404).json({
         success: false,
         message: "No account found with this email.",
@@ -463,8 +425,7 @@ export const signInAdmin = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    const isPasswordValid = await user.comparePassword(password);
-    if (!isPasswordValid) {
+    if (result.kind === "wrong_password") {
       res.status(401).json({
         success: false,
         message: "Incorrect password. Please try again.",
@@ -473,8 +434,7 @@ export const signInAdmin = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    const role = String((user as any).role || "");
-    if (!isAdminRole(role)) {
+    if (result.kind === "not_admin") {
       res.status(403).json({
         success: false,
         message: "This account does not have admin access.",
@@ -483,7 +443,7 @@ export const signInAdmin = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    if (user.isBlocked) {
+    if (result.kind === "blocked") {
       res.status(403).json({
         success: false,
         message: "Your account has been blocked. Please contact support.",
@@ -492,20 +452,16 @@ export const signInAdmin = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    const tokenPayload: TokenPayload = {
-      userId: user._id.toString(),
-      email: user.email,
-      role: role || "admin",
-    };
-    const tokenData = generateAccessToken(tokenPayload);
-
+    const session = await createSession(req, res, result.user);
     res.status(200).json({
       success: true,
       message: "Admin login successful",
-      user: userResponse(user),
-      accessToken: tokenData.accessToken,
-      tokenExpiresAt: tokenData.expiresAt,
-      tokenExpiresIn: tokenData.expiresIn,
+      user: applicationUserResponse(result.user),
+      accessToken: session.accessToken,
+      tokenExpiresAt: session.expiresAt,
+      tokenExpiresIn: session.expiresIn,
+      sessionId: session.sessionId,
+      ...bffRefreshResponse(req, session),
     });
   } catch (error) {
     console.error("Admin sign in error:", error);
@@ -523,12 +479,14 @@ export const signInAdmin = async (req: Request, res: Response): Promise<void> =>
 ───────────────────────────────────────── */
 export const getCurrentUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const user = await User.findById(req.user?.userId);
+    const user = req.user?.userId
+      ? await getAuthenticatedUserAccount(req.user.userId)
+      : null;
     if (!user) {
       res.status(404).json({ success: false, message: "User not found" });
       return;
     }
-    res.status(200).json({ success: true, user: userResponse(user) });
+    res.status(200).json({ success: true, user: applicationUserResponse(user) });
   } catch (error) {
     console.error("Get current user error:", error);
     res.status(500).json({
@@ -542,8 +500,100 @@ export const getCurrentUser = async (req: AuthRequest, res: Response): Promise<v
 /* ─────────────────────────────────────────
    POST /api/auth/logout
 ───────────────────────────────────────── */
-export const signOut = async (_req: AuthRequest, res: Response): Promise<void> => {
+export const signOut = async (req: AuthRequest, res: Response): Promise<void> => {
+  if (req.user?.userId && req.user.organizationId && req.user.sessionId) {
+    await authenticationSessions.revokeSession({
+      userId: req.user.userId,
+      organizationId: req.user.organizationId,
+      sessionId: req.user.sessionId,
+      correlationId: correlationId(req),
+    });
+  }
+  clearRefreshCookie(res);
   res.status(200).json({ success: true, message: "Signed out successfully" });
+};
+
+export const refreshSession = async (req: Request, res: Response): Promise<void> => {
+  const refreshToken = presentedRefreshToken(req);
+  if (!refreshToken) {
+    res.status(401).json({
+      success: false,
+      code: "REFRESH_SESSION_REQUIRED",
+      message: "Refresh session required",
+    });
+    return;
+  }
+  const result = await authenticationSessions.rotate({
+    refreshToken,
+    correlationId: correlationId(req),
+    userAgent: req.headers["user-agent"],
+    ip: req.ip,
+  });
+  if (result.kind !== "rotated") {
+    clearRefreshCookie(res);
+    res.status(401).json({
+      success: false,
+      code: "REFRESH_SESSION_EXPIRED",
+      reason: result.kind,
+      message: "Refresh session is invalid or expired",
+    });
+    return;
+  }
+  setRefreshCookie(res, result.refreshToken, result.refreshExpiresAt);
+  res.status(200).json({
+    success: true,
+    accessToken: result.accessToken,
+    tokenExpiresAt: result.expiresAt,
+    tokenExpiresIn: result.expiresIn,
+    sessionId: result.sessionId,
+    ...bffRefreshResponse(req, result),
+  });
+};
+
+export const signOutAll = async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!req.user?.userId || !req.user.organizationId) {
+    res.status(401).json({ success: false, message: "Authentication required" });
+    return;
+  }
+  const revoked = await authenticationSessions.revokeAll({
+    userId: req.user.userId,
+    organizationId: req.user.organizationId,
+    correlationId: correlationId(req),
+  });
+  clearRefreshCookie(res);
+  res.status(200).json({ success: true, revoked });
+};
+
+export const listSessions = async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!req.user?.userId || !req.user.organizationId) {
+    res.status(401).json({ success: false, message: "Authentication required" });
+    return;
+  }
+  const sessions = await authenticationSessions.listActive({
+    userId: req.user.userId,
+    organizationId: req.user.organizationId,
+  });
+  res.status(200).json({ success: true, sessions, currentSessionId: req.user.sessionId });
+};
+
+export const revokeSession = async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!req.user?.userId || !req.user.organizationId) {
+    res.status(401).json({ success: false, message: "Authentication required" });
+    return;
+  }
+  const revoked = await authenticationSessions.revokeSession({
+    userId: req.user.userId,
+    organizationId: req.user.organizationId,
+    sessionId: req.params.id,
+    correlationId: correlationId(req),
+    reason: "user_revoked_device",
+  });
+  if (!revoked) {
+    res.status(404).json({ success: false, message: "Session not found" });
+    return;
+  }
+  if (req.params.id === req.user.sessionId) clearRefreshCookie(res);
+  res.status(200).json({ success: true, revoked });
 };
 
 /* ─────────────────────────────────────────
@@ -560,32 +610,7 @@ export const sendForgotPasswordOtp = async (req: Request, res: Response): Promis
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    const user = await User.findOne({ email: normalizedEmail });
-    // Security: don't reveal whether account exists
-    if (!user) {
-      res.status(200).json({
-        success: true,
-        message: "If an account with this email exists, a reset code has been sent.",
-      });
-      return;
-    }
-
-    // Invalidate existing forgot-password OTPs
-    await Otp.deleteMany({ email: normalizedEmail, type: "forgot-password" });
-
-    const otp = generateOtp();
-    await Otp.create({
-      email: normalizedEmail,
-      otp,
-      type: "forgot-password",
-    });
-
-    try {
-      await sendForgotPasswordOtpEmail(normalizedEmail, otp);
-    } catch (sendError) {
-      await Otp.deleteMany({ email: normalizedEmail, type: "forgot-password" });
-      throw sendError;
-    }
+    await requestAuthenticationOtp(normalizedEmail, "forgot-password");
 
     res.status(200).json({
       success: true,
@@ -614,30 +639,25 @@ export const verifyForgotPasswordOtp = async (req: Request, res: Response): Prom
       return;
     }
 
-    const record = await Otp.findOne({
-      email: email.toLowerCase().trim(),
-      type: "forgot-password",
-      verified: false,
-    });
-
-    if (!record) {
+    const result = await verifyAuthenticationOtp(
+      email.toLowerCase().trim(),
+      otp.trim(),
+      "forgot-password",
+    );
+    if (result.kind === "not_found") {
       res.status(400).json({ success: false, message: "OTP not found or already used. Please request a new one." });
       return;
     }
 
-    if (new Date() > record.expiresAt) {
-      await record.deleteOne();
+    if (result.kind === "expired") {
       res.status(400).json({ success: false, message: "OTP has expired. Please request a new one." });
       return;
     }
 
-    if (record.otp !== otp.trim()) {
+    if (result.kind === "invalid") {
       res.status(400).json({ success: false, message: "Invalid OTP. Please try again." });
       return;
     }
-
-    record.verified = true;
-    await record.save();
 
     res.status(200).json({ success: true, message: "OTP verified. You can now reset your password." });
   } catch (error) {
@@ -656,26 +676,17 @@ export const verifyForgotPasswordOtp = async (req: Request, res: Response): Prom
 ───────────────────────────────────────── */
 export const resetPassword = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, newPassword } = req.body;
-
-    if (!email || !newPassword) {
+    const result = await resetCustomerPassword(req.body ?? {});
+    if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Email and new password are required" });
       return;
     }
-
-    if (newPassword.length < 6) {
-      res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
+    if (result.kind === "invalid_password") {
+      res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
       return;
     }
 
-    // Confirm OTP was verified
-    const otpRecord = await Otp.findOne({
-      email: email.toLowerCase().trim(),
-      type: "forgot-password",
-      verified: true,
-    });
-
-    if (!otpRecord) {
+    if (result.kind === "unauthorized") {
       res.status(403).json({
         success: false,
         message: "Password reset not authorized. Please verify your OTP first.",
@@ -683,17 +694,10 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() }).select("+password");
-    if (!user) {
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "User not found" });
       return;
     }
-
-    user.password = newPassword; // bcrypt pre-save hook will hash it
-    await user.save();
-
-    // Clean up OTP
-    await otpRecord.deleteOne();
 
     res.status(200).json({ success: true, message: "Password reset successfully. You can now sign in." });
   } catch (error) {
@@ -705,4 +709,3 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
     });
   }
 };
-

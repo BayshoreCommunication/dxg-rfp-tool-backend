@@ -5,10 +5,41 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-production
+  cancel-in-progress: false
+
 jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run quality gate
+        run: npm run ci
+
   deploy:
     name: Deploy to DigitalOcean
+    needs: validate
     runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code
@@ -31,10 +62,16 @@ jobs:
             cd /var/www/dxg-rfp-tool-backend
 
             echo "📥 Pulling latest code..."
-            git pull origin main
+            git pull --ff-only origin main
 
-            echo "📦 Installing dependencies..."
-            npm install --omit=dev
+            echo "📦 Installing locked dependencies..."
+            npm ci
+
+            echo "🏗️ Building the validated source release..."
+            npm run build
+
+            echo "🧹 Removing development-only dependencies..."
+            npm prune --omit=dev
 
             echo "♻️ Restarting PM2..."
             pm2 restart dxg-rfp-tool

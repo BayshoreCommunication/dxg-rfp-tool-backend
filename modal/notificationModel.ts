@@ -7,6 +7,7 @@ export type NotificationType =
   | "vendor_response";
 
 export interface INotification extends Document {
+  organizationId?: mongoose.Types.ObjectId;
   userId: mongoose.Types.ObjectId;
   proposalId?: mongoose.Types.ObjectId | null;
   type: NotificationType;
@@ -22,6 +23,7 @@ export interface INotification extends Document {
 
 const notificationSchema = new Schema<INotification>(
   {
+    organizationId: { type: Schema.Types.ObjectId, ref: "Organization", index: true },
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
@@ -72,6 +74,7 @@ const notificationSchema = new Schema<INotification>(
 );
 
 notificationSchema.index({ userId: 1, createdAt: -1 });
+notificationSchema.index({ organizationId: 1, userId: 1, createdAt: -1 });
 notificationSchema.index(
   { dedupeKey: 1 },
   {

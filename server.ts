@@ -1,10 +1,13 @@
 import "./config/env"; // must be first — loads .env before any module reads process.env
+import "./config/observability";
 import cors from "cors";
+import helmet from "helmet";
 import express, { Application, NextFunction, Request, Response } from "express";
 import http from "http";
 import mongoose from "mongoose";
 import morgan from "morgan";
 import connectDB from "./config/db";
+import { checkPostgres, postgresEnabled } from "./config/postgres";
 import authRoutes from "./routes/authRoute";
 import adminRoutes from "./routes/adminRoute";
 import adminUserRoutes from "./routes/adminUserRoute";
@@ -14,12 +17,30 @@ import emailRoutes from "./routes/emailRoute";
 import extractRoutes from "./routes/extractRoute";
 import notificationRoutes from "./routes/notificationRoute";
 import proposalRoutes from "./routes/proposalsRoute";
+import publicAccessRoutes from "./routes/publicAccessRoute";
 import settingsRoutes from "./routes/settingsRoute";
 import userRoutes from "./routes/usersRoute";
 import vendorResponseRoutes from "./routes/vendorResponseRoute";
+import documentSourcesRoutes from "./routes/documentSourcesRoute";
+import jobsRoutes from "./routes/jobsRoute";
+import aiGatewayRoutes from "./routes/aiGatewayRoute";
+import knowledgeImportRoutes from "./routes/knowledgeImportRoute";
+import knowledgeReviewRoutes from "./routes/knowledgeReviewRoute";
+import knowledgeRetrievalRoutes from "./routes/knowledgeRetrievalRoute";
+import proposalContextRoutes from "./routes/proposalContextRoute";
+import conversationsRoutes from "./routes/conversationsRoute";
+import guidanceRoutes from "./routes/guidanceRoute";
+import pricingRoutes from "./routes/pricingRoute";
+import investmentRoutes from "./routes/investmentRoute";
+import vendorAnalysisRoutes from "./routes/vendorAnalysisRoute";
+import candidateApplicationRoutes from "./routes/candidateApplicationRoute";
+import proposalDraftRoutes from "./routes/proposalDraftRoute";
+import proposalWorkflowRoutes from "./routes/proposalWorkflowRoute";
 import { startCronJobs } from "./utils/cronJobs";
 import { initializeNotificationWebSocketServer } from "./utils/notificationService";
 import { getUploadsDir } from "./utils/paths";
+import { checkQueue } from "./src/modules/durableJobs/queue";
+import {correlationMiddleware} from "./middleware/observability";
 
 console.log("Loaded SMTP_MAIL:", process.env.SMTP_MAIL ? "***" : "UNDEFINED");
 console.log(
@@ -31,10 +52,26 @@ const app: Application = express();
 const PORT = process.env.PORT || 8000;
 
 // Middleware
-app.use(cors());
+app.use(helmet());
+
+// CORS allowlist: configured app origins only. Tracking pixels/redirects are
+// plain GETs and remain unaffected; server-to-server calls have no Origin.
+const corsAllowlist = [
+  process.env.FRONTEND_URL,
+  process.env.ADMIN_URL,
+  ...(process.env.CORS_ALLOWED_ORIGINS || "").split(","),
+  ...(process.env.NODE_ENV !== "production" ? ["http://localhost:3000", "http://localhost:3001"] : []),
+].map((value) => (value || "").trim().replace(/\/$/, "")).filter(Boolean);
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || corsAllowlist.includes(origin)) return callback(null, true);
+    callback(null, false);
+  },
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan("dev"));
+if(process.env.OBSERVABILITY_ENABLED!=="true")app.use(morgan("dev"));
+app.use(correlationMiddleware);
 
 // Prevent any proxy / CDN / browser from caching API responses
 app.use((_req: Request, res: Response, next: NextFunction) => {
@@ -84,15 +121,26 @@ app.get("/", (_req: Request, res: Response) => {
 });
 
 // Health check with database status
-app.get("/health", (_req: Request, res: Response) => {
+app.get("/health", async (_req: Request, res: Response) => {
   const dbStatus =
     mongoose.connection.readyState === 1 ? "connected" : "disconnected";
-  const isHealthy = mongoose.connection.readyState === 1;
+  let postgres: Awaited<ReturnType<typeof checkPostgres>> | { enabled: true; ready: false; migrationVersion: null; error: string } = {
+    enabled: false, ready: false, migrationVersion: null,
+  };
+  if (postgresEnabled()) {
+    try { postgres = await checkPostgres(); }
+    catch { postgres = { enabled: true, ready: false, migrationVersion: null, error: "unavailable" }; }
+  }
+  const queue = await checkQueue();
+  const isHealthy = mongoose.connection.readyState === 1 && (!postgres.enabled || postgres.ready) && (!queue.enabled || queue.ready);
 
   res.status(isHealthy ? 200 : 503).json({
     status: isHealthy ? "OK" : "ERROR",
     timestamp: new Date().toISOString(),
     database: dbStatus,
+    postgres,
+    queue,
+    observability: { enabled: process.env.OBSERVABILITY_ENABLED === "true", exporter: process.env.OBSERVABILITY_ENABLED === "true" ? "local_otlp" : "disabled" },
     environment: process.env.NODE_ENV || "development",
   });
 });
@@ -121,6 +169,22 @@ app.use("/api/users", userRoutes);
 
 // Proposal routes
 app.use("/api/proposals", proposalRoutes);
+app.use("/api/public-access", publicAccessRoutes);
+app.use("/api/v1", documentSourcesRoutes);
+app.use("/api/v1", jobsRoutes);
+app.use("/api/v1", aiGatewayRoutes);
+app.use("/api/v1", knowledgeImportRoutes);
+app.use("/api/v1", knowledgeReviewRoutes);
+app.use("/api/v1", knowledgeRetrievalRoutes);
+app.use("/api/v1", proposalContextRoutes);
+app.use("/api/v1", conversationsRoutes);
+app.use("/api/v1", guidanceRoutes);
+app.use("/api/v1", pricingRoutes);
+app.use("/api/v1", investmentRoutes);
+app.use("/api/v1", vendorAnalysisRoutes);
+app.use("/api/v1", candidateApplicationRoutes);
+app.use("/api/v1", proposalDraftRoutes);
+app.use("/api/v1", proposalWorkflowRoutes);
 
 // Email campaign routes
 app.use("/api/emails", emailRoutes);

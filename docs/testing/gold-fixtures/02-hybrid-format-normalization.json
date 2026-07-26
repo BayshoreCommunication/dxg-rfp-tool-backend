@@ -1,0 +1,16 @@
+{
+  "name": "hybrid-format-normalization",
+  "description": "Format normalization: evidence spells the format as 'HYBRID format'; the pipeline must emit the canonical Hybrid enum value, not the raw phrasing.",
+  "evidence": [
+    { "id": "gold-hybrid-1", "text": "The Synthetic DXG Leadership Summit will run as a HYBRID format event with both onsite and online audiences." },
+    { "id": "gold-hybrid-2", "text": "The edition year for the summit is 2026." }
+  ],
+  "expected": {
+    "candidates": [
+      { "path": "/content/event/eventName", "value": "Synthetic DXG Leadership Summit" },
+      { "path": "/content/event/eventFormat", "value": "Hybrid" },
+      { "path": "/content/event/editionYear", "value": "2026" }
+    ],
+    "allowAdditional": false
+  }
+}

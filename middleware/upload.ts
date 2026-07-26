@@ -122,10 +122,54 @@ export const uploadProposalDocs = uploadDocument.fields([
   { name: "avQuoteFiles", maxCount: 10 },
 ]);
 
-// Vendor response uploads — any file type, 10 MB per file
+// Vendor response uploads — restricted document/image types only.
+// These files arrive on an unauthenticated public endpoint, so both the
+// MIME type and the file extension must be on the allowlist.
+const VENDOR_ALLOWED_MIMES = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+  "application/csv",
+  "text/plain",
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+]);
+
+const VENDOR_ALLOWED_EXTENSIONS = new Set([
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xlsx",
+  ".csv",
+  ".txt",
+  ".png",
+  ".jpg",
+  ".jpeg",
+]);
+
+const vendorDocumentFilter = (
+  _req: Request,
+  file: any,
+  cb: FileFilterCallback,
+) => {
+  const ext = path.extname(file.originalname || "").toLowerCase();
+  if (VENDOR_ALLOWED_MIMES.has(file.mimetype) && VENDOR_ALLOWED_EXTENSIONS.has(ext)) {
+    cb(null, true);
+  } else {
+    cb(
+      new Error(
+        "Unsupported file type. Allowed: PDF, DOC, DOCX, XLSX, CSV, TXT, PNG, JPG.",
+      ),
+    );
+  }
+};
+
 const uploadVendorDocsMulter = multer({
   storage,
-  // No fileFilter — accept any MIME type the vendor sends
+  fileFilter: vendorDocumentFilter,
   limits: {
     fileSize: 10 * 1024 * 1024, // 10 MB
     files: 10,

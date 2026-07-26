@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rfpilot.dxg.com/contracts/proposal/v1/proposal-public.v1.schema.json",
+  "title": "ProposalPublicV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "proposalId", "version", "content", "presentation", "publishedAt"],
+  "properties": {
+    "schemaVersion": { "const": "proposal-public.v1" },
+    "proposalId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "version": { "type": "integer", "minimum": 1 },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "venueSchedule", "rooms", "contacts"],
+      "properties": {
+        "event": { "$ref": "proposal.v1.schema.json#/$defs/event" },
+        "venueSchedule": { "$ref": "proposal.v1.schema.json#/$defs/venueSchedule" },
+        "rooms": {
+          "type": "array",
+          "items": { "$ref": "proposal.v1.schema.json#/$defs/room" },
+          "maxItems": 200
+        },
+        "hybridVirtual": { "$ref": "proposal.v1.schema.json#/$defs/hybridVirtual" },
+        "contentCreative": { "$ref": "proposal.v1.schema.json#/$defs/contentCreative" },
+        "videoRecording": { "$ref": "proposal.v1.schema.json#/$defs/videoRecording" },
+        "venueTechnical": { "$ref": "proposal.v1.schema.json#/$defs/venueTechnical" },
+        "vendorCoordination": { "$ref": "proposal.v1.schema.json#/$defs/vendorCoordination" },
+        "confidentiality": { "$ref": "proposal.v1.schema.json#/$defs/confidentiality" },
+        "budgetPreferences": { "$ref": "proposal.v1.schema.json#/$defs/budgetPreferences" },
+        "contacts": { "$ref": "proposal.v1.schema.json#/$defs/contacts" }
+      }
+    },
+    "presentation": { "$ref": "proposal.v1.schema.json#/$defs/presentation" },
+    "publishedAt": { "type": "string", "format": "date-time" }
+  }
+}

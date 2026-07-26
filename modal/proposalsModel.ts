@@ -1,6 +1,7 @@
 import mongoose, { Document, Schema } from "mongoose";
 
 export interface IProposal extends Document {
+  organizationId?: mongoose.Types.ObjectId;
   userId?: mongoose.Types.ObjectId;
   status: "unsubmitted" | "submitted" | "reviewed" | "approved" | "rejected";
   isDraft: boolean;
@@ -12,6 +13,8 @@ export interface IProposal extends Document {
   archivedAt?: Date | null;
   isCopy: boolean;
   viewsCount: number;
+  version: number;
+  candidateApplicationIds: string[];
   proposalSettings?: Record<string, unknown>;
   event: {
     eventName: string;
@@ -63,8 +66,16 @@ export interface IProposal extends Document {
   updatedAt: Date;
 }
 
+// Contact details are only mandatory once a proposal leaves the draft stage:
+// assisted/lazy creation starts an unsubmitted draft with no contact yet, and
+// the final submit step still enforces these fields.
+function contactRequired(this: { status?: string; isDraft?: boolean }): boolean {
+  return !(this.isDraft === true && (this.status ?? "unsubmitted") === "unsubmitted");
+}
+
 const proposalSchema = new Schema<IProposal>(
   {
+    organizationId: { type: Schema.Types.ObjectId, ref: "Organization", index: true },
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
@@ -84,6 +95,8 @@ const proposalSchema = new Schema<IProposal>(
     archivedAt: { type: Date, default: null },
     isCopy: { type: Boolean, default: false, index: true },
     viewsCount: { type: Number, default: 0, min: 0 },
+    version: { type: Number, default: 1, min: 1 },
+    candidateApplicationIds: { type: [String], default: [], select: false },
 
     proposalSettings: { type: Schema.Types.Mixed, default: {} },
 
@@ -127,12 +140,12 @@ const proposalSchema = new Schema<IProposal>(
     contact: {
       contactFirstName: {
         type: String,
-        required: [true, "First name is required"],
+        required: [contactRequired, "First name is required"],
         trim: true,
       },
       contactLastName: {
         type: String,
-        required: [true, "Last name is required"],
+        required: [contactRequired, "Last name is required"],
         trim: true,
       },
       contactTitle: { type: String, trim: true },
@@ -140,13 +153,13 @@ const proposalSchema = new Schema<IProposal>(
       organizationLegalName: { type: String, trim: true },
       contactEmail: {
         type: String,
-        required: [true, "Contact email is required"],
+        required: [contactRequired, "Contact email is required"],
         trim: true,
         lowercase: true,
       },
       contactPhone: {
         type: String,
-        required: [true, "Contact phone is required"],
+        required: [contactRequired, "Contact phone is required"],
         trim: true,
       },
       contactPhoneExt: { type: String, trim: true },
@@ -163,6 +176,7 @@ const proposalSchema = new Schema<IProposal>(
 );
 
 proposalSchema.index({ userId: 1, createdAt: -1 });
+proposalSchema.index({ organizationId: 1, userId: 1, createdAt: -1 });
 proposalSchema.index({ status: 1 });
 proposalSchema.index({ "contact.contactEmail": 1 });
 proposalSchema.index({ "event.eventName": 1 });

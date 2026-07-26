@@ -12,6 +12,7 @@ export interface IEmailRecipient {
 }
 
 export interface IEmailCampaign extends Document {
+  organizationId?: mongoose.Types.ObjectId;
   userId: mongoose.Types.ObjectId;
   proposalId: mongoose.Types.ObjectId;
   proposalTitle: string;
@@ -59,6 +60,7 @@ const emailRecipientSchema = new Schema<IEmailRecipient>(
 
 const emailCampaignSchema = new Schema<IEmailCampaign>(
   {
+    organizationId: { type: Schema.Types.ObjectId, ref: "Organization", index: true },
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
@@ -105,8 +107,8 @@ const emailCampaignSchema = new Schema<IEmailCampaign>(
 );
 
 emailCampaignSchema.index({ userId: 1, createdAt: -1 });
+emailCampaignSchema.index({ organizationId: 1, userId: 1, createdAt: -1 });
 emailCampaignSchema.index({ userId: 1, proposalId: 1, createdAt: -1 });
-emailCampaignSchema.index({ "recipients.trackingId": 1 });
 
 const EmailCampaign = mongoose.model<IEmailCampaign>(
   "EmailCampaign",

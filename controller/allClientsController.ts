@@ -1,11 +1,10 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
-import User from "../modal/userModel";
-
-const PER_PAGE = 10;
-
-const escapeRegex = (value: string): string =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+import {
+  deleteAdminClient,
+  listAdminClients,
+  setAdminClientBlocked,
+} from "../src/modules/admin/composition";
 
 const isAdminRole = (role?: string): boolean => {
   const normalized = String(role || "").toLowerCase().trim();
@@ -34,120 +33,15 @@ export const getAdminClientsList = async (
       return;
     }
 
-    const pageParam = Number.parseInt(String(req.query.page || "1"), 10);
-    const page = Number.isNaN(pageParam) || pageParam < 1 ? 1 : pageParam;
-    const skip = (page - 1) * PER_PAGE;
-    const search = String(req.query.search || "").trim();
-
-    const matchStage: {
-      role?: { $nin: string[] };
-      $or?: { name?: RegExp; email?: RegExp }[];
-    } = {
-      // Include all non-admin users. This also works for legacy user records
-      // where role might be missing or not exactly "customer".
-      role: { $nin: ["admin", "super_admin", "superadmin"] },
-    };
-
-    if (search) {
-      const regex = new RegExp(escapeRegex(search), "i");
-      matchStage.$or = [{ name: regex }, { email: regex }];
-    }
-
-    const [result] = await User.aggregate<{
-      metadata: { total: number }[];
-      data: {
-        _id: string;
-        name: string;
-        email: string;
-        company?: string;
-        joinDate: Date;
-        totalProposals: number;
-        totalEmailSent: number;
-      }[];
-    }>([
-      { $match: matchStage },
-      {
-        $facet: {
-          metadata: [{ $count: "total" }],
-          data: [
-            { $sort: { createdAt: -1 } },
-            { $skip: skip },
-            { $limit: PER_PAGE },
-            {
-              $lookup: {
-                from: "proposals",
-                let: { userId: "$_id" },
-                pipeline: [
-                  {
-                    $match: {
-                      $expr: { $eq: ["$userId", "$$userId"] },
-                    },
-                  },
-                  { $count: "count" },
-                ],
-                as: "proposalStats",
-              },
-            },
-            {
-              $lookup: {
-                from: "emailcampaigns",
-                let: { userId: "$_id" },
-                pipeline: [
-                  {
-                    $match: {
-                      $expr: { $eq: ["$userId", "$$userId"] },
-                    },
-                  },
-                  {
-                    $group: {
-                      _id: null,
-                      totalEmailSent: { $sum: "$sentCount" },
-                    },
-                  },
-                ],
-                as: "emailStats",
-              },
-            },
-            {
-              $project: {
-                _id: 0,
-                id: "$_id",
-                name: 1,
-                email: 1,
-                company: { $ifNull: ["$company", null] },
-                joinDate: "$createdAt",
-                isBlocked: { $ifNull: ["$isBlocked", false] },
-                totalProposals: {
-                  $ifNull: [{ $first: "$proposalStats.count" }, 0],
-                },
-                totalEmailSent: {
-                  $ifNull: [{ $first: "$emailStats.totalEmailSent" }, 0],
-                },
-              },
-            },
-          ],
-        },
-      },
-    ]);
-
-    const total = result?.metadata?.[0]?.total || 0;
-    const totalPages = Math.ceil(total / PER_PAGE) || 1;
+    const result = await listAdminClients({
+      page: req.query.page,
+      search: req.query.search,
+    });
 
     res.status(200).json({
       success: true,
       message: "Clients fetched successfully",
-      data: result?.data || [],
-      pagination: {
-        page,
-        perPage: PER_PAGE,
-        total,
-        totalPages,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1,
-      },
-      filters: {
-        search,
-      },
+      ...result,
     });
   } catch (error) {
     console.error("Get admin clients list error:", error);
@@ -183,14 +77,13 @@ export const blockClient = async (
       return;
     }
 
-    const user = await User.findById(id);
-
-    if (!user) {
+    const result = await setAdminClientBlocked(id, isBlocked);
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "Client not found." });
       return;
     }
 
-    if (isAdminRole(user.role)) {
+    if (result.kind === "admin_target") {
       res.status(400).json({
         success: false,
         message: "Cannot block an admin account.",
@@ -198,15 +91,12 @@ export const blockClient = async (
       return;
     }
 
-    user.isBlocked = isBlocked;
-    await user.save();
-
     res.status(200).json({
       success: true,
       message: isBlocked
         ? "Client blocked successfully."
         : "Client unblocked successfully.",
-      data: { id: user._id, isBlocked: user.isBlocked },
+      data: { id: result.id, isBlocked: result.isBlocked },
     });
   } catch (error) {
     console.error("Block client error:", error);
@@ -233,22 +123,19 @@ export const deleteClient = async (
 
     const { id } = req.params;
 
-    const user = await User.findById(id);
-
-    if (!user) {
+    const result = await deleteAdminClient(id);
+    if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "Client not found." });
       return;
     }
 
-    if (isAdminRole(user.role)) {
+    if (result.kind === "admin_target") {
       res.status(400).json({
         success: false,
         message: "Cannot delete an admin account.",
       });
       return;
     }
-
-    await user.deleteOne();
 
     res.status(200).json({
       success: true,

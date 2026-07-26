@@ -77,10 +77,16 @@ export const runExpirationCheck = async () => {
 export const purgeArchivedProposals = async () => {
   try {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const result = await Proposal.deleteMany({
-      isArchived: true,
-      archivedAt: { $lte: thirtyDaysAgo },
-    });
+    const doomed = await Proposal.find({ isArchived: true, archivedAt: { $lte: thirtyDaysAgo } })
+      .select("_id")
+      .lean<{ _id: unknown }[]>();
+    if (!doomed.length) return;
+    const ids = doomed.map((doc) => String(doc._id));
+    const result = await Proposal.deleteMany({ _id: { $in: ids } });
+    // Propagate the deletion to private storage and Postgres source rows so a
+    // Mongo purge never strands document bytes in other stores.
+    const { purgeProposalArtifacts } = await import("../src/modules/dataFoundation/purgeProposalArtifacts");
+    await purgeProposalArtifacts(ids);
     if (result.deletedCount > 0) {
       console.log(`[Cron] Purged ${result.deletedCount} archived proposal(s) older than 30 days`);
     }

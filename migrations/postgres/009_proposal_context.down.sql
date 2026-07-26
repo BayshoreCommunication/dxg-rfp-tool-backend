@@ -1,0 +1,2 @@
+DROP TRIGGER IF EXISTS proposal_context_issues_immutable ON rfpilot.proposal_context_issues;DROP TRIGGER IF EXISTS proposal_context_operations_immutable ON rfpilot.proposal_context_operations;DROP TRIGGER IF EXISTS proposal_context_evidence_immutable ON rfpilot.proposal_context_evidence;DROP FUNCTION IF EXISTS rfpilot.reject_proposal_context_result_mutation();
+DROP TABLE IF EXISTS rfpilot.proposal_context_issues;DROP TABLE IF EXISTS rfpilot.proposal_context_operations;DROP TABLE IF EXISTS rfpilot.proposal_context_evidence;DROP TABLE IF EXISTS rfpilot.proposal_context_runs;

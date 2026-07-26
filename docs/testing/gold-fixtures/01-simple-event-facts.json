@@ -1,0 +1,15 @@
+{
+  "name": "simple-event-facts",
+  "description": "Baseline: two plainly stated synthetic event facts (event name and in-person format) that any competent extraction must recover exactly.",
+  "evidence": [
+    { "id": "gold-simple-1", "text": "The event is named Synthetic DXG Gold Conference." },
+    { "id": "gold-simple-2", "text": "The conference will be held fully in person." }
+  ],
+  "expected": {
+    "candidates": [
+      { "path": "/content/event/eventName", "value": "Synthetic DXG Gold Conference" },
+      { "path": "/content/event/eventFormat", "value": "In-Person" }
+    ],
+    "allowAdditional": false
+  }
+}
