@@ -25,6 +25,27 @@ DROP TRIGGER draft_gaps_immutable ON rfpilot.proposal_draft_gaps;
 CREATE TRIGGER draft_gaps_immutable BEFORE UPDATE ON rfpilot.proposal_draft_gaps
  FOR EACH ROW EXECUTE FUNCTION rfpilot.reject_proposal_draft_result_mutation();
 
+-- The same guard sits on context-run results and candidate application items,
+-- which the sweeper also has to expire. Narrowed on identical reasoning: these
+-- rows must never be rewritten, but they must be removable when their retention
+-- window closes. Missing these would have failed the sweep on its first pass
+-- over any context run.
+DROP TRIGGER proposal_context_evidence_immutable ON rfpilot.proposal_context_evidence;
+CREATE TRIGGER proposal_context_evidence_immutable BEFORE UPDATE ON rfpilot.proposal_context_evidence
+ FOR EACH ROW EXECUTE FUNCTION rfpilot.reject_proposal_context_result_mutation();
+
+DROP TRIGGER proposal_context_operations_immutable ON rfpilot.proposal_context_operations;
+CREATE TRIGGER proposal_context_operations_immutable BEFORE UPDATE ON rfpilot.proposal_context_operations
+ FOR EACH ROW EXECUTE FUNCTION rfpilot.reject_proposal_context_result_mutation();
+
+DROP TRIGGER proposal_context_issues_immutable ON rfpilot.proposal_context_issues;
+CREATE TRIGGER proposal_context_issues_immutable BEFORE UPDATE ON rfpilot.proposal_context_issues
+ FOR EACH ROW EXECUTE FUNCTION rfpilot.reject_proposal_context_result_mutation();
+
+DROP TRIGGER candidate_application_items_immutable ON rfpilot.candidate_application_items;
+CREATE TRIGGER candidate_application_items_immutable BEFORE UPDATE ON rfpilot.candidate_application_items
+ FOR EACH ROW EXECUTE FUNCTION rfpilot.reject_candidate_application_evidence_mutation();
+
 -- The sweeper deletes by expiry within a tenant, so every retention-owning
 -- table needs an index on that predicate. Without these each pass is a full
 -- scan of the family.

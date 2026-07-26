@@ -150,3 +150,31 @@ test("migration 027 narrows draft immutability to UPDATE without allowing edits"
     );
   }
 });
+
+test("every table the sweep deletes from has its delete guard narrowed", () => {
+  // The first version of migration 027 narrowed only the four draft triggers
+  // and missed the context-run and candidate-item ones, which would have failed
+  // the sweep on its first pass over any context run. This derives the list from
+  // the sweeper itself so a newly swept table cannot silently reintroduce it.
+  const up = read("migrations/postgres/027_retention_sweep.up.sql");
+  const migrations = fs
+    .readdirSync(path.join(root, "migrations/postgres"))
+    .filter((file) => file.endsWith(".up.sql") && !file.startsWith("027"))
+    .map((file) => read(`migrations/postgres/${file}`))
+    .join("\n");
+
+  const swept = [...source.matchAll(/DELETE FROM rfpilot\.([a-z_]+)|"([a-z_]+)",\s*"[a-z_]+",\s*\w+,\s*apply/g)]
+    .map((m) => m[1] || m[2])
+    .filter(Boolean);
+  assert.ok(swept.length > 5, "sweeper deletes from several tables");
+
+  for (const table of new Set(swept)) {
+    const guarded = new RegExp(`CREATE TRIGGER ([a-z_]+) BEFORE UPDATE OR DELETE ON rfpilot\\.${table}\\b`);
+    const match = migrations.match(guarded);
+    if (!match) continue; // no delete guard on this table
+    assert.ok(
+      up.includes(`CREATE TRIGGER ${match[1]} BEFORE UPDATE ON rfpilot.${table}`),
+      `migration 027 must narrow ${match[1]} on ${table}, which the sweeper deletes from`,
+    );
+  }
+});
