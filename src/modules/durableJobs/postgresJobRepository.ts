@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
-import { DurableJobError, type DurableJob, type QueueMessage } from "./domain";
+import { DurableJobError, attemptBudget, type DurableJob, type QueueMessage } from "./domain";
 import type { JobRepository } from "./jobRepository";
 type Row = {
   id: string;
@@ -604,7 +604,13 @@ export const postgresJobRepository: JobRepository = {
       const organizationId = await tenant(c, input.message.organizationMongoId);
       const row = await getRow(c, input.message.jobId, true);
       if (row.status !== "running") return map(row);
-      const exhausted = input.attempt >= input.maxAttempts;
+      // row.max_attempts was written at creation and then ignored here in
+      // favour of the worker's global JOB_MAX_ATTEMPTS, so a 2-attempt job
+      // retried 5 times — and for vendor analysis every extra attempt is a
+      // billed provider call. BullMQ may still deliver further attempts;
+      // claim() rejects them once the row is dead_letter, so no additional
+      // provider call is made.
+      const exhausted = input.attempt >= attemptBudget(row.max_attempts, input.maxAttempts);
       const status = input.retryable
         ? exhausted
           ? "dead_letter"
