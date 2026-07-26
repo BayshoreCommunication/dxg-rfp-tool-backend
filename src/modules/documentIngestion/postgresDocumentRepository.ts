@@ -52,8 +52,8 @@ export const postgresDocumentRepository: DocumentRepository = {
     if (!proposal.rows[0]) throw new DocumentIngestionError("PROPOSAL_NOT_FOUND", "Proposal reference is unavailable.", 404);
     const sourceId = input.objectKey.split("/")[2];
     const objectId = uuidv7();
-    await client.query(`INSERT INTO rfpilot.document_sources(id,organization_id,proposal_reference_id,uploader_external_user_id,retention_until,confidentiality)
-      VALUES($1,$2,$3,$4,$5,$6)`, [sourceId, organizationId, proposal.rows[0].id, input.userMongoId, input.retentionUntil,input.confidentiality]);
+    await client.query(`INSERT INTO rfpilot.document_sources(id,organization_id,proposal_reference_id,uploader_external_user_id,retention_until,confidentiality,origin,segment_message_id)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [sourceId, organizationId, proposal.rows[0].id, input.userMongoId, input.retentionUntil,input.confidentiality,input.origin??"upload",input.segmentMessageId??null]);
     await client.query(`INSERT INTO rfpilot.document_objects(id,organization_id,source_id,object_key,original_filename,safe_filename,declared_mime_type,expected_size_bytes)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [objectId, organizationId, sourceId, input.objectKey, input.originalFilename.slice(0,255), input.safeFilename, input.mimeType, input.expectedSizeBytes]);
     await client.query(`INSERT INTO rfpilot.outbox_events(id,organization_id,aggregate_type,aggregate_id,event_type,idempotency_key,payload)
