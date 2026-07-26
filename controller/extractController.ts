@@ -2,6 +2,11 @@ import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import multer from "multer";
 import { extractProposalDocument } from "../src/modules/extraction/composition";
+import {
+  assertLegacyExtractionReady,
+  LegacyExtractionError,
+  LEGACY_EXTRACTION_MODEL,
+} from "../src/modules/extraction/domain/policy";
 import { safeLog } from "../src/shared/observability/safeTelemetry";
 
 /* ─── Multer — memory storage (no disk writes) ─── */
@@ -30,6 +35,10 @@ export const extractProposal = async (
   res: Response
 ): Promise<void> => {
   try {
+    // Deny by default, and stoppable: this path calls a live provider, so it
+    // is gated by AI_ENVIRONMENT, its own flag, and the kill switch before any
+    // file is read.
+    assertLegacyExtractionReady();
     if (!req.file) {
       res.status(400).json({ success: false, message: "No file uploaded." });
       return;
@@ -45,7 +54,7 @@ export const extractProposal = async (
       outcome: result.kind,
       durationMs: Date.now() - startedAt,
       provider: "openai",
-      model: "gpt-4o",
+      model: LEGACY_EXTRACTION_MODEL,
     });
     if (result.kind === "empty_document") {
       res.status(422).json({ success: false, message: result.message });
@@ -70,8 +79,19 @@ export const extractProposal = async (
       },
     });
   } catch (error) {
+    // A governance refusal is a deliberate, safe outcome — surface its code and
+    // status rather than collapsing it into a generic 500.
+    if (error instanceof LegacyExtractionError) {
+      safeLog("info", "legacy_extraction_denied", { outcome: error.code });
+      res.status(error.status).json({
+        success: false,
+        message: error.message,
+        errorCode: error.code,
+      });
+      return;
+    }
     console.error("Extract proposal error:", error);
-    safeLog("error", "legacy_extraction_failed", { provider: "openai", model: "gpt-4o" });
+    safeLog("error", "legacy_extraction_failed", { provider: "openai", model: LEGACY_EXTRACTION_MODEL });
     res.status(500).json({
       success: false,
       message: "Error extracting proposal data from document.",
