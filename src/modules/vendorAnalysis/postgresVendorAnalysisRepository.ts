@@ -149,7 +149,7 @@ export const vendorAnalysisRepository={
    await this.fail({organizationMongoId:input.organizationMongoId,runId:input.runId,code:"VENDOR_EVIDENCE_EMPTY",status:"failed"});
    throw new VendorAnalysisError("VENDOR_EVIDENCE_EMPTY","The vendor response contains no analyzable evidence.",422);
   }
-  const live=await liveVendorResponseAnalysis(requirements,vendorEvidence);
+  const live=await liveVendorResponseAnalysis(requirements,vendorEvidence,{runType:"vendor_response_analyze",runId:meta.id,organizationId:meta.organization_id});
   const findings=live.findings.slice(0,MAX_FINDINGS);
   const escalationCount=findings.filter(finding=>finding.needsHumanReview).length;
   await withPostgresTransaction(async(c)=>{

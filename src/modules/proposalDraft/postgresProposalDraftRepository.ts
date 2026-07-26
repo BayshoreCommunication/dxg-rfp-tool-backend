@@ -153,7 +153,16 @@ export const proposalDraftRepository = {
       userId: input.actorUserMongoId,
       organizationId: input.organizationMongoId,
     })
-      .select("version status isDraft isArchived event venueSchedule")
+      // Every RFP-content section. This previously read "… event venueSchedule",
+      // so a "full proposal draft" was built from 2 of the 12 content sections
+      // and could not describe production scope, rooms, venue technical needs,
+      // budget, or procurement dates at all — while still being asked for a
+      // production_scope section it had no evidence for. contact and
+      // additionalContacts stay excluded: they are personal data the draft
+      // prose never needs, and the provider payload stays minimized.
+      .select(
+        "version status isDraft isArchived event venueSchedule roomByRoom production hybridVirtual contentCreative videoRecordingStep venue uploads budget",
+      )
       .lean<any>();
     const version = Number(proposal?.version || 1);
     if (

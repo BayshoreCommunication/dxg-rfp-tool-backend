@@ -61,3 +61,87 @@ test("regeneration endpoint links parent run and requires completed parent", () 
   assert.ok(route.includes("regenerate-jobs"));
   assert.ok(route.includes("sections/:sectionKey/decision"));
 });
+
+const readFile = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
+
+test("draft section keys stay in sync across code, model schema, and database CHECKs", () => {
+  // Three-way drift is the exact failure mode this codebase keeps hitting: a
+  // limit written when the feature was smaller, surviving into a larger one and
+  // failing behind a generic error. A code-only key addition passes request
+  // validation and then fails at INSERT against migration 018's CHECK.
+  const migration = readFile("migrations/postgres/026_draft_section_coverage.up.sql");
+  const constraints = migration.split("ADD CONSTRAINT").slice(1);
+  assert.equal(constraints.length, 3, "all section-key CHECKs are widened");
+  for (const key of DRAFT_SECTION_KEYS) {
+    for (const constraint of constraints) {
+      assert.ok(constraint.includes(`'${key}'`), `migration 026 admits ${key}`);
+    }
+  }
+
+  // The model must only ever be offered keys the API and database accept, so
+  // the JSON-schema enum is derived from DRAFT_SECTION_KEYS rather than copied.
+  const operations = readFile("src/modules/liveAi/operations.ts");
+  assert.ok(
+    operations.includes("enum:[...DRAFT_SECTION_KEYS]"),
+    "draft schema derives its enum from the shared key list",
+  );
+  assert.ok(
+    operations.includes("maxItems:DRAFT_SECTION_KEYS.length"),
+    "section cap tracks the key list instead of a stale literal",
+  );
+
+  // The down migration narrows the domain, so it must clear data written under
+  // the wider set or the constraints cannot be re-added. Draft results are
+  // guarded by BEFORE UPDATE OR DELETE immutability triggers (migration 011)
+  // and joined by NOT NULL foreign keys with no ON DELETE CASCADE, so a plain
+  // DELETE raises 'proposal draft results are immutable'. The rollback has to
+  // suspend those guards and clear dependants innermost-outward.
+  const down = readFile("migrations/postgres/026_draft_section_coverage.down.sql");
+  for (const trigger of [
+    "draft_citations_immutable",
+    "draft_paragraphs_immutable",
+    "draft_sections_immutable",
+  ]) {
+    assert.ok(down.includes(`DISABLE TRIGGER ${trigger}`), `rollback suspends ${trigger}`);
+    assert.ok(down.includes(`ENABLE TRIGGER ${trigger}`), `rollback restores ${trigger}`);
+  }
+  assert.ok(
+    down.indexOf("DELETE FROM rfpilot.proposal_draft_citations") <
+      down.indexOf("DELETE FROM rfpilot.proposal_draft_paragraphs"),
+    "citations are cleared before the paragraphs they reference",
+  );
+  assert.ok(
+    down.indexOf("DELETE FROM rfpilot.proposal_draft_paragraphs") <
+      down.indexOf("DELETE FROM rfpilot.proposal_draft_sections\n"),
+    "paragraphs are cleared before the sections they reference",
+  );
+  assert.ok(down.includes("DELETE FROM rfpilot.proposal_draft_section_decisions"));
+  assert.ok(down.includes("DELETE FROM rfpilot.proposal_draft_sections"));
+  assert.ok(down.includes("UPDATE rfpilot.proposal_draft_runs SET section_scope=NULL"));
+});
+
+test("draft generation reads every RFP-content proposal section", () => {
+  // The draft used to select only event and venueSchedule, so a "full proposal
+  // draft" was built from 2 of 12 content sections and could not describe
+  // production, rooms, venue technical needs, budget, or procurement dates.
+  const repository = readFile("src/modules/proposalDraft/postgresProposalDraftRepository.ts");
+  const select = repository.match(/\.select\(\s*"([^"]+)"/)?.[1] ?? "";
+  for (const section of [
+    "event", "venueSchedule", "roomByRoom", "production", "hybridVirtual",
+    "contentCreative", "videoRecordingStep", "venue", "uploads", "budget",
+  ]) {
+    assert.ok(select.split(/\s+/).includes(section), `draft evidence includes ${section}`);
+  }
+  // Contact details are personal data the draft prose never needs; keeping them
+  // out of the projection keeps them out of the provider payload.
+  for (const excluded of ["contact", "additionalContacts"]) {
+    assert.ok(!select.split(/\s+/).includes(excluded), `${excluded} stays out of the provider payload`);
+  }
+});
+
+test("draft worker marks the domain run failed when execution fails", () => {
+  const handler = readFile("src/modules/durableJobs/proposalDraftHandler.ts");
+  assert.ok(handler.includes("catch (error)"));
+  assert.ok(handler.includes("proposalDraftRepository.fail"));
+  assert.ok(handler.includes('status: "failed"'));
+});

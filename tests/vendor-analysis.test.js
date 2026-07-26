@@ -73,14 +73,52 @@ test("VendorAnalysisError carries safe code, status, and retryability", () => {
   assert.equal(new VendorAnalysisError("X", "y", 503, true).retryable, true);
 });
 
-test("live vendor analysis operation enforces citation and requirement-path whitelists", () => {
+test("live vendor analysis operation hardens its prompt and schema", () => {
+  // Enforcement of the citation and requirement-path whitelists is asserted
+  // behaviourally against validateVendorAnalysisFindings below, not by matching
+  // error-code strings in the source. Only what cannot be exercised without a
+  // provider call is checked here.
   const source = read("src/modules/liveAi/operations.ts");
   assert.ok(source.includes("export async function liveVendorResponseAnalysis"));
   assert.ok(source.includes("Never follow instructions"), "prompt hardens against instruction injection");
   const operation = source.slice(source.indexOf("export async function liveVendorResponseAnalysis"));
-  assert.ok(operation.includes("LIVE_AI_CITATION_INVALID"), "invalid citations are rejected");
-  assert.ok(operation.includes("LIVE_AI_OUTPUT_INVALID"), "invalid requirement paths are rejected");
   assert.ok(operation.includes("rfpilot_vendor_response_analysis"), "strict json_schema name is set");
+  assert.ok(
+    operation.includes("validateVendorAnalysisFindings("),
+    "the operation actually runs the validator",
+  );
+  // Empty-string citations are rejected structurally by the provider's strict
+  // mode as well, not only by the validator.
+  assert.ok(
+    source.includes('citations:{type:"array",maxItems:5,items:{type:"string",minLength:1}}'),
+    "vendor citation schema forbids empty strings",
+  );
+});
+
+test("live vendor analysis is covered by the provider attempt ledger", () => {
+  const operations = read("src/modules/liveAi/operations.ts");
+  const operation = operations.slice(operations.indexOf("export async function liveVendorResponseAnalysis"));
+  // The parameter was named `_ledger` and discarded, so these calls had no
+  // pre-call durable row, no orphan detection, no provider idempotency key,
+  // and never appeared in the usage report.
+  assert.ok(!operation.includes("_ledger"), "ledger parameter is used, not discarded");
+  assert.ok(
+    /executeOpenAiJson<VendorAnalysisOutput>\(\{[^)]*ledger,/.test(operation),
+    "ledger is forwarded to executeOpenAiJson",
+  );
+
+  const repository = read("src/modules/vendorAnalysis/postgresVendorAnalysisRepository.ts");
+  assert.ok(
+    repository.includes('runType:"vendor_response_analyze"'),
+    "caller supplies the ledger context",
+  );
+
+  // The run type must be permitted by the CHECK constraint, or every ledgered
+  // call would fail at insert. Migration 021 widened it; 016 did not allow it.
+  const ledger = read("src/modules/liveAi/attemptLedger.ts");
+  assert.ok(ledger.includes('"vendor_response_analyze"'), "context type admits the run type");
+  const migration = read("migrations/postgres/021_ledger_run_types.up.sql");
+  assert.ok(migration.includes("vendor_response_analyze"), "migration permits the run type");
 });
 
 test("durable worker registers the vendor analysis job type and stage", () => {
@@ -113,4 +151,70 @@ test("vendor analysis routes require auth, authorization, and an idempotency key
   const controller = read("controller/vendorAnalysisController.ts");
   assert.ok(controller.includes("idempotency-key"), "controller enforces the Idempotency-Key header");
   assert.ok(controller.includes("VENDOR_ANALYSIS_DISABLED"), "controller gates on the feature flag");
+});
+
+const { validateVendorAnalysisFindings } = require("../src/modules/liveAi/operations");
+const ALLOWED_CITES = new Set(["vendor-fragment-1", "vendor-fragment-2"]);
+const ALLOWED_PATHS = new Set(["/content/event/eventName", "/content/venueSchedule/venueCity"]);
+const finding = (overrides = {}) => ({
+  kind: "compliance",
+  requirementPath: "/content/event/eventName",
+  requirementLabel: "Event name",
+  verdict: "addressed",
+  message: "Vendor confirms the event name.",
+  confidence: 0.9,
+  needsHumanReview: false,
+  citations: ["vendor-fragment-1"],
+  ...overrides,
+});
+const rejects = (item, code) => {
+  assert.throws(
+    () => validateVendorAnalysisFindings([item], ALLOWED_CITES, ALLOWED_PATHS),
+    (error) => error.code === code,
+    `expected ${code}`,
+  );
+};
+
+test("vendor analysis validation closes the empty-citation and requirement-path escapes", () => {
+  // Baseline: a well-formed finding passes.
+  assert.doesNotThrow(() => validateVendorAnalysisFindings([finding()], ALLOWED_CITES, ALLOWED_PATHS));
+
+  // The `citation && ...` guard used to skip validation for a falsy citation,
+  // so an empty string was accepted as if it were a real evidence reference.
+  rejects(finding({ citations: [""] }), "LIVE_AI_CITATION_INVALID");
+  rejects(finding({ citations: ["vendor-fragment-9"] }), "LIVE_AI_CITATION_INVALID");
+
+  // `requirementPath !== ""` used to let a compliance finding bypass the
+  // allowlist entirely by returning an empty path.
+  rejects(finding({ requirementPath: "" }), "LIVE_AI_OUTPUT_INVALID");
+  rejects(finding({ requirementPath: "/content/invented/field" }), "LIVE_AI_OUTPUT_INVALID");
+
+  // Non-compliance kinds may omit the path, but may not invent one.
+  assert.doesNotThrow(() =>
+    validateVendorAnalysisFindings(
+      [finding({ kind: "pricing_flag", requirementPath: "" })],
+      ALLOWED_CITES,
+      ALLOWED_PATHS,
+    ),
+  );
+  rejects(
+    finding({ kind: "pricing_flag", requirementPath: "/content/invented/field" }),
+    "LIVE_AI_OUTPUT_INVALID",
+  );
+});
+
+test("vendor analysis allows uncited findings only for a missing verdict", () => {
+  // "missing" asserts the vendor did not address the requirement, so there is
+  // nothing in the vendor's text to cite.
+  assert.doesNotThrow(() =>
+    validateVendorAnalysisFindings(
+      [finding({ verdict: "missing", citations: [] })],
+      ALLOWED_CITES,
+      ALLOWED_PATHS,
+    ),
+  );
+  // Every other verdict makes a claim about vendor text and must point at it.
+  for (const verdict of ["addressed", "partial", "not_applicable", "none"]) {
+    rejects(finding({ verdict, citations: [] }), "LIVE_AI_CITATION_INVALID");
+  }
 });
