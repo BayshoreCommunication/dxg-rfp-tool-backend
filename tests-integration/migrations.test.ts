@@ -50,3 +50,62 @@ test("schema migration journal matches the checked-in migration files", async ()
     "rfpilot_schema_migrations should record exactly the versions on disk",
   );
 });
+
+test("platform assistant migration rolls back cleanly and reapplies", async () => {
+  const rollback = runMigrationCommand("rollback");
+  assert.equal(
+    rollback.status,
+    0,
+    `platform assistant rollback failed:\n${rollback.stderr}${rollback.stdout}`,
+  );
+  assert.match(rollback.stdout, /Rolled back 026_platform_assistant/);
+
+  try {
+    const rolledBack = await postgresPool().query<{
+      threads: string | null;
+      messages: string | null;
+      attempt_constraint: string;
+    }>(
+      `
+        SELECT
+          to_regclass('rfpilot.assistant_threads')::text AS threads,
+          to_regclass('rfpilot.assistant_messages')::text AS messages,
+          pg_get_constraintdef(oid) AS attempt_constraint
+        FROM pg_constraint
+        WHERE conname='ai_provider_attempts_run_type_check'
+      `,
+    );
+    assert.equal(rolledBack.rows[0]?.threads, null);
+    assert.equal(rolledBack.rows[0]?.messages, null);
+    assert.doesNotMatch(
+      rolledBack.rows[0]?.attempt_constraint ?? "",
+      /platform_assistant/,
+    );
+  } finally {
+    const reapply = runMigrationCommand("up");
+    assert.equal(
+      reapply.status,
+      0,
+      `platform assistant reapply failed:\n${reapply.stderr}${reapply.stdout}`,
+    );
+    assert.match(reapply.stdout, /Applied 026_platform_assistant/);
+  }
+
+  const reapplied = await postgresPool().query<{
+    threads: string | null;
+    messages: string | null;
+    attempt_constraint: string;
+  }>(
+    `
+      SELECT
+        to_regclass('rfpilot.assistant_threads')::text AS threads,
+        to_regclass('rfpilot.assistant_messages')::text AS messages,
+        pg_get_constraintdef(oid) AS attempt_constraint
+      FROM pg_constraint
+      WHERE conname='ai_provider_attempts_run_type_check'
+    `,
+  );
+  assert.equal(reapplied.rows[0]?.threads, "rfpilot.assistant_threads");
+  assert.equal(reapplied.rows[0]?.messages, "rfpilot.assistant_messages");
+  assert.match(reapplied.rows[0]?.attempt_constraint ?? "", /platform_assistant/);
+});

@@ -48,6 +48,8 @@ const overrides: Record<string, string> = {
   PROPOSAL_DRAFT_ENABLED: "true",
   PROPOSAL_DRAFT_PROVIDER: "mock",
   CONVERSATIONS_ENABLED: "true",
+  AI_ASSISTANT_ENABLED: "true",
+  AI_ASSISTANT_KILL_SWITCH: "false",
   PRICING_CORPUS_ENABLED: "true",
 
   // Never call live providers from this suite.
