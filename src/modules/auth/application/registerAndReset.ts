@@ -56,7 +56,11 @@ type ResetResult =
   | { kind: "invalid_password" }
   | { kind: "unauthorized" }
   | { kind: "not_found" }
-  | { kind: "reset" };
+  | {
+      kind: "reset";
+      userId: string;
+      organizationId?: string;
+    };
 
 export const createResetPassword = (dependencies: {
   accounts: AuthAccountRepository;
@@ -70,12 +74,19 @@ export const createResetPassword = (dependencies: {
   if (!await dependencies.otps.hasVerified(email, "forgot-password")) {
     return { kind: "unauthorized" };
   }
-  if (!await dependencies.accounts.emailExists(email)) return { kind: "not_found" };
+  const credentials = await dependencies.accounts.findCredentials(email);
+  if (!credentials) return { kind: "not_found" };
   const updated = await dependencies.accounts.replacePassword(
     email,
     await dependencies.passwordHasher.hash(password),
   );
   if (!updated) return { kind: "not_found" };
   await dependencies.otps.consumeVerified(email, "forgot-password");
-  return { kind: "reset" };
+  return {
+    kind: "reset",
+    userId: credentials.user.id,
+    ...(credentials.user.organizationId
+      ? { organizationId: credentials.user.organizationId }
+      : {}),
+  };
 };

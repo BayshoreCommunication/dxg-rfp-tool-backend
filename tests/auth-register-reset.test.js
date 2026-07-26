@@ -74,7 +74,7 @@ test("password reset requires verified authorization before account or hash work
   const reset = createResetPassword({
     otps: { async hasVerified() { return false; } },
     accounts: {
-      async emailExists() { sideEffects += 1; return true; },
+      async findCredentials() { sideEffects += 1; return null; },
       async replacePassword() { sideEffects += 1; return true; },
     },
     passwordHasher: { async hash() { sideEffects += 1; return "hash"; } },
@@ -93,15 +93,31 @@ test("password reset hashes once and consumes authorization only after persisten
       async consumeVerified(email, purpose) { events.push(["consume", email, purpose]); },
     },
     accounts: {
-      async emailExists() { return true; },
+      async findCredentials(email) {
+        events.push(["account", email]);
+        return {
+          user: {
+            id: "u1",
+            organizationId: "o1",
+            name: "User",
+            email,
+            role: "customer",
+          },
+          passwordHash: "old-hash",
+          isBlocked: false,
+        };
+      },
       async replacePassword(email, hash) { events.push(["replace", email, hash]); return true; },
     },
     passwordHasher: { async hash(password) { events.push(["hash", password]); return "one-hash"; } },
   });
   assert.deepEqual(await reset({ email: " USER@example.com ", newPassword: "secret-01" }), {
     kind: "reset",
+    userId: "u1",
+    organizationId: "o1",
   });
   assert.deepEqual(events, [
+    ["account", "user@example.com"],
     ["hash", "secret-01"],
     ["replace", "user@example.com", "one-hash"],
     ["consume", "user@example.com", "forgot-password"],

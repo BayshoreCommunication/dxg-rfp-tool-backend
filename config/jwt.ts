@@ -10,6 +10,10 @@ const ACCESS_TOKEN_EXPIRE_MINUTES = Math.max(
   1,
   Number.parseInt(process.env.ACCESS_TOKEN_EXPIRE_MINUTES || "15", 10) || 15,
 );
+const REFRESH_TOKEN_EXPIRE_DAYS = Math.max(
+  1,
+  Number.parseInt(process.env.REFRESH_TOKEN_EXPIRE_DAYS || "30", 10) || 30,
+);
 const JWT_EXPIRE = `${ACCESS_TOKEN_EXPIRE_MINUTES}m`;
 const JWT_ISSUER = process.env.JWT_ISSUER || "rfpilot-api";
 const JWT_AUDIENCE = process.env.JWT_AUDIENCE || "rfpilot-web";
@@ -19,6 +23,8 @@ if (process.env.NODE_ENV === "production" && JWT_SECRET === DEFAULT_JWT_SECRET) 
 }
 
 export const TOKEN_EXPIRY_MS = ACCESS_TOKEN_EXPIRE_MINUTES * 60 * 1000;
+export const REFRESH_TOKEN_EXPIRY_MS =
+  REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60 * 1000;
 
 export interface TokenPayload {
   userId: string;
@@ -36,7 +42,16 @@ export interface TokenResponse {
   expiresIn: number; // Seconds until expiration
 }
 
-// Generate access token (30 days validity)
+export type NotificationSocketTicketPayload = {
+  userId: string;
+  organizationId: string;
+  sessionId: string;
+};
+
+const NOTIFICATION_SOCKET_TICKET_TTL_SECONDS = 30;
+const NOTIFICATION_SOCKET_AUDIENCE = `${JWT_AUDIENCE}:notification-ws`;
+
+// Generate an access token using the configured lifetime.
 export const generateAccessToken = (payload: TokenPayload): TokenResponse => {
   const accessToken = jwt.sign({
     email: payload.email,
@@ -62,6 +77,59 @@ export const generateAccessToken = (payload: TokenPayload): TokenResponse => {
     expiresAt,
     expiresIn,
   };
+};
+
+export const generateNotificationSocketTicket = (
+  payload: NotificationSocketTicketPayload,
+) => {
+  const ticket = jwt.sign(
+    {
+      purpose: "notification_ws",
+      organizationId: payload.organizationId,
+      sessionId: payload.sessionId,
+    },
+    JWT_SECRET,
+    {
+      expiresIn: NOTIFICATION_SOCKET_TICKET_TTL_SECONDS,
+      algorithm: "HS256",
+      issuer: JWT_ISSUER,
+      audience: NOTIFICATION_SOCKET_AUDIENCE,
+      subject: payload.userId,
+      jwtid: crypto.randomUUID(),
+    } as SignOptions,
+  );
+  return {
+    ticket,
+    expiresAt:
+      Date.now() + NOTIFICATION_SOCKET_TICKET_TTL_SECONDS * 1000,
+  };
+};
+
+export const verifyNotificationSocketTicket = (
+  ticket: string,
+): NotificationSocketTicketPayload => {
+  try {
+    const decoded = jwt.verify(ticket, JWT_SECRET, {
+      algorithms: ["HS256"],
+      issuer: JWT_ISSUER,
+      audience: NOTIFICATION_SOCKET_AUDIENCE,
+    }) as jwt.JwtPayload;
+    if (
+      decoded.purpose !== "notification_ws" ||
+      !decoded.sub ||
+      typeof decoded.organizationId !== "string" ||
+      typeof decoded.sessionId !== "string"
+    ) {
+      throw new Error("Required notification ticket claims are missing");
+    }
+    return {
+      userId: decoded.sub,
+      organizationId: decoded.organizationId,
+      sessionId: decoded.sessionId,
+    };
+  } catch {
+    throw new Error("Invalid or expired notification socket ticket");
+  }
 };
 
 // Verify access token

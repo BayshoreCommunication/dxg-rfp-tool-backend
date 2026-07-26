@@ -2,8 +2,9 @@ import crypto from "crypto";
 import http from "http";
 import { Duplex } from "stream";
 import Notification from "../modal/notificationModel";
+import RefreshSession from "../modal/refreshSessionModel";
 import User from "../modal/userModel";
-import { verifyAccessToken } from "../config/jwt";
+import { verifyNotificationSocketTicket } from "../config/jwt";
 
 type SocketMessage =
   | {
@@ -145,7 +146,7 @@ const parseFrames = (client: ConnectedClient) => {
 };
 
 export const initializeNotificationWebSocketServer = (server: http.Server) => {
-  server.on("upgrade", (req, socket, head) => {
+  server.on("upgrade", async (req, socket, head) => {
     try {
       const requestUrl = new URL(req.url || "", "http://localhost");
       if (requestUrl.pathname !== WS_PATH) {
@@ -153,14 +154,27 @@ export const initializeNotificationWebSocketServer = (server: http.Server) => {
         return;
       }
 
-      const token = requestUrl.searchParams.get("token");
-      if (!token) {
+      const ticket = requestUrl.searchParams.get("ticket");
+      if (!ticket) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         return;
       }
 
-      const payload = verifyAccessToken(token);
+      const payload = verifyNotificationSocketTicket(ticket);
+      const activeSession = await RefreshSession.exists({
+        sessionId: payload.sessionId,
+        userId: payload.userId,
+        organizationId: payload.organizationId,
+        status: "active",
+        expiresAt: { $gt: new Date() },
+        idleExpiresAt: { $gt: new Date() },
+      });
+      if (!activeSession) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
+      }
       const websocketKey = req.headers["sec-websocket-key"];
 
       if (!websocketKey) {

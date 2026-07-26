@@ -77,6 +77,20 @@ const isAuthorizedBff = (req: Request) => {
   const right = Buffer.from(supplied);
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 };
+const rejectInvalidBffCredential = (req: Request, res: Response) => {
+  if (
+    req.headers["x-rfpilot-bff-key"] !== undefined &&
+    !isAuthorizedBff(req)
+  ) {
+    res.status(403).json({
+      success: false,
+      code: "BFF_AUTHORIZATION_INVALID",
+      message: "BFF authorization is invalid",
+    });
+    return true;
+  }
+  return false;
+};
 const presentedRefreshToken = (req: Request) =>
   cookieValue(req, refreshCookieName()) ||
   (isAuthorizedBff(req) && typeof req.body?.refreshToken === "string"
@@ -104,6 +118,8 @@ const bffRefreshResponse = (req: Request, session: {
   refreshToken: session.refreshToken,
   refreshExpiresAt: session.refreshExpiresAt,
 } : {};
+const bffRequestsAccountOnly = (req: Request) =>
+  isAuthorizedBff(req) && req.body?.createSession === false;
 
 /* ─────────────────────────────────────────
    POST /api/auth/send-otp
@@ -192,6 +208,7 @@ export const verifySignupOtp = async (req: Request, res: Response): Promise<void
 ───────────────────────────────────────── */
 export const signUp = async (req: Request, res: Response): Promise<void> => {
   try {
+    if (rejectInvalidBffCredential(req, res)) return;
     const result = await registerCustomerAccount(req.body ?? {});
     if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Name, email, and password are required" });
@@ -214,11 +231,21 @@ export const signUp = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const user = { ...result.user, _id: result.user.id, id: undefined };
+    if (bffRequestsAccountOnly(req)) {
+      res.status(201).json({
+        success: true,
+        message: "Account created successfully",
+        user,
+      });
+      return;
+    }
+
     const session = await createSession(req, res, result.user);
     res.status(201).json({
       success: true,
       message: "Account created successfully",
-      user: { ...result.user, _id: result.user.id, id: undefined },
+      user,
       accessToken: session.accessToken,
       tokenExpiresAt: session.expiresAt,
       tokenExpiresIn: session.expiresIn,
@@ -241,6 +268,7 @@ export const signUp = async (req: Request, res: Response): Promise<void> => {
 ───────────────────────────────────────── */
 export const signInWithCredentials = async (req: Request, res: Response): Promise<void> => {
   try {
+    if (rejectInvalidBffCredential(req, res)) return;
     const result = await authenticateWithCredentials(req.body ?? {}, "customer");
     if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Email and password are required" });
@@ -278,6 +306,15 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
       return;
     }
 
+    if (bffRequestsAccountOnly(req)) {
+      res.status(201).json({
+        success: true,
+        message: "Admin account created successfully",
+        user: applicationUserResponse(result.user),
+      });
+      return;
+    }
+
     const session = await createSession(req, res, result.user);
     res.status(200).json({
       success: true,
@@ -305,6 +342,7 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
 ───────────────────────────────────────────── */
 export const signInWithGoogle = async (req: Request, res: Response): Promise<void> => {
   try {
+    if (rejectInvalidBffCredential(req, res)) return;
     const result = await authenticateGoogleIdentity(req.body?.idToken);
     if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Google ID token is required" });
@@ -352,6 +390,7 @@ export const signInWithGoogle = async (req: Request, res: Response): Promise<voi
 ───────────────────────────────────────────── */
 export const signUpAdmin = async (req: Request, res: Response): Promise<void> => {
   try {
+    if (rejectInvalidBffCredential(req, res)) return;
     const result = await registerAdminAccount(
       req.body ?? {},
       process.env.ADMIN_SIGNUP_SECRET,
@@ -410,6 +449,7 @@ export const signUpAdmin = async (req: Request, res: Response): Promise<void> =>
 ───────────────────────────────────────────── */
 export const signInAdmin = async (req: Request, res: Response): Promise<void> => {
   try {
+    if (rejectInvalidBffCredential(req, res)) return;
     const result = await authenticateWithCredentials(req.body ?? {}, "admin");
     if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Email and password are required" });
@@ -513,7 +553,46 @@ export const signOut = async (req: AuthRequest, res: Response): Promise<void> =>
   res.status(200).json({ success: true, message: "Signed out successfully" });
 };
 
+export const signOutSession = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    if (
+      typeof req.body?.refreshToken === "string" &&
+      !isAuthorizedBff(req)
+    ) {
+      res.status(403).json({
+        success: false,
+        code: "BFF_AUTHORIZATION_REQUIRED",
+        message: "BFF authorization required",
+      });
+      return;
+    }
+    const refreshToken = presentedRefreshToken(req);
+    if (refreshToken) {
+      await authenticationSessions.revokePresented({
+        refreshToken,
+        correlationId: correlationId(req),
+      });
+    }
+    clearRefreshCookie(res);
+    res.status(200).json({
+      success: true,
+      message: "Signed out successfully",
+    });
+  } catch (error) {
+    clearRefreshCookie(res);
+    console.error("Refresh session logout error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Unable to confirm session revocation",
+    });
+  }
+};
+
 export const refreshSession = async (req: Request, res: Response): Promise<void> => {
+  if (rejectInvalidBffCredential(req, res)) return;
   const refreshToken = presentedRefreshToken(req);
   if (!refreshToken) {
     res.status(401).json({
@@ -699,6 +778,15 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    if (result.organizationId) {
+      await authenticationSessions.revokeAll({
+        userId: result.userId,
+        organizationId: result.organizationId,
+        correlationId: correlationId(req),
+        reason: "password_reset",
+      });
+    }
+    clearRefreshCookie(res);
     res.status(200).json({ success: true, message: "Password reset successfully. You can now sign in." });
   } catch (error) {
     console.error("Reset password error:", error);

@@ -91,6 +91,10 @@ test("admin signup validates secret and conflict before hashing", async () => {
     tokens: { issue() { throw new Error("must not issue"); } },
   });
   assert.deepEqual(await signup({
+    name: "Admin", email: "a@e.com", password: "secret",
+  }), { kind: "invalid_secret" });
+  assert.equal(lookups, 0);
+  assert.deepEqual(await signup({
     name: "Admin", email: "a@e.com", password: "secret", adminSecret: "bad",
   }, "required"), { kind: "invalid_secret" });
   assert.equal(lookups, 0);
@@ -115,9 +119,12 @@ test("admin signup hashes once, creates admin, and issues admin token", async ()
     tokens: { issue(input) { issued = input; return { accessToken: "t", expiresAt: 2, expiresIn: 1 }; } },
   });
   assert.equal((await signup({
-    name: " Admin ", email: " ADMIN@E.COM ", phone: " 123 ", password: "secret",
-    adminSecret: "the-secret",
-  }, "the-secret")).kind, "created");
+    name: " Admin ",
+    email: " ADMIN@E.COM ",
+    phone: " 123 ",
+    password: "secret",
+    adminSecret: "required",
+  }, "required")).kind, "created");
   assert.deepEqual(created, {
     name: "Admin", email: "admin@e.com", phone: "123", passwordHash: "one-hash",
   });

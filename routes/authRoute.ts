@@ -16,6 +16,7 @@ import {
   signOutAll,
   listSessions,
   revokeSession,
+  signOutSession,
 } from "../controller/authController";
 import { authenticate } from "../middleware/auth";
 import { emailAndIpIdentity, securityRateLimit } from "../middleware/securityRateLimit";
@@ -42,6 +43,7 @@ router.post("/google", authAttemptLimit, signInWithGoogle);
 router.post("/admin/signup", authAttemptLimit, signUpAdmin);
 router.post("/admin/signin", authAttemptLimit, signInAdmin);
 router.post("/refresh", refreshLimit, refreshSession);
+router.post("/logout-session", refreshLimit, signOutSession);
 
 /* ─── Forgot password flow ─── */
 // Step 1: Send reset OTP

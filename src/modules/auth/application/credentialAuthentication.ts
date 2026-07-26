@@ -75,14 +75,15 @@ export const createRegisterAdmin = (dependencies: {
   const password = typeof input.password === "string" ? input.password : "";
   if (!name || !email || !password) return { kind: "validation" };
   if (password.length < 6) return { kind: "invalid_password" };
-  // Fail closed. This previously read `if (configuredSecret && ...)`, so an
-  // unset ADMIN_SIGNUP_SECRET silently disabled the check and left admin
-  // account creation open to anyone who could reach the endpoint — and the
-  // variable is not in .env.example, so an operator following the documented
-  // setup would never have set it.
-  const expectedSecret = (configuredSecret ?? "").trim();
-  if (!expectedSecret) return { kind: "invalid_secret" };
-  if (String(input.adminSecret ?? "").trim() !== expectedSecret) {
+  // Fails closed: an unset or blank ADMIN_SIGNUP_SECRET refuses outright. This
+  // previously read `if (configuredSecret && ...)`, so an unconfigured secret
+  // silently disabled the check and left admin account creation open to anyone
+  // who could reach the endpoint — and the variable was absent from
+  // .env.example, so unset was the documented setup.
+  if (
+    !configuredSecret?.trim() ||
+    String(input.adminSecret ?? "").trim() !== configuredSecret.trim()
+  ) {
     return { kind: "invalid_secret" };
   }
   if (await dependencies.accounts.emailExists(email)) return { kind: "email_conflict" };
