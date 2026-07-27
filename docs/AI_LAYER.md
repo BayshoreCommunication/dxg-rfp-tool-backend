@@ -15,6 +15,7 @@ The M1–M6 audit roadmap is implemented behind deny-by-default flags. The pinne
 | Draft generation | Proposal fields plus eligible knowledge | Cited sections with scoped regeneration and review state. |
 | Knowledge retrieval | Approved active fragments | Tenant-scoped lexical/vector results from a release registry. |
 | Guidance | Canonical proposal facts | Deterministic completeness and rule findings. |
+| Room recommendations | Confirmed room/event facts plus approved knowledge fixtures | Deterministic, classified, review-gated suggestions; explicit selective application to a tiny allowlisted room-field set with version and room-identity checks. See [architecture/ROOM_RECOMMENDATIONS.md](architecture/ROOM_RECOMMENDATIONS.md). |
 | Investment guidance | Approved pricing corpus and factors | Deterministic estimate or explicit refusal; never invent a number. |
 | Vendor analysis | Clean vendor response sources | Cited findings and escalation flags; comparison/export remain gaps. |
 
@@ -34,7 +35,7 @@ The proprietary baseline v3 workbook contains 433 items, 22 regional factors, 13
 
 ## Open gaps
 
-Typed chat extraction, array/room extraction, weighted completeness, invalid-operation UI, vendor attempt-ledger coverage, bid comparison, report export, and a written OpenAI-versus-Anthropic comparison remain open. See [ROADMAP.md](ROADMAP.md).
+Typed chat extraction, array/room extraction, weighted completeness, invalid-operation UI, vendor attempt-ledger coverage, bid comparison, report export, and a written OpenAI-versus-Anthropic comparison remain open. Room recommendations partially offset the room gap with a review-first deterministic capability (crew application, production knowledge retrieval, and any AI enrichment stage remain deferred). See [ROADMAP.md](ROADMAP.md).
 
 ## Detailed references
 

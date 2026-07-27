@@ -46,6 +46,8 @@ Client approval pack: [Slice 3B live-AI pilot approval](../approval-packs/SLICE_
 
 Content-free operational telemetry: [Observability](./OBSERVABILITY.md).
 
+Review-first room specification recommendations: [Room recommendations](./ROOM_RECOMMENDATIONS.md).
+
 ## Target modular-monolith boundaries
 
 | Boundary | Responsibility |

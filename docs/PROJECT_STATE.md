@@ -127,6 +127,38 @@ across 10 categories, 22 regional factors, 13 modifiers, 13 confidence rules.
   **$54,060 against his $54,366 — 0.56%**. That is the strongest acceptance
   evidence the project has; lead with it.
 
+### Room specification recommendations (added 2026-07-27; auto-apply same day)
+
+**Policy note for DXG:** originally built review-first; changed the same day
+by product decision to **apply automatically into empty room fields** (the
+planner adjusts values in the form; filled fields are never overwritten and
+are reported as skipped). This extends the empty-field auto-apply boundary
+already flagged for extraction and includes `recommended_assumption` values
+below the 0.8 automatic-confidence bar — tell DXG together with the earlier
+boundary change. Engine is `room-rules.v2`; migration 031 added
+automatic/skipped columns. The paragraph below otherwise stands, with crew
+roles now applied as append-only `$addToSet` writes and manual review/apply
+endpoints retained.
+
+Originally: a review-first, deterministic room recommendation capability behind
+`ROOM_RECOMMENDATIONS_ENABLED` / `NEXT_PUBLIC_ROOM_RECOMMENDATIONS_ENABLED`
+(both default off). Confirmed room/event facts plus approved synthetic
+knowledge fixtures produce a strictly validated `room-recommendation.v1`
+payload (migration 030) in which every value is classified
+(`deterministic_derivation` / `recommended_assumption` / questions for
+`unknown`), everything is review-gated, and explicit application is limited to
+a three-field wireless-microphone allowlist with proposal-version CAS **and a
+per-room identity guard** (ordinary wizard saves do not bump the proposal
+version, so apply re-checks each room's `roomFunction` label). Reviewer
+decisions persist with the schema's first enumerated reason-code vocabulary as
+governed evaluation data. Crew suggestions mirror the wizard's auto-suggest
+and are review-only. Extraction is unchanged — `rooms[]` remains excluded from
+the scalar candidate whitelist. Details:
+`docs/architecture/ROOM_RECOMMENDATIONS.md`. Deferred: crew/array application,
+production knowledge adapter, workflow-facts integration, integration-suite
+coverage for the new tables, and any AI enrichment stage (fine-tuning
+explicitly out of scope until enough producer-reviewed outcomes exist).
+
 ### The conversational workspace
 
 Lives at **`/proposals/{id}/assistant`** (one surface, one implementation).
@@ -186,7 +218,10 @@ investment guidance.
   runs, questions now also come from empty fields.
 - Completeness scores against all ~120 canonical fields, so it reads harshly
   (~9% for a real proposal). Weighting toward RFP-relevant fields would help.
-- Rooms/arrays are not extracted (only scalar fields are mapped).
+- Rooms/arrays are not extracted (only scalar fields are mapped). The room
+  recommendation capability (2026-07-27) covers part of this gap with
+  deterministic, review-gated suggestions, but extraction itself still skips
+  `roomByRoom`.
 - Invalid extracted candidates are reported by the API (`invalidOperations`)
   but not rendered anywhere.
 - Report envelope: confidence/assumptions/scenarios ride inside the
