@@ -124,4 +124,6 @@ See the dashboard's `docs/architecture/README.md` and
 
 Use [Platform Assistant rollout](../runbooks/PLATFORM_ASSISTANT_ROLLOUT.md) for
 release records, smoke tests, kill-switch verification, rollback, monitoring,
-and the staged-rollout gates.
+and the staged-rollout gates. Use
+[Platform Assistant environment setup](../runbooks/PLATFORM_ASSISTANT_ENVIRONMENT.md)
+for deployment variables and migration activation.

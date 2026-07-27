@@ -13,6 +13,10 @@ The approved baseline is `gpt-5.4-mini-2026-03-17`. The evaluated candidate
 must not replace it until the Product Owner records an explicit approve/reject
 decision.
 
+Use [Platform Assistant environment setup](./PLATFORM_ASSISTANT_ENVIRONMENT.md)
+for the exact backend/dashboard variables, migration commands, and senior
+developer handoff.
+
 ## Required release record
 
 Create a release record before changing any flag. Record:
