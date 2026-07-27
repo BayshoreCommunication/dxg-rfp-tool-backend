@@ -105,6 +105,9 @@ test("catch-all detection targets broad missing-field issues, not small conflict
   assert.equal(isCatchAllIssue("MISSING_ROOM_COUNT", ["/content/venueSchedule/numberOfEventRooms"]), false);
   assert.equal(MAX_OPEN_FIELD_QUESTIONS, 8);
   assert.ok(IMPORTANT_FIELD_QUESTIONS.slice(0, MAX_OPEN_FIELD_QUESTIONS).some((field) => field.path === "/content/venueSchedule/venueName"));
+  const venueQuestion = IMPORTANT_FIELD_QUESTIONS.find((field) => field.path === "/content/venueSchedule/venueName");
+  assert.match(venueQuestion.prompt, /use Skip/i);
+  assert.doesNotMatch(venueQuestion.prompt, /Not selected/i);
 });
 
 test("venue follow-up questions activate only for a selected venue", () => {

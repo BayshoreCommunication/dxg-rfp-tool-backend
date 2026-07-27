@@ -95,7 +95,7 @@ export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Obje
   { path: "/content/event/startDate", prompt: "When does the event start? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
   { path: "/content/event/endDate", prompt: "When does the event end? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
   { path: "/content/event/eventFormat", prompt: "Is the event in-person, hybrid, or virtual?", impact: "scope", answerType: "choice", options: Object.freeze(["In-Person", "Hybrid", "Virtual"]) },
-  { path: "/content/venueSchedule/venueName", prompt: "Which venue will host the event? Enter the venue name, or “Not selected” if it is still undecided.", impact: "cost", answerType: "text" },
+  { path: "/content/venueSchedule/venueName", prompt: "Which venue will host the event? Enter the venue name, or use Skip if it is still undecided.", impact: "cost", answerType: "text" },
   { path: "/content/event/attendees", prompt: "How many in-person attendees are expected?", impact: "cost", answerType: "number" },
   { path: "/content/venueSchedule/numberOfEventRooms", prompt: "How many event rooms are required?", impact: "cost", answerType: "number" },
   { path: "/content/venueSchedule/venueCity", prompt: "Which city will host the event?", impact: "cost", answerType: "text" },
