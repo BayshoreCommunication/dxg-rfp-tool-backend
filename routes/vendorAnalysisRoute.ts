@@ -3,6 +3,7 @@ import { authenticate, authorizeAction } from "../middleware/auth";
 import { securityRateLimit } from "../middleware/securityRateLimit";
 import {
   createVendorAnalysis,
+  exportVendorAnalysis,
   latestVendorAnalysis,
   readVendorAnalysis,
 } from "../controller/vendorAnalysisController";
@@ -26,6 +27,14 @@ router.get(
   authenticate,
   authorizeAction("vendor-response:read"),
   latestVendorAnalysis,
+);
+// Registered before the :runId route so "export" is not read as a run id.
+router.get(
+  "/vendor-responses/:responseId/analysis-export",
+  authenticate,
+  authorizeAction("vendor-response:read"),
+  limit,
+  exportVendorAnalysis,
 );
 router.get(
   "/vendor-responses/:responseId/analysis-runs/:runId",
