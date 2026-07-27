@@ -14,8 +14,40 @@ export type GuidanceFinding = {
   message: string;
   paths: string[];
 };
-export type SectionCompleteness = { section: string; label: string; filled: number; total: number; score: number };
+export type SectionCompleteness = { section: string; label: string; filled: number; total: number; score: number; essentialMissing: string[] };
 export type GuidanceResult = { overall: number; completeness: SectionCompleteness[]; findings: GuidanceFinding[] };
+
+/**
+ * Completeness counted all 114 whitelisted paths equally, so a proposal with no
+ * event name, no dates and no venue could outscore one that had all three
+ * simply by answering optional questions about sponsor overlays and virtual
+ * backgrounds. The planner then saw a high percentage on a proposal no vendor
+ * could quote against.
+ *
+ * These are the fields a vendor genuinely cannot produce a number without: what
+ * the event is, when and where it happens, how big it is, what the budget is,
+ * and by when a response is due. Everything else stays at weight 1 — this is a
+ * priority ordering, not a required-field list, and nothing here blocks a save.
+ */
+const ESSENTIAL_WEIGHT = 3;
+const ESSENTIAL_PATHS = new Set([
+  "/content/event/eventName",
+  "/content/event/eventFormat",
+  "/content/event/startDate",
+  "/content/event/endDate",
+  "/content/event/attendees",
+  "/content/venueSchedule/venueName",
+  "/content/venueSchedule/venueCity",
+  "/content/venueSchedule/venueState",
+  "/content/venueSchedule/numberOfEventRooms",
+  "/content/venueSchedule/loadInDate",
+  "/content/venueSchedule/showStartDate",
+  "/content/venueSchedule/showEndDate",
+  "/content/venue/inHouseAvRequired",
+  "/content/videoRecordingStep/videoRecordingRequired",
+  "/content/budget/estimatedAvBudget",
+  "/content/budget/proposalSubmissionDueDate",
+]);
 
 const SECTION_LABELS: Record<string, string> = {
   event: "Event overview",
@@ -51,12 +83,16 @@ const asCount = (value: unknown): number | null => {
 // to concrete proposal fields. Rules mirror the pre-publication checklist the
 // client scope describes (missing requirements, conflicts, schedule concerns).
 export const computeGuidance = (proposal: Record<string, unknown>): GuidanceResult => {
-  const bySection = new Map<string, { filled: number; total: number }>();
+  const bySection = new Map<string, { filled: number; total: number; weightFilled: number; weightTotal: number; essentialMissing: string[] }>();
   for (const path of approvedCandidatePaths) {
     const section = path.split("/")[2];
-    const bucket = bySection.get(section) ?? { filled: 0, total: 0 };
+    const bucket = bySection.get(section) ?? { filled: 0, total: 0, weightFilled: 0, weightTotal: 0, essentialMissing: [] };
+    const weight = ESSENTIAL_PATHS.has(path) ? ESSENTIAL_WEIGHT : 1;
+    const isFilled = filled(valueAt(proposal, path));
     bucket.total += 1;
-    if (filled(valueAt(proposal, path))) bucket.filled += 1;
+    bucket.weightTotal += weight;
+    if (isFilled) { bucket.filled += 1; bucket.weightFilled += weight; }
+    else if (weight === ESSENTIAL_WEIGHT) bucket.essentialMissing.push(path);
     bySection.set(section, bucket);
   }
   const completeness: SectionCompleteness[] = [...bySection.entries()].map(([section, counts]) => ({
@@ -64,9 +100,10 @@ export const computeGuidance = (proposal: Record<string, unknown>): GuidanceResu
     label: SECTION_LABELS[section] ?? section,
     filled: counts.filled,
     total: counts.total,
-    score: counts.total ? Number((counts.filled / counts.total).toFixed(4)) : 0,
+    score: counts.weightTotal ? Number((counts.weightFilled / counts.weightTotal).toFixed(4)) : 0,
+    essentialMissing: counts.essentialMissing,
   }));
-  const totals = completeness.reduce((sum, item) => ({ filled: sum.filled + item.filled, total: sum.total + item.total }), { filled: 0, total: 0 });
+  const totals = [...bySection.values()].reduce((sum, item) => ({ filled: sum.filled + item.weightFilled, total: sum.total + item.weightTotal }), { filled: 0, total: 0 });
   const overall = totals.total ? Number((totals.filled / totals.total).toFixed(4)) : 0;
 
   const findings: GuidanceFinding[] = [];
@@ -121,6 +158,19 @@ export const computeGuidance = (proposal: Record<string, unknown>): GuidanceResu
   for (const item of completeness)
     if (item.score < 0.25 && item.total >= 5)
       flag({ code: `SECTION_SPARSE_${item.section.toUpperCase()}`, severity: "info", category: "completeness", message: `${item.label} is mostly empty (${item.filled} of ${item.total} fields).`, paths: [] });
+
+  // A percentage tells a planner how far along they are but not what to do
+  // next. Naming the missing essentials is the part they can act on, and the
+  // paths let the dashboard link straight to the fields.
+  const missingEssentials = completeness.flatMap((item) => item.essentialMissing);
+  if (missingEssentials.length)
+    flag({
+      code: "ESSENTIALS_MISSING",
+      severity: "warning",
+      category: "completeness",
+      message: `${missingEssentials.length} field${missingEssentials.length === 1 ? "" : "s"} vendors need in order to quote ${missingEssentials.length === 1 ? "is" : "are"} still empty.`,
+      paths: missingEssentials,
+    });
 
   return { overall, completeness, findings };
 };
