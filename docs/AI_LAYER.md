@@ -34,6 +34,8 @@ The proprietary baseline v3 workbook contains 433 items, 22 regional factors, 13
 - Record provider attempts before calls to close duplicate-charge windows.
 - Keep Platform Assistant history private to its owning user, including from
   other users in the same organization.
+- Require an explicit organization cohort for production Platform Assistant
+  access; the global feature flag is not a cohort mechanism.
 
 ## Open gaps
 

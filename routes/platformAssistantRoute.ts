@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   createAssistantThread,
+  getAssistantAccess,
   getAssistantThread,
   listAssistantThreads,
   patchAssistantThread,
@@ -10,6 +11,12 @@ import { authenticate, authorizeAction } from "../middleware/auth";
 
 const router = Router();
 
+router.get(
+  "/assistant/access",
+  authenticate,
+  authorizeAction("assistant:use"),
+  getAssistantAccess,
+);
 router.get(
   "/assistant/threads",
   authenticate,

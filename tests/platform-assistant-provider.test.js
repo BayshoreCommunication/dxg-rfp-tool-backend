@@ -76,6 +76,7 @@ const withEnabledAssistant = async (work) => {
     "NODE_ENV",
     "AI_ENVIRONMENT",
     "AI_ASSISTANT_ENABLED",
+    "AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS",
     "AI_ASSISTANT_KILL_SWITCH",
     "LIVE_AI_KILL_SWITCH",
   ];
@@ -84,6 +85,7 @@ const withEnabledAssistant = async (work) => {
     NODE_ENV: "production",
     AI_ENVIRONMENT: "staging",
     AI_ASSISTANT_ENABLED: "true",
+    AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS: "*",
     AI_ASSISTANT_KILL_SWITCH: "false",
     LIVE_AI_KILL_SWITCH: "false",
   });

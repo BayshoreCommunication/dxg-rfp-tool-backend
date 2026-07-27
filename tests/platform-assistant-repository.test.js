@@ -7,11 +7,12 @@ const { createPlatformAssistantApplication } = require("../src/modules/platformA
 
 const root = path.resolve(__dirname, "..");
 
-const withEnabledAssistant = async (work) => {
+const withEnabledAssistant = async (work, overrides = {}) => {
   const keys = [
     "NODE_ENV",
     "AI_ENVIRONMENT",
     "AI_ASSISTANT_ENABLED",
+    "AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS",
     "AI_ASSISTANT_KILL_SWITCH",
     "LIVE_AI_KILL_SWITCH",
   ];
@@ -20,8 +21,10 @@ const withEnabledAssistant = async (work) => {
     NODE_ENV: "production",
     AI_ENVIRONMENT: "staging",
     AI_ASSISTANT_ENABLED: "true",
+    AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS: "*",
     AI_ASSISTANT_KILL_SWITCH: "false",
     LIVE_AI_KILL_SWITCH: "false",
+    ...overrides,
   });
   try {
     return await work();
@@ -58,6 +61,51 @@ test("migration creates tenant-isolated assistant storage and widens the attempt
   }
   assert.ok(down.includes("DROP TABLE IF EXISTS rfpilot.assistant_messages"));
   assert.ok(down.includes("DROP TABLE IF EXISTS rfpilot.assistant_threads"));
+});
+
+test("application rejects an organization outside the production cohort before persistence", async () => {
+  let repositoryCalled = false;
+  const application = createPlatformAssistantApplication({
+    async createThread() {
+      repositoryCalled = true;
+      throw new Error("must not be called");
+    },
+    async listThreads() {
+      repositoryCalled = true;
+      return [];
+    },
+    async getThread() {
+      repositoryCalled = true;
+      throw new Error("must not be called");
+    },
+    async archiveThread() {
+      repositoryCalled = true;
+      throw new Error("must not be called");
+    },
+    async appendUserMessage() {
+      repositoryCalled = true;
+      throw new Error("must not be called");
+    },
+  });
+
+  await withEnabledAssistant(async () => {
+    assert.throws(
+      () =>
+        application.listThreads({
+          organizationMongoId: "aaaaaaaaaaaaaaaaaaaaaaaa",
+          actorUserMongoId: "bbbbbbbbbbbbbbbbbbbbbbbb",
+          correlationId: "correlation",
+        }),
+      (error) =>
+        error.code === "AI_ASSISTANT_ORGANIZATION_NOT_ENABLED" &&
+        error.status === 403,
+    );
+  }, {
+    AI_ENVIRONMENT: "production",
+    AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS: "cccccccccccccccccccccccc",
+  });
+
+  assert.equal(repositoryCalled, false);
 });
 
 test("application boundary validates values before invoking the repository", async () => {

@@ -3,7 +3,7 @@ import {
   ASSISTANT_MESSAGE_LIST_MAX_LIMIT,
   ASSISTANT_RESPONSE_MAX_CHARACTERS,
   PlatformAssistantError,
-  assertPlatformAssistantAvailable,
+  assertPlatformAssistantOrganizationAvailable,
   parseAssistantIdempotencyKey,
   parseAssistantMessageInput,
   parseAssistantThreadId,
@@ -113,7 +113,7 @@ export const createPlatformAssistantStreamingApplication = (
       emit: Emit;
     },
   ): Promise<StreamAssistantGuidanceResult> {
-    assertPlatformAssistantAvailable();
+    assertPlatformAssistantOrganizationAvailable(context.organizationMongoId);
     const threadId = parseAssistantThreadId(input.threadId);
     const { content } = parseAssistantMessageInput(input.body);
     const idempotencyKey = parseAssistantIdempotencyKey(input.idempotencyKey);

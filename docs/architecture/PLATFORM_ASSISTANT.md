@@ -17,23 +17,28 @@ routes and OpenAI/PostgreSQL/Redis implementations remain adapters.
 ## Request flow
 
 1. The authenticated `/api/v1/assistant` route requires `assistant:use`.
-2. `AI_ENVIRONMENT`, `AI_ASSISTANT_ENABLED`, and the Assistant kill switch are
-   checked before an operation proceeds.
-3. Thread and message access is scoped to both organization and owning user.
-4. A user message and pending assistant placeholder are persisted
+2. `AI_ENVIRONMENT`, `AI_ASSISTANT_ENABLED`, and
+   `AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS` are checked before organization
+   access proceeds. Production access fails closed without an explicit cohort.
+3. `GET /api/v1/assistant/access` exposes only the current organization's
+   launcher eligibility; provider and history data are not returned.
+4. Thread and message access is scoped to both organization and owning user.
+5. The Assistant kill switch blocks new messages while preserving allowed
+   organizations' read-only history access.
+6. A user message and pending assistant placeholder are persisted
    idempotently.
-5. The prompt builder combines bounded conversation history, versioned
+7. The prompt builder combines bounded conversation history, versioned
    platform facts, and eligible approved `operating_guidance`.
-6. Approved knowledge is labelled as untrusted evidence. It cannot supply
+8. Approved knowledge is labelled as untrusted evidence. It cannot supply
    instructions, permissions, tools, or links outside the supplied evidence
    contract.
-7. The OpenAI adapter uses `store: false`, strict structured output, bounded
+9. The OpenAI adapter uses `store: false`, strict structured output, bounded
    tokens, an HMAC-derived safety identifier, and an attempt row committed
    before every possibly billable call.
-8. The controller emits only versioned product SSE events:
+10. The controller emits only versioned product SSE events:
    `message.accepted`, `response.started`, `response.delta`,
    `response.completed`, and `response.failed`.
-9. Provider output is completed only after response kind, citation IDs, and
+11. Provider output is completed only after response kind, citation IDs, and
    links validate against supplied evidence.
 
 The browser never receives provider credentials, prompts, provider-native
@@ -89,6 +94,8 @@ The capability is deny-by-default. Relevant controls are documented in
 `.env.example`:
 
 - environment authorization, feature flag, and kill switch;
+- production organization allowlist, with an explicitly approved `*` sentinel
+  reserved for all-organization rollout;
 - approved model, reasoning effort, verbosity, and token ceilings;
 - per-user and per-organization rate limits;
 - per-user and per-organization active-stream limits;
@@ -104,10 +111,11 @@ evaluation never mutates runtime configuration.
 ## Frontend boundary
 
 The dashboard exposes a compact non-modal helper from the sidebar footer.
-Typed server actions own durable reads and mutations. A same-origin BFF route
-owns streamed POST requests and attaches backend authentication server-side.
-The feature-local reducer owns only optimistic, streaming, retry, scroll,
-sheet, and draft state.
+The authenticated layout combines its public build flag with the backend
+organization-access result before rendering the launcher. Typed server actions
+own durable reads and mutations. A same-origin BFF route owns streamed POST
+requests and attaches backend authentication server-side. The feature-local
+reducer owns only optimistic, streaming, retry, scroll, sheet, and draft state.
 
 See the dashboard's `docs/architecture/README.md` and
 `docs/user-guides/AI_ASSISTANT.md`.

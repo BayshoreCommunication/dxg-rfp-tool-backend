@@ -1,4 +1,7 @@
-import { aiRuntimeAuthorized } from "../../../config/aiEnvironment";
+import {
+  aiEnvironment,
+  aiRuntimeAuthorized,
+} from "../../../config/aiEnvironment";
 
 export const ASSISTANT_THREAD_TITLE_MAX_LENGTH = 200;
 export const ASSISTANT_MESSAGE_MAX_LENGTH = 8_000;
@@ -146,6 +149,51 @@ export const platformAssistantKilled = (): boolean =>
   process.env.AI_ASSISTANT_KILL_SWITCH !== "false" ||
   process.env.LIVE_AI_KILL_SWITCH === "true";
 
+const organizationIdPattern = /^[0-9a-f]{24}$/i;
+
+const configuredAssistantOrganizations = ():
+  | { mode: "all" }
+  | { mode: "limited"; ids: Set<string> }
+  | { mode: "blocked" } => {
+  const configured = String(
+    process.env.AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS || "",
+  ).trim();
+
+  if (!configured) {
+    return aiEnvironment() === "production"
+      ? { mode: "blocked" }
+      : { mode: "all" };
+  }
+
+  if (configured === "*") return { mode: "all" };
+
+  const ids = configured
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (
+    ids.length === 0 ||
+    ids.includes("*") ||
+    ids.some((value) => !organizationIdPattern.test(value))
+  ) {
+    return { mode: "blocked" };
+  }
+  return { mode: "limited", ids: new Set(ids) };
+};
+
+export const platformAssistantEnabledForOrganization = (
+  organizationMongoId: string,
+): boolean => {
+  if (!platformAssistantEnabled()) return false;
+  const organizationId = String(organizationMongoId || "")
+    .trim()
+    .toLowerCase();
+  if (!organizationIdPattern.test(organizationId)) return false;
+  const access = configuredAssistantOrganizations();
+  return access.mode === "all" ||
+    (access.mode === "limited" && access.ids.has(organizationId));
+};
+
 export const assertPlatformAssistantEnabled = (): void => {
   if (!platformAssistantEnabled()) {
     throw new PlatformAssistantError(
@@ -156,8 +204,34 @@ export const assertPlatformAssistantEnabled = (): void => {
   }
 };
 
+export const assertPlatformAssistantOrganizationEnabled = (
+  organizationMongoId: string,
+): void => {
+  assertPlatformAssistantEnabled();
+  if (!platformAssistantEnabledForOrganization(organizationMongoId)) {
+    throw new PlatformAssistantError(
+      "AI_ASSISTANT_ORGANIZATION_NOT_ENABLED",
+      "The AI Assistant is not enabled for this organization.",
+      403,
+    );
+  }
+};
+
 export const assertPlatformAssistantAvailable = (): void => {
   assertPlatformAssistantEnabled();
+  if (platformAssistantKilled()) {
+    throw new PlatformAssistantError(
+      "AI_ASSISTANT_KILLED",
+      "The AI Assistant is temporarily unavailable.",
+      503,
+    );
+  }
+};
+
+export const assertPlatformAssistantOrganizationAvailable = (
+  organizationMongoId: string,
+): void => {
+  assertPlatformAssistantOrganizationEnabled(organizationMongoId);
   if (platformAssistantKilled()) {
     throw new PlatformAssistantError(
       "AI_ASSISTANT_KILLED",

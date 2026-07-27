@@ -43,7 +43,11 @@ Create a release record before changing any flag. Record:
 5. Confirm the baseline model and prompt passed the versioned evaluation gate.
 6. Confirm PostgreSQL, Redis, and the active knowledge release are healthy.
 7. Confirm `assistant:use` assignments match the approved roles.
-8. Confirm the release record contains a named owner and rollback authority.
+8. Confirm `AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS` contains only the exact
+   approved 24-character organization IDs. An empty or invalid production
+   value must return `enabled: false`; use `*` only for an explicitly approved
+   all-organization rollout.
+9. Confirm the release record contains a named owner and rollback authority.
 
 ## Deploy flags off
 
@@ -51,6 +55,7 @@ Use these safe values for the first production deployment:
 
 ```dotenv
 AI_ASSISTANT_ENABLED=false
+AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS=
 AI_ASSISTANT_KILL_SWITCH=true
 NEXT_PUBLIC_AI_ASSISTANT_ENABLED=false
 ```
@@ -64,13 +69,15 @@ Perform this test in staging before every production enablement:
 
 1. Enable the environment/provider prerequisites.
 2. Set `AI_ASSISTANT_ENABLED=true`.
-3. Keep `AI_ASSISTANT_KILL_SWITCH=true`.
-4. Attempt a new message and verify a safe `AI_ASSISTANT_KILLED` response.
-5. Verify no new billable `platform_assistant` provider attempt was started.
-6. Verify existing thread history remains readable.
-7. Set `AI_ASSISTANT_KILL_SWITCH=false`, restart/reload configuration as
+3. Set `AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS` to the staging test
+   organization's exact ID.
+4. Keep `AI_ASSISTANT_KILL_SWITCH=true`.
+5. Attempt a new message and verify a safe `AI_ASSISTANT_KILLED` response.
+6. Verify no new billable `platform_assistant` provider attempt was started.
+7. Verify existing thread history remains readable.
+8. Set `AI_ASSISTANT_KILL_SWITCH=false`, restart/reload configuration as
    required, and complete one grounded smoke-test response.
-8. Restore the intended release state and attach evidence to the release
+9. Restore the intended release state and attach evidence to the release
    record.
 
 ## Staged enablement
@@ -82,9 +89,11 @@ workflows.
 
 ### Stage 1 — Internal
 
-Enable only when the deployment layer or an application entitlement restricts
-the feature to named internal organization IDs. Verify:
+Set `AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS` to the named internal
+organization IDs. Verify:
 
+- `/api/v1/assistant/access` returns `enabled: true` for the internal
+  organization and `enabled: false` for an organization outside the cohort;
 - launcher visibility and authorized bootstrap;
 - one grounded platform question;
 - one unsupported/out-of-scope question;
@@ -94,9 +103,10 @@ the feature to named internal organization IDs. Verify:
 
 ### Stage 2 — Limited organization cohort
 
-Use an explicit organization entitlement or allowlist and record its exact
-membership. Do not use the global feature flag alone as a cohort mechanism.
-Hold the cohort constant through the monitoring window.
+Update `AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS` with the exact approved cohort
+and record its membership. Do not use the global feature flag or `*` as a
+limited-cohort mechanism. Hold the cohort constant through the monitoring
+window.
 
 ### Stage 3 — Wider rollout
 
@@ -104,25 +114,27 @@ Expand only after the Product Owner accepts the monitored Stage 2 results.
 Keep the same model/prompt versions during expansion unless a separate release
 record approves a change.
 
-The current implementation has global environment flags and role permission,
-but no durable organization-cohort entitlement. Stage 1/2 must remain blocked
-until the release environment supplies that restriction or the application
-adds an approved entitlement mechanism.
+Production parsing is fail-closed: an absent, malformed, mixed wildcard, or
+partially invalid allowlist enables no organization. Test and staging retain
+global-flag behavior when the allowlist is absent, but an explicitly configured
+allowlist is enforced there as well.
 
 ## Smoke tests
 
 For each enabled stage:
 
 1. Open the dashboard helper from the sidebar.
-2. Ask how to create a proposal and verify an internal `/proposals` citation.
-3. Ask for a platform-changing action and verify the Assistant explains its
+2. Verify a user with `assistant:use` outside the cohort receives
+   `enabled: false` and sees no launcher.
+3. Ask how to create a proposal and verify an internal `/proposals` citation.
+4. Ask for a platform-changing action and verify the Assistant explains its
    read-only boundary.
-4. Start a new conversation, reload, and reopen history.
-5. Verify a different user in the same organization cannot read the thread.
-6. Trigger a bounded retry and verify one user message with distinct assistant
+5. Start a new conversation, reload, and reopen history.
+6. Verify a different user in the same organization cannot read the thread.
+7. Trigger a bounded retry and verify one user message with distinct assistant
    attempts.
-7. Close an active stream and verify terminal aborted/interrupted persistence.
-8. Confirm the API key and prompts are absent from browser network payloads,
+8. Close an active stream and verify terminal aborted/interrupted persistence.
+9. Confirm the API key and prompts are absent from browser network payloads,
    HTML, logs, and client state.
 
 ## Monitoring

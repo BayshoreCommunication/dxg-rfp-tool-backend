@@ -6,6 +6,8 @@ const {
   PlatformAssistantError,
   assertPlatformAssistantAvailable,
   assertPlatformAssistantEnabled,
+  assertPlatformAssistantOrganizationAvailable,
+  assertPlatformAssistantOrganizationEnabled,
   canTransitionAssistantMessage,
   parseAssistantBeforeOrdinal,
   parseAssistantIdempotencyKey,
@@ -14,6 +16,7 @@ const {
   parseAssistantThreadId,
   parseCreateAssistantThreadInput,
   platformAssistantEnabled,
+  platformAssistantEnabledForOrganization,
   platformAssistantKilled,
 } = require("../src/modules/platformAssistant/domain");
 
@@ -92,6 +95,116 @@ test("provider kill switches preserve enabled read-only access", () => {
     assert.throws(
       assertPlatformAssistantAvailable,
       (error) => error instanceof PlatformAssistantError && error.code === "AI_ASSISTANT_KILLED",
+    );
+  });
+});
+
+test("production organization access is deny-by-default and supports explicit cohorts", () => {
+  const base = {
+    NODE_ENV: "production",
+    AI_ENVIRONMENT: "production",
+    AI_ASSISTANT_ENABLED: "true",
+    AI_ASSISTANT_KILL_SWITCH: "false",
+    LIVE_AI_KILL_SWITCH: "false",
+  };
+  const allowedOrganization = "aaaaaaaaaaaaaaaaaaaaaaaa";
+  const otherOrganization = "bbbbbbbbbbbbbbbbbbbbbbbb";
+
+  withEnv({
+    ...base,
+    AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS: undefined,
+  }, () => {
+    assert.equal(
+      platformAssistantEnabledForOrganization(allowedOrganization),
+      false,
+    );
+    assert.throws(
+      () => assertPlatformAssistantOrganizationEnabled(allowedOrganization),
+      (error) =>
+        error instanceof PlatformAssistantError &&
+        error.code === "AI_ASSISTANT_ORGANIZATION_NOT_ENABLED" &&
+        error.status === 403,
+    );
+  });
+
+  withEnv({
+    ...base,
+    AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS:
+      ` ${allowedOrganization.toUpperCase()} `,
+  }, () => {
+    assert.equal(
+      platformAssistantEnabledForOrganization(allowedOrganization),
+      true,
+    );
+    assert.equal(
+      platformAssistantEnabledForOrganization(otherOrganization),
+      false,
+    );
+    assert.doesNotThrow(() =>
+      assertPlatformAssistantOrganizationAvailable(allowedOrganization));
+  });
+
+  withEnv({
+    ...base,
+    AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS: "*",
+  }, () => {
+    assert.equal(
+      platformAssistantEnabledForOrganization(otherOrganization),
+      true,
+    );
+  });
+});
+
+test("invalid or ambiguous production organization allowlists fail closed", () => {
+  const organizationId = "aaaaaaaaaaaaaaaaaaaaaaaa";
+  for (const configured of [
+    "not-an-organization",
+    `*,${organizationId}`,
+    `${organizationId},broken`,
+  ]) {
+    withEnv({
+      NODE_ENV: "production",
+      AI_ENVIRONMENT: "production",
+      AI_ASSISTANT_ENABLED: "true",
+      AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS: configured,
+      AI_ASSISTANT_KILL_SWITCH: "false",
+      LIVE_AI_KILL_SWITCH: "false",
+    }, () => {
+      assert.equal(
+        platformAssistantEnabledForOrganization(organizationId),
+        false,
+      );
+    });
+  }
+});
+
+test("non-production environments preserve global test and staging access unless a cohort is configured", () => {
+  const organizationId = "aaaaaaaaaaaaaaaaaaaaaaaa";
+  withEnv({
+    NODE_ENV: "production",
+    AI_ENVIRONMENT: "staging",
+    AI_ASSISTANT_ENABLED: "true",
+    AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS: undefined,
+    AI_ASSISTANT_KILL_SWITCH: "false",
+    LIVE_AI_KILL_SWITCH: "false",
+  }, () => {
+    assert.equal(
+      platformAssistantEnabledForOrganization(organizationId),
+      true,
+    );
+  });
+
+  withEnv({
+    NODE_ENV: "production",
+    AI_ENVIRONMENT: "staging",
+    AI_ASSISTANT_ENABLED: "true",
+    AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS: "bbbbbbbbbbbbbbbbbbbbbbbb",
+    AI_ASSISTANT_KILL_SWITCH: "false",
+    LIVE_AI_KILL_SWITCH: "false",
+  }, () => {
+    assert.equal(
+      platformAssistantEnabledForOrganization(organizationId),
+      false,
     );
   });
 });

@@ -68,8 +68,10 @@ behaviour. On top of that: `CONVERSATIONS_ENABLED`, `PROPOSAL_CONTEXT_ENABLED`,
 admin: `NEXT_PUBLIC_PRICING_ENABLED`.
 
 The Platform Assistant additionally requires `AI_ASSISTANT_ENABLED=true` and
-`AI_ASSISTANT_KILL_SWITCH=false`. Its runtime model remains the approved
-baseline unless `AI_ASSISTANT_MODEL` is explicitly promoted.
+an organization allowed by `AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS`; production
+fails closed when that cohort is absent or invalid. New messages additionally
+require `AI_ASSISTANT_KILL_SWITCH=false`. Its runtime model remains the
+approved baseline unless `AI_ASSISTANT_MODEL` is explicitly promoted.
 
 Model is pinned to the dated snapshot `gpt-5.4-mini-2026-03-17`.
 

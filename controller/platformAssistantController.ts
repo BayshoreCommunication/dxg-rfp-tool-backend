@@ -6,6 +6,7 @@ import {
   parseAssistantIdempotencyKey,
   parseAssistantMessageInput,
   parseAssistantThreadId,
+  platformAssistantEnabledForOrganization,
   type PlatformAssistantContext,
 } from "../src/modules/platformAssistant/domain";
 import {
@@ -129,6 +130,21 @@ export const createPlatformAssistantController = (dependencies?: {
     dependencies?.heartbeatMs ?? (() => assistantRuntimeConfig().heartbeatMs);
 
   return {
+    async getAccess(req: AuthRequest, res: Response) {
+      try {
+        const ctx = context(req);
+        res.json({
+          data: {
+            enabled: platformAssistantEnabledForOrganization(
+              ctx.organizationMongoId,
+            ),
+          },
+        });
+      } catch (error) {
+        writePlatformAssistantProblem(res, error);
+      }
+    },
+
     async listThreads(req: AuthRequest, res: Response) {
       try {
         const ctx = context(req);
@@ -301,6 +317,7 @@ type AssistantLimitLeaseLike = {
 
 const controller = createPlatformAssistantController();
 
+export const getAssistantAccess = controller.getAccess;
 export const listAssistantThreads = controller.listThreads;
 export const createAssistantThread = controller.createThread;
 export const getAssistantThread = controller.getThread;

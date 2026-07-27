@@ -198,6 +198,50 @@ test("thread controllers expose typed JSON envelopes and idempotent status", asy
   assert.deepEqual(captured.body, { title: "Existing" });
 });
 
+test("access controller exposes organization-scoped launcher eligibility", async () => {
+  const saved = {
+    NODE_ENV: process.env.NODE_ENV,
+    AI_ENVIRONMENT: process.env.AI_ENVIRONMENT,
+    AI_ASSISTANT_ENABLED: process.env.AI_ASSISTANT_ENABLED,
+    AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS:
+      process.env.AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS,
+  };
+  Object.assign(process.env, {
+    NODE_ENV: "production",
+    AI_ENVIRONMENT: "production",
+    AI_ASSISTANT_ENABLED: "true",
+    AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS: "aaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  try {
+    const controller = createPlatformAssistantController({
+      application: application(),
+      streamingApplication: successfulStreamingApplication,
+      limiter: { async acquire() { return { async release() {} }; } },
+    });
+    const allowed = new MockResponse();
+    await controller.getAccess(request(), allowed);
+    assert.deepEqual(allowed.jsonBody, { data: { enabled: true } });
+
+    const denied = new MockResponse();
+    await controller.getAccess(
+      request({
+        user: {
+          userId: "bbbbbbbbbbbbbbbbbbbbbbbb",
+          organizationId: "cccccccccccccccccccccccc",
+          roles: ["planner"],
+        },
+      }),
+      denied,
+    );
+    assert.deepEqual(denied.jsonBody, { data: { enabled: false } });
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test("message controller emits only versioned product SSE with safe streaming headers", async () => {
   let released = 0;
   const controller = createPlatformAssistantController({
@@ -394,6 +438,7 @@ test("route and server wire authentication, assistant permission, and API mount"
   );
   const server = fs.readFileSync(path.join(root, "server.ts"), "utf8");
   for (const pathFragment of [
+    '"/assistant/access"',
     '"/assistant/threads"',
     '"/assistant/threads/:threadId"',
     '"/assistant/threads/:threadId/messages"',

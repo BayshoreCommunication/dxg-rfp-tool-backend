@@ -49,6 +49,7 @@ const overrides: Record<string, string> = {
   PROPOSAL_DRAFT_PROVIDER: "mock",
   CONVERSATIONS_ENABLED: "true",
   AI_ASSISTANT_ENABLED: "true",
+  AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS: "*",
   AI_ASSISTANT_KILL_SWITCH: "false",
   PRICING_CORPUS_ENABLED: "true",
 

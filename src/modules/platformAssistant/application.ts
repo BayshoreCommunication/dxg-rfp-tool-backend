@@ -3,8 +3,8 @@ import {
   ASSISTANT_KNOWLEDGE_MAX_RESULTS,
   ASSISTANT_THREAD_LIST_MAX_LIMIT,
   PlatformAssistantError,
-  assertPlatformAssistantAvailable,
-  assertPlatformAssistantEnabled,
+  assertPlatformAssistantOrganizationAvailable,
+  assertPlatformAssistantOrganizationEnabled,
   parseAssistantBeforeOrdinal,
   parseAssistantIdempotencyKey,
   parseAssistantListLimit,
@@ -33,7 +33,7 @@ export const createPlatformAssistantApplication = (
     body: unknown,
     idempotencyKey: unknown,
   ) {
-    assertPlatformAssistantEnabled();
+    assertPlatformAssistantOrganizationEnabled(context.organizationMongoId);
     return repository.createThread({
       ...context,
       ...parseCreateAssistantThreadInput(body),
@@ -45,7 +45,7 @@ export const createPlatformAssistantApplication = (
     context: PlatformAssistantContext,
     input: { limit?: unknown; updatedBefore?: Date | null } = {},
   ) {
-    assertPlatformAssistantEnabled();
+    assertPlatformAssistantOrganizationEnabled(context.organizationMongoId);
     return repository.listThreads({
       ...context,
       limit: parseAssistantListLimit(
@@ -65,7 +65,7 @@ export const createPlatformAssistantApplication = (
       beforeOrdinal?: unknown;
     },
   ) {
-    assertPlatformAssistantEnabled();
+    assertPlatformAssistantOrganizationEnabled(context.organizationMongoId);
     return repository.getThread({
       ...context,
       threadId: parseAssistantThreadId(input.threadId),
@@ -79,7 +79,7 @@ export const createPlatformAssistantApplication = (
   },
 
   archiveThread(context: PlatformAssistantContext, threadId: unknown) {
-    assertPlatformAssistantEnabled();
+    assertPlatformAssistantOrganizationEnabled(context.organizationMongoId);
     return repository.archiveThread({
       ...context,
       threadId: parseAssistantThreadId(threadId),
@@ -90,7 +90,7 @@ export const createPlatformAssistantApplication = (
     context: PlatformAssistantContext,
     input: { threadId: unknown; body: unknown; idempotencyKey: unknown },
   ) {
-    assertPlatformAssistantAvailable();
+    assertPlatformAssistantOrganizationAvailable(context.organizationMongoId);
     return repository.appendUserMessage({
       ...context,
       threadId: parseAssistantThreadId(input.threadId),
@@ -103,7 +103,7 @@ export const createPlatformAssistantApplication = (
     context: PlatformAssistantContext,
     input: { threadId: unknown; body: unknown; idempotencyKey: unknown },
   ): Promise<GenerateAssistantGuidanceResult> {
-    assertPlatformAssistantAvailable();
+    assertPlatformAssistantOrganizationAvailable(context.organizationMongoId);
     if (!guidanceDependencies) {
       throw new PlatformAssistantError(
         "AI_ASSISTANT_NOT_CONFIGURED",
