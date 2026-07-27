@@ -92,7 +92,7 @@ export type AssistantPromptMessage = {
 };
 
 export type AssistantPromptInput = {
-  schemaVersion: "platform-assistant-prompt.v1";
+  schemaVersion: "platform-assistant-prompt.v2";
   platformKnowledgeVersion: string;
   userMessage: string;
   history: AssistantPromptMessage[];

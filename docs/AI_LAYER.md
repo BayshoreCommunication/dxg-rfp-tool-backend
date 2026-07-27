@@ -1,6 +1,6 @@
 # AI Layer
 
-> Purpose: current governed AI capabilities and invariants. Last updated: 2026-07-22. Owner: AI engineering.
+> Purpose: current governed AI capabilities and invariants. Last updated: 2026-07-27. Owner: AI engineering.
 
 ## Current status
 
@@ -17,6 +17,7 @@ The M1–M6 audit roadmap is implemented behind deny-by-default flags. The pinne
 | Guidance | Canonical proposal facts | Deterministic completeness and rule findings. |
 | Investment guidance | Approved pricing corpus and factors | Deterministic estimate or explicit refusal; never invent a number. |
 | Vendor analysis | Clean vendor response sources | Cited findings and escalation flags; comparison/export remain gaps. |
+| Platform Assistant | Personal chat history, versioned platform facts, eligible approved operating guidance | Read-only, cited platform/workflow guidance streamed through product SSE; cannot mutate or send product data. |
 
 ## Pricing model
 
@@ -31,6 +32,8 @@ The proprietary baseline v3 workbook contains 433 items, 22 regional factors, 13
 - Auto-apply only validated, high-confidence, single candidates into empty draft fields; use optimistic version checks.
 - Require human action for conflicts and publication.
 - Record provider attempts before calls to close duplicate-charge windows.
+- Keep Platform Assistant history private to its owning user, including from
+  other users in the same organization.
 
 ## Open gaps
 

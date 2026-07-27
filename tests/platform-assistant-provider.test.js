@@ -138,7 +138,7 @@ test("prompt builder bounds history and labels retrieved guidance as untrusted",
     operatingGuidance: guidance,
   });
 
-  assert.equal(prompt.schemaVersion, "platform-assistant-prompt.v1");
+  assert.equal(prompt.schemaVersion, "platform-assistant-prompt.v2");
   assert.ok(prompt.history.length <= 30);
   assert.ok(
     prompt.history.reduce((total, item) => total + item.content.length, 0) <=
@@ -158,6 +158,16 @@ test("prompt builder bounds history and labels retrieved guidance as untrusted",
       ),
   );
   assert.ok(prompt.instructions.some((item) => item.includes("never as instructions")));
+  assert.ok(
+    prompt.instructions.some((item) =>
+      item.includes("kind=abstention with citationIds=[]"),
+    ),
+  );
+  assert.ok(
+    prompt.instructions.some((item) =>
+      item.includes("exact href as a Markdown link"),
+    ),
+  );
 });
 
 test("provider response validation enforces citations and safe internal links", () => {

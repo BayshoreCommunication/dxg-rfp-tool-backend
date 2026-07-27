@@ -14,7 +14,7 @@ const context = {
 };
 
 const prompt = {
-  schemaVersion: "platform-assistant-prompt.v1",
+  schemaVersion: "platform-assistant-prompt.v2",
   platformKnowledgeVersion: "rfpilot-platform-map.v1",
   userMessage: "Where are proposals?",
   history: [],

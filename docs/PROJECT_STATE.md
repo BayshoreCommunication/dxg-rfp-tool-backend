@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-07-22 · **Branch:** `ai-agent` (all three repos) · **Status:** audit roadmap M1–M6 complete, DXG pricing engine imported, conversational workspace shipped.
+**Last updated:** 2026-07-27 · **Branches:** backend/dashboard `ai-chatbot`, admin `ai-agent` · **Status:** audit roadmap M1–M6 complete; read-only Platform AI Assistant implemented behind deny-by-default release gates.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -64,7 +64,12 @@ behaviour. On top of that: `CONVERSATIONS_ENABLED`, `PROPOSAL_CONTEXT_ENABLED`,
 `INVESTMENT_GUIDANCE_ENABLED`, `PRICING_CORPUS_ENABLED`,
 `VENDOR_ANALYSIS_ENABLED`, `LIVE_AI_*` (+ kill switches). Dashboard mirrors:
 `NEXT_PUBLIC_CONVERSATIONS_ENABLED`, `NEXT_PUBLIC_PROPOSAL_WORKFLOW_ENABLED`,
-`NEXT_PUBLIC_VENDOR_ANALYSIS_ENABLED`; admin: `NEXT_PUBLIC_PRICING_ENABLED`.
+`NEXT_PUBLIC_VENDOR_ANALYSIS_ENABLED`, `NEXT_PUBLIC_AI_ASSISTANT_ENABLED`;
+admin: `NEXT_PUBLIC_PRICING_ENABLED`.
+
+The Platform Assistant additionally requires `AI_ASSISTANT_ENABLED=true` and
+`AI_ASSISTANT_KILL_SWITCH=false`. Its runtime model remains the approved
+baseline unless `AI_ASSISTANT_MODEL` is explicitly promoted.
 
 Model is pinned to the dated snapshot `gpt-5.4-mini-2026-03-17`.
 
@@ -139,6 +144,26 @@ auto-apply (empty field, confidence ≥ 0.8, single candidate for that path) →
 guided key questions with typed controls (date picker, choice pills, number) →
 progress card with real completeness → generate cited draft → readiness and
 investment guidance.
+
+### The Platform AI Assistant
+
+The dashboard sidebar now exposes a compact helper popup for onboarding,
+navigation, proposal workflow, and event-planning guidance. It is a separate
+bounded module from proposal conversations and is read-only.
+
+PostgreSQL owns personal threads/messages with organization RLS plus explicit
+owner predicates. Approved `operating_guidance` is accessed behind an
+Assistant-owned knowledge port, with versioned platform facts as a safe
+fallback. OpenAI streaming stays behind a provider port and emits only
+versioned product SSE through a same-origin dashboard BFF. Attempts are
+recorded before provider calls; user and organization rate/concurrency limits
+are enforced through Redis with a bounded fallback.
+
+The baseline/candidate evaluation and live staging comparison are complete.
+The runtime baseline remains `gpt-5.4-mini-2026-03-17`; promoting the evaluated
+candidate still requires an explicit Product Owner decision. Production
+internal/cohort rollout also remains blocked until an organization-scoped
+entitlement or deployment allowlist exists.
 
 ---
 
