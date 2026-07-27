@@ -15,8 +15,10 @@ import {
   updateOwnedProposalMeta,
   updateOwnedProposalStatus,
   updateOwnedProposal,
+  presignOwnedProposalFile,
   uploadOwnedProposalFiles,
 } from "../src/modules/proposals/composition";
+import { ProposalFileAccessError } from "../src/modules/proposals/application/proposalFileAccess";
 import { PROPOSAL_STATUSES } from "../src/modules/proposals/application/mutateOwnedProposal";
 
 const isValidProposalId = (id?: string) =>
@@ -612,6 +614,31 @@ export const copyProposal = async (
       message: "Error copying proposal",
       error: error instanceof Error ? error.message : "Unknown error",
     });
+  }
+};
+
+export const getProposalFileUrl = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const result = await presignOwnedProposalFile({
+      requesterUserId: userId,
+      url: typeof req.query.url === "string" ? req.query.url : "",
+    });
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    if (error instanceof ProposalFileAccessError) {
+      res.status(error.status).json({ success: false, code: error.code, message: error.message });
+      return;
+    }
+    console.error("Presign proposal file error:", error);
+    res.status(500).json({ success: false, message: "Error preparing the file link" });
   }
 };
 

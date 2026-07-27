@@ -1,6 +1,8 @@
 import { createGetOwnedProposal } from "./application/getOwnedProposal";
 import { createListOwnedProposals } from "./application/listOwnedProposals";
 import { createUploadProposalFiles } from "./application/uploadProposalFiles";
+import { createPresignProposalFile } from "./application/proposalFileAccess";
+import { presignSpacesGetUrl, spacesObjectKeyFromUrl } from "../../../utils/uploadToSpaces";
 import {
   createGetProposalByLegacyPublicId,
   createIncrementLegacyPublicProposalViews,
@@ -70,6 +72,10 @@ export const incrementOwnedProposalViews = createIncrementOwnedProposalViews({
   proposals: mongoProposalWriteRepository,
   settings: mongoProposalSettingsRepository,
   notifications: proposalNotificationAdapter,
+});
+export const presignOwnedProposalFile = createPresignProposalFile({
+  objectKeyFromUrl: spacesObjectKeyFromUrl,
+  presign: presignSpacesGetUrl,
 });
 export const uploadOwnedProposalFiles = createUploadProposalFiles({
   storage: spacesProposalFileStorage,

@@ -6,6 +6,7 @@ import {
   deleteProposal,
   getAllProposals,
   getProposalById,
+  getProposalFileUrl,
   getProposalByIdPublic,
   incrementProposalViews,
   incrementProposalViewsPublic,
@@ -55,6 +56,8 @@ const optionalAuth = (req: Request, _res: Response, next: NextFunction) => {
 /* Protected static routes — must come BEFORE /:id wildcard */
 router.get("/", authenticate, authorizeAction("proposal:read"), getAllProposals);
 router.post("/", authenticate, authorizeAction("proposal:write"), createProposal);
+// Support documents are private objects; this issues the short-lived link.
+router.get("/file-url", authenticate, authorizeAction("proposal:read"), getProposalFileUrl);
 router.post("/upload-files", authenticate, authorizeAction("proposal:write"), uploadProposalDocs, uploadProposalFiles);
 
 /* Routes accessible with or without auth — different controller per case */
