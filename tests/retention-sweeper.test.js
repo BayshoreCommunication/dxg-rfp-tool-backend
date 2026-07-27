@@ -178,3 +178,23 @@ test("every table the sweep deletes from has its delete guard narrowed", () => {
     );
   }
 });
+
+test("the sweep enumerates tenants from Mongo, not from the RLS-protected table", () => {
+  // rfpilot.organizations is RLS-protected on
+  // external_mongo_id = current_organization_mongo_id(), so selecting from it
+  // with no tenant GUC set matches zero rows. The first live dry run reported
+  // organizations: 0 for exactly this reason — the sweep was a permanent no-op.
+  assert.ok(
+    /from ["'].*modal\/organizationModel["']/.test(source),
+    "tenants come from the Mongo identity authority",
+  );
+  const mongoEnum = source.indexOf("Organization.find(");
+  const pgLookup = source.indexOf("FROM rfpilot.organizations");
+  assert.ok(mongoEnum > 0, "organizations are enumerated from Mongo");
+  assert.ok(mongoEnum < pgLookup, "the Postgres lookup only resolves an already-known tenant");
+  assert.match(
+    source,
+    /set_config\('app\.organization_mongo_id'/,
+    "the tenant GUC is set before the organizations row is read",
+  );
+});

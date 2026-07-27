@@ -3,6 +3,7 @@ import type { PoolClient } from "pg";
 import { postgresEnabled, withPostgresTransaction } from "../../../config/postgres";
 import { s3PrivateDocumentStorage } from "../documentIngestion/s3PrivateDocumentStorage";
 import { safeLog } from "../../shared/observability/safeTelemetry";
+import Organization from "../../../modal/organizationModel";
 
 /**
  * Governed retention enforcement.
@@ -215,20 +216,27 @@ export const sweepExpiredArtifacts = async (): Promise<SweepResult> => {
   const result: SweepResult = { dryRun, organizations: 0, deleted: {} };
   if (!postgresEnabled() || !retentionSweepEnabled()) return result;
 
-  // Each organization is swept in its own transaction: RLS is per-tenant, and
-  // one tenant's failure must not roll back another's completed work.
-  const organizations = await withPostgresTransaction(async (c) => {
-    const rows = await c.query<{ id: string }>(
-      "SELECT id FROM rfpilot.organizations WHERE status='active' ORDER BY id",
-    );
-    return rows.rows.map((row) => row.id);
-  });
+  // Organizations are enumerated from MongoDB, the identity authority, not from
+  // rfpilot.organizations. That table is RLS-protected on
+  // external_mongo_id = current_organization_mongo_id(), so selecting from it
+  // with no tenant GUC set matches zero rows and the sweep silently does
+  // nothing — which is exactly what the first dry run reported. Resolving the
+  // tenant from Mongo and then setting the GUC per organization uses the same
+  // pattern as every other module and needs no RLS exemption.
+  const tenants = await Organization.find({ status: "active" }).select("_id").lean<{ _id: unknown }[]>();
+  const organizationMongoIds = tenants.map((row) => String(row._id));
 
-  for (const organizationId of organizations) {
+  for (const organizationMongoId of organizationMongoIds) {
     try {
-      const counts = await withPostgresTransaction((c) =>
-        sweepOrganization(c, organizationId, !dryRun),
-      );
+      const counts = await withPostgresTransaction(async (c) => {
+        await c.query("SELECT set_config('app.organization_mongo_id',$1,true)", [organizationMongoId]);
+        const org = await c.query<{ id: string }>(
+          "SELECT id FROM rfpilot.organizations WHERE external_mongo_id=$1 AND status='active'",
+          [organizationMongoId],
+        );
+        if (!org.rows[0]) return {};
+        return sweepOrganization(c, org.rows[0].id, !dryRun);
+      });
       result.organizations += 1;
       for (const [table, n] of Object.entries(counts)) add(result.deleted, table, n);
     } catch (error) {

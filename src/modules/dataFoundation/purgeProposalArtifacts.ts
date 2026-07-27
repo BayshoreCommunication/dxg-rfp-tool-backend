@@ -8,25 +8,26 @@ import { safeLog } from "../../shared/observability/safeTelemetry";
 // rows are tombstoned. Immutable AI evidence/audit rows are intentionally
 // retained until their own retention windows expire (they hold no raw
 // document content — only checksums, locators and validated outputs).
-export const purgeProposalArtifacts = async (proposalMongoIds: string[]): Promise<void> => {
-  if (!proposalMongoIds.length || !postgresEnabled()) return;
-  for (const proposalMongoId of proposalMongoIds) {
+export const purgeProposalArtifacts = async (
+  proposals: Array<{ proposalMongoId: string; organizationMongoId: string }>,
+): Promise<void> => {
+  if (!proposals.length || !postgresEnabled()) return;
+  for (const { proposalMongoId, organizationMongoId } of proposals) {
     try {
       await withPostgresTransaction(async (c) => {
-        // The tenant GUC has to be set before the first tenant-table read, not
-        // derived from it. This lookup previously ran first, so under a role
-        // that actually honours RLS current_organization_id() was NULL, the
-        // policy filtered every row, and the whole purge returned silently —
-        // after Mongo had already hard-deleted the proposal. Resolving the
-        // organization through the RLS-exempt organizations catalog first
-        // breaks that circular dependency.
-        const org = await c.query<{ organization_id: string }>(
-          `SELECT p.organization_id FROM rfpilot.proposal_references p WHERE p.external_mongo_id=$1`,
-          [proposalMongoId],
+        // The tenant is resolved from Mongo, the identity authority, and the
+        // GUC is set before any tenant table is read. Deriving the organization
+        // FROM proposal_references was circular: that table is RLS-protected on
+        // organization_id = current_organization_id(), so with no GUC set it
+        // matched zero rows and the purge returned silently — after Mongo had
+        // already hard-deleted the proposal.
+        await c.query("SELECT set_config('app.organization_mongo_id',$1,true)", [organizationMongoId]);
+        const org = await c.query<{ id: string }>(
+          "SELECT id FROM rfpilot.organizations WHERE external_mongo_id=$1 AND status='active'",
+          [organizationMongoId],
         );
-        const organizationId = org.rows[0]?.organization_id;
-        if (!organizationId) return;
-        await c.query("SELECT set_config('app.organization_id',$1,true)", [organizationId]);
+        if (!org.rows[0]) return;
+        await c.query("SELECT set_config('app.organization_id',$1,true)", [org.rows[0].id]);
         const ref = await c.query<{ id: string; organization_id: string }>(
           "SELECT p.id,p.organization_id FROM rfpilot.proposal_references p WHERE p.external_mongo_id=$1",
           [proposalMongoId],

@@ -78,8 +78,8 @@ export const purgeArchivedProposals = async () => {
   try {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const doomed = await Proposal.find({ isArchived: true, archivedAt: { $lte: thirtyDaysAgo } })
-      .select("_id")
-      .lean<{ _id: unknown }[]>();
+      .select("_id organizationId")
+      .lean<{ _id: unknown; organizationId?: unknown }[]>();
     if (!doomed.length) return;
     const ids = doomed.map((doc) => String(doc._id));
     // Propagate to private storage and Postgres source rows BEFORE the Mongo
@@ -87,7 +87,7 @@ export const purgeArchivedProposals = async () => {
     // document bytes with nothing left to identify them; this order leaves the
     // authoritative record in place so the next run retries.
     const { purgeProposalArtifacts } = await import("../src/modules/dataFoundation/purgeProposalArtifacts");
-    await purgeProposalArtifacts(ids);
+    await purgeProposalArtifacts(doomed.map((doc) => ({ proposalMongoId: String(doc._id), organizationMongoId: String(doc.organizationId ?? "") })).filter((row) => row.organizationMongoId));
     const result = await Proposal.deleteMany({ _id: { $in: ids } });
     if (result.deletedCount > 0) {
       console.log(`[Cron] Purged ${result.deletedCount} archived proposal(s) older than 30 days`);

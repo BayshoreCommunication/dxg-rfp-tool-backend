@@ -12,15 +12,23 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const source = read("src/modules/dataFoundation/purgeProposalArtifacts.ts");
 
 test("purge sets the tenant GUC before reading any tenant table", () => {
-  // The organization lookup used to run before set_config, so under a role that
-  // honours RLS current_organization_id() was NULL, the policy filtered every
-  // row, and the purge returned silently — after Mongo had already hard-deleted
-  // the proposal.
+  // The organization used to be derived FROM proposal_references, which is
+  // circular: that table is RLS-protected on
+  // organization_id = current_organization_id(), so with no GUC set it matched
+  // zero rows and the purge returned silently — after Mongo had already
+  // hard-deleted the proposal. A live dry run reported organizations: 0, which
+  // is how this was caught. The tenant now comes from Mongo instead.
   const guc = source.indexOf("set_config('app.organization_id'");
+  const refRead = source.indexOf("FROM rfpilot.proposal_references");
   const sourcesRead = source.indexOf("FROM rfpilot.document_sources");
-  assert.ok(guc > 0, "tenant GUC is set");
-  assert.ok(sourcesRead > 0, "document sources are read");
-  assert.ok(guc < sourcesRead, "GUC is set before the first tenant-table read");
+  assert.ok(guc > 0 && refRead > 0 && sourcesRead > 0);
+  assert.ok(guc < refRead, "GUC precedes the proposal_references read");
+  assert.ok(guc < sourcesRead, "GUC precedes the document_sources read");
+  // The organization must be an input, not something read out of Postgres.
+  assert.ok(
+    /organizationMongoId: string/.test(source),
+    "the caller supplies the tenant from the identity authority",
+  );
 });
 
 test("purge reads object_key from document_objects, not document_sources", () => {
