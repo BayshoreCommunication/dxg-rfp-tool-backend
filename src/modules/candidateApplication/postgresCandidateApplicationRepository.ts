@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
-import { CandidateApplicationError, type ReviewDecision } from "./domain";
+import { AUTO_APPLY_MIN_CONFIDENCE, CandidateApplicationError, type ReviewDecision } from "./domain";
 import { normalizeCandidate } from "./canonicalMapping";
 import { mongoProposalCandidateMutation } from "./mongoProposalCandidateMutation";
 
@@ -191,6 +191,7 @@ export const candidateApplicationRepository = {
     expectedProposalVersion: number;
     operationIds: string[];
     overwriteConfirmedOperationIds: string[];
+    automatic?: boolean;
     idempotencyKey: string;
     correlationId: string;
   }) {
@@ -220,7 +221,7 @@ export const candidateApplicationRepository = {
           409,
         );
       const selected = await c.query<any>(
-        `SELECT d.id decision_id,d.decision,d.modified_value,o.id operation_id,o.path,o.value FROM rfpilot.candidate_review_decisions d JOIN rfpilot.proposal_context_operations o ON o.id=d.operation_id WHERE d.review_set_id=$1 AND o.id=ANY($2::uuid[])`,
+        `SELECT d.id decision_id,d.decision,d.modified_value,o.id operation_id,o.path,o.value,o.confidence FROM rfpilot.candidate_review_decisions d JOIN rfpilot.proposal_context_operations o ON o.id=d.operation_id WHERE d.review_set_id=$1 AND o.id=ANY($2::uuid[])`,
         [review.rows[0].id, input.operationIds],
       );
       if (
@@ -242,6 +243,21 @@ export const candidateApplicationRepository = {
           "Select only one candidate for each proposal field.",
           409,
         );
+      /* An automatic application must clear the confidence bar the product
+         claims. A human who reviewed a low-confidence candidate and accepted it
+         deliberately is still allowed through — the threshold governs what the
+         system may apply unattended, not what a person may decide. */
+      if (input.automatic) {
+        const weak = selected.rows.find(
+          (x: any) => Number(x.confidence) < AUTO_APPLY_MIN_CONFIDENCE,
+        );
+        if (weak)
+          throw new CandidateApplicationError(
+            "AUTO_APPLY_CONFIDENCE_TOO_LOW",
+            "Automatic application requires high-confidence candidates; review this one instead.",
+            422,
+          );
+      }
       const appId = uuidv7(),
         jobId = uuidv7();
       await c.query(
