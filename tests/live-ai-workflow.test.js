@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { proposalDraftEvidence, supplementExplicitAttendanceCounts } = require("../src/modules/liveAi/operations");
+const { proposalDraftEvidence, supplementExplicitAttendanceCounts, validateDraftOutput } = require("../src/modules/liveAi/operations");
 
 test("explicit attendance counts supplement omitted model fields without overriding them", () => {
   const evidence = [{
@@ -53,4 +53,34 @@ test("proposal draft evidence includes every structured proposal section and nes
   assert.equal(byId.has("/content/_id"), false);
   assert.equal(byId.has("/content/userId"), false);
   assert.equal(byId.has("/content/status"), false);
+});
+
+test("beginner draft validation rejects duplicate sections and persistence overflow before SQL", () => {
+  const paragraph = { text: "Supported proposal text.", citations: ["/content/event/eventName"] };
+  assert.throws(
+    () => validateDraftOutput({
+      sections: [
+        { key: "event_overview", heading: "Event overview", paragraphs: [paragraph] },
+        { key: "event_overview", heading: "Event overview again", paragraphs: [paragraph] },
+      ],
+      gaps: [],
+    }),
+    (error) => error.code === "LIVE_AI_OUTPUT_INVALID",
+  );
+
+  assert.throws(
+    () => validateDraftOutput({
+      sections: Array.from({ length: 10 }, (_, section) => ({
+        key: [
+          "event_overview", "objectives_audience", "format_experience", "venue_schedule",
+          "production_scope", "known_requirements", "information_gaps", "budget_procurement",
+          "room_requirements", "venue_technical",
+        ][section],
+        heading: `Section ${section + 1}`,
+        paragraphs: Array.from({ length: 4 }, () => paragraph),
+      })),
+      gaps: [],
+    }),
+    (error) => error.code === "LIVE_AI_OUTPUT_INVALID",
+  );
 });

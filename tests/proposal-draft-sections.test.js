@@ -86,9 +86,10 @@ test("draft section keys stay in sync across code, model schema, and database CH
     "draft schema derives its enum from the shared key list",
   );
   assert.ok(
-    operations.includes("maxItems:DRAFT_SECTION_KEYS.length"),
-    "section cap tracks the key list instead of a stale literal",
+    operations.includes("maxItems:DRAFT_MAX_SECTIONS"),
+    "section cap tracks the database persistence limit",
   );
+  assert.ok(operations.includes("validateDraftOutput(result.output)"), "provider output is validated before persistence");
 
   // The down migration narrows the domain, so it must clear data written under
   // the wider set or the constraints cannot be re-added. Draft results are

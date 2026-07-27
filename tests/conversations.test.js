@@ -10,7 +10,10 @@ const {
   conversationsEnabled,
   ConversationError,
   IMPORTANT_FIELD_QUESTIONS,
+  MAX_ADAPTIVE_VENUE_QUESTIONS,
   MAX_OPEN_FIELD_QUESTIONS,
+  isSelectedVenueName,
+  venueNeedsOperationalFollowUp,
   isCatchAllIssue,
   fieldQuestionCode,
   questionImpact,
@@ -100,7 +103,31 @@ test("catch-all detection targets broad missing-field issues, not small conflict
   assert.equal(isCatchAllIssue("missing-fields", []), true);
   assert.equal(isCatchAllIssue("CROSS_SOURCE_CONFLICT", ["/content/event/startDate"]), false);
   assert.equal(isCatchAllIssue("MISSING_ROOM_COUNT", ["/content/venueSchedule/numberOfEventRooms"]), false);
-  assert.equal(MAX_OPEN_FIELD_QUESTIONS, 7);
+  assert.equal(MAX_OPEN_FIELD_QUESTIONS, 8);
+  assert.ok(IMPORTANT_FIELD_QUESTIONS.slice(0, MAX_OPEN_FIELD_QUESTIONS).some((field) => field.path === "/content/venueSchedule/venueName"));
+});
+
+test("venue follow-up questions activate only for a selected venue", () => {
+  assert.equal(MAX_ADAPTIVE_VENUE_QUESTIONS, 16);
+  assert.equal(isSelectedVenueName("Hyatt Regency Chicago"), true);
+  for (const deferred of ["", "Not selected", "TBD", "undecided", "unknown", "N/A"])
+    assert.equal(isSelectedVenueName(deferred), false, deferred);
+  assert.equal(venueNeedsOperationalFollowUp("Hyatt Regency Chicago", undefined), true);
+  assert.equal(venueNeedsOperationalFollowUp("Hyatt Regency Chicago", "CONTRACT_SIGNED"), true);
+  assert.equal(venueNeedsOperationalFollowUp("Hyatt Regency Chicago", "NOT_SELECTED"), false);
+  const adaptivePaths = IMPORTANT_FIELD_QUESTIONS
+    .slice(MAX_OPEN_FIELD_QUESTIONS, MAX_ADAPTIVE_VENUE_QUESTIONS)
+    .map((field) => field.path);
+  for (const path of [
+    "/content/venueSchedule/venueConfirmedStatus",
+    "/content/venueSchedule/isUnionVenue",
+    "/content/venue/inHouseAvRequired",
+    "/content/venue/riggingRequired",
+    "/content/venue/powerDropsRequired",
+    "/content/venueSchedule/loadInDate",
+    "/content/venueSchedule/loadInTime",
+    "/content/venue/venueAccessRequirements",
+  ]) assert.ok(adaptivePaths.includes(path), path);
 });
 
 test("answer targeting and impact tags only apply to single whitelisted-field questions", () => {
