@@ -3,19 +3,18 @@
 // context run's issues, answering a question appends a question_answer
 // message, and appendExchange is idempotent.
 //
-// WORKAROUND (known src bug, flagged separately): conversationRepository.read
-// selects s.safe_filename from rfpilot.document_sources, a column no migration
-// creates (it lives on rfpilot.document_objects), so read fails with 42703 as
-// soon as the conversation has one message (the attachments query is gated on
-// message count, not attachment count). Tests therefore call read only while
-// the conversation is empty, and use conversationRepository.snapshot plus
-// direct SQL for assertions after messages exist. Once the repository join is
-// fixed, the post-message assertions here can switch back to read().
-import { ensureMigrated, ensureServices, seedTenant, type Tenant } from "./setup";
+// The attachments query now selects o.safe_filename from rfpilot.document_objects,
+// so read() no longer fails with 42703 once the conversation has a message. The
+// workaround this file used to carry — snapshot() and direct SQL for every
+// post-message assertion — is gone, and read() is exercised with messages
+// present, which is the path that used to break.
+import { closeIntegrationConnections, createMongoProposal, ensureMigrated, ensureServices, seedTenant, type Tenant } from "./setup";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { after, before, test } from "node:test";
-import { closePostgres, postgresPool } from "../config/postgres";
+import mongoose from "mongoose";
+import Proposal from "../modal/proposalsModel";
+import { postgresPool } from "../config/postgres";
 import { conversationRepository } from "../src/modules/conversations/postgresConversationRepository";
 import { contextInput } from "../src/modules/proposalContext/domain";
 import { proposalContextRepository } from "../src/modules/proposalContext/postgresProposalContextRepository";
@@ -23,6 +22,7 @@ import { proposalContextRepository } from "../src/modules/proposalContext/postgr
 let tenant: Tenant;
 let conversationId: string;
 let questionId: string;
+let fieldGapCount: number;
 
 const ctx = () => ({
   organizationMongoId: tenant.organizationMongoId,
@@ -35,22 +35,48 @@ before(async () => {
   await ensureServices();
   ensureMigrated();
   tenant = await seedTenant("Conversations Org");
+  // conversationRepository.read syncs field-gap questions, which reads the
+  // proposal from Mongo. Without a connection every read buffered for ten
+  // seconds and then failed.
+  await createMongoProposal(tenant);
 });
 
 after(async () => {
-  await closePostgres();
+  await Proposal.deleteOne({ _id: new mongoose.Types.ObjectId(tenant.proposalMongoId) });
+  await closeIntegrationConnections();
 });
 
-test("read creates the conversation on first access", async () => {
+test("read creates the conversation and opens the beginner intake questions", async () => {
   const result = await conversationRepository.read(ctx());
   assert.ok(result.conversation.id);
   conversationId = result.conversation.id;
   assert.equal(result.conversation.messageCount, 0);
   assert.deepEqual(result.messages, []);
-  assert.deepEqual(result.questions, []);
+
+  // read syncs field-gap questions from the Mongo proposal, which is the whole
+  // reason it needs a Mongo connection. The fixture has only an event name, so
+  // the next seven of the eight highest-impact fields are asked and eventName
+  // is not — a filled field is never asked about.
+  assert.deepEqual(
+    result.questions.map((question) => question.code),
+    [
+      "MISSING_FIELD:/content/event/startDate",
+      "MISSING_FIELD:/content/event/endDate",
+      "MISSING_FIELD:/content/event/eventFormat",
+      "MISSING_FIELD:/content/venueSchedule/venueName",
+      "MISSING_FIELD:/content/event/attendees",
+      "MISSING_FIELD:/content/venueSchedule/numberOfEventRooms",
+      "MISSING_FIELD:/content/venueSchedule/venueCity",
+    ],
+  );
+  assert.ok(result.questions.every((question) => question.status === "open" && question.contextRunId === null));
+  fieldGapCount = result.questions.length;
 
   const again = await conversationRepository.read(ctx());
   assert.equal(again.conversation.id, conversationId, "read must reuse the existing conversation");
+  // The unique index behind ON CONFLICT DO NOTHING is what stops a second read
+  // asking the same seven questions again.
+  assert.equal(again.questions.length, fieldGapCount, "re-reading must not duplicate the intake");
 });
 
 test("issues from a succeeded context run surface as clarification questions", async () => {
@@ -71,19 +97,22 @@ test("issues from a succeeded context run surface as clarification questions", a
   });
 
   const state = await conversationRepository.read(ctx());
-  assert.equal(state.questions.length, 1);
-  const question = state.questions[0];
+  // The extraction issue joins the intake questions rather than replacing them:
+  // both are things the planner still has to answer.
+  assert.equal(state.questions.length, fieldGapCount + 1);
+  const question = state.questions.find((item) => item.code === "MISSING_SHOW_END_TIME");
+  assert.ok(question, "the context run's issue is surfaced as a question");
   questionId = question.id;
-  assert.equal(question.code, "MISSING_SHOW_END_TIME");
   assert.equal(question.severity, "question");
   assert.equal(question.status, "open");
-  assert.equal(question.contextRunId, run.runId);
+  assert.equal(question.contextRunId, run.runId, "unlike a field gap, this one names the run it came from");
   assert.deepEqual(question.paths, ["/content/venueSchedule/showEndTime"]);
   assert.ok(question.prompt.length > 0);
 
   const snapshot = await conversationRepository.snapshot(ctx());
-  assert.equal(snapshot.openQuestions, 1);
+  assert.equal(snapshot.openQuestions, fieldGapCount + 1);
 });
+
 
 test("answering a question appends a question_answer message and closes it", async () => {
   const answer = "The show ends at 22:00 local time.";
@@ -96,26 +125,26 @@ test("answering a question appends a question_answer message and closes it", asy
   assert.equal(updated.status, "answered");
   assert.ok(updated.answeredMessageId);
 
-  const message = await postgresPool().query<{ role: string; kind: string; content: string; status: string }>(
-    "SELECT role,kind,content,status FROM rfpilot.conversation_messages WHERE id=$1 AND conversation_id=$2",
-    [updated.answeredMessageId, conversationId],
-  );
-  assert.equal(message.rows.length, 1);
-  assert.equal(message.rows[0].role, "user");
-  assert.equal(message.rows[0].kind, "question_answer");
-  assert.equal(message.rows[0].content, answer);
-  assert.equal(message.rows[0].status, "complete");
+  // read() with a message present: the case the old attachments join broke on,
+  // so it is asserted through the repository rather than around it.
+  const state = await conversationRepository.read(ctx());
+  assert.equal(state.conversation.messageCount, 1, "the answer becomes the first conversation message");
+  assert.equal(state.messages.length, 1);
+  assert.equal(state.messages[0].id, updated.answeredMessageId);
+  assert.equal(state.messages[0].role, "user");
+  assert.equal(state.messages[0].kind, "question_answer");
+  assert.equal(state.messages[0].content, answer);
+  assert.equal(state.messages[0].status, "complete");
+  assert.deepEqual(state.messages[0].attachments, [], "no attachments, but the join still has to run");
 
-  const snapshot = await conversationRepository.snapshot(ctx());
-  assert.equal(snapshot.messageCount, 1, "the answer becomes the first conversation message");
-  assert.equal(snapshot.openQuestions, 0, "the answered question is no longer open");
-
-  const question = await postgresPool().query<{ status: string; answered_message_id: string }>(
-    "SELECT status,answered_message_id FROM rfpilot.clarification_questions WHERE id=$1",
-    [questionId],
+  const answered = state.questions.find((item) => item.id === questionId);
+  assert.equal(answered?.status, "answered");
+  assert.equal(answered?.answeredMessageId, updated.answeredMessageId);
+  assert.equal(
+    state.questions.filter((item) => item.status === "open").length,
+    fieldGapCount,
+    "the answered question is no longer open, the intake still is",
   );
-  assert.equal(question.rows[0].status, "answered");
-  assert.equal(question.rows[0].answered_message_id, updated.answeredMessageId);
 
   // A resolved question cannot be answered twice.
   await assert.rejects(
