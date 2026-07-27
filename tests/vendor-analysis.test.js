@@ -218,3 +218,28 @@ test("vendor analysis allows uncited findings only for a missing verdict", () =>
     rejects(finding({ verdict, citations: [] }), "LIVE_AI_CITATION_INVALID");
   }
 });
+
+test("cited vendor fragments are persisted, so a finding can be traced to its words", () => {
+  // Findings cited ids like "vendor-fragment-3" that were positions in an array
+  // existing only for the run. Nothing about those fragments was stored, so a
+  // citation resolved to nothing and the UI could show the claim but never its
+  // basis — while AI_LAYER.md described these as cited findings.
+  const repo = read("src/modules/vendorAnalysis/postgresVendorAnalysisRepository.ts");
+  assert.match(repo, /origin:string;locator:unknown/, "provenance travels with each fragment");
+  assert.match(repo, /INSERT INTO rfpilot\.vendor_analysis_evidence/, "cited fragments are persisted");
+  assert.match(repo, /ON CONFLICT \(run_id,fragment_id\) DO NOTHING/, "a re-executed run cannot duplicate evidence");
+
+  // Only cited fragments are stored: keeping all of them would copy the
+  // vendor's documents into Postgres for no benefit.
+  assert.match(repo, /const citedIds=new Set\(findings\.flatMap/, "only what was cited is kept");
+  assert.match(repo, /item\.text\.slice\(0,1000\)/, "an excerpt, not the whole fragment");
+  assert.match(repo, /SELECT fragment_id,origin,locator,excerpt/, "the read path returns it");
+
+  const migration = read("migrations/postgres/029_vendor_analysis_evidence.up.sql");
+  assert.match(migration, /FORCE ROW LEVEL SECURITY/, "tenant isolated like every other evidence table");
+  assert.match(migration, /UNIQUE \(run_id, fragment_id\)/);
+  assert.match(migration, /REFERENCES rfpilot\.vendor_analysis_runs\(id\)/, "expires with its run");
+  // Deliberately no delete-blocking trigger: migration 027 had to exempt every
+  // table that had one so retention could expire it.
+  assert.ok(!/CREATE TRIGGER/.test(migration), "no new delete guard for retention to undo");
+});
