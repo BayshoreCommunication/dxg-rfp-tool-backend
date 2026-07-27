@@ -14,6 +14,10 @@ import {
   assertAssistantProviderConfigured,
 } from "./config";
 import {
+  normalizeConversationalAssistantResponse,
+  validateAssistantProviderResponse,
+} from "./prompt";
+import {
   postgresAssistantAttemptLedger,
   type AssistantAttemptLedger,
   type AssistantAttemptOutcome,
@@ -109,14 +113,56 @@ const responseSchema = {
   additionalProperties: false,
   properties: {
     kind: { type: "string", enum: [...ASSISTANT_RESPONSE_KINDS] },
-    content: { type: "string" },
     citationIds: {
       type: "array",
       items: { type: "string" },
     },
+    content: { type: "string" },
   },
-  required: ["kind", "content", "citationIds"],
+  required: ["kind", "citationIds", "content"],
 } as const;
+
+const validateMetadataBeforeContent = (
+  rawOutput: string,
+  input: AssistantPromptInput,
+): void => {
+  const contentKey = /"content"\s*:\s*"/.exec(rawOutput);
+  if (!contentKey) {
+    throw new PlatformAssistantError(
+      "ASSISTANT_RESPONSE_INVALID",
+      "The provider returned invalid structured output.",
+      502,
+      true,
+    );
+  }
+  const prefix = rawOutput.slice(0, contentKey.index);
+  if (!/,\s*$/u.test(prefix)) {
+    throw new PlatformAssistantError(
+      "ASSISTANT_RESPONSE_INVALID",
+      "The provider returned invalid structured output.",
+      502,
+      true,
+    );
+  }
+  let metadata: unknown;
+  try {
+    metadata = JSON.parse(`${prefix}"content":"Validated metadata."}`);
+  } catch {
+    throw new PlatformAssistantError(
+      "ASSISTANT_RESPONSE_INVALID",
+      "The provider returned invalid structured output.",
+      502,
+      true,
+    );
+  }
+  validateAssistantProviderResponse(
+    normalizeConversationalAssistantResponse(
+      metadata,
+      input.userMessage,
+    ),
+    input.evidence,
+  );
+};
 
 const requestFor = (
   input: AssistantPromptInput,
@@ -180,6 +226,32 @@ const boundedProductDeltas = (value: string): string[] => {
   }
   return deltas;
 };
+
+class AssistantStreamTextNormalizer {
+  private started = false;
+  private pendingWhitespace = "";
+
+  feed(value: string): string {
+    let output = "";
+    for (const character of value) {
+      if (/\s/u.test(character)) {
+        if (this.started) this.pendingWhitespace += character;
+        continue;
+      }
+      if (this.pendingWhitespace) {
+        output += this.pendingWhitespace;
+        this.pendingWhitespace = "";
+      }
+      this.started = true;
+      output += character;
+    }
+    return output;
+  }
+
+  finish(): void {
+    this.pendingWhitespace = "";
+  }
+}
 
 /**
  * Extracts only the JSON string value at the top-level `content` key. Provider
@@ -530,10 +602,12 @@ export class OpenAiAssistantProvider
       let effectiveModel = configured.config.model;
       let emittedText = false;
       let emittedStarted = false;
+      let metadataValidated = false;
       let streamedContent = "";
       let rawOutput = "";
       let timeoutAborted = false;
       const extractor = new AssistantJsonContentExtractor();
+      const contentNormalizer = new AssistantStreamTextNormalizer();
       const controller = new AbortController();
       const forwardAbort = () => controller.abort();
       options.signal.addEventListener("abort", forwardAbort, { once: true });
@@ -572,6 +646,11 @@ export class OpenAiAssistantProvider
             rawOutput += delta;
             const decoded = extractor.feed(delta);
             if (decoded) {
+              if (!metadataValidated) {
+                validateMetadataBeforeContent(rawOutput, input);
+                metadataValidated = true;
+              }
+              const normalized = contentNormalizer.feed(decoded);
               if (!emittedStarted) {
                 emittedStarted = true;
                 yield {
@@ -580,7 +659,7 @@ export class OpenAiAssistantProvider
                   model: effectiveModel,
                 };
               }
-              for (const productDelta of boundedProductDeltas(decoded)) {
+              for (const productDelta of boundedProductDeltas(normalized)) {
                 if (!productDelta) continue;
                 streamedContent += productDelta;
                 emittedText = true;
@@ -604,6 +683,11 @@ export class OpenAiAssistantProvider
               rawOutput = finalOutput;
               const decoded = extractor.feed(finalOutput);
               if (decoded) {
+                if (!metadataValidated) {
+                  validateMetadataBeforeContent(rawOutput, input);
+                  metadataValidated = true;
+                }
+                const normalized = contentNormalizer.feed(decoded);
                 if (!emittedStarted) {
                   emittedStarted = true;
                   yield {
@@ -612,7 +696,7 @@ export class OpenAiAssistantProvider
                     model: effectiveModel,
                   };
                 }
-                for (const productDelta of boundedProductDeltas(decoded)) {
+                for (const productDelta of boundedProductDeltas(normalized)) {
                   if (!productDelta) continue;
                   streamedContent += productDelta;
                   emittedText = true;
@@ -621,6 +705,7 @@ export class OpenAiAssistantProvider
               }
             }
             extractor.finish();
+            contentNormalizer.finish();
             let output: unknown;
             try {
               output = JSON.parse(finalOutput);
@@ -634,7 +719,7 @@ export class OpenAiAssistantProvider
             const outputRecord = record(output);
             if (
               !outputRecord ||
-              text(outputRecord.content) !== streamedContent ||
+              text(outputRecord.content).trim() !== streamedContent ||
               streamedContent.length > ASSISTANT_RESPONSE_MAX_CHARACTERS ||
               !Array.isArray(outputRecord.citationIds) ||
               outputRecord.citationIds.length > ASSISTANT_RESPONSE_MAX_CITATIONS
@@ -645,6 +730,13 @@ export class OpenAiAssistantProvider
                 502,
               );
             }
+            validateAssistantProviderResponse(
+              normalizeConversationalAssistantResponse(
+                output,
+                input.userMessage,
+              ),
+              input.evidence,
+            );
             if (!emittedStarted) {
               emittedStarted = true;
               yield {

@@ -267,6 +267,39 @@ test("greeting-only uncited answer completes as a safe clarification", async () 
   });
 });
 
+test("invalid provider output with no visible delta completes as a safe fallback", async () => {
+  await withEnabledAssistant(async () => {
+    const setupResult = setup([
+      {
+        type: "failed",
+        providerResponseId: "resp_invalid",
+        model: "effective-model",
+        code: "ASSISTANT_RESPONSE_INVALID",
+        message: "The provider returned invalid structured output.",
+        retryable: true,
+      },
+    ]);
+    const { events, result } = await invoke(setupResult.application);
+    const terminal = setupResult.updates.at(-1);
+
+    assert.deepEqual(
+      events.map((event) => event.type),
+      [
+        "message.accepted",
+        "response.started",
+        "response.delta",
+        "response.completed",
+      ],
+    );
+    assert.equal(setupResult.updates[0].status, "streaming");
+    assert.equal(terminal.status, "complete");
+    assert.match(terminal.content, /enough approved guidance/i);
+    assert.deepEqual(terminal.citations, []);
+    assert.equal(terminal.safeErrorCode, undefined);
+    assert.equal(result.assistantMessage.status, "complete");
+  });
+});
+
 test("a supplied response-attempt key is independent from the user-message key", async () => {
   await withEnabledAssistant(async () => {
     const setupResult = setup([]);

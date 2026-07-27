@@ -15,7 +15,7 @@ const context = {
 
 const prompt = {
   schemaVersion: "platform-assistant-prompt.v2",
-  platformKnowledgeVersion: "rfpilot-platform-map.v1",
+  platformKnowledgeVersion: "rfpilot-platform-map.v2",
   userMessage: "Where are proposals?",
   history: [],
   evidence: [
@@ -67,8 +67,8 @@ const withProviderEnvironment = async (work, overrides = {}) => {
 
 const outputJson = JSON.stringify({
   kind: "answer",
-  content: "Open Proposals.\nReady 😀",
   citationIds: ["platform:navigation:proposals"],
+  content: "Open Proposals.\nReady 😀",
 });
 
 const completedEvents = () => [
@@ -246,6 +246,152 @@ test("temporary provider failure retries only before a text delta", async () => 
   });
 });
 
+test("invalid citation metadata retries before any product text is emitted", async () => {
+  await withProviderEnvironment(async () => {
+    let calls = 0;
+    const outcomes = [];
+    const invalid = JSON.stringify({
+      kind: "answer",
+      citationIds: [],
+      content: "Unsupported event-planning advice.",
+    });
+    const provider = new OpenAiAssistantProvider({
+      ledger: {
+        async begin() {
+          const attemptNumber = outcomes.length + 1;
+          return {
+            id: `attempt-${attemptNumber}`,
+            fingerprint: `fingerprint-${attemptNumber}`,
+            attemptNumber,
+            context: {
+              runType: "platform_assistant",
+              runId: "01890b2e-58b1-7c7e-9b0a-1a2b3c4d5e71",
+              organizationId: "01890b2e-58b1-7c7e-9b0a-1a2b3c4d5e72",
+            },
+          };
+        },
+        async complete(_attempt, outcome) {
+          outcomes.push(outcome);
+        },
+      },
+      async streamFactory() {
+        calls += 1;
+        if (calls === 1) {
+          return iterable([
+            {
+              type: "response.created",
+              response: { id: "resp_invalid", model: "effective-model" },
+            },
+            { type: "response.output_text.delta", delta: invalid },
+            {
+              type: "response.completed",
+              response: {
+                id: "resp_invalid",
+                model: "effective-model",
+                output_text: invalid,
+              },
+            },
+          ]);
+        }
+        return iterable(completedEvents());
+      },
+      async sleep() {},
+      random: () => 0,
+    });
+    const events = await collect(provider);
+
+    assert.equal(calls, 2);
+    assert.deepEqual(
+      outcomes.map((outcome) => [outcome.state, outcome.errorCode || null]),
+      [
+        ["failed", "ASSISTANT_RESPONSE_INVALID"],
+        ["succeeded", null],
+      ],
+    );
+    assert.equal(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => event.delta)
+        .join(""),
+      "Open Proposals.\nReady 😀",
+    );
+    assert.equal(events.at(-1).type, "completed");
+  });
+});
+
+test("whitespace-only content retries without exposing a partial response", async () => {
+  await withProviderEnvironment(async () => {
+    let calls = 0;
+    const outcomes = [];
+    const whitespace = JSON.stringify({
+      kind: "abstention",
+      citationIds: [],
+      content: " ",
+    });
+    const provider = new OpenAiAssistantProvider({
+      ledger: {
+        async begin() {
+          const attemptNumber = outcomes.length + 1;
+          return {
+            id: `attempt-${attemptNumber}`,
+            fingerprint: `fingerprint-${attemptNumber}`,
+            attemptNumber,
+            context: {
+              runType: "platform_assistant",
+              runId: "01890b2e-58b1-7c7e-9b0a-1a2b3c4d5e71",
+              organizationId: "01890b2e-58b1-7c7e-9b0a-1a2b3c4d5e72",
+            },
+          };
+        },
+        async complete(_attempt, outcome) {
+          outcomes.push(outcome);
+        },
+      },
+      async streamFactory() {
+        calls += 1;
+        if (calls === 1) {
+          return iterable([
+            {
+              type: "response.created",
+              response: { id: "resp_whitespace", model: "effective-model" },
+            },
+            { type: "response.output_text.delta", delta: whitespace },
+            {
+              type: "response.completed",
+              response: {
+                id: "resp_whitespace",
+                model: "effective-model",
+                output_text: whitespace,
+              },
+            },
+          ]);
+        }
+        return iterable(completedEvents());
+      },
+      async sleep() {},
+      random: () => 0,
+    });
+    const events = await collect(provider);
+
+    assert.equal(calls, 2);
+    assert.deepEqual(
+      outcomes.map((outcome) => [outcome.state, outcome.errorCode || null]),
+      [
+        ["failed", "ASSISTANT_RESPONSE_INVALID"],
+        ["succeeded", null],
+      ],
+    );
+    assert.equal(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => event.delta)
+        .join(""),
+      "Open Proposals.\nReady 😀",
+    );
+    assert.equal(events.at(-1).type, "completed");
+  });
+});
+
 test("failure after a text delta is interrupted and never retried", async () => {
   await withProviderEnvironment(async () => {
     let calls = 0;
@@ -278,7 +424,8 @@ test("failure after a text delta is interrupted and never retried", async () => 
           },
           {
             type: "response.output_text.delta",
-            delta: '{"kind":"answer","content":"Partial text',
+            delta:
+              '{"kind":"answer","citationIds":["platform:navigation:proposals"],"content":"Partial text',
           },
           {
             type: "error",

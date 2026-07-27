@@ -1,6 +1,6 @@
 import type { AssistantPromptEvidence } from "./domain";
 
-export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v1";
+export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v2";
 
 type PlatformFact = Omit<AssistantPromptEvidence, "sourceType" | "trust" | "releaseId"> & {
   keywords: readonly string[];
@@ -21,6 +21,32 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = Object.freeze([
       "The platform AI Assistant provides general guidance and does not automatically read a specific proposal. Work on a specific proposal belongs in that proposal's dedicated assistant at /proposals/{proposalId}/assistant.",
     href: "/proposals",
     keywords: ["proposal assistant", "specific proposal", "my proposal", "this proposal", "difference"],
+  },
+  {
+    id: "platform:event:planning-brief",
+    title: "Event planning brief",
+    content:
+      "Before planning an event, gather the event purpose, dates and timings, venue or city, expected attendee count, audience type, room and session schedule, speaker or presenter needs, registration flow, audio, video, lighting, staging, internet or streaming, recording, accessibility, catering, staffing, security, transport, budget range, decision owners, and approval deadlines. Exact quantities such as speaker count, staffing, or equipment depend on the agenda, venue, service level, and production scope.",
+    keywords: [
+      "event",
+      "event planning",
+      "planning",
+      "checklist",
+      "gather",
+      "attendee",
+      "attendees",
+      "venue",
+      "speaker",
+      "speakers",
+      "production",
+      "av",
+      "ইভেন্ট",
+      "পরিকল্পনা",
+      "তথ্য",
+      "অতিথি",
+      "ভেন্যু",
+      "স্পিকার",
+    ],
   },
   {
     id: "platform:navigation:dashboard",
@@ -83,7 +109,7 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = Object.freeze([
 const normalizedTerms = (value: string): string[] =>
   value
     .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
     .split(/\s+/)
     .filter((term) => term.length > 1);
 

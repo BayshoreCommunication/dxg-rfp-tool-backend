@@ -96,6 +96,9 @@ const failureMessage = (code: string): string => {
   }
 };
 
+const SAFE_VALIDATION_FALLBACK =
+  "I don’t have enough approved guidance to answer that reliably yet. Try asking about RFPilot navigation, proposals, proposal workflows, email, settings, vendor responses, or event-planning basics.";
+
 export const createPlatformAssistantStreamingApplication = (
   repository: PlatformAssistantRepository,
   dependencies: {
@@ -328,6 +331,60 @@ export const createPlatformAssistantStreamingApplication = (
           providerResponseId =
             event.providerResponseId || providerResponseId;
           effectiveModel = event.model || effectiveModel;
+          if (
+            event.code === "ASSISTANT_RESPONSE_INVALID" &&
+            !accumulated &&
+            !input.signal.aborted
+          ) {
+            if (!started) {
+              started = true;
+              await input.emit({
+                type: "response.started",
+                version: 1,
+                assistantMessageId: placeholder.message.id,
+              });
+            }
+            if (!streamingPersisted) {
+              assistantMessage = await repository.updateAssistantMessage({
+                ...context,
+                threadId,
+                messageId: placeholder.message.id,
+                status: "streaming",
+                content: "",
+                providerResponseId,
+                model: effectiveModel,
+              });
+              streamingPersisted = true;
+            }
+            accumulated = SAFE_VALIDATION_FALLBACK;
+            await input.emit({
+              type: "response.delta",
+              version: 1,
+              assistantMessageId: placeholder.message.id,
+              delta: accumulated,
+            });
+            assistantMessage = await repository.updateAssistantMessage({
+              ...context,
+              threadId,
+              messageId: placeholder.message.id,
+              status: "complete",
+              content: accumulated,
+              citations: [],
+              providerResponseId,
+              model: effectiveModel,
+            });
+            await input.emit({
+              type: "response.completed",
+              version: 1,
+              message: assistantMessage,
+              correlationId: context.correlationId,
+            });
+            return {
+              userMessage: accepted.message,
+              assistantMessage,
+              knowledge: knowledge.status,
+            };
+          }
           return persistFailure(event);
         }
 

@@ -101,7 +101,7 @@ const withEnabledAssistant = async (work) => {
 };
 
 test("platform map is versioned, bounded, and contains internal routes only", () => {
-  assert.equal(PLATFORM_KNOWLEDGE_VERSION, "rfpilot-platform-map.v1");
+  assert.equal(PLATFORM_KNOWLEDGE_VERSION, "rfpilot-platform-map.v2");
   assert.ok(PLATFORM_FACTS.length >= 8);
   assert.equal(new Set(PLATFORM_FACTS.map((fact) => fact.id)).size, PLATFORM_FACTS.length);
   for (const fact of PLATFORM_FACTS) {
@@ -113,6 +113,16 @@ test("platform map is versioned, bounded, and contains internal routes only", ()
   assert.ok(selected.length <= 3);
   assert.ok(selected.some((fact) => fact.id === "platform:navigation:vendor-responses"));
   assert.ok(selected.every((fact) => fact.trust === "trusted_platform_fact"));
+  assert.ok(
+    platformFactsForQuery(
+      "What information should I gather before planning an event?",
+    ).some((fact) => fact.id === "platform:event:planning-brief"),
+  );
+  assert.ok(
+    platformFactsForQuery(
+      "১৫০০ জনের ইভেন্টের জন্য কী কী তথ্য আগে সংগ্রহ করব?",
+    ).some((fact) => fact.id === "platform:event:planning-brief"),
+  );
 });
 
 test("prompt builder bounds history and labels retrieved guidance as untrusted", () => {
