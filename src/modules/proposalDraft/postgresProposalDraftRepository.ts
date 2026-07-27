@@ -345,6 +345,21 @@ export const proposalDraftRepository = {
       };
     });
   },
+  /* The export needs the event name for its title and filename. Kept here
+     rather than in the controller: controllers must not import persistence
+     models (enforced by tests/repository-baseline.test.js), and this module
+     already owns the Proposal reader. */
+  async readForExport(input: { organizationMongoId: string; actorUserMongoId: string; correlationId: string; proposalMongoId: string }) {
+    const draft = await this.read(input);
+    const proposal = await Proposal.findOne({
+      _id: input.proposalMongoId,
+      userId: input.actorUserMongoId,
+      organizationId: input.organizationMongoId,
+    })
+      .select("event.eventName")
+      .lean<{ event?: { eventName?: string } }>();
+    return { draft, eventName: proposal?.event?.eventName ?? null };
+  },
   decideSection(input: {
     organizationMongoId: string;
     actorUserMongoId: string;
