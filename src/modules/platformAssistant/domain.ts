@@ -133,6 +133,7 @@ export class PlatformAssistantError extends Error {
     message: string,
     public readonly status = 422,
     public readonly retryable = false,
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
   }

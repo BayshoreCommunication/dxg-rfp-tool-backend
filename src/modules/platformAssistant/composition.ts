@@ -1,7 +1,9 @@
 import { createPlatformAssistantApplication } from "./application";
 import { approvedKnowledgeSource } from "./approvedKnowledgeSource";
 import { deterministicAssistantProvider } from "./deterministicAssistantProvider";
+import { openAiAssistantProvider } from "./openAiAssistantProvider";
 import { postgresAssistantRepository } from "./postgresAssistantRepository";
+import { createPlatformAssistantStreamingApplication } from "./streamingApplication";
 
 export const platformAssistantRepository = postgresAssistantRepository;
 export const platformAssistantApplication = createPlatformAssistantApplication(
@@ -11,3 +13,9 @@ export const platformAssistantApplication = createPlatformAssistantApplication(
     responseProvider: deterministicAssistantProvider,
   },
 );
+
+export const platformAssistantStreamingApplication =
+  createPlatformAssistantStreamingApplication(platformAssistantRepository, {
+    knowledgeSource: approvedKnowledgeSource,
+    responseProvider: openAiAssistantProvider,
+  });

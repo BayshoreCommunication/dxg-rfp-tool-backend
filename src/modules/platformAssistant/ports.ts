@@ -41,6 +41,52 @@ export interface AssistantResponseProvider {
   generate(input: AssistantPromptInput): Promise<unknown>;
 }
 
+export type AssistantProviderUsage = {
+  inputTokens: number;
+  outputTokens: number;
+};
+
+export type AssistantProviderEvent =
+  | {
+      type: "started";
+      providerResponseId: string;
+      model: string;
+    }
+  | {
+      type: "text_delta";
+      delta: string;
+    }
+  | {
+      type: "completed";
+      providerResponseId: string;
+      model: string;
+      usage: AssistantProviderUsage;
+      output: unknown;
+    }
+  | {
+      type: "failed";
+      providerResponseId: string | null;
+      model: string;
+      code: string;
+      message: string;
+      retryable: boolean;
+      retryAfterSeconds?: number;
+      aborted?: boolean;
+    };
+
+export interface AssistantStreamingResponseProvider {
+  readonly provider: string;
+  readonly model: string;
+  stream(
+    input: AssistantPromptInput,
+    options: {
+      context: PlatformAssistantContext;
+      assistantMessageId: string;
+      signal: AbortSignal;
+    },
+  ): AsyncIterable<AssistantProviderEvent>;
+}
+
 export type PlatformAssistantGuidanceDependencies = {
   knowledgeSource: AssistantKnowledgeSource;
   responseProvider: AssistantResponseProvider;
