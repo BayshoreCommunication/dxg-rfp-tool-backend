@@ -8,7 +8,7 @@
     "dev:proposal-context": "nodemon --exec 'env NODE_ENV=test ts-node' server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "lint": "eslint src contracts config/postgres.ts scripts/migrateProposalV1.ts scripts/migrateDxgOrganization.ts scripts/migrateOrganizationMemberships.ts scripts/migratePostgres.ts scripts/backfillPostgresProposalReferences.ts scripts/verifyAuthRefreshE2E.ts scripts/verifyDocumentIngestionE2E.ts scripts/verifyDurableJobsE2E.ts scripts/verifyKnowledgeIngestionE2E.ts scripts/verifyKnowledgeReviewE2E.ts scripts/verifyKnowledgeRetrievalE2E.ts scripts/verifyProposalContextE2E.ts scripts/startDurableWorker.ts scripts/startDurableDispatcher.ts scripts/startAiGatewayWorker.ts --max-warnings=0",
+    "lint": "eslint src contracts config/postgres.ts scripts/migrateProposalV1.ts scripts/migrateDxgOrganization.ts scripts/migrateOrganizationMemberships.ts scripts/migratePostgres.ts scripts/backfillPostgresProposalReferences.ts scripts/verifyAuthRefreshE2E.ts scripts/verifyDocumentIngestionE2E.ts scripts/verifyDurableJobsE2E.ts scripts/verifyKnowledgeIngestionE2E.ts scripts/verifyKnowledgeReviewE2E.ts scripts/verifyKnowledgeRetrievalE2E.ts scripts/verifyProposalContextE2E.ts scripts/verifyRetentionSweepE2E.ts scripts/startDurableWorker.ts scripts/startDurableDispatcher.ts scripts/startAiGatewayWorker.ts --max-warnings=0",
     "type-check": "tsc --noEmit",
     "test": "node --test --require ts-node/register tests/*.test.js",
     "contracts:generate": "node scripts/generateContracts.mjs",
@@ -40,7 +40,8 @@
     "integration:down": "docker compose -p rfpilotintg -f deploy/integration/docker-compose.yml down -v",
     "test:integration": "INTEGRATION=1 node --test --require ts-node/register --test-concurrency=1 tests-integration/*.test.ts",
     "dev:worker": "nodemon --quiet --watch src --watch config --watch modal --watch contracts --ext ts --exec ts-node scripts/startDurableWorker.ts",
-    "dev:dispatcher": "nodemon --quiet --watch src --watch config --ext ts --exec ts-node scripts/startDurableDispatcher.ts"
+    "dev:dispatcher": "nodemon --quiet --watch src --watch config --ext ts --exec ts-node scripts/startDurableDispatcher.ts",
+    "verify:retention-sweep": "ts-node scripts/verifyRetentionSweepE2E.ts"
   },
   "keywords": [
     "express",
