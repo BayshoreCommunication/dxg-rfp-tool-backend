@@ -104,3 +104,31 @@ test("every step status agrees with the phase it was derived from",()=>{
 test("one authoritative state drives the next beginner action",()=>{assert.equal(deriveWorkflowState(facts({openQuestionCount:2})).nextAction,"answer_questions");assert.equal(deriveWorkflowState(facts({answeredQuestionCount:5})).nextAction,"generate_draft");assert.equal(deriveWorkflowState(facts({draftStatus:"running"})).phase,"drafting");assert.equal(deriveWorkflowState(facts({draftStatus:"succeeded"})).phase,"reviewing");assert.equal(deriveWorkflowState(facts({draftStatus:"succeeded",guidanceBlockingCount:1})).phase,"improving");assert.equal(deriveWorkflowState(facts({draftStatus:"succeeded",acceptedSectionCount:4})).phase,"ready");});
 test("workflow step validation is deny by default",()=>{assert.equal(parseStep(5),5);assert.throws(()=>parseStep(6),ProposalWorkflowError);assert.throws(()=>parseStep("x"),ProposalWorkflowError);});
 test("workflow is test-only",()=>{const oldNode=process.env.NODE_ENV,oldFlag=process.env.PROPOSAL_WORKFLOW_ENABLED;process.env.NODE_ENV="production";process.env.PROPOSAL_WORKFLOW_ENABLED="true";assert.equal(proposalWorkflowEnabled(),false);process.env.NODE_ENV="test";assert.equal(proposalWorkflowEnabled(),true);process.env.NODE_ENV=oldNode;process.env.PROPOSAL_WORKFLOW_ENABLED=oldFlag;});
+
+test("the Mongo publish read does not delay the Postgres work",()=>{
+ // Whether the RFP has gone out is authoritative in Mongo, so the published
+ // phase needs a read the workflow never used to make. Awaiting it before
+ // opening the transaction — as the first version did — paid its full round
+ // trip on top of the Postgres one for no reason; neither read depends on the
+ // other. This checks the shape; tests-integration/proposal-workflow.test.ts
+ // proves the ordering against real Postgres and Mongo, and fails if the two
+ // reads are made sequential again.
+ const source=require("node:fs").readFileSync(
+  require("node:path").join(__dirname,"..","src/modules/proposalWorkflow/postgresProposalWorkflowRepository.ts"),"utf8");
+ const parallel=source.indexOf("Promise.all([");
+ assert.ok(parallel>0,"the two reads are issued together");
+ assert.match(source.slice(parallel,parallel+400),/publishStatus\(/);
+ assert.match(source.slice(parallel,parallel+400),/withPostgresTransaction\(/);
+ assert.ok(!/const publish=await publishStatus/.test(source),"nothing awaits Mongo before the transaction");
+
+ // Deriving labels is pure, so it happens after the connection is released
+ // rather than while it is held open.
+ assert.ok(source.indexOf("const present=")<source.indexOf("export const proposalWorkflowRepository"));
+ assert.ok(!/withPostgresTransaction\(async c=>\{[\s\S]*?deriveWorkflowState\(/.test(source),"no presentation inside the transaction");
+
+ // The publish status is read from Mongo, NOT mirrored onto proposal_references:
+ // that mirror is best-effort and behind PROPOSAL_REFERENCE_DUAL_WRITE_ENABLED,
+ // so serving it from there would report every proposal unpublished whenever
+ // the dual write is off.
+ assert.match(source,/Proposal\.findOne\(\{_id:proposalMongoId,userId:actorUserMongoId\}\)\.select\("status"\)/);
+});
