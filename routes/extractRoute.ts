@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { extractProposal, extractUpload } from "../controller/extractController";
+import { extractProposal, extractUpload, normalizeTimes } from "../controller/extractController";
 import { authenticate, authorizeAction } from "../middleware/auth";
 import { securityRateLimit } from "../middleware/securityRateLimit";
 
@@ -14,6 +14,14 @@ router.post(
   securityRateLimit({ name: "extract-proposal", limit: 20, windowMs: 15 * 60_000 }),
   extractUpload.single("file"),
   extractProposal,
+);
+
+router.post(
+  "/normalize-times",
+  authenticate,
+  authorizeAction("proposal:write"),
+  securityRateLimit({ name: "normalize-times", limit: 60, windowMs: 15 * 60_000 }),
+  normalizeTimes,
 );
 
 export default router;

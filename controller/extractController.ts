@@ -1,7 +1,8 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import multer from "multer";
-import { extractProposalDocument } from "../src/modules/extraction/composition";
+import { extractProposalDocument, normalizeScheduleTimes } from "../src/modules/extraction/composition";
+import { MAX_VALUES } from "../src/modules/extraction/application/normalizeScheduleTimes";
 import {
   assertLegacyExtractionReady,
   LegacyExtractionError,
@@ -96,5 +97,42 @@ export const extractProposal = async (
       success: false,
       message: "Error extracting proposal data from document.",
     });
+  }
+};
+
+/* POST /api/extract-proposal/normalize-times
+   The dashboard has called this since the schedule-upload feature shipped and
+   the route never existed, so every call 404'd and the client silently dropped
+   the times it could not parse locally. Governed like the extraction endpoint:
+   it can reach a live provider. */
+export const normalizeTimes = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    assertLegacyExtractionReady();
+    const values = (req.body as { values?: unknown })?.values;
+    if (!Array.isArray(values)) {
+      res.status(422).json({ success: false, message: "values must be an array of time strings." });
+      return;
+    }
+    if (values.length > MAX_VALUES) {
+      res.status(422).json({ success: false, message: "Send at most " + MAX_VALUES + " values." });
+      return;
+    }
+    const results = await normalizeScheduleTimes(values);
+    safeLog("info", "normalize_times_completed", {
+      outcome: "success",
+      provider: "openai",
+      model: LEGACY_EXTRACTION_MODEL,
+    });
+    res.status(200).json({ success: true, data: { results } });
+  } catch (error) {
+    if (error instanceof LegacyExtractionError) {
+      res.status(error.status).json({ success: false, message: error.message, errorCode: error.code });
+      return;
+    }
+    safeLog("error", "normalize_times_failed", { outcome: "failure" });
+    res.status(500).json({ success: false, message: "Times could not be normalized." });
   }
 };

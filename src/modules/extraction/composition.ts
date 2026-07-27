@@ -1,4 +1,5 @@
 import { createExtractProposalDocument } from "./application/extractProposalDocument";
+import { createNormalizeScheduleTimes } from "./application/normalizeScheduleTimes";
 import { legacyOpenAiProposalExtractionModel } from "./infrastructure/openai/legacyOpenAiProposalExtractionModel";
 import { legacyDocumentTextExtractor } from "./infrastructure/parsers/legacyDocumentTextExtractor";
 import { versionedExtractionPromptRegistry } from "./infrastructure/prompts/versionedExtractionPromptRegistry";
@@ -10,3 +11,5 @@ export const extractProposalDocument = createExtractProposalDocument({
   prompts: versionedExtractionPromptRegistry,
   outputValidator: ajvLegacyExtractionOutputValidator,
 });
+
+export const normalizeScheduleTimes = createNormalizeScheduleTimes(legacyOpenAiProposalExtractionModel);
