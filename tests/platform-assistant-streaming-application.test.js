@@ -65,7 +65,9 @@ const withEnabledAssistant = async (work) => {
 };
 
 const setup = (providerEvents, options = {}) => {
-  const user = message();
+  const user = message({
+    content: options.userContent || "Where are proposals?",
+  });
   const pending = message({
     id: "01890b2e-58b1-7c7e-9b0a-1a2b3c4d5e71",
     ordinal: 2,
@@ -151,11 +153,12 @@ const invoke = async (
   application,
   signal = new AbortController().signal,
   responseIdempotencyKey,
+  content = "Where are proposals?",
 ) => {
   const events = [];
   const result = await application.streamGuidance(context, {
     threadId,
-    body: { content: "Where are proposals?" },
+    body: { content },
     idempotencyKey: "stream-app-test",
     ...(responseIdempotencyKey ? { responseIdempotencyKey } : {}),
     signal,
@@ -220,6 +223,46 @@ test("streaming application persists only lifecycle boundaries and completes ato
       setupResult.updates[1].citations[0].sourceId,
       "platform:navigation:proposals",
     );
+    assert.equal(result.assistantMessage.status, "complete");
+  });
+});
+
+test("greeting-only uncited answer completes as a safe clarification", async () => {
+  await withEnabledAssistant(async () => {
+    const content = "Hello! How can I help?";
+    const setupResult = setup(
+      [
+        {
+          type: "started",
+          providerResponseId: "resp_greeting",
+          model: "effective-model",
+        },
+        { type: "text_delta", delta: content },
+        {
+          type: "completed",
+          providerResponseId: "resp_greeting",
+          model: "effective-model",
+          usage: { inputTokens: 8, outputTokens: 6 },
+          output: {
+            kind: "answer",
+            content,
+            citationIds: [],
+          },
+        },
+      ],
+      { userContent: "hello" },
+    );
+    const { events, result } = await invoke(
+      setupResult.application,
+      new AbortController().signal,
+      undefined,
+      "hello",
+    );
+
+    assert.equal(events.at(-1).type, "response.completed");
+    assert.equal(setupResult.updates.at(-1).status, "complete");
+    assert.equal(setupResult.updates.at(-1).content, content);
+    assert.deepEqual(setupResult.updates.at(-1).citations, []);
     assert.equal(result.assistantMessage.status, "complete");
   });
 });

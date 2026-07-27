@@ -15,6 +15,7 @@ const {
 } = require("../src/modules/platformAssistant/platformKnowledge");
 const {
   buildAssistantPromptInput,
+  normalizeConversationalAssistantResponse,
   validateAssistantProviderResponse,
 } = require("../src/modules/platformAssistant/prompt");
 const {
@@ -205,6 +206,42 @@ test("provider response validation enforces citations and safe internal links", 
         error.code === "ASSISTANT_RESPONSE_INVALID",
     );
   }
+});
+
+test("greeting-only uncited answers normalize without weakening substantive validation", () => {
+  const greeting = {
+    kind: "answer",
+    content: "Hello! How can I help?",
+    citationIds: [],
+  };
+  assert.deepEqual(
+    normalizeConversationalAssistantResponse(greeting, "hello"),
+    { ...greeting, kind: "clarification" },
+  );
+  assert.deepEqual(
+    normalizeConversationalAssistantResponse(greeting, "হ্যালো!"),
+    { ...greeting, kind: "clarification" },
+  );
+  assert.deepEqual(
+    normalizeConversationalAssistantResponse(
+      greeting,
+      "Explain the proposal workflow.",
+    ),
+    greeting,
+  );
+  assert.throws(
+    () =>
+      validateAssistantProviderResponse(
+        normalizeConversationalAssistantResponse(
+          greeting,
+          "Explain the proposal workflow.",
+        ),
+        [],
+      ),
+    (error) =>
+      error instanceof PlatformAssistantError &&
+      error.code === "ASSISTANT_RESPONSE_INVALID",
+  );
 });
 
 test("approved knowledge adapter forces operating guidance and degrades safely", async () => {

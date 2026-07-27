@@ -14,6 +14,7 @@ import {
 import { platformFactsForQuery } from "./platformKnowledge";
 import {
   buildAssistantPromptInput,
+  normalizeConversationalAssistantResponse,
   validateAssistantProviderResponse,
 } from "./prompt";
 import type {
@@ -333,7 +334,10 @@ export const createPlatformAssistantStreamingApplication = (
         providerResponseId = event.providerResponseId;
         effectiveModel = event.model;
         const validated = validateAssistantProviderResponse(
-          event.output,
+          normalizeConversationalAssistantResponse(
+            event.output,
+            accepted.message.content,
+          ),
           prompt.evidence,
         );
         if (validated.content !== accumulated) {

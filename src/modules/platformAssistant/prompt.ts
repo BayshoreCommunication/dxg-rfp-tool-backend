@@ -109,6 +109,57 @@ const invalidResponse = (): never => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
+const conversationalOpeners = new Set([
+  "hello",
+  "hello there",
+  "hi",
+  "hey",
+  "good morning",
+  "good afternoon",
+  "good evening",
+  "thanks",
+  "thank you",
+  "salam",
+  "assalamu alaikum",
+  "হ্যালো",
+  "হাই",
+  "সালাম",
+  "আসসালামু আলাইকুম",
+  "ধন্যবাদ",
+]);
+
+const isConversationalOpener = (value: string): boolean => {
+  const normalized = value
+    .normalize("NFKC")
+    .trim()
+    .toLocaleLowerCase("en-US")
+    .replace(/[!,.?।]+$/gu, "")
+    .trim();
+  return conversationalOpeners.has(normalized);
+};
+
+/**
+ * Greeting-only turns make no platform claim and therefore require no
+ * evidence. Some strict-schema models still classify them as `answer`; narrow
+ * that single no-citation case to `clarification` without weakening grounded
+ * answer validation for substantive requests.
+ */
+export const normalizeConversationalAssistantResponse = (
+  value: unknown,
+  userMessage: string,
+): unknown => {
+  if (
+    !isConversationalOpener(userMessage) ||
+    !isRecord(value) ||
+    value.kind !== "answer" ||
+    !Array.isArray(value.citationIds) ||
+    value.citationIds.length !== 0
+  ) {
+    return value;
+  }
+  return { ...value, kind: "clarification" };
+};
+
 export type ValidatedAssistantResponse = AssistantProviderResponse & {
   citations: AssistantCitation[];
 };
