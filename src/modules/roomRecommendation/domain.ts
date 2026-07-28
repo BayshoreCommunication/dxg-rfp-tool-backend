@@ -12,7 +12,9 @@ export const SCHEMA_VERSION = "room-recommendation.v1";
 // empty fields became the default flow. Bumping the engine version changes
 // the generation fingerprint, so proposals regenerate instead of replaying
 // stored v1 payloads whose eligibility flags predate the policy.
-export const ENGINE_VERSION = "room-rules.v2";
+// v3: multi-function physical rooms use every function for core-fact and
+// schedule validation, while shared AV sizing uses peak function attendance.
+export const ENGINE_VERSION = "room-rules.v3";
 
 /**
  * Every generated value carries exactly one classification. Only the first two

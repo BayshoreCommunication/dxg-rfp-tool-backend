@@ -155,6 +155,10 @@ export const patchConversationQuestion = async (req: AuthRequest, res: Response)
       answer: update.answer,
       appliedPath: appliedField?.path ?? null,
     });
+    await conversationRepository.appendRoomScheduleSuggestionWhenReady({
+      ...ctx,
+      proposalMongoId,
+    }).catch(() => undefined);
     res.json({ data: { ...result, appliedField } });
   } catch (error) { handle(res, error); }
 };

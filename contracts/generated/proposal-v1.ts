@@ -105,10 +105,22 @@ export interface Room {
   rehearsalAt?: DateTime;
   showStartAt?: DateTime;
   showEndAt?: DateTime;
+  /**
+   * @maxItems 500
+   */
+  scheduleEntries?: RoomScheduleEntry[];
   audio?: AudioRequirements;
   video?: VideoRequirements;
   lighting?: LightingRequirements;
   production?: RoomProduction;
+}
+export interface RoomScheduleEntry {
+  function: string;
+  setup?: string;
+  scheduleDate?: Date;
+  estimatedAttendees?: NonNegativeInteger;
+  showStartAt?: DateTime;
+  showEndAt?: DateTime;
 }
 export interface AudioRequirements {
   systemRequired?: NullableBoolean;

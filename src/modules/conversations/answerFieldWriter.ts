@@ -1,5 +1,6 @@
 import Proposal from "../../../modal/proposalsModel";
 import { normalizeCandidate } from "../candidateApplication/canonicalMapping";
+import { resolveVenueLocation } from "./venueLocationResolver";
 
 export type AppliedAnswerField = { path: string; mongoPath: string; value: unknown };
 
@@ -17,9 +18,29 @@ export const applyAnswerToProposalField = async (input: {
   path: string;
   answer: string;
 }): Promise<AppliedAnswerField | null> => {
-  const normalized = normalizeCandidate(input.path, input.answer);
+  const location = input.path === "/content/venueSchedule/venueCity"
+    ? resolveVenueLocation(input.answer)
+    : null;
+  const normalized = normalizeCandidate(input.path, location?.city ?? input.answer);
   const currentValue = `$${normalized.mongoPath}`;
   const currentVersion = { $ifNull: ["$version", 1] };
+  const empty = (mongoPath: string) => ({ $eq: [{ $ifNull: [`$${mongoPath}`, ""] }, ""] });
+  const derivedSet = location
+    ? {
+        "venueSchedule.venueState": {
+          $cond: [empty("venueSchedule.venueState"), location.state, "$venueSchedule.venueState"],
+        },
+        "venueSchedule.timeZone": {
+          $cond: [empty("venueSchedule.timeZone"), location.timeZone, "$venueSchedule.timeZone"],
+        },
+      }
+    : {};
+  const changes = [
+    { $ne: [currentValue, normalized.mongoValue] },
+    ...(location
+      ? [empty("venueSchedule.venueState"), empty("venueSchedule.timeZone")]
+      : []),
+  ];
   const row = await Proposal.findOneAndUpdate(
     {
       _id: input.proposalMongoId,
@@ -32,15 +53,16 @@ export const applyAnswerToProposalField = async (input: {
     [{
       $set: {
         [normalized.mongoPath]: normalized.mongoValue,
+        ...derivedSet,
         // Mongo and the conversation repository live in different databases,
         // so the question-resolution request may be retried after Mongo
         // succeeded but Postgres did not. Re-applying the same answer must not
         // keep advancing the proposal version on every retry.
         version: {
           $cond: [
-            { $eq: [currentValue, normalized.mongoValue] },
-            currentVersion,
+            { $or: changes },
             { $add: [currentVersion, 1] },
+            currentVersion,
           ],
         },
       },

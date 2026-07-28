@@ -113,6 +113,83 @@ test("passed-mic Q&A derives handheld mics and recommends a bounded knowledge-ba
   assert.ok([micYes, micType, micQty].every((r) => r.applyEligible === true));
 });
 
+test("multi-function rooms share one AV recommendation set sized to peak attendance", () => {
+  const result = generate({
+    event: { eventFormat: "In-Person", attendees: "800" },
+    venueSchedule: { numberOfEventRooms: "1" },
+    roomByRoom: [room({
+      roomLocation: "A-110-112",
+      roomFunction: "Opening Session",
+      estimatedAttendeesInRoom: "100",
+      functions: [
+        {
+          functionName: "Opening Session",
+          estimatedAttendees: "100",
+          showStartDateTime: "2026-09-01T09:00:00.000Z",
+          showEndDateTime: "2026-09-01T10:00:00.000Z",
+        },
+        {
+          functionName: "Keynote",
+          estimatedAttendees: "600",
+          showStartDateTime: "2026-09-01T11:00:00.000Z",
+          showEndDateTime: "2026-09-01T12:00:00.000Z",
+        },
+      ],
+      audienceQa: { audienceQa: "Yes", audienceQaMethod: "Passed Handheld Mic — Staff walks mics to audience" },
+    })],
+  });
+
+  assert.equal(result.rooms.length, 1);
+  assert.equal(result.rooms[0].recommendations.filter((item) => item.value === CREW.a1).length, 1);
+  const micQty = result.rooms[0].recommendations.find((item) => item.path.endsWith("/wirelessMics/wirelessMicsQty"));
+  assert.equal(micQty.value, "4");
+  assert.match(micQty.explanation, /600 attendees/);
+});
+
+test("multi-function rooms validate each function schedule independently", () => {
+  const result = generate({
+    event: { attendees: "500" },
+    venueSchedule: {},
+    roomByRoom: [room({
+      loadInDateTime: "2026-09-01T10:30:00.000Z",
+      functions: [
+        {
+          functionName: "Breakfast",
+          estimatedAttendees: "200",
+          showStartDateTime: "2026-09-01T09:00:00.000Z",
+          showEndDateTime: "2026-09-01T10:00:00.000Z",
+        },
+        {
+          functionName: "Keynote",
+          estimatedAttendees: "500",
+          showStartDateTime: "2026-09-01T11:00:00.000Z",
+          showEndDateTime: "2026-09-01T10:45:00.000Z",
+        },
+      ],
+    })],
+  });
+
+  const warnings = result.rooms[0].warnings;
+  assert.ok(warnings.some((warning) => warning.paths.includes("/content/roomByRoom/0/functions/1/showEndDateTime")));
+  assert.ok(warnings.some((warning) => warning.paths.includes("/content/roomByRoom/0/functions/0/showStartDateTime")));
+});
+
+test("an incomplete function suppresses shared AV recommendations instead of using only the first function", () => {
+  const result = generate({
+    event: { attendees: "500" },
+    venueSchedule: {},
+    roomByRoom: [room({
+      functions: [
+        { functionName: "Breakfast", estimatedAttendees: "200" },
+        { functionName: "Keynote", estimatedAttendees: "" },
+      ],
+    })],
+  });
+
+  assert.equal(result.rooms[0].recommendations.length, 0);
+  assert.ok(result.rooms[0].clarificationQuestions.some((question) => question.questionKey.includes("attendance")));
+});
+
 // ── Scenario 3: general session plus breakout — LED wall crew, per-room isolation ──
 test("LED wall and cameras derive the full crew set per room without leaking across rooms", () => {
   const result = generate({

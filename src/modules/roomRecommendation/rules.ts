@@ -75,9 +75,41 @@ const asDate = (value: string): Date | null => {
 const roomPath = (index: number, relative: string) => `/content/roomByRoom/${index}/${relative}`;
 const fact = (index: number, relative: string, value: string): RecommendationEvidence => ({ path: roomPath(index, relative), value });
 
+const roomFunctions = (room: RoomFacts): Record<string, unknown>[] =>
+  Array.isArray(room.raw.functions)
+    ? room.raw.functions.filter((entry): entry is Record<string, unknown> =>
+        Boolean(entry) && typeof entry === "object" && !Array.isArray(entry))
+    : [];
+
+const functionNames = (room: RoomFacts): string[] => {
+  const entries = roomFunctions(room);
+  return entries.length > 0
+    ? entries.map((entry) => text(entry.functionName))
+    : [text(room.raw.roomFunction)];
+};
+
+const functionAttendances = (room: RoomFacts): number[] => {
+  const entries = roomFunctions(room);
+  const values = entries.length > 0
+    ? entries.map((entry) => asCount(text(entry.estimatedAttendees)))
+    : [asCount(text(room.raw.estimatedAttendeesInRoom))];
+  return values.filter((value): value is number => value !== null && value > 0);
+};
+
+const peakRoomAttendance = (room: RoomFacts): number | null => {
+  const values = functionAttendances(room);
+  if (values.length > 0) return Math.max(...values);
+  return asCount(text(room.raw.estimatedAttendeesInRoom));
+};
+
 export const hasCoreRoomFacts = (room: RoomFacts): { purpose: boolean; attendance: boolean } => ({
-  purpose: text(room.raw.roomFunction).length > 0,
-  attendance: asCount(text(room.raw.estimatedAttendeesInRoom)) !== null && asCount(text(room.raw.estimatedAttendeesInRoom))! > 0,
+  purpose: functionNames(room).length > 0 && functionNames(room).every(Boolean),
+  attendance: roomFunctions(room).length > 0
+    ? roomFunctions(room).every((entry) => {
+        const attendance = asCount(text(entry.estimatedAttendees));
+        return attendance !== null && attendance > 0;
+      })
+    : peakRoomAttendance(room) !== null && peakRoomAttendance(room)! > 0,
 });
 
 /** Crew tokens must match the wizard's Show Crew options exactly. */
@@ -228,7 +260,7 @@ export const ROOM_RULES: RoomRule[] = [
         });
       }
       const existingQty = asCount(nested(ctx.room.raw, "wirelessMics", "wirelessMicsQty"));
-      const attendance = asCount(text(ctx.room.raw.estimatedAttendeesInRoom));
+      const attendance = peakRoomAttendance(ctx.room);
       if (existingQty === null && attendance !== null) {
         const band = entry.guidance.handheldMicBands.find((candidate) => candidate.maxAttendees === null || attendance <= candidate.maxAttendees);
         if (band) {
@@ -239,7 +271,16 @@ export const ROOM_RULES: RoomRule[] = [
             classification: "recommended_assumption",
             confidence: 0.75,
             explanation: `For roughly ${attendance} attendees with passed-microphone Q&A, ${band.quantity} handheld channel(s) is the approved baseline (${entry.title}).`,
-            evidence: [...micEvidence, fact(ctx.room.index, "estimatedAttendeesInRoom", String(attendance))],
+            evidence: [
+              ...micEvidence,
+              fact(
+                ctx.room.index,
+                roomFunctions(ctx.room).length > 0
+                  ? `functions/${roomFunctions(ctx.room).findIndex((entry) => asCount(text(entry.estimatedAttendees)) === attendance)}/estimatedAttendees`
+                  : "estimatedAttendeesInRoom",
+                String(attendance),
+              ),
+            ],
             knowledgeIds: [entry.id],
             assumptions: [
               "Staff runners can reach seated attendees with passed microphones.",
@@ -278,16 +319,22 @@ export const ROOM_RULES: RoomRule[] = [
     scope: "room",
     requiresCoreFacts: false,
     evaluate: (ctx) => {
-      const start = asDate(text(ctx.room.raw.showStartDateTime));
-      const end = asDate(text(ctx.room.raw.showEndDateTime));
-      if (!start || !end || end.getTime() > start.getTime()) return [];
-      return [{
-        kind: "warning",
-        code: "ROOM_SHOW_END_NOT_AFTER_START",
-        severity: "blocking",
-        message: "This room's show end is not after its show start. Vendors cannot schedule against this.",
-        paths: [roomPath(ctx.room.index, "showStartDateTime"), roomPath(ctx.room.index, "showEndDateTime")],
-      }];
+      const entries = roomFunctions(ctx.room);
+      const schedules = entries.length > 0 ? entries : [ctx.room.raw];
+      return schedules.flatMap((entry, functionIndex) => {
+        const start = asDate(text(entry.showStartDateTime));
+        const end = asDate(text(entry.showEndDateTime));
+        if (!start || !end || end.getTime() > start.getTime()) return [];
+        const prefix = entries.length > 0 ? `functions/${functionIndex}/` : "";
+        const functionName = entries.length > 0 ? text(entry.functionName) : text(ctx.room.raw.roomFunction);
+        return [{
+          kind: "warning" as const,
+          code: "ROOM_SHOW_END_NOT_AFTER_START",
+          severity: "blocking" as const,
+          message: `${functionName || "This function"} has a show end that is not after its show start. Vendors cannot schedule against this.`,
+          paths: [roomPath(ctx.room.index, `${prefix}showStartDateTime`), roomPath(ctx.room.index, `${prefix}showEndDateTime`)],
+        }];
+      });
     },
   },
   {
@@ -298,15 +345,22 @@ export const ROOM_RULES: RoomRule[] = [
     requiresCoreFacts: false,
     evaluate: (ctx) => {
       const loadIn = asDate(text(ctx.room.raw.loadInDateTime));
-      const start = asDate(text(ctx.room.raw.showStartDateTime));
-      if (!loadIn || !start || loadIn.getTime() <= start.getTime()) return [];
-      return [{
-        kind: "warning",
-        code: "ROOM_LOADIN_AFTER_SHOW",
-        severity: "blocking",
-        message: "This room's load-in is scheduled after its show starts.",
-        paths: [roomPath(ctx.room.index, "loadInDateTime"), roomPath(ctx.room.index, "showStartDateTime")],
-      }];
+      if (!loadIn) return [];
+      const entries = roomFunctions(ctx.room);
+      const schedules = entries.length > 0 ? entries : [ctx.room.raw];
+      return schedules.flatMap((entry, functionIndex) => {
+        const start = asDate(text(entry.showStartDateTime));
+        if (!start || loadIn.getTime() <= start.getTime()) return [];
+        const prefix = entries.length > 0 ? `functions/${functionIndex}/` : "";
+        const functionName = entries.length > 0 ? text(entry.functionName) : text(ctx.room.raw.roomFunction);
+        return [{
+          kind: "warning" as const,
+          code: "ROOM_LOADIN_AFTER_SHOW",
+          severity: "blocking" as const,
+          message: `This room's load-in is scheduled after ${functionName || "a function"} starts.`,
+          paths: [roomPath(ctx.room.index, "loadInDateTime"), roomPath(ctx.room.index, `${prefix}showStartDateTime`)],
+        }];
+      });
     },
   },
   {
@@ -316,7 +370,7 @@ export const ROOM_RULES: RoomRule[] = [
     scope: "room",
     requiresCoreFacts: false,
     evaluate: (ctx) => {
-      const roomAttendance = asCount(text(ctx.room.raw.estimatedAttendeesInRoom));
+      const roomAttendance = peakRoomAttendance(ctx.room);
       const eventAttendance = asCount(text(ctx.event.attendees));
       if (roomAttendance === null || eventAttendance === null || eventAttendance <= 0 || roomAttendance <= eventAttendance) return [];
       return [{

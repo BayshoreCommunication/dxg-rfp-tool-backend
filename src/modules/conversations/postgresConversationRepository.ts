@@ -12,6 +12,8 @@ import {
   questionImpact,
   questionAnswerType,
   questionPrompt,
+  ROOM_SCHEDULE_ASSISTANT_ACTIONS,
+  ROOM_SCHEDULE_GUIDANCE_MESSAGE,
   runStatusMessage,
   type MessageIntent,
 } from "./domain";
@@ -148,6 +150,7 @@ const messagePayload = (row: any, attachments: any[]) => ({
   role: row.role,
   kind: row.kind,
   content: row.content,
+  actions: Array.isArray(row.actions) ? row.actions : [],
   intent: row.intent,
   runType: row.run_type,
   runId: row.run_id,
@@ -305,7 +308,7 @@ export const conversationRepository = {
   },
 
   // Direct assistant turn with no backing run (e.g. the live chat reply).
-  async appendAssistantMessage(ctx: Ctx & { proposalMongoId: string; content: string }) {
+  async appendAssistantMessage(ctx: Ctx & { proposalMongoId: string; content: string; actions?: string[] }) {
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, ctx.organizationMongoId);
       const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
@@ -315,12 +318,47 @@ export const conversationRepository = {
       const ordinal = Number(count.rows[0]?.n ?? 0) + 1;
       const id = uuidv7();
       await c.query(
-        `INSERT INTO rfpilot.conversation_messages(id,organization_id,conversation_id,ordinal,role,kind,content,status,actor_external_user_id)
-         VALUES($1,$2,$3,$4,'assistant','status',$5,'complete',$6)`,
-        [id, org, conversation.id, ordinal, ctx.content.slice(0, 4000), ctx.actorUserMongoId],
+        `INSERT INTO rfpilot.conversation_messages(id,organization_id,conversation_id,ordinal,role,kind,content,actions,status,actor_external_user_id)
+         VALUES($1,$2,$3,$4,'assistant','status',$5,$6::jsonb,'complete',$7)`,
+        [id, org, conversation.id, ordinal, ctx.content.slice(0, 4000), JSON.stringify(ctx.actions ?? []), ctx.actorUserMongoId],
       );
       await c.query("UPDATE rfpilot.conversations SET message_count=$2,updated_at=now() WHERE id=$1", [conversation.id, ordinal]);
       return { id, ordinal };
+    });
+  },
+
+  // The spreadsheet workflow belongs after the minimum intake, not in the
+  // opening greeting. Append it once, immediately after the final open guided
+  // question is answered or skipped. Explicit user requests are still handled
+  // immediately by chatReply.ts.
+  async appendRoomScheduleSuggestionWhenReady(ctx: Ctx & { proposalMongoId: string }) {
+    return withPostgresTransaction(async (c) => {
+      const org = await tenant(c, ctx.organizationMongoId);
+      const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
+      const conversation = await getOrCreateConversation(c, org, proposalRefId, ctx.actorUserMongoId);
+      await c.query("SELECT id FROM rfpilot.conversations WHERE id=$1 FOR UPDATE", [conversation.id]);
+      const open = await c.query<{ n: number }>(
+        "SELECT count(*)::int n FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND status='open'",
+        [proposalRefId],
+      );
+      if (Number(open.rows[0]?.n ?? 0) > 0) return { created: false, reason: "questions_open" };
+      const existing = await c.query<{ id: string }>(
+        `SELECT id FROM rfpilot.conversation_messages
+          WHERE conversation_id=$1 AND actions @> '["download_room_schedule_template"]'::jsonb
+          LIMIT 1`,
+        [conversation.id],
+      );
+      if (existing.rows[0]) return { created: false, reason: "already_suggested" };
+      const count = await c.query<{ n: number }>("SELECT message_count n FROM rfpilot.conversations WHERE id=$1", [conversation.id]);
+      const ordinal = Number(count.rows[0]?.n ?? 0) + 1;
+      const id = uuidv7();
+      await c.query(
+        `INSERT INTO rfpilot.conversation_messages(id,organization_id,conversation_id,ordinal,role,kind,content,actions,status,actor_external_user_id)
+         VALUES($1,$2,$3,$4,'assistant','status',$5,$6::jsonb,'complete',$7)`,
+        [id, org, conversation.id, ordinal, ROOM_SCHEDULE_GUIDANCE_MESSAGE, JSON.stringify(ROOM_SCHEDULE_ASSISTANT_ACTIONS), ctx.actorUserMongoId],
+      );
+      await c.query("UPDATE rfpilot.conversations SET message_count=$2,updated_at=now() WHERE id=$1", [conversation.id, ordinal]);
+      return { created: true, id };
     });
   },
 

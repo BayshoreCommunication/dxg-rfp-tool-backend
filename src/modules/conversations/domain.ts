@@ -10,6 +10,33 @@ export const conversationsEnabled = () => aiRuntimeAuthorized() && process.env.C
 export const MESSAGE_INTENTS = ["chat", "extract_requirements", "generate_draft"] as const;
 export type MessageIntent = (typeof MESSAGE_INTENTS)[number];
 
+export const ASSISTANT_ACTION_IDS = [
+  "download_room_schedule_template",
+  "open_room_specifications",
+] as const;
+export type AssistantActionId = (typeof ASSISTANT_ACTION_IDS)[number];
+export const ROOM_SCHEDULE_ASSISTANT_ACTIONS: readonly AssistantActionId[] = Object.freeze([
+  "download_room_schedule_template",
+  "open_room_specifications",
+]);
+export const ROOM_SCHEDULE_GUIDANCE_MESSAGE =
+  "Now that the key event details are covered, you can add room specifications. If you have a room schedule, download the sample sheet, add one row per function, and upload it in Room Specifications. Functions with the same Room Name will share AV specifications.";
+
+export const parseAssistantActions = (value: unknown): AssistantActionId[] => {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value)]
+    .filter((item): item is AssistantActionId =>
+      typeof item === "string" && ASSISTANT_ACTION_IDS.includes(item as AssistantActionId))
+    .slice(0, 2);
+};
+
+export const asksForRoomScheduleHelp = (message: string): boolean => {
+  const normalized = message.trim().toLowerCase();
+  const roomContext = /\b(room|rooms|function|functions|schedule)\b/.test(normalized);
+  const sheetContext = /\b(excel|xlsx|spreadsheet|sheet|template|upload|download|import)\b/.test(normalized);
+  return roomContext && sheetContext;
+};
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type MessageInput = {
@@ -88,6 +115,34 @@ const STREAMING_PLATFORMS = Object.freeze([
   "Vendor Recommendation Needed",
   "Other",
 ]);
+const VENUE_TYPES = Object.freeze([
+  "Convention Center",
+  "Hotel Ballroom",
+  "Resort / Conference Center",
+  "Theater / Performing Arts Venue",
+  "Arena / Stadium",
+  "Corporate Campus / HQ",
+  "Outdoor Venue / Tent",
+  "Broadcast Studio",
+  "Restaurant / Private Event Space",
+  "Cruise Ship",
+  "Other",
+]);
+const EVENT_TYPES = Object.freeze([
+  "Corporate Conference",
+  "User / Customer Summit",
+  "Sales Kickoff (SKO)",
+  "Annual Meeting / Shareholder Event",
+  "Product Launch",
+  "Awards Show / Gala",
+  "Trade Show / Exhibition",
+  "Internal Town Hall",
+  "Training / Certification Event",
+  "Association / Member Conference",
+  "Industry Symposium",
+  "Hybrid Broadcast / Studio Production",
+  "Other",
+]);
 export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Object.freeze([
   // Asked first: the proposal is created with a placeholder title, and every
   // downstream surface (breadcrumb, draft, exports) reads better once it is real.
@@ -95,10 +150,13 @@ export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Obje
   { path: "/content/event/startDate", prompt: "When does the event start? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
   { path: "/content/event/endDate", prompt: "When does the event end? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
   { path: "/content/event/eventFormat", prompt: "Is the event in-person, hybrid, or virtual?", impact: "scope", answerType: "choice", options: Object.freeze(["In-Person", "Hybrid", "Virtual"]) },
+  { path: "/content/event/eventType/eventType", prompt: "What type of event are you planning?", impact: "scope", answerType: "choice", options: EVENT_TYPES },
   { path: "/content/venueSchedule/venueName", prompt: "Which venue will host the event? Enter the venue name, or use Skip if it is still undecided.", impact: "cost", answerType: "text" },
+  { path: "/content/venueSchedule/venueCity", prompt: "Which city will host the event? Add the state for ambiguous city names (for example, Portland, OR).", impact: "cost", answerType: "text" },
+  { path: "/content/venueSchedule/venueState", prompt: "Which state or region will host the event?", impact: "cost", answerType: "text" },
+  { path: "/content/venueSchedule/venueType", prompt: "What type of venue will host the event?", impact: "cost", answerType: "choice", options: VENUE_TYPES },
   { path: "/content/event/attendees", prompt: "How many in-person attendees are expected?", impact: "cost", answerType: "number" },
   { path: "/content/venueSchedule/numberOfEventRooms", prompt: "How many event rooms are required?", impact: "cost", answerType: "number" },
-  { path: "/content/venueSchedule/venueCity", prompt: "Which city will host the event?", impact: "cost", answerType: "text" },
   // Asked only after a real venue is selected.
   { path: "/content/venueSchedule/venueConfirmedStatus", prompt: "What is the venue status?", impact: "cost", answerType: "choice", options: Object.freeze(["Contract signed", "Verbally confirmed", "Preferred", "Not selected"]) },
   { path: "/content/venueSchedule/isUnionVenue", prompt: "Is the venue a union venue? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
@@ -127,7 +185,7 @@ export const isCatchAllIssue = (code: string, paths: string[]): boolean =>
 // facts. Remaining fields become prioritized improvements after the draft
 // instead of an apparently endless intake interview.
 export const MAX_OPEN_FIELD_QUESTIONS = 8;
-export const MAX_ADAPTIVE_VENUE_QUESTIONS = 16;
+export const MAX_ADAPTIVE_VENUE_QUESTIONS = 19;
 export const ADAPTIVE_VENUE_FIELD_PATHS = Object.freeze(
   IMPORTANT_FIELD_QUESTIONS
     .slice(MAX_OPEN_FIELD_QUESTIONS, MAX_ADAPTIVE_VENUE_QUESTIONS)

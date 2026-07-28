@@ -129,13 +129,37 @@ across 10 categories, 22 regional factors, 13 modifiers, 13 confidence rules.
 
 ### Room specification recommendations (added 2026-07-27; auto-apply same day)
 
+Conversation messages may carry a bounded `actions` array. Migration 032 adds
+the persisted allowlist for downloading the room schedule template and opening
+Room Specifications; room-schedule intent has a deterministic fallback so the
+guidance remains available when the live model is disabled. Proactive guidance
+appears once after the initial guided questions are answered or skipped, not in
+the opening assistant turn. An explicit room-schedule request still receives
+the actions immediately, and the persisted action guard prevents duplication.
+
+When live chat is unavailable, the deterministic first turn welcomes the
+planner and points to the guided intake; later turns acknowledge conversation
+context. These fallbacks do not claim that chat text was saved or applied to
+proposal fields.
+
+The guided intake includes Event Type among its first eight questions and uses
+the same closed choice list as the advanced proposal editor.
+
+Location intake asks city before state. A validated US city answer can fill an
+empty state and the editor-compatible time-zone label in the same guarded
+Mongo update. Explicit `City, ST` or `City, State` answers are supported;
+ambiguous or unknown bare city names are not guessed and leave the state
+follow-up open. Existing state or time-zone values are not overwritten.
+
 **Policy note for DXG:** originally built review-first; changed the same day
 by product decision to **apply automatically into empty room fields** (the
 planner adjusts values in the form; filled fields are never overwritten and
 are reported as skipped). This extends the empty-field auto-apply boundary
 already flagged for extraction and includes `recommended_assumption` values
 below the 0.8 automatic-confidence bar — tell DXG together with the earlier
-boundary change. Engine is `room-rules.v2`; migration 031 added
+boundary change. Engine is `room-rules.v3`; v3 evaluates every function in a
+physical room, sizes shared AV guidance from peak function attendance, and
+validates each function schedule independently. Migration 031 added
 automatic/skipped columns. The paragraph below otherwise stands, with crew
 roles now applied as append-only `$addToSet` writes and manual review/apply
 endpoints retained.

@@ -215,6 +215,28 @@ const mapRoom = (
       .map(([key, value]) => [key, integer(value)])
       .filter((entry): entry is [string, number] => typeof entry[1] === "number"),
   );
+  const scheduleEntries = Array.isArray(room.functions)
+    ? room.functions.flatMap((value, functionIndex) => {
+        const entry = record(value);
+        const functionName = text(entry.functionName);
+        if (!functionName) {
+          issues.push({
+            path: `/roomByRoom/${index}/functions/${functionIndex}/functionName`,
+            code: "missing",
+            message: "Scheduled function was not migrated because its name is missing",
+          });
+          return [];
+        }
+        return [{
+          function: functionName,
+          ...optional("setup", text(entry.roomSetup)),
+          ...optional("scheduleDate", date(entry.scheduleDate, `/roomByRoom/${index}/functions/${functionIndex}/scheduleDate`, issues)),
+          ...optional("estimatedAttendees", integer(entry.estimatedAttendees)),
+          ...optional("showStartAt", dateTime(entry.showStartDateTime, `/roomByRoom/${index}/functions/${functionIndex}/showStartDateTime`, issues)),
+          ...optional("showEndAt", dateTime(entry.showEndDateTime, `/roomByRoom/${index}/functions/${functionIndex}/showEndDateTime`, issues)),
+        }];
+      })
+    : [];
 
   return {
     id: text(room._id) ?? `room-${index + 1}`,
@@ -227,6 +249,7 @@ const mapRoom = (
     ...optional("rehearsalAt", dateTime(room.rehearsalDateTime, `/roomByRoom/${index}/rehearsalDateTime`, issues)),
     ...optional("showStartAt", dateTime(room.showStartDateTime, `/roomByRoom/${index}/showStartDateTime`, issues)),
     ...optional("showEndAt", dateTime(room.showEndDateTime, `/roomByRoom/${index}/showEndDateTime`, issues)),
+    ...(scheduleEntries.length > 0 ? { scheduleEntries } : {}),
     audio: {
       ...optional("systemRequired", booleanOrNull(room.audioSystemRequired)),
       ...optional("systemAudienceCount", integer(room.audioSystemForHowManyPpl)),

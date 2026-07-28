@@ -20,8 +20,11 @@ const {
   questionAnswerType,
   ANSWER_TYPES,
   answerTargetPath,
+  asksForRoomScheduleHelp,
+  parseAssistantActions,
 } = require("../src/modules/conversations/domain");
 const { approvedCandidatePaths, normalizeCandidate } = require("../src/modules/candidateApplication/canonicalMapping");
+const { resolveVenueLocation } = require("../src/modules/conversations/venueLocationResolver");
 
 const root = path.join(__dirname, "..");
 
@@ -51,6 +54,15 @@ test("message input validation bounds content, intent, sources and version", () 
   const parsed = parseMessageInput({ content: "extract these", intent: "extract_requirements", sourceIds: [uuid, uuid] });
   assert.deepEqual(parsed.sourceIds, [uuid]);
   assert.equal(parseMessageInput({ content: "", intent: "generate_draft", expectedProposalVersion: 3 }).expectedProposalVersion, 3);
+});
+
+test("room schedule help selects only allowlisted assistant actions", () => {
+  assert.equal(asksForRoomScheduleHelp("Can I upload an Excel room schedule?"), true);
+  assert.equal(asksForRoomScheduleHelp("Tell me about the event schedule"), false);
+  assert.deepEqual(
+    parseAssistantActions(["download_room_schedule_template", "delete_proposal", "open_room_specifications"]),
+    ["download_room_schedule_template", "open_room_specifications"],
+  );
 });
 
 test("question updates require an answer only when marking answered", () => {
@@ -95,6 +107,16 @@ test("important-field whitelist only contains approved candidate paths with plai
     assert.ok(seen.has(path), path);
 });
 
+test("guided intake asks event type using the editor's supported choices", () => {
+  const question = IMPORTANT_FIELD_QUESTIONS.find((item) => item.path === "/content/event/eventType/eventType");
+  assert.ok(question);
+  assert.equal(question.answerType, "choice");
+  assert.ok(question.options.includes("Corporate Conference"));
+  assert.ok(question.options.includes("Hybrid Broadcast / Studio Production"));
+  assert.ok(question.options.includes("Other"));
+  assert.ok(IMPORTANT_FIELD_QUESTIONS.indexOf(question) < MAX_OPEN_FIELD_QUESTIONS);
+});
+
 test("catch-all detection targets broad missing-field issues, not small conflicts", () => {
   const manyPaths = Array.from({ length: 12 }, (_, i) => `/content/event/field${i}`);
   assert.equal(isCatchAllIssue("SOME_ISSUE", manyPaths), true, "more than 8 paths explodes");
@@ -108,10 +130,42 @@ test("catch-all detection targets broad missing-field issues, not small conflict
   const venueQuestion = IMPORTANT_FIELD_QUESTIONS.find((field) => field.path === "/content/venueSchedule/venueName");
   assert.match(venueQuestion.prompt, /use Skip/i);
   assert.doesNotMatch(venueQuestion.prompt, /Not selected/i);
+  const stateIndex = IMPORTANT_FIELD_QUESTIONS.findIndex((field) => field.path === "/content/venueSchedule/venueState");
+  const cityIndex = IMPORTANT_FIELD_QUESTIONS.findIndex((field) => field.path === "/content/venueSchedule/venueCity");
+  assert.ok(cityIndex >= 0 && cityIndex < stateIndex, "city is asked before the state fallback");
+  const venueType = IMPORTANT_FIELD_QUESTIONS.find((field) => field.path === "/content/venueSchedule/venueType");
+  assert.equal(venueType.answerType, "choice");
+  assert.ok(venueType.options.includes("Convention Center"));
+});
+
+test("city answers derive state and time zone without guessing ambiguous names", () => {
+  assert.deepEqual(resolveVenueLocation("Chicago"), {
+    city: "Chicago",
+    state: "IL",
+    timeZone: "Central Time (CT)",
+  });
+  assert.deepEqual(resolveVenueLocation("Portland, Oregon"), {
+    city: "Portland",
+    state: "OR",
+    timeZone: "Pacific Time (PT)",
+  });
+  assert.deepEqual(resolveVenueLocation("Washington, DC"), {
+    city: "Washington",
+    state: "DC",
+    timeZone: "Eastern Time (ET)",
+  });
+  assert.equal(resolveVenueLocation("Portland"), null);
+  assert.equal(resolveVenueLocation("Springfield"), null);
+  assert.deepEqual(resolveVenueLocation("Paris, France"), {
+    city: "Paris",
+    state: "OTHER",
+    timeZone: "Other / International",
+  });
+  assert.equal(resolveVenueLocation("Chicago, ZZ"), null);
 });
 
 test("venue follow-up questions activate only for a selected venue", () => {
-  assert.equal(MAX_ADAPTIVE_VENUE_QUESTIONS, 16);
+  assert.equal(MAX_ADAPTIVE_VENUE_QUESTIONS, 19);
   assert.equal(isSelectedVenueName("Hyatt Regency Chicago"), true);
   for (const deferred of ["", "Not selected", "TBD", "undecided", "unknown", "N/A"])
     assert.equal(isSelectedVenueName(deferred), false, deferred);
@@ -251,11 +305,16 @@ test("catch-all explosion and answer field writing are wired into repository and
   const controller = fs.readFileSync(path.join(root, "controller/conversationsController.ts"), "utf8");
   assert.ok(controller.includes("applyAnswerToProposalField"), "controller must write single-field answers into the proposal");
   assert.ok(controller.indexOf("applyAnswerToProposalField") < controller.indexOf("updateQuestion"), "field write must precede resolving the question so invalid values re-ask");
+  assert.ok(controller.includes("appendRoomScheduleSuggestionWhenReady"), "finishing guided intake must offer the room schedule workflow");
   const writer = fs.readFileSync(path.join(root, "src/modules/conversations/answerFieldWriter.ts"), "utf8");
   for (const guard of ["normalizeCandidate", "status: \"unsubmitted\"", "isDraft: true", "$ifNull: [\"$version\", 1]", "$cond", "$eq"])
     assert.ok(writer.includes(guard), guard);
+  for (const locationBehavior of ["resolveVenueLocation", "venueSchedule.venueState", "venueSchedule.timeZone", "...derivedSet"])
+    assert.ok(writer.includes(locationBehavior), locationBehavior);
   for (const recoveryGuard of ["supersededByThisAnswer", "row.canonical_paths.includes(ctx.appliedPath)"])
     assert.ok(repository.includes(recoveryGuard), recoveryGuard);
+  for (const delayedSuggestionGuard of ["questions_open", "already_suggested", "actions @>", "ROOM_SCHEDULE_GUIDANCE_MESSAGE"])
+    assert.ok(repository.includes(delayedSuggestionGuard), delayedSuggestionGuard);
 });
 
 test("run status narration covers every lifecycle state", () => {
@@ -313,6 +372,14 @@ test("the assistant never claims to be extracting when there are no sources", ()
   assert.ok(operations.includes("When there are NO sources, never claim to be reading, extracting or processing anything"));
   assert.ok(operations.includes("never say that you recorded, captured, saved, added, or applied its details to the proposal"));
   assert.ok(operations.includes("persistenceClaim"));
+});
+
+test("deterministic chat fallbacks welcome the planner without false persistence claims", () => {
+  const replySource = fs.readFileSync(path.join(root, "src/modules/conversations/chatReply.ts"), "utf8");
+  assert.match(replySource, /I’ll help you build this proposal/);
+  assert.match(replySource, /Answer the first question below/);
+  assert.doesNotMatch(replySource, /I've saved that to this proposal/);
+  assert.doesNotMatch(replySource, /I’ve saved that to this proposal/);
 });
 
 test("source extraction explicitly preserves discrete high-value facts embedded in prose", () => {

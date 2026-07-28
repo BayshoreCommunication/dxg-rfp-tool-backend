@@ -18,6 +18,12 @@ validation. There is **no model call** in this slice; the payload contract is
 validated as strictly as if one existed so a future AI enrichment stage cannot
 widen the shape.
 
+Multi-function physical rooms remain one shared AV scope. Core-fact validation
+considers every function, shared quantity guidance uses peak function
+attendance, and schedule warnings identify the individual function whose
+timing is invalid. Shared crew and equipment recommendations are emitted only
+once per physical room.
+
 ## Trust boundary
 
 > **Policy change (2026-07-27, product decision):** recommendations now apply
@@ -36,10 +42,10 @@ widen the shape.
 
 - Generation is read-only against the proposal. A run is an immutable snapshot
   (`room_recommendation_runs.payload`); review and application always operate
-  on what was generated, never a recomputation. Engine `room-rules.v2`
-  (v2 = crew appends became apply-eligible and automatic application became
-  the default flow; the engine version participates in the idempotency
-  fingerprint so stale v1 payloads are not replayed).
+  on what was generated, never a recomputation. Engine `room-rules.v3`
+  (v3 adds multi-function room evaluation; v2 made crew appends apply-eligible
+  and automatic application the default flow; the engine version participates
+  in the idempotency fingerprint so stale payloads are not replayed).
 - Every value carries exactly one classification:
   - `confirmed_fact` — reserved; the engine never emits it as a suggestion.
   - `deterministic_derivation` — entailed by selections (e.g. LED wall →
@@ -158,6 +164,11 @@ strict contract, or non-deterministic output for identical input.
 
 - Apply allowlist covers the three wireless-mic fields and append-only crew
   roles; every other room field remains read-only for recommendations.
+- Rooms may contain multiple scheduled `functions[]` sharing one AV
+  specification. Recommendation rules continue to use the backward-compatible
+  primary `roomFunction` mirror (the first scheduled function) and peak
+  `estimatedAttendeesInRoom`; recommendations do not yet reason across every
+  function name independently.
 - The knowledge provider is a synthetic fixture; production retrieval adapter
   (knowledge releases / expert rules) is unbuilt.
 - No workflow-step projection; recommendations do not yet feed
