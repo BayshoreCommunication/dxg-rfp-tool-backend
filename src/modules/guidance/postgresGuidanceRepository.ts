@@ -38,6 +38,7 @@ const present = (row: any, currentProposalVersion = Number(row.proposal_version)
   analysisVersion: row.engine_version,
   engineVersion: row.engine_version,
   summary: row.summary ?? {},
+  roomSchedule: row.room_schedule_analysis ?? {},
   overallCompleteness: Number(row.overall_completeness),
   completeness: row.completeness,
   findings: row.findings,
@@ -60,11 +61,12 @@ export const guidanceRepository = {
       const org = await tenant(c, ctx.organizationMongoId);
       const p = await proposalRef(c, ctx.proposalMongoId, ctx.actorUserMongoId);
       const row = await c.query<any>(
-        `INSERT INTO rfpilot.guidance_reports(id,organization_id,proposal_reference_id,actor_external_user_id,proposal_version,engine_version,summary,overall_completeness,completeness,findings,finding_count,blocking_count,correlation_id)
-         VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10::jsonb,$11,$12,$13) RETURNING *`,
+        `INSERT INTO rfpilot.guidance_reports(id,organization_id,proposal_reference_id,actor_external_user_id,proposal_version,engine_version,summary,room_schedule_analysis,overall_completeness,completeness,findings,finding_count,blocking_count,correlation_id)
+         VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10::jsonb,$11::jsonb,$12,$13,$14) RETURNING *`,
         [
           uuidv7(), org, p, ctx.actorUserMongoId, proposalVersion,
-          PROPOSAL_ANALYSIS_VERSION, JSON.stringify(result.summary), result.overall,
+          PROPOSAL_ANALYSIS_VERSION, JSON.stringify(result.summary),
+          JSON.stringify(result.roomSchedule), result.overall,
           JSON.stringify(result.completeness), JSON.stringify(result.findings),
           result.findings.length, blockingCount, ctx.correlationId,
         ],

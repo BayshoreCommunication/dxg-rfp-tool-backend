@@ -1,6 +1,11 @@
 import { aiRuntimeAuthorized } from "../../../config/aiEnvironment";
 import { approvedCandidatePaths } from "../candidateApplication/canonicalMapping";
 import {
+  computeRoomScheduleAnalysis,
+  type RoomScheduleAnalysis,
+  type RoomScheduleCategory,
+} from "./roomScheduleAnalysis";
+import {
   computeScopeGuidance,
   type ScopeRuleCategory,
   type ScopeRuleSeverity,
@@ -12,7 +17,7 @@ export class GuidanceError extends Error {
 
 export const guidanceEnabled = () => aiRuntimeAuthorized() && process.env.GUIDANCE_ENABLED === "true";
 
-export const PROPOSAL_ANALYSIS_VERSION = "proposal-analysis.v2";
+export const PROPOSAL_ANALYSIS_VERSION = "proposal-analysis.v3";
 
 export type GuidanceEvidence = {
   path: string;
@@ -42,6 +47,8 @@ export type GuidanceFinding = {
   analysisVersion: string;
   scopeCategory?: ScopeRuleCategory;
   scopeSeverity?: ScopeRuleSeverity;
+  roomCategory?: RoomScheduleCategory;
+  roomKeys?: string[];
   question?: string;
 };
 export type SectionCompleteness = { section: string; label: string; filled: number; total: number; score: number };
@@ -59,6 +66,7 @@ export type GuidanceResult = {
   overall: number;
   completeness: SectionCompleteness[];
   findings: GuidanceFinding[];
+  roomSchedule: RoomScheduleAnalysis;
 };
 
 const SECTION_LABELS: Record<string, string> = {
@@ -276,6 +284,42 @@ export const computeGuidance = (
     });
   }
 
+  const roomSchedule = computeRoomScheduleAnalysis(proposal);
+  for (const roomFinding of roomSchedule.findings) {
+    findings.push({
+      id: roomFinding.id,
+      code: roomFinding.code,
+      severity: visualSeverity(roomFinding.severity),
+      category:
+        roomFinding.category === "schedule_conflict" ||
+        roomFinding.category === "crew_conflict"
+          ? "schedule"
+          : roomFinding.category === "duplicate_rental"
+            ? "budget"
+            : "production",
+      message: roomFinding.explanation,
+      paths: roomFinding.paths,
+      affectedSection:
+        roomFinding.paths.map(sectionForPath).find(Boolean) ?? null,
+      affectedFields: roomFinding.paths.map(fieldForPath),
+      evidence: roomFinding.evidence,
+      explanation: roomFinding.explanation,
+      suggestedNextStep: roomFinding.suggestedNextAction,
+      confidence: roomFinding.confidence,
+      provenance: {
+        source: "current_proposal",
+        ruleId: roomFinding.code,
+        ruleVersion: roomFinding.ruleVersion,
+      },
+      proposalVersion,
+      analysisVersion: PROPOSAL_ANALYSIS_VERSION,
+      scopeSeverity: roomFinding.severity,
+      roomCategory: roomFinding.category,
+      roomKeys: roomFinding.roomKeys,
+      ...(roomFinding.question ? { question: roomFinding.question } : {}),
+    });
+  }
+
   for (const item of completeness)
     if (item.score < 0.25 && item.total >= 5)
       flag({ code: `SECTION_SPARSE_${item.section.toUpperCase()}`, severity: "info", category: "completeness", message: `${item.label} is mostly empty (${item.filled} of ${item.total} fields).`, paths: [] });
@@ -303,5 +347,6 @@ export const computeGuidance = (
     overall,
     completeness,
     findings,
+    roomSchedule,
   };
 };

@@ -52,6 +52,9 @@ Read-only platform guidance and personal Assistant history:
 Deterministic proposal equipment and dependency review:
 [Scope guidance](./SCOPE_GUIDANCE.md).
 
+Room-level gaps, schedule conflicts, and conditional resource reuse:
+[Room and schedule analysis](./ROOM_SCHEDULE_ANALYSIS.md).
+
 Controlled enablement and recovery:
 [Platform Assistant rollout](../runbooks/PLATFORM_ASSISTANT_ROLLOUT.md).
 

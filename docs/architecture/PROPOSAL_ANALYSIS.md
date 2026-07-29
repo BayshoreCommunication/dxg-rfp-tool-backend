@@ -13,7 +13,7 @@ publish, send, price, or apply suggestions.
 
 ## Versioned report
 
-`proposal-analysis.v2` produces:
+`proposal-analysis.v3` produces:
 
 - a concise summary containing only event name, format, date range, attendance,
   and room count;
@@ -28,6 +28,10 @@ Migration `028_proposal_analysis_summary` adds the summary object to the
 existing `guidance_reports` table and advances the default engine version.
 Historical reports remain readable.
 
+Migration `029_room_schedule_analysis` adds the separately versioned
+[`room-schedule-analysis.v1`](./ROOM_SCHEDULE_ANALYSIS.md) result. Historical
+reports without that object remain readable.
+
 ## Staleness and safety
 
 The latest-report read reloads the authoritative owner-scoped Mongo proposal
@@ -40,5 +44,7 @@ scalar values when safe. Contact values and arbitrary long proposal text are
 not copied into the summary. Audit metadata remains content-free.
 
 Equipment and scope dependency checks are supplied by the separately versioned
-[`scope-guidance.v1`](./SCOPE_GUIDANCE.md) registry. Room/session analysis and
-budget calculation remain separate later phases and must remain deterministic.
+[`scope-guidance.v1`](./SCOPE_GUIDANCE.md) registry. Room/session conflicts and
+conditional reuse are supplied by
+[`room-schedule-analysis.v1`](./ROOM_SCHEDULE_ANALYSIS.md). Budget calculation
+remains a separate deterministic phase.
