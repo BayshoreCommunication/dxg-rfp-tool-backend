@@ -37,6 +37,7 @@ import candidateApplicationRoutes from "./routes/candidateApplicationRoute";
 import proposalDraftRoutes from "./routes/proposalDraftRoute";
 import proposalWorkflowRoutes from "./routes/proposalWorkflowRoute";
 import platformAssistantRoutes from "./routes/platformAssistantRoute";
+import historicalInsightsRoutes from "./routes/historicalInsightsRoute";
 import { startCronJobs } from "./utils/cronJobs";
 import { initializeNotificationWebSocketServer } from "./utils/notificationService";
 import { getUploadsDir } from "./utils/paths";
@@ -187,6 +188,7 @@ app.use("/api/v1", candidateApplicationRoutes);
 app.use("/api/v1", proposalDraftRoutes);
 app.use("/api/v1", proposalWorkflowRoutes);
 app.use("/api/v1", platformAssistantRoutes);
+app.use("/api/v1", historicalInsightsRoutes);
 
 // Email campaign routes
 app.use("/api/emails", emailRoutes);
