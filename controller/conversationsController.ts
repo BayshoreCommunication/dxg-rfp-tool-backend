@@ -10,6 +10,7 @@ import { proposalDraftEnabled, parseDraftInput } from "../src/modules/proposalDr
 import { proposalDraftRepository } from "../src/modules/proposalDraft/postgresProposalDraftRepository";
 import { durableJobDispatcher } from "../src/modules/durableJobs/composition";
 import { appendChatReply } from "../src/modules/conversations/chatReply";
+import { withConversationProposalReference } from "../src/modules/conversations/conversationProposalReference";
 import { safeLog } from "../src/shared/observability/safeTelemetry";
 
 const context = (req: AuthRequest) => {
@@ -55,7 +56,19 @@ const handle = (res: Response, error: unknown) => {
 export const getConversation = async (req: AuthRequest, res: Response) => {
   try {
     const ctx = context(req);
-    res.json({ data: await conversationRepository.read({ ...ctx, proposalMongoId: proposalId(req.params.proposalId), limit: Number(req.query.limit) || undefined }) });
+    const proposalMongoId = proposalId(req.params.proposalId);
+    res.json({
+      data: await withConversationProposalReference(
+        ctx,
+        proposalMongoId,
+        () =>
+          conversationRepository.read({
+            ...ctx,
+            proposalMongoId,
+            limit: Number(req.query.limit) || undefined,
+          }),
+      ),
+    });
   } catch (error) { handle(res, error); }
 };
 
@@ -71,15 +84,50 @@ export const postConversationMessage = async (req: AuthRequest, res: Response) =
       if (process.env.LIVE_AI_PROPOSAL_SOURCE_ENABLED !== "true")
         throw new ConversationError("LIVE_AI_SOURCE_DISABLED", "Live AI proposal-source processing is disabled.", 503);
       const parsed = sourceContextInput({ sourceIds: input.sourceIds });
-      const result = await proposalContextRepository.create({ ...ctx, ...parsed, live: true, proposalMongoId, idempotencyKey: key });
+      const result = await withConversationProposalReference(
+        ctx,
+        proposalMongoId,
+        () =>
+          proposalContextRepository.create({
+            ...ctx,
+            ...parsed,
+            live: true,
+            proposalMongoId,
+            idempotencyKey: key,
+          }),
+      );
       run = { runType: "proposal_context", runId: result.runId, jobId: result.job.id };
     } else if (input.intent === "generate_draft") {
       if (!proposalDraftEnabled()) throw new ConversationError("PROPOSAL_DRAFT_DISABLED", "Draft generation is disabled.", 503);
       const parsed = parseDraftInput({ expectedProposalVersion: input.expectedProposalVersion, fixture: "synthetic-proposal-draft" });
-      const result = await proposalDraftRepository.create({ ...ctx, ...parsed, live: true, proposalMongoId, idempotencyKey: key });
+      const result = await withConversationProposalReference(
+        ctx,
+        proposalMongoId,
+        () =>
+          proposalDraftRepository.create({
+            ...ctx,
+            ...parsed,
+            live: true,
+            proposalMongoId,
+            idempotencyKey: key,
+          }),
+      );
       run = { runType: "proposal_draft", runId: result.run.id, jobId: result.run.job_id };
     }
-    const exchange = await conversationRepository.appendExchange({ ...ctx, proposalMongoId, idempotencyKey: key, content: input.content, intent: input.intent, sourceIds: input.sourceIds, run });
+    const exchange = await withConversationProposalReference(
+      ctx,
+      proposalMongoId,
+      () =>
+        conversationRepository.appendExchange({
+          ...ctx,
+          proposalMongoId,
+          idempotencyKey: key,
+          content: input.content,
+          intent: input.intent,
+          sourceIds: input.sourceIds,
+          run,
+        }),
+    );
     if (run) void durableJobDispatcher.dispatch().catch(() => undefined);
     if (input.intent === "chat" && exchange.created)
       await appendChatReply(ctx, proposalMongoId, (exchange as { organizationId?: string }).organizationId, exchange.message.id);
@@ -99,7 +147,16 @@ export const patchConversationQuestion = async (req: AuthRequest, res: Response)
     // with a friendly 422 BEFORE the question is resolved, so the UI re-asks.
     let appliedField: AppliedAnswerField | null = null;
     if (update.status === "answered") {
-      const question = await conversationRepository.readQuestion({ ...ctx, proposalMongoId, questionId: targetQuestionId });
+      const question = await withConversationProposalReference(
+        ctx,
+        proposalMongoId,
+        () =>
+          conversationRepository.readQuestion({
+            ...ctx,
+            proposalMongoId,
+            questionId: targetQuestionId,
+          }),
+      );
       const targetPath = question.status === "open" ? answerTargetPath(question.paths) : null;
       if (targetPath)
         appliedField = await applyAnswerToProposalField({
@@ -110,14 +167,19 @@ export const patchConversationQuestion = async (req: AuthRequest, res: Response)
           answer: update.answer,
         });
     }
-    const result = await conversationRepository.updateQuestion({
-      ...ctx,
+    const result = await withConversationProposalReference(
+      ctx,
       proposalMongoId,
-      questionId: targetQuestionId,
-      status: update.status,
-      answer: update.answer,
-      appliedPath: appliedField?.path ?? null,
-    });
+      () =>
+        conversationRepository.updateQuestion({
+          ...ctx,
+          proposalMongoId,
+          questionId: targetQuestionId,
+          status: update.status,
+          answer: update.answer,
+          appliedPath: appliedField?.path ?? null,
+        }),
+    );
     res.json({ data: { ...result, appliedField } });
   } catch (error) { handle(res, error); }
 };
@@ -138,7 +200,15 @@ export const conversationEvents = async (req: AuthRequest, res: Response) => {
     let ticks = 0;
     const push = async () => {
       try {
-        const snapshot = await conversationRepository.snapshot({ ...ctx, proposalMongoId });
+        const snapshot = await withConversationProposalReference(
+          ctx,
+          proposalMongoId,
+          () =>
+            conversationRepository.snapshot({
+              ...ctx,
+              proposalMongoId,
+            }),
+        );
         const payload = JSON.stringify(snapshot);
         if (payload !== last) { last = payload; res.write(`event: update\ndata: ${payload}\n\n`); }
         ticks += 1;

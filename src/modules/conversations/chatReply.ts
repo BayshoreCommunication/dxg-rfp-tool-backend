@@ -3,6 +3,7 @@ import { documentIngestion } from "../documentIngestion/composition";
 import { liveConversationReply } from "../liveAi/operations";
 import { safeLog } from "../../shared/observability/safeTelemetry";
 import { conversationRepository } from "./postgresConversationRepository";
+import { buildSelectedProposalKnowledge } from "./selectedProposalKnowledge";
 
 const FALLBACK_REPLY = "Noted — I've saved that to this proposal. Add files or notes as sources on the right, then ask me to extract requirements or generate a cited draft. I'll raise clarification questions as I find gaps.";
 
@@ -22,11 +23,23 @@ export const appendChatReply = async (
     if (process.env.LIVE_AI_PILOT_ENABLED === "true") {
       const conversation = await conversationRepository.read({ ...ctx, proposalMongoId, limit: 12 });
       const sources = await documentIngestion.list(ctx.organizationMongoId, proposalMongoId, 20).catch(() => []);
-      const proposalDoc = await Proposal.findOne({ _id: proposalMongoId, userId: ctx.actorUserMongoId })
-        .select("event venueSchedule").lean<Record<string, unknown>>();
+      const proposalDoc = await Proposal.findOne({
+        _id: proposalMongoId,
+        userId: ctx.actorUserMongoId,
+        isArchived: { $ne: true },
+        $or: [
+          { organizationId: ctx.organizationMongoId },
+          { organizationId: { $exists: false } },
+          { organizationId: null },
+        ],
+      })
+        .select(
+          "status isDraft version event venueSchedule roomByRoom production hybridVirtual contentCreative videoRecordingStep venue budget",
+        )
+        .lean<Record<string, unknown>>();
       const live = await liveConversationReply({
         history: conversation.messages.map((m: { role: string; content: string }) => ({ role: m.role, content: m.content })),
-        proposalSummary: { event: proposalDoc?.event ?? {}, venueSchedule: proposalDoc?.venueSchedule ?? {} },
+        proposalSummary: buildSelectedProposalKnowledge(proposalDoc ?? {}),
         sources: (sources as Array<Record<string, unknown>>).map((s) => ({
           filename: String(s.safeFilename ?? s.originalFilename ?? "source"),
           status: String(s.status ?? "unknown"),
