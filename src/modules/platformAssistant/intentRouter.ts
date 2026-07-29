@@ -155,7 +155,14 @@ export const classifyAssistantIntent = (input: {
     return result("platform_navigation", "deterministic", "high");
   }
   if (
-    /\b(?:plan|planning|event|venue|attendee|conference|agenda|schedule|room)\b/i.test(
+    /\b(?:weather forecast|sports score|stock price|medical diagnosis|legal advice|write code|recipe|movie|music)\b/i.test(
+      query,
+    )
+  ) {
+    return result("unsupported_or_off_topic", "deterministic", "high");
+  }
+  if (
+    /\b(?:plan|planning|event|venue|attendee|conference|agenda|schedule|rooms?)\b/i.test(
       query,
     )
   ) {
@@ -166,13 +173,6 @@ export const classifyAssistantIntent = (input: {
     if (prior && prior !== "greeting_or_thanks" && prior !== "ambiguous") {
       return result(prior, "follow_up", "medium");
     }
-  }
-  if (
-    /\b(?:weather forecast|sports score|stock price|medical diagnosis|legal advice|write code|recipe|movie|music)\b/i.test(
-      query,
-    )
-  ) {
-    return result("unsupported_or_off_topic", "deterministic", "high");
   }
   if (query.length < 4) {
     return result("ambiguous", "fallback", "low");

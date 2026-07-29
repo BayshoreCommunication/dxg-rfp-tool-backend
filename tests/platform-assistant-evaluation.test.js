@@ -4,9 +4,12 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  ASSISTANT_EVALUATION_COVERAGE,
+  PLATFORM_ASSISTANT_MINIMUM_EVALUATION_CASES,
   assistantEvaluationModels,
   assistantEvaluationThresholds,
   assistantModelPrice,
+  compareAssistantEvaluationSummaries,
   estimatedAssistantCostUsd,
   parseAssistantEvaluationFixtures,
   percentile95,
@@ -17,6 +20,9 @@ const {
 const {
   platformFactsForQuery,
 } = require("../src/modules/platformAssistant/platformKnowledge");
+const {
+  classifyAssistantIntent,
+} = require("../src/modules/platformAssistant/intentRouter");
 
 const rawFixtures = JSON.parse(
   fs.readFileSync(
@@ -42,17 +48,23 @@ const observation = (overrides = {}) => ({
   outputTokens: 100,
   estimatedCostUsd: 0.002,
   providerFailed: false,
+  intentCorrect: true,
   ...overrides,
 });
 
-test("assistant evaluation fixtures cover every required category exactly once", () => {
+test("assistant evaluation fixtures cover at least 50 cases and every risk tag", () => {
   const parsed = parseAssistantEvaluationFixtures(rawFixtures);
   assert.deepEqual(parsed.errors, []);
-  assert.equal(parsed.fixtures.length, 10);
+  assert.ok(
+    parsed.fixtures.length >= PLATFORM_ASSISTANT_MINIMUM_EVALUATION_CASES,
+  );
   assert.equal(
     new Set(parsed.fixtures.map((fixture) => fixture.category)).size,
     10,
   );
+  const coverage = new Set(parsed.fixtures.flatMap((fixture) => fixture.coverage));
+  assert.deepEqual([...coverage].sort(), [...ASSISTANT_EVALUATION_COVERAGE].sort());
+  assert.equal(parsed.baseline.promptVersion, "platform-assistant-prompt.v5");
   assert.ok(
     parsed.fixtures.some(
       (fixture) =>
@@ -62,7 +74,7 @@ test("assistant evaluation fixtures cover every required category exactly once",
   );
 });
 
-test("fixture parser rejects version drift, missing categories, and duplicates", () => {
+test("fixture parser rejects version drift, missing coverage, and duplicates", () => {
   const wrongVersion = parseAssistantEvaluationFixtures({
     ...rawFixtures,
     version: "old",
@@ -71,11 +83,20 @@ test("fixture parser rejects version drift, missing categories, and duplicates",
 
   const duplicated = structuredClone(rawFixtures);
   duplicated.cases[1].id = duplicated.cases[0].id;
-  duplicated.cases.pop();
+  duplicated.cases = duplicated.cases.slice(0, 49);
+  duplicated.cases.forEach((fixture) => {
+    fixture.coverage = fixture.coverage.filter(
+      (tag) => tag !== "unauthorized_or_cross_tenant",
+    );
+  });
   const parsed = parseAssistantEvaluationFixtures(duplicated);
   assert.ok(parsed.errors.some((error) => error.includes("duplicated")));
-  assert.ok(parsed.errors.some((error) => error.includes("exactly 10")));
-  assert.ok(parsed.errors.some((error) => error.includes("missing category")));
+  assert.ok(parsed.errors.some((error) => error.includes("at least 50")));
+  assert.ok(
+    parsed.errors.some((error) =>
+      error.includes("missing coverage: unauthorized_or_cross_tenant"),
+    ),
+  );
 });
 
 test("evaluation scoring checks kind, grounding, route, and forbidden claims", () => {
@@ -100,6 +121,16 @@ test("evaluation scoring checks kind, grounding, route, and forbidden claims", (
   assert.ok(failing.failures.some((failure) => failure.includes("kind")));
   assert.ok(failing.failures.some((failure) => failure.includes("citation")));
   assert.ok(failing.failures.some((failure) => failure.includes("route")));
+
+  const wrongIntent = scoreAssistantEvaluation(
+    fixture,
+    observation({ fixtureId: fixture.id, intentCorrect: false }),
+  );
+  assert.ok(
+    wrongIntent.failures.some((failure) =>
+      failure.includes("intent classification"),
+    ),
+  );
 });
 
 test("production response validation is reused by the evaluation gate", () => {
@@ -160,6 +191,7 @@ test("release summary enforces quality, critical, latency, and cost gates", () =
   assert.equal(passing.passedReleaseGate, true);
   assert.equal(passing.casePassRate, 1);
   assert.equal(passing.criticalFailures, 0);
+  assert.equal(passing.intentAccuracy, 1);
 
   rows[0] = {
     ...rows[0],
@@ -187,6 +219,90 @@ test("release summary enforces quality, critical, latency, and cost gates", () =
     ),
   );
   assert.ok(failing.failures.some((failure) => failure.includes("p95 cost")));
+});
+
+test("candidate comparison rejects quality, grounding, intent, or critical regressions", () => {
+  const thresholds = assistantEvaluationThresholds();
+  const rows = Array.from({ length: 50 }, (_, index) => ({
+    ...observation({ fixtureId: `fixture-${index}` }),
+    passed: true,
+    critical: index < 10,
+    failures: [],
+  }));
+  const baseline = summarizeAssistantEvaluation("baseline", rows, thresholds);
+  const candidate = summarizeAssistantEvaluation("candidate", rows, thresholds);
+  assert.deepEqual(compareAssistantEvaluationSummaries(baseline, candidate), {
+    passedPromotionGate: true,
+    failures: [],
+  });
+
+  const regressedRows = [...rows];
+  regressedRows[0] = {
+    ...regressedRows[0],
+    passed: false,
+    intentCorrect: false,
+    failures: ["intent classification mismatch"],
+  };
+  const regression = compareAssistantEvaluationSummaries(
+    baseline,
+    summarizeAssistantEvaluation("candidate", regressedRows, thresholds),
+  );
+  assert.equal(regression.passedPromotionGate, false);
+  assert.ok(regression.failures.some((failure) => failure.includes("pass rate")));
+  assert.ok(regression.failures.some((failure) => failure.includes("intent")));
+  assert.ok(regression.failures.some((failure) => failure.includes("critical")));
+});
+
+test("provider empty and citation-manipulated outputs fail closed", () => {
+  const parsed = parseAssistantEvaluationFixtures(rawFixtures);
+  const invalidCases = parsed.fixtures.filter((fixture) =>
+    fixture.coverage.includes("provider_invalid_output"),
+  );
+  assert.ok(invalidCases.length >= 2);
+  for (const fixture of invalidCases) {
+    const invalid = validatedEvaluationResponse(
+      { kind: "answer", content: "", citationIds: ["invented:citation"] },
+      [],
+    );
+    const row = scoreAssistantEvaluation(
+      fixture,
+      observation({
+        fixtureId: fixture.id,
+        schemaValid: invalid.schemaValid,
+        citationValid: invalid.citationValid,
+        kind: invalid.kind,
+        content: invalid.content,
+        citationIds: invalid.citationIds,
+        providerFailed: true,
+      }),
+    );
+    assert.equal(row.passed, false);
+    assert.ok(row.failures.includes("provider request failed"));
+    assert.ok(row.failures.includes("structured output is invalid"));
+    assert.ok(row.failures.includes("citation validation failed"));
+  }
+});
+
+test("all fixtures declare the deterministic intent produced by the runtime router", () => {
+  const parsed = parseAssistantEvaluationFixtures(rawFixtures);
+  const mismatches = parsed.fixtures.flatMap((fixture) => {
+    const history = fixture.history.map((message, index) => ({
+      id: `history-${index}`,
+      role: message.role,
+      content: message.content,
+      status: "complete",
+      intent: message.intent ?? null,
+    }));
+    const actual = classifyAssistantIntent({
+      query: fixture.query,
+      uiContext: null,
+      history,
+    }).intent;
+    return actual === fixture.expected.intent
+      ? []
+      : [`${fixture.id}: expected ${fixture.expected.intent}, received ${actual}`];
+  });
+  assert.deepEqual(mismatches, []);
 });
 
 test("percentile and model defaults remain deterministic", () => {

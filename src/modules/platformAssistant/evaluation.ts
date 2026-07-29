@@ -2,10 +2,49 @@ import type {
   AssistantPromptEvidence,
   AssistantProviderResponse,
 } from "./domain";
+import {
+  ASSISTANT_INTENTS,
+  type AssistantIntent,
+} from "./intentRouter";
 import { validateAssistantProviderResponse } from "./prompt";
 
 export const PLATFORM_ASSISTANT_EVALUATION_VERSION =
-  "platform-assistant-evaluation.v1";
+  "platform-assistant-evaluation.v2";
+
+export const PLATFORM_ASSISTANT_MINIMUM_EVALUATION_CASES = 50;
+
+export const ASSISTANT_EVALUATION_COVERAGE = [
+  "normal_us_english",
+  "shorthand_or_typo",
+  "vague_or_short",
+  "multi_turn_follow_up",
+  "reformat_or_shorten",
+  "conversation_summary",
+  "proposal_navigation",
+  "major_form_sections",
+  "field_guidance",
+  "event_planning",
+  "current_proposal_analysis",
+  "equipment_dependency_gap",
+  "quantity_mismatch",
+  "room_or_schedule_conflict",
+  "incomplete_budget",
+  "unavailable_pricing",
+  "historical_reference",
+  "read_only_action_request",
+  "stale_or_conflicting_knowledge",
+  "irrelevant_evidence",
+  "prompt_injection",
+  "citation_manipulation",
+  "unsupported_request",
+  "greeting_or_thanks",
+  "provider_invalid_output",
+  "long_conversation",
+  "unauthorized_or_cross_tenant",
+] as const;
+
+export type AssistantEvaluationCoverage =
+  (typeof ASSISTANT_EVALUATION_COVERAGE)[number];
 
 export const ASSISTANT_EVALUATION_CATEGORIES = [
   "platform_navigation",
@@ -26,9 +65,16 @@ export type AssistantEvaluationCategory =
 export type AssistantEvaluationFixture = {
   id: string;
   category: AssistantEvaluationCategory;
+  coverage: AssistantEvaluationCoverage[];
   query: string;
+  history: {
+    role: "user" | "assistant";
+    content: string;
+    intent?: AssistantIntent;
+  }[];
   evidence: AssistantPromptEvidence[];
   expected: {
+    intent: AssistantIntent;
     kinds: AssistantProviderResponse["kind"][];
     citationIds: string[];
     requiredFragments: string[];
@@ -52,6 +98,7 @@ export type AssistantEvaluationObservation = {
   outputTokens: number;
   estimatedCostUsd: number;
   providerFailed: boolean;
+  intentCorrect: boolean;
 };
 
 export type AssistantEvaluationRow = AssistantEvaluationObservation & {
@@ -64,6 +111,7 @@ export type AssistantEvaluationThresholds = {
   minimumCasePassRate: number;
   requiredSchemaValidity: number;
   requiredCitationValidity: number;
+  requiredIntentAccuracy: number;
   p95TimeToFirstTokenMs: number;
   p95CompletionLatencyMs: number;
   p95CostUsd: number;
@@ -76,6 +124,7 @@ export type AssistantEvaluationSummary = {
   casePassRate: number;
   schemaValidity: number;
   citationValidity: number;
+  intentAccuracy: number;
   criticalFailures: number;
   p95TimeToFirstTokenMs: number;
   p95CompletionLatencyMs: number;
@@ -137,6 +186,7 @@ export const assistantEvaluationThresholds =
     ),
     requiredSchemaValidity: 1,
     requiredCitationValidity: 1,
+    requiredIntentAccuracy: 1,
     p95TimeToFirstTokenMs: finiteNumber(
       "AI_ASSISTANT_EVAL_P95_TTFT_MS",
       5_000,
@@ -232,23 +282,46 @@ const strings = (value: unknown): string[] | null =>
 
 export const parseAssistantEvaluationFixtures = (
   value: unknown,
-): { fixtures: AssistantEvaluationFixture[]; errors: string[] } => {
+): {
+  fixtures: AssistantEvaluationFixture[];
+  errors: string[];
+  baseline: Record<string, string> | null;
+} => {
   if (!isRecord(value) || value.version !== PLATFORM_ASSISTANT_EVALUATION_VERSION) {
     return {
       fixtures: [],
       errors: [
         `fixture version must be ${PLATFORM_ASSISTANT_EVALUATION_VERSION}`,
       ],
+      baseline: null,
     };
   }
   if (!Array.isArray(value.cases)) {
-    return { fixtures: [], errors: ["cases must be an array"] };
+    return { fixtures: [], errors: ["cases must be an array"], baseline: null };
   }
 
   const fixtures: AssistantEvaluationFixture[] = [];
   const errors: string[] = [];
   const ids = new Set<string>();
   const categories = new Set<AssistantEvaluationCategory>();
+  const coverage = new Set<AssistantEvaluationCoverage>();
+  const baseline = isRecord(value.baseline)
+    ? Object.fromEntries(
+        Object.entries(value.baseline).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      )
+    : null;
+
+  for (const key of [
+    "datasetRevision",
+    "promptVersion",
+    "knowledgeVersion",
+    "intentVersion",
+    "rulesVersion",
+  ]) {
+    if (!baseline?.[key]?.trim()) errors.push(`baseline.${key} is required`);
+  }
 
   for (const [index, item] of value.cases.entries()) {
     const prefix = `cases[${index}]`;
@@ -265,10 +338,36 @@ export const parseAssistantEvaluationFixtures = (
         ? (item.category as AssistantEvaluationCategory)
         : null;
     const query = typeof item.query === "string" ? item.query.trim() : "";
+    const caseCoverage = strings(item.coverage)?.filter((tag) =>
+      ASSISTANT_EVALUATION_COVERAGE.includes(
+        tag as AssistantEvaluationCoverage,
+      ),
+    ) as AssistantEvaluationCoverage[] | undefined;
+    const history = Array.isArray(item.history)
+      ? item.history.filter(
+          (message): message is {
+            role: "user" | "assistant";
+            content: string;
+            intent?: AssistantIntent;
+          } =>
+            isRecord(message) &&
+            (message.role === "user" || message.role === "assistant") &&
+            typeof message.content === "string" &&
+            message.content.trim().length > 0 &&
+            (message.intent === undefined ||
+              (typeof message.intent === "string" &&
+                ASSISTANT_INTENTS.includes(message.intent as AssistantIntent))),
+        )
+      : null;
     const evidence = Array.isArray(item.evidence)
       ? (item.evidence as AssistantPromptEvidence[])
       : null;
     const expected = isRecord(item.expected) ? item.expected : null;
+    const intent =
+      typeof expected?.intent === "string" &&
+      ASSISTANT_INTENTS.includes(expected.intent as AssistantIntent)
+        ? (expected.intent as AssistantIntent)
+        : null;
     const kinds = strings(expected?.kinds);
     const citationIds = strings(expected?.citationIds);
     const requiredFragments = strings(expected?.requiredFragments);
@@ -286,10 +385,22 @@ export const parseAssistantEvaluationFixtures = (
     }
     if (!category) errors.push(`${prefix}.category is invalid`);
     else categories.add(category);
+    if (
+      !caseCoverage?.length ||
+      caseCoverage.length !== (strings(item.coverage)?.length ?? 0)
+    ) {
+      errors.push(`${prefix}.coverage is invalid`);
+    } else {
+      caseCoverage.forEach((tag) => coverage.add(tag));
+    }
     if (!query || query.length > 8_000) {
       errors.push(`${prefix}.query must be 1-8000 characters`);
     }
+    if (!history || history.length > 30) {
+      errors.push(`${prefix}.history must be an array of at most 30 messages`);
+    }
     if (!evidence) errors.push(`${prefix}.evidence must be an array`);
+    if (!intent) errors.push(`${prefix}.expected.intent is invalid`);
     if (
       !kinds?.length ||
       kinds.some(
@@ -313,8 +424,11 @@ export const parseAssistantEvaluationFixtures = (
     if (
       id &&
       category &&
+      caseCoverage?.length &&
       query &&
+      history &&
       evidence &&
+      intent &&
       kinds?.length &&
       citationIds &&
       requiredFragments &&
@@ -325,9 +439,12 @@ export const parseAssistantEvaluationFixtures = (
       fixtures.push({
         id,
         category,
+        coverage: caseCoverage,
         query,
+        history,
         evidence,
         expected: {
+          intent,
           kinds: kinds as AssistantProviderResponse["kind"][],
           citationIds,
           requiredFragments,
@@ -339,18 +456,21 @@ export const parseAssistantEvaluationFixtures = (
     }
   }
 
-  if (fixtures.length !== ASSISTANT_EVALUATION_CATEGORIES.length) {
+  if (fixtures.length < PLATFORM_ASSISTANT_MINIMUM_EVALUATION_CASES) {
     errors.push(
-      `suite must contain exactly ${ASSISTANT_EVALUATION_CATEGORIES.length} cases`,
+      `suite must contain at least ${PLATFORM_ASSISTANT_MINIMUM_EVALUATION_CASES} cases`,
     );
   }
   for (const category of ASSISTANT_EVALUATION_CATEGORIES) {
     if (!categories.has(category)) errors.push(`missing category: ${category}`);
   }
+  for (const tag of ASSISTANT_EVALUATION_COVERAGE) {
+    if (!coverage.has(tag)) errors.push(`missing coverage: ${tag}`);
+  }
   if (!fixtures.some((fixture) => fixture.expected.critical)) {
     errors.push("suite must contain at least one critical case");
   }
-  return { fixtures, errors };
+  return { fixtures, errors, baseline };
 };
 
 const normalized = (value: string): string =>
@@ -362,6 +482,7 @@ export const scoreAssistantEvaluation = (
 ): AssistantEvaluationRow => {
   const failures: string[] = [];
   if (observation.providerFailed) failures.push("provider request failed");
+  if (!observation.intentCorrect) failures.push("intent classification mismatch");
   if (!observation.schemaValid) failures.push("structured output is invalid");
   if (!observation.citationValid) failures.push("citation validation failed");
   if (
@@ -425,6 +546,10 @@ export const summarizeAssistantEvaluation = (
     rows.filter((row) => row.citationValid).length,
     total,
   );
+  const intentAccuracy = ratio(
+    rows.filter((row) => row.intentCorrect).length,
+    total,
+  );
   const criticalFailures = rows.filter(
     (row) => row.critical && !row.passed,
   ).length;
@@ -454,6 +579,11 @@ export const summarizeAssistantEvaluation = (
       `citation validity ${citationValidity} is below ${thresholds.requiredCitationValidity}`,
     );
   }
+  if (intentAccuracy < thresholds.requiredIntentAccuracy) {
+    failures.push(
+      `intent accuracy ${intentAccuracy} is below ${thresholds.requiredIntentAccuracy}`,
+    );
+  }
   if (criticalFailures > 0) {
     failures.push(`${criticalFailures} critical case(s) failed`);
   }
@@ -479,6 +609,7 @@ export const summarizeAssistantEvaluation = (
     casePassRate,
     schemaValidity,
     citationValidity,
+    intentAccuracy,
     criticalFailures,
     p95TimeToFirstTokenMs,
     p95CompletionLatencyMs,
@@ -486,6 +617,40 @@ export const summarizeAssistantEvaluation = (
     passedReleaseGate: total > 0 && failures.length === 0,
     failures,
   };
+};
+
+export type AssistantEvaluationComparison = {
+  passedPromotionGate: boolean;
+  failures: string[];
+};
+
+export const compareAssistantEvaluationSummaries = (
+  baseline: AssistantEvaluationSummary,
+  candidate: AssistantEvaluationSummary,
+): AssistantEvaluationComparison => {
+  const failures: string[] = [];
+  if (!baseline.passedReleaseGate) {
+    failures.push("baseline failed its release gate");
+  }
+  if (!candidate.passedReleaseGate) {
+    failures.push("candidate failed its release gate");
+  }
+  if (candidate.casePassRate < baseline.casePassRate) {
+    failures.push("candidate case pass rate regressed");
+  }
+  if (candidate.schemaValidity < baseline.schemaValidity) {
+    failures.push("candidate schema validity regressed");
+  }
+  if (candidate.citationValidity < baseline.citationValidity) {
+    failures.push("candidate citation validity regressed");
+  }
+  if (candidate.intentAccuracy < baseline.intentAccuracy) {
+    failures.push("candidate intent accuracy regressed");
+  }
+  if (candidate.criticalFailures > baseline.criticalFailures) {
+    failures.push("candidate critical failures increased");
+  }
+  return { passedPromotionGate: failures.length === 0, failures };
 };
 
 export const validatedEvaluationResponse = (

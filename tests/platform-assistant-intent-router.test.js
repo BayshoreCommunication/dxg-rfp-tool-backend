@@ -19,6 +19,7 @@ test("deterministic router recognizes the initial intent taxonomy", () => {
     ["Review the proposal workflow.", "proposal_review"],
     ["What should I check before sending a proposal?", "pre_send_checklist"],
     ["Plan an event for 500 attendees.", "event_planning"],
+    ["Two rooms overlap at 2 PM.", "event_planning"],
     ["What should I enter in this field?", "form_field_help"],
     ["Summarize my current proposal.", "proposal_specific_request"],
     ["Review the equipment scope for missing microphones.", "equipment_scope_review"],
@@ -26,6 +27,7 @@ test("deterministic router recognizes the initial intent taxonomy", () => {
     ["Compare this with last year's proposal.", "historical_reference_request"],
     ["Delete my latest proposal.", "action_request"],
     ["What is the weather forecast?", "unsupported_or_off_topic"],
+    ["Give medical diagnosis advice for an attendee.", "unsupported_or_off_topic"],
     ["help", "ambiguous"],
   ];
 

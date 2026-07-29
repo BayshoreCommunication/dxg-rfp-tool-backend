@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   assistantEvaluationBudgetsApproved,
+  compareAssistantEvaluationSummaries,
   assistantEvaluationModels,
   assistantEvaluationThresholds,
   assistantModelPrice,
@@ -21,8 +22,9 @@ import {
   buildAssistantPromptInput,
 } from "../src/modules/platformAssistant/prompt";
 import {
-  platformFactsForQuery,
+  platformFactsForConversation,
 } from "../src/modules/platformAssistant/platformKnowledge";
+import { classifyAssistantIntent } from "../src/modules/platformAssistant/intentRouter";
 import {
   OpenAiAssistantProvider,
 } from "../src/modules/platformAssistant/openAiAssistantProvider";
@@ -84,17 +86,18 @@ const assertFixtureIntegrity = (): AssistantEvaluationFixture[] => {
 const offline = (fixtures: AssistantEvaluationFixture[]): void => {
   console.log("Platform Assistant evaluation — offline integrity mode\n");
   printTable(
-    ["fixture", "category", "critical", "evidence", "integrity"],
+    ["fixture", "category", "coverage", "critical", "evidence", "integrity"],
     fixtures.map((fixture) => [
       fixture.id,
       fixture.category,
+      String(fixture.coverage.length),
       fixture.expected.critical ? "yes" : "no",
       String(fixture.evidence.length),
       "ok",
     ]),
   );
   console.log(
-    `\nPASS ${fixtures.length} versioned fixtures cover every Phase 5 evaluation category.`,
+    `\nPASS ${fixtures.length} versioned fixtures cover every production-copilot evaluation category and risk tag.`,
   );
   console.log(
     "Run `npm run eval:assistant:live` only in staging after setting the explicit live-evaluation gate and provider credential.",
@@ -123,11 +126,55 @@ const userMessage = (
     inputTokens: null,
     outputTokens: null,
     safeErrorCode: null,
+    intent: null,
+    intentVersion: null,
+    intentSource: null,
+    intentConfidence: null,
+    responseKind: null,
+    promptVersion: null,
+    knowledgeVersion: null,
+    firstTokenMs: null,
+    completionLatencyMs: null,
     citations: [],
+    feedback: null,
     createdAt: stamp,
     updatedAt: stamp,
     completedAt: stamp,
   };
+};
+
+const historyMessages = (
+  fixture: AssistantEvaluationFixture,
+): AssistantMessage[] => {
+  const threadId = crypto.randomUUID();
+  const stamp = new Date().toISOString();
+  return fixture.history.map((message, index) => ({
+    id: crypto.randomUUID(),
+    threadId,
+    ordinal: index + 1,
+    role: message.role,
+    content: message.content,
+    status: "complete",
+    providerResponseId: null,
+    model: null,
+    inputTokens: null,
+    outputTokens: null,
+    safeErrorCode: null,
+    intent: message.intent ?? null,
+    intentVersion: message.intent ? "assistant-intent-router.v1" : null,
+    intentSource: message.intent ? "deterministic" : null,
+    intentConfidence: message.intent ? "high" : null,
+    responseKind: null,
+    promptVersion: null,
+    knowledgeVersion: null,
+    firstTokenMs: null,
+    completionLatencyMs: null,
+    citations: [],
+    feedback: null,
+    createdAt: stamp,
+    updatedAt: stamp,
+    completedAt: stamp,
+  }));
 };
 
 const evaluationLedger = (): AssistantAttemptLedger => ({
@@ -162,11 +209,23 @@ const runFixture = async (
   let providerFailed = false;
   let streamedContent = "";
   const promptUser = userMessage(fixture);
+  const history = historyMessages(fixture);
+  const intent = classifyAssistantIntent({
+    query: fixture.query,
+    uiContext: null,
+    history,
+    currentUserMessageId: promptUser.id,
+  });
   const prompt = buildAssistantPromptInput({
     userMessage: promptUser,
-    history: [],
-    platformFacts: platformFactsForQuery(fixture.query),
+    history,
+    platformFacts: platformFactsForConversation(
+      fixture.query,
+      history,
+      promptUser.id,
+    ),
     operatingGuidance: fixture.evidence,
+    intent,
   });
 
   try {
@@ -215,6 +274,7 @@ const runFixture = async (
       price,
     ),
     providerFailed,
+    intentCorrect: intent.intent === fixture.expected.intent,
   };
   return scoreAssistantEvaluation(fixture, observation);
 };
@@ -283,7 +343,7 @@ const liveEvaluation = async (
 
   console.log("Platform Assistant evaluation — staging model comparison\n");
   console.log(
-    `Thresholds: pass>=${thresholds.minimumCasePassRate}, schema=${thresholds.requiredSchemaValidity}, citations=${thresholds.requiredCitationValidity}, p95 TTFT<=${thresholds.p95TimeToFirstTokenMs}ms, p95 completion<=${thresholds.p95CompletionLatencyMs}ms, p95 cost<=$${thresholds.p95CostUsd.toFixed(6)}.`,
+    `Thresholds: pass>=${thresholds.minimumCasePassRate}, schema=${thresholds.requiredSchemaValidity}, citations=${thresholds.requiredCitationValidity}, intent=${thresholds.requiredIntentAccuracy}, p95 TTFT<=${thresholds.p95TimeToFirstTokenMs}ms, p95 completion<=${thresholds.p95CompletionLatencyMs}ms, p95 cost<=$${thresholds.p95CostUsd.toFixed(6)}.`,
   );
   console.log(
     `Budget approval: ${assistantEvaluationBudgetsApproved() ? "approved" : "pending"}\n`,
@@ -319,8 +379,10 @@ const liveEvaluation = async (
     console.log("");
   }
 
-  const approved = summaries.find((summary) => summary.role === "approved");
-  if (!approved?.passedReleaseGate) {
+  const approved =
+    summaries.find((summary) => summary.role === "approved") ??
+    fail("the approved assistant model did not produce an evaluation summary");
+  if (!approved.passedReleaseGate) {
     fail("the approved assistant model did not pass its release gate");
   }
   if (!assistantEvaluationBudgetsApproved()) {
@@ -334,9 +396,13 @@ const liveEvaluation = async (
   );
   const candidate = summaries.find((summary) => summary.role === "candidate");
   if (candidate) {
+    const comparison = compareAssistantEvaluationSummaries(approved, candidate);
+    for (const failure of comparison.failures) {
+      console.error(`FAILED candidate comparison: ${failure}`);
+    }
     console.log(
-      candidate.passedReleaseGate
-        ? "Candidate passed its comparison gate. Promotion remains an explicit configuration decision."
+      comparison.passedPromotionGate
+        ? "Candidate passed the non-regression comparison gate. Promotion remains an explicit, human-approved configuration decision."
         : "Candidate did not pass its comparison gate. Keep the approved model unchanged.",
     );
   }

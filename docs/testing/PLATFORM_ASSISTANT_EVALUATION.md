@@ -1,4 +1,4 @@
-# Platform Assistant Phase 5 Evaluation
+# Platform Assistant Production Evaluation
 
 This is the release gate for the read-only Platform AI Assistant. It compares
 the already approved live-AI model with the assistant candidate using the same
@@ -7,21 +7,29 @@ and token accounting used by production.
 
 ## Scope
 
-The versioned suite contains one synthetic case for each required behavior:
+The versioned v2 suite contains 50 synthetic cases across the original ten
+behavior categories. Coverage tags make each production risk explicit and the
+offline gate rejects a suite when any tag is absent. It covers:
 
-1. Platform navigation.
-2. Proposal workflow explanation.
-3. Event information checklist.
-4. Difference between the two assistant surfaces.
-5. Unknown or unimplemented feature.
-6. A request to mutate, publish, or send.
-7. A question about an unnamed proposal.
-8. Prompt injection in retrieved content.
-9. Conflicting approved knowledge.
-10. No relevant approved knowledge.
+- US English, shorthand and typos, short or vague requests, greetings, thanks,
+  long conversations, follow-ups, reformatting, and conversation summaries.
+- Proposal navigation, all major intake sections, field guidance, event
+  planning, current-proposal requests, equipment dependencies, quantity and
+  room/schedule conflicts, incomplete budgets, unavailable pricing, and
+  selected historical references.
+- Read-only action boundaries, stale or conflicting knowledge, irrelevant
+  evidence, prompt and citation manipulation, unsupported requests, invalid
+  provider output, and unauthorized or cross-tenant attempts.
 
 Fixtures contain no customer or production data. Live evaluation is restricted
 to `AI_ENVIRONMENT=staging`.
+
+Every fixture declares its expected deterministic intent, allowed response
+kind, required citations, preserved facts/calculations, approved routes, and
+forbidden claims. Multi-turn fixtures carry synthetic history through the same
+history bounder and conversation-aware platform-fact selector used at runtime.
+Provider-empty and malformed-citation controls prove that production response
+validation fails closed.
 
 ## Gates
 
@@ -30,6 +38,7 @@ Quality gates are fixed:
 - At least 90% of cases pass.
 - 100% structured-output validity.
 - 100% citation validity.
+- 100% deterministic intent accuracy.
 - Zero failures on critical mutation, privacy, ambiguity, injection, conflict,
   and unsupported-capability cases.
 
@@ -60,9 +69,10 @@ prevents a missing price from becoming a zero-cost result.
 npm run eval:assistant
 ```
 
-This validates the suite version, fixture schema, unique IDs, complete category
-coverage, and critical-case coverage. It makes no provider call and does not
-read an API key.
+This validates the suite version, baseline manifest, fixture schema, unique
+IDs, minimum 50-case size, complete category and risk-tag coverage, declared
+intent behavior, critical-case coverage, and invalid-provider controls. It
+makes no provider call and does not read an API key.
 
 ## Staging model comparison
 
@@ -101,16 +111,36 @@ First run with budget approval set to `false` to collect evidence. Product
 approval is a separate decision. After the owner approves the measured budget,
 set the approval flag to `true` and rerun the exact same suite.
 
-## Selection rule
+## Baseline and selection rule
+
+The fixture manifest pins the dataset revision plus prompt, platform knowledge,
+intent-router, and deterministic-rule versions. Any prompt, retrieval, rule, or
+model candidate must run against the same fixture revision as the approved
+baseline. Change one promotion variable at a time.
 
 The approved model remains the runtime default unless it fails the gate or the
 candidate demonstrates a product-relevant improvement that justifies its
 latency and cost. A candidate passing the suite does not modify
 `AI_ASSISTANT_MODEL`; promotion is an explicit configuration decision.
 
-Do not change the prompt and model in the same baseline comparison. If a case
-fails, record the exact fixture and failure, make the smallest prompt or model
+The comparison gate rejects any candidate with a lower case-pass rate, schema
+validity, citation validity, intent accuracy, or a higher critical-failure
+count. If a case fails, record the exact fixture and failure, make the smallest
 change that addresses it, and rerun the unchanged fixture suite.
+
+## Review limitations
+
+The automated gate is deterministic. It does not use the candidate model as its
+own grader and does not silently promote a model. Required/forbidden fragments
+are useful for preserved facts, calculations, safe refusals, routes, and
+professional-language hazards, but they do not prove that every natural
+language answer is excellent.
+
+Before promotion, a named reviewer must inspect a sample spanning every
+coverage tag, including all critical failures and borderline answers. Record
+reviewer, date, dataset revision, model/prompt/retrieval/rule versions, decision,
+and limitations. Promotion remains a human configuration change after the
+automated and human gates both pass.
 
 ## Official guidance
 
