@@ -24,7 +24,8 @@
 - Run final acceptance with the SOW test RFP and vendor responses, reviewed by the founder.
 - Confirm whether service charge compounds on the in-house subtotal.
 - Confirm adding projector lumens and an in-house-versus-outside-AV input.
-- Explicitly confirm the policy change allowing safe candidates to fill empty draft fields automatically. Conflicts and publication remain human-controlled.
+- Confirm the final reviewed-field workflow during acceptance. Extracted
+  candidates never fill even empty fields until the owner explicitly confirms.
 
 ## Exclusions and protected assets
 

@@ -7,7 +7,8 @@
 1. Write and approve the provider comparison; close the 2.5-point recall gap or document the accepted exception.
 2. Run founder-reviewed acceptance with the SOW assets and vendor responses.
 3. Resolve the pricing-factor and questionnaire questions in [CLIENT_SCOPE.md](CLIENT_SCOPE.md).
-4. Obtain explicit confirmation of the empty-field auto-apply boundary.
+4. Validate the explicit current-versus-proposed field confirmation during
+   founder-reviewed acceptance.
 
 ## Product priorities
 

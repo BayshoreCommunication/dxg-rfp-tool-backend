@@ -141,11 +141,10 @@ Lives at **`/proposals/{id}/assistant`** (one surface, one implementation).
 a proposal exists. The editor keeps its stepper and review panels and links to
 the assistant.
 
-Flow: type or attach → sources scan → extraction auto-runs → safe candidates
-auto-apply (empty field, confidence ≥ 0.8, single candidate for that path) →
-guided key questions with typed controls (date picker, choice pills, number) →
-progress card with real completeness → generate cited draft → readiness and
-investment guidance.
+Flow: type or attach → sources scan → extraction auto-runs → cited candidates
+remain read-only and link to explicit per-field review → guided key questions
+with typed controls (date picker, choice pills, number) → progress card with
+real completeness → generate cited draft → readiness and investment guidance.
 
 ### The Platform AI Assistant
 
@@ -174,13 +173,10 @@ entitlement or deployment allowlist exists.
 - **MongoDB stays authoritative for proposal content**; PostgreSQL owns the AI
   domain (runs, evidence, reviews, knowledge, pricing, audit, outbox); Redis
   carries references only, never content.
-- **Human control boundary moved deliberately.** Originally every extracted
-  field required explicit approval. Now AI writes into *empty* draft fields
-  automatically; conflicts, filled fields and low-confidence values still need
-  review, and submission/publication remain manual. Per-file "non-confidential"
-  consent was also removed from the workspace (org-wide flags and kill switches
-  still apply). **This is a policy change from the signed pilot design and DXG
-  should be told explicitly.**
+- **Human control boundary is explicit.** Every extracted field requires
+  individual review followed by a current-versus-proposed confirmation.
+  Empty fields are not treated as implicit consent. Submission and publication
+  remain manual.
 - **Never fabricate a number.** Investment guidance refuses categories the
   corpus cannot support, with a concrete ask. All 433 imported records are
   `calibration_tier = 'baseline'`, so every estimate says it rests on national
