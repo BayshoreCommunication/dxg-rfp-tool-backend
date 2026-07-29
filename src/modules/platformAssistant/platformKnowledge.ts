@@ -1,6 +1,7 @@
 import type { AssistantMessage, AssistantPromptEvidence } from "./domain";
+import { proposalFormGuidanceEvidenceForQuery } from "./proposalFormGuidance";
 
-export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v3";
+export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v4";
 
 type PlatformFact = Omit<AssistantPromptEvidence, "sourceType" | "trust" | "releaseId"> & {
   keywords: readonly string[];
@@ -310,7 +311,14 @@ export const platformFactsForQuery = (
   );
   const facts = selected.length ? selected.map((item) => item.fact) : fallback;
 
-  return facts.map(platformFactEvidence);
+  const fieldGuidance = proposalFormGuidanceEvidenceForQuery(
+    query,
+    Math.min(3, limit),
+  );
+  return [
+    ...fieldGuidance,
+    ...facts.map(platformFactEvidence),
+  ].slice(0, Math.max(1, limit));
 };
 
 export const platformFactsForConversation = (

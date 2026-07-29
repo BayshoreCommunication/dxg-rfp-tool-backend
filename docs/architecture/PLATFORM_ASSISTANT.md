@@ -87,10 +87,32 @@ New sources must be added behind this port and must preserve:
 - output citation/link validation;
 - graceful degradation to versioned platform facts.
 
-Platform map v3 also records the current guided proposal intake separately
-from the optional five-phase proposal-assistant workflow. It covers the
-displayed intake sections, their main field groups, the proposal pre-send
-checklist, and safe user-operated next steps for read-only action refusals.
+Platform map v4 records the current guided proposal intake separately from the
+optional five-phase proposal-assistant workflow. It covers the displayed intake
+sections, the proposal pre-send checklist, and safe user-operated next steps
+for read-only action refusals.
+
+### Authoritative form guidance
+
+`proposalFormGuidance.ts` derives its field inventory from the canonical
+`proposal.v1` JSON schema instead of maintaining an independent list of field
+paths. The registry:
+
+- maps every user-facing canonical leaf to one of the ten verified form
+  sections;
+- keeps explicit, documented exclusions for generated or non-visible fields;
+- exposes a stable canonical field key, type, required/optional/conditional
+  status, visibility conditions, dependencies, purpose, entry guidance,
+  example, common mistakes, follow-up questions, sources, owner, version, and
+  review date;
+- converts only a small number of relevant field records into bounded trusted
+  evidence for the existing retrieval path;
+- returns no evidence for unknown field keys;
+- pins the reviewed canonical leaf-path digest in tests, so a schema field
+  addition, removal, or rename requires an explicit guidance review.
+
+The registry is read-only. It does not load a proposal or authorize any field
+mutation.
 
 ## Streaming and retry rules
 
