@@ -1,4 +1,5 @@
 import Proposal from "../../../modal/proposalsModel";
+import { listOwnedProposals } from "../proposals/composition";
 import {
   buildSelectedProposalKnowledge,
   SELECTED_PROPOSAL_KNOWLEDGE_VERSION,
@@ -14,11 +15,14 @@ import type {
 } from "./domain";
 
 const MAX_PROPOSAL_CANDIDATES = 500;
+const PROPOSAL_PORTFOLIO_VERSION = "assistant-proposal-portfolio.v1";
 const SAFE_PROPOSAL_FIELDS = [
   "status",
   "isDraft",
   "isActive",
+  "isArchived",
   "isCopy",
+  "isFavorite",
   "version",
   "event",
   "venueSchedule",
@@ -35,13 +39,35 @@ type ProposalCandidate = Record<string, unknown> & {
   status?: unknown;
   isDraft?: unknown;
   isActive?: unknown;
+  isArchived?: unknown;
   isCopy?: unknown;
+  isFavorite?: unknown;
   event?: { eventName?: unknown };
+};
+
+type ProposalPortfolioCounts = {
+  totalCreated: number;
+  all: number;
+  draft: number;
+  live: number;
+  favorite: number;
+  expired: number;
+  archive: number;
+  saved: number;
 };
 
 type FindOwnedProposals = (
   context: PlatformAssistantContext,
 ) => Promise<ProposalCandidate[]>;
+
+type CountOwnedProposals = (
+  context: PlatformAssistantContext,
+) => Promise<ProposalPortfolioCounts>;
+
+type ProposalContextDependencies = {
+  findOwnedProposals: FindOwnedProposals;
+  countOwnedProposals?: CountOwnedProposals;
+};
 
 const normalize = (value: string): string =>
   value
@@ -50,6 +76,17 @@ const normalize = (value: string): string =>
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim()
     .replace(/\s+/g, " ");
+
+const proposalCountQuestion = (value: string): boolean => {
+  const normalized = normalize(value);
+  return (
+    /\b(?:how many|number of|count of|total(?: number of)?)\b.{0,48}\bproposals?\b/u.test(
+      normalized,
+    ) ||
+    /\bproposals?\b.{0,48}\b(?:count|total|how many)\b/u.test(normalized) ||
+    /\bproposal count\b/u.test(normalized)
+  );
+};
 
 const proposalName = (proposal: ProposalCandidate): string => {
   const value = proposal.event?.eventName;
@@ -164,56 +201,159 @@ const proposalEvidence = (
   return [overview, readiness, ...sections];
 };
 
-export const createAssistantProposalContextSource = (
-  findOwnedProposals: FindOwnedProposals,
-): AssistantProposalContextSource => ({
-  async resolve(input): Promise<AssistantProposalContextResolution> {
-    const proposals = await findOwnedProposals(input);
-    const messages = [
-      input.query,
-      ...input.recentUserMessages.slice(-8).reverse(),
-    ];
+const countsFromCandidates = (
+  proposals: readonly ProposalCandidate[],
+): ProposalPortfolioCounts => {
+  const available = proposals.filter(
+    (proposal) =>
+      proposal.isArchived !== true && proposal.isCopy !== true,
+  );
+  return {
+    totalCreated: proposals.length,
+    all: available.length,
+    draft: available.filter((proposal) => proposal.isDraft === true).length,
+    live: available.filter(
+      (proposal) =>
+        proposal.isDraft !== true &&
+        proposal.status === "submitted" &&
+        proposal.isActive !== false,
+    ).length,
+    favorite: available.filter(
+      (proposal) => proposal.isFavorite === true,
+    ).length,
+    expired: available.filter(
+      (proposal) =>
+        proposal.isDraft !== true && proposal.isActive === false,
+    ).length,
+    archive: proposals.filter(
+      (proposal) => proposal.isArchived === true,
+    ).length,
+    saved: proposals.filter(
+      (proposal) =>
+        proposal.isArchived !== true && proposal.isCopy === true,
+    ).length,
+  };
+};
 
-    for (const message of messages) {
-      const matches = matchingCandidates(proposals, message);
-      if (matches.length === 1) {
-        const name = proposalName(matches[0]);
-        return {
-          state: "matched",
-          proposalName: name,
-          evidence: proposalEvidence(matches[0]),
-        };
-      }
-      if (matches.length > 1) {
-        return {
-          state: "ambiguous",
-          proposalNames: matches
-            .map(proposalName)
-            .filter(Boolean)
-            .slice(0, 5),
-          evidence: [],
-        };
-      }
-    }
-
-    return { state: "not_found", evidence: [] };
-  },
+const portfolioEvidence = (
+  counts: ProposalPortfolioCounts,
+): AssistantPromptEvidence => ({
+  id: "proposal-portfolio:counts",
+  sourceType: "proposal_portfolio",
+  trust: "authorized_private_data",
+  title: "Your proposal counts",
+  content: JSON.stringify({
+    schemaVersion: PROPOSAL_PORTFOLIO_VERSION,
+    scope: "authenticated_owner_and_organization",
+    totalCreated: counts.totalCreated,
+    mainList: counts.all,
+    draft: counts.draft,
+    live: counts.live,
+    favorite: counts.favorite,
+    expired: counts.expired,
+    archived: counts.archive,
+    savedCopies: counts.saved,
+  }),
+  href: "/proposals",
+  releaseId: PROPOSAL_PORTFOLIO_VERSION,
+  fragmentId: "counts",
 });
 
+export const createAssistantProposalContextSource = (
+  input: FindOwnedProposals | ProposalContextDependencies,
+): AssistantProposalContextSource => {
+  const dependencies: ProposalContextDependencies =
+    typeof input === "function"
+      ? { findOwnedProposals: input }
+      : input;
+  return {
+    async resolve(input): Promise<AssistantProposalContextResolution> {
+      if (proposalCountQuestion(input.query)) {
+        const counts = dependencies.countOwnedProposals
+          ? await dependencies.countOwnedProposals(input)
+          : countsFromCandidates(
+              await dependencies.findOwnedProposals(input),
+            );
+        return {
+          state: "portfolio_summary",
+          evidence: [portfolioEvidence(counts)],
+        };
+      }
+
+      const proposals = await dependencies.findOwnedProposals(input);
+      const messages = [
+        input.query,
+        ...input.recentUserMessages.slice(-8).reverse(),
+      ];
+
+      for (const message of messages) {
+        const matches = matchingCandidates(proposals, message);
+        if (matches.length === 1) {
+          const name = proposalName(matches[0]);
+          return {
+            state: "matched",
+            proposalName: name,
+            evidence: proposalEvidence(matches[0]),
+          };
+        }
+        if (matches.length > 1) {
+          return {
+            state: "ambiguous",
+            proposalNames: matches
+              .map(proposalName)
+              .filter(Boolean)
+              .slice(0, 5),
+            evidence: [],
+          };
+        }
+      }
+
+      return { state: "not_found", evidence: [] };
+    },
+  };
+};
+
 export const mongoAssistantProposalContextSource =
-  createAssistantProposalContextSource(async (context) =>
-    Proposal.find({
-      userId: context.actorUserMongoId,
-      isArchived: { $ne: true },
-      isCopy: { $ne: true },
-      $or: [
-        { organizationId: context.organizationMongoId },
-        { organizationId: { $exists: false } },
-        { organizationId: null },
-      ],
-    })
-      .select(SAFE_PROPOSAL_FIELDS)
-      .sort({ updatedAt: -1 })
-      .limit(MAX_PROPOSAL_CANDIDATES)
-      .lean<ProposalCandidate[]>(),
-  );
+  createAssistantProposalContextSource({
+    findOwnedProposals: async (context) =>
+      Proposal.find({
+        userId: context.actorUserMongoId,
+        isArchived: { $ne: true },
+        isCopy: { $ne: true },
+        $or: [
+          { organizationId: context.organizationMongoId },
+          { organizationId: { $exists: false } },
+          { organizationId: null },
+        ],
+      })
+        .select(SAFE_PROPOSAL_FIELDS)
+        .sort({ updatedAt: -1 })
+        .limit(MAX_PROPOSAL_CANDIDATES)
+        .lean<ProposalCandidate[]>(),
+    countOwnedProposals: async (context) => {
+      const [totalCreated, list] = await Promise.all([
+        Proposal.countDocuments({
+          userId: context.actorUserMongoId,
+          organizationId: context.organizationMongoId,
+        }),
+        listOwnedProposals({
+          ownerUserId: context.actorUserMongoId,
+          query: {
+            includeCounts: "true",
+            page: "1",
+            limit: "1",
+          },
+        }),
+      ]);
+      const counts = list.counts ?? {
+        all: 0,
+        draft: 0,
+        live: 0,
+        favorite: 0,
+        expired: 0,
+        archive: 0,
+        saved: 0,
+      };
+      return { totalCreated, ...counts };
+    },
+  });

@@ -227,6 +227,83 @@ test("streaming application injects matched proposal evidence and promotes the i
   });
 });
 
+test("streaming application bypasses the model for exact proposal counts", async () => {
+  await withEnabledAssistant(async () => {
+    const setupResult = setup(
+      [
+        {
+          type: "failed",
+          code: "ASSISTANT_PROVIDER_FAILED",
+          retryable: true,
+        },
+      ],
+      {
+        userContent: "How many proposals have I created?",
+        proposalContextSource: {
+          async resolve(input) {
+            assert.equal(input.query, "How many proposals have I created?");
+            return {
+              state: "portfolio_summary",
+              evidence: [
+                {
+                  id: "proposal-portfolio:counts",
+                  sourceType: "proposal_portfolio",
+                  trust: "authorized_private_data",
+                  title: "Your proposal counts",
+                  content: JSON.stringify({
+                    totalCreated: 83,
+                    mainList: 68,
+                    draft: 48,
+                    live: 4,
+                    expired: 16,
+                    archived: 14,
+                    savedCopies: 1,
+                  }),
+                  href: "/proposals",
+                },
+              ],
+            };
+          },
+        },
+      },
+    );
+
+    const output = await invoke(
+      setupResult.application,
+      new AbortController().signal,
+      undefined,
+      "How many proposals have I created?",
+    );
+
+    assert.equal(setupResult.providerCalls(), 0);
+    assert.equal(output.result.assistantMessage.status, "complete");
+    assert.equal(
+      output.result.assistantMessage.model,
+      "platform-assistant-deterministic-v1",
+    );
+    assert.match(
+      output.result.assistantMessage.content,
+      /\*\*83 proposals\*\*/,
+    );
+    assert.ok(
+      output.result.assistantMessage.citations.some(
+        (item) => item.sourceId === "proposal-portfolio:counts",
+      ),
+    );
+    assert.ok(
+      output.events.some(
+        (event) =>
+          event.type === "response.delta" &&
+          event.delta.includes("83 proposals"),
+      ),
+    );
+    assert.equal(
+      output.events.at(-1).type,
+      "response.completed",
+    );
+  });
+});
+
 const invoke = async (
   application,
   signal = new AbortController().signal,

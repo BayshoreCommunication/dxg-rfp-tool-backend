@@ -122,6 +122,23 @@ const selectedProposalOverview = (
   }
 };
 
+const proposalPortfolioSnapshot = (
+  input: AssistantPromptInput,
+): { evidence: AssistantPromptEvidence; value: Record<string, unknown> } | null => {
+  const evidence = input.evidence.find(
+    (item) =>
+      item.sourceType === "proposal_portfolio" &&
+      item.id === "proposal-portfolio:counts",
+  );
+  if (!evidence) return null;
+  try {
+    const value = record(JSON.parse(evidence.content));
+    return value ? { evidence, value } : null;
+  } catch {
+    return null;
+  }
+};
+
 const displayValue = (value: unknown): string | null => {
   if (typeof value === "string" && value.trim()) return value.trim();
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
@@ -141,6 +158,111 @@ const displayValue = (value: unknown): string | null => {
     );
   }
   return null;
+};
+
+const countValue = (
+  value: Record<string, unknown>,
+  key: string,
+): number | null => {
+  const candidate = value[key];
+  return typeof candidate === "number" &&
+    Number.isInteger(candidate) &&
+    candidate >= 0
+    ? candidate
+    : null;
+};
+
+const proposalPortfolioAnswer = (
+  input: AssistantPromptInput,
+): AssistantProviderResponse | null => {
+  const snapshot = proposalPortfolioSnapshot(input);
+  if (!snapshot) return null;
+  const query = input.userMessage.toLocaleLowerCase("en-US");
+  const statusCounts = [
+    {
+      pattern: /\bdrafts?\b/i,
+      key: "draft",
+      singular: "draft proposal",
+      plural: "draft proposals",
+    },
+    {
+      pattern: /\blive\b/i,
+      key: "live",
+      singular: "live proposal",
+      plural: "live proposals",
+    },
+    {
+      pattern: /\bfavou?rites?\b/i,
+      key: "favorite",
+      singular: "favorite proposal",
+      plural: "favorite proposals",
+    },
+    {
+      pattern: /\bexpired\b/i,
+      key: "expired",
+      singular: "expired proposal",
+      plural: "expired proposals",
+    },
+    {
+      pattern: /\barchived?\b/i,
+      key: "archived",
+      singular: "archived proposal",
+      plural: "archived proposals",
+    },
+    {
+      pattern: /\bsaved(?:\s+cop(?:y|ies))?\b/i,
+      key: "savedCopies",
+      singular: "saved copy",
+      plural: "saved copies",
+    },
+  ] as const;
+  const requestedStatus = statusCounts.find((item) =>
+    item.pattern.test(query),
+  );
+  if (requestedStatus) {
+    const count = countValue(snapshot.value, requestedStatus.key);
+    if (count !== null) {
+      const label =
+        count === 1
+          ? requestedStatus.singular
+          : requestedStatus.plural;
+      return result(
+        "answer",
+        `You currently have **${count} ${label}**. [Open Proposals](/proposals) to view them.`,
+        [snapshot.evidence.id],
+      );
+    }
+  }
+
+  const totalCreated = countValue(snapshot.value, "totalCreated");
+  const mainList = countValue(snapshot.value, "mainList");
+  const draft = countValue(snapshot.value, "draft");
+  const live = countValue(snapshot.value, "live");
+  const expired = countValue(snapshot.value, "expired");
+  const archived = countValue(snapshot.value, "archived");
+  const savedCopies = countValue(snapshot.value, "savedCopies");
+  if (totalCreated === null) return null;
+
+  const mainBreakdown =
+    mainList !== null &&
+    draft !== null &&
+    live !== null &&
+    expired !== null
+      ? ` Your current proposal list contains **${mainList}**: **${draft} drafts**, **${live} live**, and **${expired} expired**.`
+      : "";
+  const additional =
+    archived !== null && savedCopies !== null
+      ? ` You also have **${archived} archived** and **${savedCopies} saved ${
+          savedCopies === 1 ? "copy" : "copies"
+        }**.`
+      : "";
+  return result(
+    "answer",
+    `You have created **${totalCreated} ${
+      totalCreated === 1 ? "proposal" : "proposals"
+    }** in total.${mainBreakdown}${additional} [Open Proposals](/proposals) to review them.`,
+    [snapshot.evidence.id],
+  );
 };
 
 const selectedProposalAnswer = (
@@ -246,6 +368,9 @@ export class DeterministicAssistantProvider implements AssistantResponseProvider
         );
       }
     }
+
+    const portfolioAnswer = proposalPortfolioAnswer(input);
+    if (portfolioAnswer) return portfolioAnswer;
 
     const proposalAnswer = selectedProposalAnswer(input);
     if (proposalAnswer) return proposalAnswer;

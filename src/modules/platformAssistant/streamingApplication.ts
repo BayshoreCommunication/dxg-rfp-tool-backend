@@ -492,6 +492,14 @@ export const createPlatformAssistantStreamingApplication = (
         };
       };
 
+      if (
+        prompt.evidence.some(
+          (item) => item.sourceType === "proposal_portfolio",
+        )
+      ) {
+        return completeValidationFallback();
+      }
+
       for await (const event of dependencies.responseProvider.stream(prompt, {
         context,
         assistantMessageId: placeholder.message.id,

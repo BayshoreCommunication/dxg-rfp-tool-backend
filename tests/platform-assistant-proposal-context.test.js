@@ -143,3 +143,95 @@ test("returns no evidence when no authorized proposal title matches", async () =
 
   assert.deepEqual(result, { state: "not_found", evidence: [] });
 });
+
+test("returns an exact portfolio count before considering named proposal history", async () => {
+  let namedReads = 0;
+  let countReads = 0;
+  const source = createAssistantProposalContextSource({
+    async findOwnedProposals() {
+      namedReads += 1;
+      return [proposal("Momentum 2027 Sales Kickoff")];
+    },
+    async countOwnedProposals(input) {
+      countReads += 1;
+      assert.equal(input.actorUserMongoId, context.actorUserMongoId);
+      assert.equal(input.organizationMongoId, context.organizationMongoId);
+      return {
+        totalCreated: 83,
+        all: 68,
+        draft: 48,
+        live: 4,
+        favorite: 0,
+        expired: 16,
+        archive: 14,
+        saved: 1,
+      };
+    },
+  });
+
+  const result = await source.resolve({
+    ...context,
+    query: "How many proposals have I created?",
+    recentUserMessages: [
+      "Tell me about Momentum 2027 Sales Kickoff proposal",
+    ],
+  });
+
+  assert.equal(result.state, "portfolio_summary");
+  assert.equal(namedReads, 0);
+  assert.equal(countReads, 1);
+  assert.equal(result.evidence[0].id, "proposal-portfolio:counts");
+  assert.equal(result.evidence[0].sourceType, "proposal_portfolio");
+  assert.equal(result.evidence[0].trust, "authorized_private_data");
+  assert.equal(result.evidence[0].href, "/proposals");
+  assert.deepEqual(JSON.parse(result.evidence[0].content), {
+    schemaVersion: "assistant-proposal-portfolio.v1",
+    scope: "authenticated_owner_and_organization",
+    totalCreated: 83,
+    mainList: 68,
+    draft: 48,
+    live: 4,
+    favorite: 0,
+    expired: 16,
+    archived: 14,
+    savedCopies: 1,
+  });
+});
+
+test("derives proposal counts from bounded candidates for injected sources", async () => {
+  const source = createAssistantProposalContextSource(async () => [
+    proposal("Draft one"),
+    proposal("Live one", {
+      status: "submitted",
+      isDraft: false,
+      isActive: true,
+    }),
+    proposal("Expired one", {
+      status: "submitted",
+      isDraft: false,
+      isActive: false,
+    }),
+    proposal("Archived one", { isArchived: true }),
+    proposal("Saved one", { isCopy: true }),
+  ]);
+
+  const result = await source.resolve({
+    ...context,
+    query: "What is my proposal count?",
+    recentUserMessages: [],
+  });
+
+  assert.equal(result.state, "portfolio_summary");
+  assert.deepEqual(JSON.parse(result.evidence[0].content), {
+    schemaVersion: "assistant-proposal-portfolio.v1",
+    scope: "authenticated_owner_and_organization",
+    totalCreated: 5,
+    mainList: 3,
+    draft: 1,
+    live: 1,
+    favorite: 0,
+    expired: 1,
+    archived: 1,
+    savedCopies: 1,
+  });
+});
