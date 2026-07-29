@@ -11,6 +11,7 @@ const {
 const {
   PLATFORM_FACTS,
   PLATFORM_KNOWLEDGE_VERSION,
+  platformFactsForConversation,
   platformFactsForQuery,
 } = require("../src/modules/platformAssistant/platformKnowledge");
 const {
@@ -101,7 +102,7 @@ const withEnabledAssistant = async (work) => {
 };
 
 test("platform map is versioned, bounded, and contains internal routes only", () => {
-  assert.equal(PLATFORM_KNOWLEDGE_VERSION, "rfpilot-platform-map.v2");
+  assert.equal(PLATFORM_KNOWLEDGE_VERSION, "rfpilot-platform-map.v3");
   assert.ok(PLATFORM_FACTS.length >= 8);
   assert.equal(new Set(PLATFORM_FACTS.map((fact) => fact.id)).size, PLATFORM_FACTS.length);
   for (const fact of PLATFORM_FACTS) {
@@ -122,6 +123,177 @@ test("platform map is versioned, bounded, and contains internal routes only", ()
     platformFactsForQuery(
       "১৫০০ জনের ইভেন্টের জন্য কী কী তথ্য আগে সংগ্রহ করব?",
     ).some((fact) => fact.id === "platform:event:planning-brief"),
+  );
+  const guided = platformFactsForQuery(
+    "Explain the proposal creation steps and input fields.",
+  );
+  assert.ok(
+    guided.some((fact) => fact.id === "platform:proposal:guided-intake"),
+  );
+  assert.ok(
+    guided.some((fact) => fact.id === "platform:proposal:event-fields"),
+  );
+  assert.ok(
+    guided.some((fact) => fact.id === "platform:proposal:venue-room-fields"),
+  );
+});
+
+test("platform fact selection carries prior user topics into follow-up and summary turns", () => {
+  const current = message({
+    id: "current-summary",
+    ordinal: 5,
+    content: "Summarize everything we discussed and include the relevant links.",
+  });
+  const selected = platformFactsForConversation(
+    current.content,
+    [
+      message({
+        id: "history-vendors",
+        ordinal: 1,
+        content: "Where can I see vendor responses?",
+      }),
+      message({
+        id: "history-event",
+        ordinal: 3,
+        content: "What should I collect for a 1,500-person hybrid event?",
+      }),
+      current,
+    ],
+    current.id,
+  );
+
+  assert.ok(
+    selected.some(
+      (fact) => fact.id === "platform:navigation:vendor-responses",
+    ),
+  );
+  assert.ok(
+    selected.some((fact) => fact.id === "platform:event:planning-brief"),
+  );
+
+  const followUp = message({
+    id: "current-follow-up",
+    ordinal: 7,
+    content: "Make that concise with bullets and include the relevant page link.",
+  });
+  const followUpSelected = platformFactsForConversation(
+    followUp.content,
+    [
+      message({
+        id: "older-vendors",
+        ordinal: 1,
+        content: "Where can I see vendor responses?",
+      }),
+      message({
+        id: "latest-event",
+        ordinal: 5,
+        content:
+          "The event is next week but venue and budget are not confirmed. What comes first?",
+      }),
+      followUp,
+    ],
+    followUp.id,
+  );
+  assert.ok(
+    followUpSelected.some(
+      (fact) => fact.id === "platform:event:planning-brief",
+    ),
+  );
+  assert.ok(
+    !followUpSelected.some(
+      (fact) => fact.id === "platform:navigation:vendor-responses",
+    ),
+  );
+
+  const mentionedLinks = message({
+    id: "current-links",
+    ordinal: 11,
+    content: "Give me only the RFPilot page links we mentioned.",
+  });
+  const mentionedLinkFacts = platformFactsForConversation(
+    mentionedLinks.content,
+    [
+      message({
+        id: "history-dashboard",
+        ordinal: 1,
+        content: "Where is the Dashboard?",
+      }),
+      message({
+        id: "history-vendor-link",
+        ordinal: 3,
+        content: "Where can I see vendor responses?",
+      }),
+      message({
+        id: "history-settings-link",
+        ordinal: 5,
+        content: "Where do I manage branding settings?",
+      }),
+      message({
+        id: "history-email-link",
+        ordinal: 7,
+        content: "Where can I see proposal email activity?",
+      }),
+      mentionedLinks,
+    ],
+    mentionedLinks.id,
+  );
+  assert.deepEqual(
+    [
+      "platform:navigation:dashboard",
+      "platform:navigation:vendor-responses",
+      "platform:navigation:settings",
+      "platform:navigation:email",
+    ].filter((id) => mentionedLinkFacts.some((fact) => fact.id === id)),
+    [
+      "platform:navigation:dashboard",
+      "platform:navigation:vendor-responses",
+      "platform:navigation:settings",
+      "platform:navigation:email",
+    ],
+  );
+
+  const recordDetails = message({
+    id: "current-record-details",
+    ordinal: 15,
+    content: "Which RFPilot page should I use to record these details?",
+  });
+  const recordDetailFacts = platformFactsForConversation(
+    recordDetails.content,
+    [
+      message({
+        id: "history-event-plan",
+        ordinal: 7,
+        content:
+          "I am planning a three-day hybrid event for 1,500 attendees.",
+      }),
+      message({
+        id: "history-room-plan",
+        ordinal: 9,
+        content: "We will have six breakout rooms.",
+      }),
+      message({
+        id: "history-summary-plan",
+        ordinal: 11,
+        content: "Summarize the five most important items.",
+      }),
+      message({
+        id: "history-format-plan",
+        ordinal: 13,
+        content: "Make that shorter and use bullets.",
+      }),
+      recordDetails,
+    ],
+    recordDetails.id,
+  );
+  assert.ok(
+    recordDetailFacts.some(
+      (fact) => fact.id === "platform:navigation:create-proposal",
+    ),
+  );
+  assert.ok(
+    recordDetailFacts.some(
+      (fact) => fact.id === "platform:proposal:guided-intake",
+    ),
   );
 });
 
@@ -181,6 +353,26 @@ test("prompt builder bounds history and labels retrieved guidance as untrusted",
       item.includes("exact href as a Markdown link"),
     ),
   );
+  assert.ok(
+    prompt.instructions.some((item) =>
+      item.includes("Resolve follow-up wording"),
+    ),
+  );
+  assert.ok(
+    prompt.instructions.some((item) =>
+      item.includes("user-operated steps"),
+    ),
+  );
+  assert.ok(
+    prompt.instructions.some((item) =>
+      item.includes("links, pages, or routes mentioned earlier"),
+    ),
+  );
+  assert.ok(
+    prompt.instructions.some((item) =>
+      item.includes("where to record general event"),
+    ),
+  );
 });
 
 test("provider response validation enforces citations and safe internal links", () => {
@@ -195,6 +387,60 @@ test("provider response validation enforces citations and safe internal links", 
   );
   assert.equal(valid.citations[0].href, "/proposals");
 
+  const actionEvidence = platformFactsForQuery(
+    "Delete my proposal and explain where I should do it.",
+  );
+  const linked = validateAssistantProviderResponse(
+    {
+      kind: "refusal",
+      content:
+        "I can’t delete it. Open [Proposals](/proposals) and use the delete control.",
+      citationIds: ["platform:assistant:scope"],
+    },
+    actionEvidence,
+  );
+  assert.ok(
+    linked.citationIds.includes("platform:navigation:proposals"),
+  );
+  assert.ok(
+    linked.citations.some((citation) => citation.href === "/proposals"),
+  );
+
+  const eventEvidence = platformFactsForQuery(
+    "The event is next week and venue and budget are not confirmed.",
+  );
+  const approvedHistoryLink = validateAssistantProviderResponse(
+    {
+      kind: "answer",
+      content:
+        "Prioritize venue and budget, then open [Proposals](/proposals).",
+      citationIds: ["platform:event:planning-brief"],
+    },
+    eventEvidence,
+  );
+  assert.ok(
+    approvedHistoryLink.citationIds.includes(
+      "platform:navigation:proposals",
+    ),
+  );
+
+  const maxEvidence = platformFactsForQuery(
+    "proposal event venue schedule room hybrid recording technical budget workflow email vendor settings dashboard",
+    12,
+  );
+  const linkedSettings = validateAssistantProviderResponse(
+    {
+      kind: "answer",
+      content: "Open [Settings](/settings).",
+      citationIds: maxEvidence.map((item) => item.id),
+    },
+    maxEvidence,
+  );
+  assert.equal(linkedSettings.citationIds.length, 12);
+  assert.ok(
+    linkedSettings.citationIds.includes("platform:navigation:settings"),
+  );
+
   for (const invalid of [
     { kind: "answer", content: "Unsupported.", citationIds: [] },
     { kind: "answer", content: "Unsupported.", citationIds: ["unknown"] },
@@ -205,7 +451,7 @@ test("provider response validation enforces citations and safe internal links", 
     },
     {
       kind: "answer",
-      content: "Open [Settings](/settings).",
+      content: "Open [unapproved](/internal-admin).",
       citationIds: ["platform:navigation:proposals"],
     },
   ]) {
@@ -339,6 +585,119 @@ test("deterministic guidance fixtures enforce grounding, refusal, and abstention
       assert.doesNotMatch(validated.content, new RegExp(forbidden, "i"), fixture.id);
     }
   }
+});
+
+test("deterministic fallback explains the guided intake and safe manual action paths", async () => {
+  const provider = new DeterministicAssistantProvider();
+
+  const createUser = message({
+    id: "create-user",
+    content: "How do I create a proposal? Explain the form steps.",
+  });
+  const createPrompt = buildAssistantPromptInput({
+    userMessage: createUser,
+    history: [],
+    platformFacts: platformFactsForQuery(createUser.content),
+    operatingGuidance: [],
+  });
+  const createResponse = validateAssistantProviderResponse(
+    await provider.generate(createPrompt),
+    createPrompt.evidence,
+  );
+  assert.equal(createResponse.kind, "answer");
+  assert.match(createResponse.content, /Event Overview/);
+  assert.match(createResponse.content, /Contact & Submit/);
+  assert.match(createResponse.content, /\/proposals\/add-new-proposal/);
+
+  const actionUser = message({
+    id: "action-user",
+    content: "Can you create, publish, and email the proposal for me?",
+  });
+  const actionPrompt = buildAssistantPromptInput({
+    userMessage: actionUser,
+    history: [],
+    platformFacts: platformFactsForQuery(actionUser.content),
+    operatingGuidance: [],
+  });
+  const actionResponse = validateAssistantProviderResponse(
+    await provider.generate(actionPrompt),
+    actionPrompt.evidence,
+  );
+  assert.equal(actionResponse.kind, "refusal");
+  assert.match(actionResponse.content, /can’t create, publish, or email/i);
+  assert.match(actionResponse.content, /\/proposals\/add-new-proposal/);
+  assert.match(actionResponse.content, /\/email/);
+
+  const deleteUser = message({
+    id: "delete-user",
+    content: "Delete my latest proposal and confirm when it is done.",
+  });
+  const deletePrompt = buildAssistantPromptInput({
+    userMessage: deleteUser,
+    history: [],
+    platformFacts: platformFactsForQuery(deleteUser.content),
+    operatingGuidance: [],
+  });
+  const deleteResponse = validateAssistantProviderResponse(
+    await provider.generate(deletePrompt),
+    deletePrompt.evidence,
+  );
+  assert.equal(deleteResponse.kind, "refusal");
+  assert.match(deleteResponse.content, /trash\/delete control/i);
+  assert.match(deleteResponse.content, /\/proposals/);
+
+  const priorAssistant = message({
+    id: "prior-assistant",
+    ordinal: 2,
+    role: "assistant",
+    content:
+      "Top items:\n- Confirm budget\n- Confirm venue\n- Lock dates\n- Define room scope\n- Confirm AV needs",
+  });
+  const formatUser = message({
+    id: "format-user",
+    ordinal: 3,
+    content: "Make that answer shorter and use bullets.",
+  });
+  const formatPrompt = buildAssistantPromptInput({
+    userMessage: formatUser,
+    history: [
+      message({
+        id: "prior-user",
+        ordinal: 1,
+        content: "What should I prioritize for this event?",
+      }),
+      priorAssistant,
+    ],
+    platformFacts: platformFactsForQuery(
+      "event budget venue dates room AV checklist",
+    ),
+    operatingGuidance: [],
+  });
+  const formatResponse = validateAssistantProviderResponse(
+    await provider.generate(formatPrompt),
+    formatPrompt.evidence,
+  );
+  assert.equal(formatResponse.kind, "answer");
+  assert.match(formatResponse.content, /^-\s+Confirm budget/m);
+  assert.doesNotMatch(formatResponse.content, /enough approved/i);
+
+  const bookingUser = message({
+    id: "booking-user",
+    content: "Book a venue for 1,500 attendees.",
+  });
+  const bookingPrompt = buildAssistantPromptInput({
+    userMessage: bookingUser,
+    history: [],
+    platformFacts: platformFactsForQuery(bookingUser.content),
+    operatingGuidance: [],
+  });
+  const bookingResponse = validateAssistantProviderResponse(
+    await provider.generate(bookingPrompt),
+    bookingPrompt.evidence,
+  );
+  assert.equal(bookingResponse.kind, "refusal");
+  assert.match(bookingResponse.content, /can’t book or reserve/i);
+  assert.match(bookingResponse.content, /\/proposals\/add-new-proposal/);
 });
 
 test("non-streaming application completes from platform facts when knowledge is unavailable", async () => {

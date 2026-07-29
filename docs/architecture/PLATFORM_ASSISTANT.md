@@ -28,7 +28,11 @@ routes and OpenAI/PostgreSQL/Redis implementations remain adapters.
 6. A user message and pending assistant placeholder are persisted
    idempotently.
 7. The prompt builder combines bounded conversation history, versioned
-   platform facts, and eligible approved `operating_guidance`.
+   platform facts, and eligible approved `operating_guidance`. Normal
+   follow-ups select facts from the immediate prior user turn; context-only
+   follow-ups walk backward only to the nearest standalone platform topic;
+   explicit summaries and “links/pages mentioned” requests use the bounded
+   full user history.
 8. Approved knowledge is labelled as untrusted evidence. It cannot supply
    instructions, permissions, tools, or links outside the supplied evidence
    contract.
@@ -39,7 +43,13 @@ routes and OpenAI/PostgreSQL/Redis implementations remain adapters.
    `message.accepted`, `response.started`, `response.delta`,
    `response.completed`, and `response.failed`.
 11. Provider output is completed only after response kind, citation IDs, and
-   links validate against supplied evidence.
+   links validate. Links must resolve to the code-reviewed internal platform
+   map; when an approved route is safely reused from conversation history, its
+   trusted route fact is attached to the completed message automatically.
+12. If structured provider output is invalid, the failed provider attempt
+    remains ledgered and the application reconciles the visible draft to a
+    grounded deterministic completion. Genuine transport failures after a
+    delta remain interrupted and retryable.
 
 The browser never receives provider credentials, prompts, provider-native
 events, or unrestricted conversation history.
@@ -76,6 +86,11 @@ New sources must be added behind this port and must preserve:
 - untrusted-evidence labelling;
 - output citation/link validation;
 - graceful degradation to versioned platform facts.
+
+Platform map v3 also records the current guided proposal intake separately
+from the optional five-phase proposal-assistant workflow. It covers the
+displayed intake sections, their main field groups, the proposal pre-send
+checklist, and safe user-operated next steps for read-only action refusals.
 
 ## Streaming and retry rules
 

@@ -27,8 +27,53 @@ const isHowToQuestion = (query: string): boolean =>
 
 const isActionRequest = (query: string): boolean =>
   !isHowToQuestion(query) &&
-  (/\b(?:publish|send|delete|edit|change|update)\b.{0,32}\b(?:my|this|it)\b/i.test(query) ||
+  (/^(?:please\s+)?(?:create|publish|send|delete|edit|change|update|book|reserve|schedule|email|contact)\b/i.test(
+    query.trim(),
+  ) ||
+    /\b(?:publish|send|delete|edit|change|update|book|reserve|schedule)\b.{0,32}\b(?:my|this|it|for me)\b/i.test(
+      query,
+    ) ||
     /\b(?:do it|do that|on my behalf|for me)\b/i.test(query));
+
+const isFormattingFollowUp = (query: string): boolean =>
+  /\b(?:shorten|shorter|concise|brief|reformat|bullets?)\b/i.test(query);
+
+const previousAssistantContent = (
+  input: AssistantPromptInput,
+): string | undefined =>
+  [...input.history]
+    .reverse()
+    .find((message) => message.role === "assistant")
+    ?.content.trim();
+
+const shortenedPreviousAnswer = (content: string): string => {
+  const listItems = content
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => /^(?:[-*]|\d+[.)])\s+/.test(line))
+    .map((line) => line.replace(/^(?:[-*]|\d+[.)])\s+/, "").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  if (listItems.length) {
+    return listItems.map((item) => `- ${item.slice(0, 180)}`).join("\n");
+  }
+  const sentences = content
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  return sentences.length
+    ? sentences.map((sentence) => `- ${sentence.slice(0, 180)}`).join("\n")
+    : content.slice(0, 600);
+};
+
+const relevantPlatformCitationIds = (
+  input: AssistantPromptInput,
+): string[] =>
+  input.evidence
+    .filter((item) => item.sourceType === "platform_fact")
+    .slice(0, 4)
+    .map((item) => item.id);
 
 const relevantOperatingGuidance = (
   input: AssistantPromptInput,
@@ -64,11 +109,64 @@ export class DeterministicAssistantProvider implements AssistantResponseProvider
     const normalized = query.toLowerCase();
 
     if (isActionRequest(query)) {
+      if (/\b(?:book|reserve)\b.*\b(?:venue|room|hotel|travel)\b/i.test(normalized)) {
+        return result(
+          "refusal",
+          "I can’t book or reserve a venue for you. I can help you prepare the venue, schedule, room, attendance, and production requirements, then you can record them in [Create a proposal](/proposals/add-new-proposal) and contact venues yourself.",
+          idsPresent(input.evidence, [
+            "platform:assistant:scope",
+            "platform:event:planning-brief",
+            "platform:navigation:create-proposal",
+          ]),
+        );
+      }
+      if (/\bdelete\b/i.test(normalized)) {
+        const citationIds = idsPresent(input.evidence, [
+          "platform:assistant:scope",
+          "platform:navigation:proposals",
+        ]);
+        const hasProposals = citationIds.includes(
+          "platform:navigation:proposals",
+        );
+        return result(
+          "refusal",
+          hasProposals
+            ? "I can’t delete a proposal or confirm that it was deleted. Open [Proposals](/proposals), find the proposal, use its trash/delete control, review the confirmation, and complete the deletion yourself."
+            : "I can’t delete a proposal or confirm that it was deleted. Use the proposal list’s trash/delete control and review the confirmation before completing the deletion yourself.",
+          citationIds,
+        );
+      }
+      const citationIds = idsPresent(input.evidence, [
+        "platform:assistant:scope",
+        "platform:navigation:create-proposal",
+        "platform:proposal:guided-intake",
+        "platform:navigation:proposals",
+        "platform:navigation:email",
+      ]);
+      const hasWorkflowLinks = [
+        "platform:navigation:create-proposal",
+        "platform:navigation:proposals",
+        "platform:navigation:email",
+      ].every((id) => citationIds.includes(id));
       return result(
         "refusal",
-        "I can explain the steps, but I cannot edit, publish, delete, or send anything for you. Tell me which workflow you want to understand and I’ll guide you through it.",
-        idsPresent(input.evidence, ["platform:assistant:scope"]),
+        hasWorkflowLinks
+          ? "I can guide you, but I can’t create, publish, or email a proposal for you. Start at [Create a proposal](/proposals/add-new-proposal), complete and review the guided intake, explicitly generate or update the RFP, then use its send action from [Proposals](/proposals). Proposal email activity is available in [Email](/email)."
+          : "I can explain the steps, but I cannot edit, publish, delete, or send anything for you. Tell me which workflow you want to understand and I’ll guide you through it.",
+        citationIds,
       );
+    }
+
+    if (isFormattingFollowUp(query)) {
+      const previous = previousAssistantContent(input);
+      const citationIds = relevantPlatformCitationIds(input);
+      if (previous && citationIds.length) {
+        return result(
+          "answer",
+          shortenedPreviousAnswer(previous),
+          citationIds,
+        );
+      }
     }
 
     if (
@@ -115,17 +213,32 @@ export class DeterministicAssistantProvider implements AssistantResponseProvider
     }
 
     if (
+      /\b(?:before|check|review)\b.*\b(?:send|sending)\b.*\bproposal\b|\bproposal\b.*\b(?:before|check|review)\b.*\b(?:send|sending)\b/i.test(
+        normalized,
+      )
+    ) {
+      return result(
+        "answer",
+        "Before sending, verify the event, venue, schedule, room and production scope, conditional hybrid/creative/recording needs, technical and insurance requirements, budget and deadlines, uploads or co-vendor responsibilities, and contact/recipient details. Review the generated RFP for gaps, then use its send action from [Proposals](/proposals).",
+        idsPresent(input.evidence, [
+          "platform:proposal:pre-send-checklist",
+          "platform:navigation:proposals",
+        ]),
+      );
+    }
+
+    if (
       /\b(?:create|start|new|send)\b.*\bproposal\b|\bproposal\b.*\b(?:workflow|steps|send)\b/i.test(
         normalized,
       )
     ) {
       return result(
         "answer",
-        "Start at [Create a proposal](/proposals/add-new-proposal). Work through Provide Information, Review the Draft, Answer Key Questions, See Guidance, and Publish. Publication and sending remain explicit user actions; proposal email activity is available in [Email](/email).",
+        "Open [Create a proposal](/proposals/add-new-proposal). If the guided form is enabled, optionally upload a source file or continue without one, then complete: Event Overview; Venue & Schedule; Room Specifications; Hybrid & Virtual when applicable; Content & Creative; Video Recording; Venue & Technical; Investment & Evaluation; Uploads & Co-Vendors; and Contact & Submit. Save a draft or explicitly generate/update the RFP at the end. The separate optional proposal-assistant experience uses five phases.",
         idsPresent(input.evidence, [
           "platform:navigation:create-proposal",
+          "platform:proposal:guided-intake",
           "platform:proposal:workflow",
-          "platform:navigation:email",
         ]),
       );
     }

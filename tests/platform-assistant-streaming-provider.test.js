@@ -15,7 +15,7 @@ const context = {
 
 const prompt = {
   schemaVersion: "platform-assistant-prompt.v2",
-  platformKnowledgeVersion: "rfpilot-platform-map.v2",
+  platformKnowledgeVersion: "rfpilot-platform-map.v3",
   userMessage: "Where are proposals?",
   history: [],
   evidence: [
@@ -458,6 +458,65 @@ test("failure after a text delta is interrupted and never retried", async () => 
       retryable: true,
     });
     assert.equal(outcomes[0].errorCode, "ASSISTANT_STREAM_INTERRUPTED");
+  });
+});
+
+test("final validation failure after a text delta remains identifiable for grounded application fallback", async () => {
+  await withProviderEnvironment(async () => {
+    const outcomes = [];
+    const invalid = JSON.stringify({
+      kind: "answer",
+      citationIds: ["platform:navigation:proposals"],
+      content: "Open [outside](https://example.com).",
+    });
+    const provider = new OpenAiAssistantProvider({
+      ledger: {
+        async begin() {
+          return {
+            id: "attempt-invalid-final",
+            fingerprint: "fingerprint-invalid-final",
+            attemptNumber: 1,
+            context: {
+              runType: "platform_assistant",
+              runId: "01890b2e-58b1-7c7e-9b0a-1a2b3c4d5e71",
+              organizationId: "01890b2e-58b1-7c7e-9b0a-1a2b3c4d5e72",
+            },
+          };
+        },
+        async complete(_attempt, outcome) {
+          outcomes.push(outcome);
+        },
+      },
+      async streamFactory() {
+        return iterable([
+          {
+            type: "response.created",
+            response: { id: "resp_invalid_final", model: "effective-model" },
+          },
+          { type: "response.output_text.delta", delta: invalid },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_invalid_final",
+              model: "effective-model",
+              output_text: invalid,
+            },
+          },
+        ]);
+      },
+    });
+    const events = await collect(provider);
+
+    assert.equal(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => event.delta)
+        .join(""),
+      "Open [outside](https://example.com).",
+    );
+    assert.equal(events.at(-1).type, "failed");
+    assert.equal(events.at(-1).code, "ASSISTANT_RESPONSE_INVALID");
+    assert.equal(outcomes[0].errorCode, "ASSISTANT_RESPONSE_INVALID");
   });
 });
 

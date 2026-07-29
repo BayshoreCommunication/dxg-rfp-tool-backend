@@ -775,9 +775,10 @@ export class OpenAiAssistantProvider
           callerAborted: options.signal.aborted,
           timeoutAborted,
         });
-        const code = emittedText
-          ? "ASSISTANT_STREAM_INTERRUPTED"
-          : failure.code;
+        const code =
+          emittedText && failure.code !== "ASSISTANT_RESPONSE_INVALID"
+            ? "ASSISTANT_STREAM_INTERRUPTED"
+            : failure.code;
         await settle({
           state: "failed",
           providerRequestId: providerResponseId,
@@ -814,7 +815,8 @@ export class OpenAiAssistantProvider
           providerResponseId,
           model: effectiveModel,
           code,
-          message: emittedText
+          message:
+            emittedText && code === "ASSISTANT_STREAM_INTERRUPTED"
             ? "The assistant response was interrupted."
             : failure.message,
           retryable: emittedText || failure.retryable,

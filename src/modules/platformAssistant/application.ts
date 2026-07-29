@@ -13,7 +13,7 @@ import {
   parseCreateAssistantThreadInput,
   type PlatformAssistantContext,
 } from "./domain";
-import { platformFactsForQuery } from "./platformKnowledge";
+import { platformFactsForConversation } from "./platformKnowledge";
 import {
   buildAssistantPromptInput,
   validateAssistantProviderResponse,
@@ -167,7 +167,11 @@ export const createPlatformAssistantApplication = (
       const prompt = buildAssistantPromptInput({
         userMessage: accepted.message,
         history: detail.messages,
-        platformFacts: platformFactsForQuery(accepted.message.content),
+        platformFacts: platformFactsForConversation(
+          accepted.message.content,
+          detail.messages,
+          accepted.message.id,
+        ),
         operatingGuidance: knowledge.evidence,
       });
       const generated = await guidanceDependencies.responseProvider.generate(prompt);

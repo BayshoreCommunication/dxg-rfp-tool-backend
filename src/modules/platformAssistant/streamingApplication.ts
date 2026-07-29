@@ -11,14 +11,16 @@ import {
   type AssistantMessage,
   type PlatformAssistantContext,
 } from "./domain";
-import { platformFactsForQuery } from "./platformKnowledge";
+import { platformFactsForConversation } from "./platformKnowledge";
 import {
   buildAssistantPromptInput,
   normalizeConversationalAssistantResponse,
   validateAssistantProviderResponse,
 } from "./prompt";
+import { deterministicAssistantProvider } from "./deterministicAssistantProvider";
 import type {
   AssistantKnowledgeSource,
+  AssistantResponseProvider,
   AssistantStreamingResponseProvider,
   PlatformAssistantRepository,
 } from "./ports";
@@ -104,6 +106,7 @@ export const createPlatformAssistantStreamingApplication = (
   dependencies: {
     knowledgeSource: AssistantKnowledgeSource;
     responseProvider: AssistantStreamingResponseProvider;
+    fallbackProvider?: AssistantResponseProvider;
   },
 ) => ({
   async streamGuidance(
@@ -274,9 +277,91 @@ export const createPlatformAssistantStreamingApplication = (
       const prompt = buildAssistantPromptInput({
         userMessage: accepted.message,
         history: detail.messages,
-        platformFacts: platformFactsForQuery(accepted.message.content),
+        platformFacts: platformFactsForConversation(
+          accepted.message.content,
+          detail.messages,
+          accepted.message.id,
+        ),
         operatingGuidance: knowledge.evidence,
       });
+      const completeValidationFallback = async () => {
+        let validated;
+        const fallbackProvider =
+          dependencies.fallbackProvider ?? deterministicAssistantProvider;
+        try {
+          validated = validateAssistantProviderResponse(
+            normalizeConversationalAssistantResponse(
+              await fallbackProvider.generate(prompt),
+              accepted.message.content,
+            ),
+            prompt.evidence,
+          );
+          effectiveModel = fallbackProvider.model;
+        } catch {
+          validated = validateAssistantProviderResponse(
+            {
+              kind: "abstention",
+              content: SAFE_VALIDATION_FALLBACK,
+              citationIds: [],
+            },
+            prompt.evidence,
+          );
+          effectiveModel = "platform-assistant-safe-fallback-v1";
+        }
+        providerResponseId = null;
+        if (!started) {
+          started = true;
+          await input.emit({
+            type: "response.started",
+            version: 1,
+            assistantMessageId: placeholder.message.id,
+          });
+        }
+        if (!streamingPersisted) {
+          assistantMessage = await repository.updateAssistantMessage({
+            ...context,
+            threadId,
+            messageId: placeholder.message.id,
+            status: "streaming",
+            content: "",
+            providerResponseId,
+            model: effectiveModel,
+          });
+          streamingPersisted = true;
+        }
+        if (!accumulated) {
+          accumulated = validated.content;
+          await input.emit({
+            type: "response.delta",
+            version: 1,
+            assistantMessageId: placeholder.message.id,
+            delta: accumulated,
+          });
+        } else {
+          accumulated = validated.content;
+        }
+        assistantMessage = await repository.updateAssistantMessage({
+          ...context,
+          threadId,
+          messageId: placeholder.message.id,
+          status: "complete",
+          content: accumulated,
+          citations: validated.citations,
+          providerResponseId,
+          model: effectiveModel,
+        });
+        await input.emit({
+          type: "response.completed",
+          version: 1,
+          message: assistantMessage,
+          correlationId: context.correlationId,
+        });
+        return {
+          userMessage: accepted.message,
+          assistantMessage,
+          knowledge: knowledge.status,
+        };
+      };
 
       for await (const event of dependencies.responseProvider.stream(prompt, {
         context,
@@ -333,57 +418,9 @@ export const createPlatformAssistantStreamingApplication = (
           effectiveModel = event.model || effectiveModel;
           if (
             event.code === "ASSISTANT_RESPONSE_INVALID" &&
-            !accumulated &&
             !input.signal.aborted
           ) {
-            if (!started) {
-              started = true;
-              await input.emit({
-                type: "response.started",
-                version: 1,
-                assistantMessageId: placeholder.message.id,
-              });
-            }
-            if (!streamingPersisted) {
-              assistantMessage = await repository.updateAssistantMessage({
-                ...context,
-                threadId,
-                messageId: placeholder.message.id,
-                status: "streaming",
-                content: "",
-                providerResponseId,
-                model: effectiveModel,
-              });
-              streamingPersisted = true;
-            }
-            accumulated = SAFE_VALIDATION_FALLBACK;
-            await input.emit({
-              type: "response.delta",
-              version: 1,
-              assistantMessageId: placeholder.message.id,
-              delta: accumulated,
-            });
-            assistantMessage = await repository.updateAssistantMessage({
-              ...context,
-              threadId,
-              messageId: placeholder.message.id,
-              status: "complete",
-              content: accumulated,
-              citations: [],
-              providerResponseId,
-              model: effectiveModel,
-            });
-            await input.emit({
-              type: "response.completed",
-              version: 1,
-              message: assistantMessage,
-              correlationId: context.correlationId,
-            });
-            return {
-              userMessage: accepted.message,
-              assistantMessage,
-              knowledge: knowledge.status,
-            };
+            return completeValidationFallback();
           }
           return persistFailure(event);
         }
