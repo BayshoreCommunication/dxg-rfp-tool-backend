@@ -15,6 +15,10 @@ import {
 } from "../src/modules/platformAssistant/composition";
 import { parseAssistantClientProductEvent } from "../src/modules/platformAssistant/productAnalytics";
 import {
+  assistantQualityReport,
+  parseAssistantQualityFilters,
+} from "../src/modules/platformAssistant/assistantQualityReport";
+import {
   assistantOperationalLimiter,
   type AssistantOperationalLimiter,
 } from "../src/modules/platformAssistant/operationalLimits";
@@ -163,6 +167,26 @@ export const createPlatformAssistantController = (dependencies?: {
           idempotencyKey(req),
         );
         res.status(result.created ? 201 : 200).json({ data: result });
+      } catch (error) {
+        writePlatformAssistantProblem(res, error);
+      }
+    },
+
+    async getQualityReport(req: AuthRequest, res: Response) {
+      try {
+        const ctx = context(req);
+        res.json({
+          data: await assistantQualityReport(
+            {
+              organizationMongoId: ctx.organizationMongoId,
+              actorUserMongoId: ctx.actorUserMongoId,
+              correlationId: ctx.correlationId,
+            },
+            parseAssistantQualityFilters(
+              req.query as Record<string, unknown>,
+            ),
+          ),
+        });
       } catch (error) {
         writePlatformAssistantProblem(res, error);
       }
@@ -357,6 +381,7 @@ const controller = createPlatformAssistantController();
 
 export const getAssistantAccess = controller.getAccess;
 export const recordAssistantProductEvent = controller.recordProductEvent;
+export const getAssistantQualityReport = controller.getQualityReport;
 export const listAssistantThreads = controller.listThreads;
 export const createAssistantThread = controller.createThread;
 export const getAssistantThread = controller.getThread;

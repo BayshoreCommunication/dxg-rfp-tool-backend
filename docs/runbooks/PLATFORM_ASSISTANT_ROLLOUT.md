@@ -26,7 +26,7 @@ Create a release record before changing any flag. Record:
 | Release owner | Named person on duty |
 | Product approver | Named Product Owner |
 | Application versions | Backend and dashboard commit SHAs |
-| Schema version | Migrations `026_platform_assistant` through `033_assistant_product_analytics` applied |
+| Schema version | Migrations `026_platform_assistant` through `034_assistant_quality_indexes` applied |
 | Prompt version | Version in `src/modules/platformAssistant/prompt.ts` |
 | Model | Exact dated model identifier |
 | Knowledge release | Active eligible release/policy identifiers |
@@ -68,7 +68,7 @@ AI_ASSISTANT_ANALYTICS_ENABLED=false
 NEXT_PUBLIC_AI_ASSISTANT_ENABLED=false
 ```
 
-Apply migrations 026 through 033, deploy backend and dashboard, then verify normal
+Apply migrations 026 through 034, deploy backend and dashboard, then verify normal
 non-Assistant dashboard workflows before proceeding.
 
 ## Kill-switch test

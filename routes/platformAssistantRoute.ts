@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   createAssistantThread,
   getAssistantAccess,
+  getAssistantQualityReport,
   getAssistantThread,
   listAssistantThreads,
   patchAssistantThread,
@@ -18,6 +19,12 @@ router.get(
   authenticate,
   authorizeAction("assistant:use"),
   getAssistantAccess,
+);
+router.get(
+  "/ai/assistant-quality",
+  authenticate,
+  authorizeAction("security:admin"),
+  getAssistantQualityReport,
 );
 router.post(
   "/assistant/analytics/events",

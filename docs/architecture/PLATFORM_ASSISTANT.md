@@ -158,6 +158,27 @@ session is the sum of versioned model-price estimates on completed responses
 divided by resolved sessions; unavailable model prices remain unavailable
 rather than being guessed.
 
+### Admin Assistant Quality
+
+Migration `034_assistant_quality_indexes` adds organization/date/version and
+finding-category indexes for bounded quality queries. The security-admin-only
+`GET /api/v1/ai/assistant-quality` endpoint accepts an inclusive date window
+of at most 90 days plus allowlisted cohort, model, prompt, knowledge, intent,
+and finding-category filters.
+
+The report is aggregate-only. Global counts, rates, latency percentiles, token
+totals, cost totals, and grouped comparison rows require at least five
+observations; smaller samples are returned as unavailable rather than exact
+values. No prompt, response, conversation, thread, message, user, proposal,
+client, or provider payload is selected or returned. Every report access adds
+a content-free `assistant_quality_report_viewed` audit event.
+
+Completed cited responses count as citation-valid only because the existing
+response validator rejects unapproved citations before completion. The report
+also summarizes expiring approved knowledge, stale or retired deterministic
+rules, and pricing categories with no approved value. It does not change,
+approve, retire, publish, or replace any governed asset.
+
 ### Deterministic-first intent routing
 
 `intentRouter.ts` owns the initial versioned taxonomy. High-confidence
