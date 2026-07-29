@@ -22,6 +22,7 @@ import {
   validateAssistantProviderResponse,
 } from "./prompt";
 import { deterministicAssistantProvider } from "./deterministicAssistantProvider";
+import { resolveAssistantProposalContext } from "./proposalContext";
 import {
   classifyAssistantIntent,
   evidenceAllowedForIntent,
@@ -29,6 +30,7 @@ import {
 } from "./intentRouter";
 import type {
   AssistantKnowledgeSource,
+  AssistantProposalContextSource,
   AssistantResponseProvider,
   AssistantStreamingResponseProvider,
   PlatformAssistantRepository,
@@ -138,6 +140,7 @@ export const createPlatformAssistantStreamingApplication = (
     knowledgeSource: AssistantKnowledgeSource;
     responseProvider: AssistantStreamingResponseProvider;
     fallbackProvider?: AssistantResponseProvider;
+    proposalContextSource?: AssistantProposalContextSource;
   },
 ) => ({
   async streamGuidance(
@@ -348,12 +351,21 @@ export const createPlatformAssistantStreamingApplication = (
         messageLimit: ASSISTANT_MESSAGE_LIST_MAX_LIMIT,
         beforeOrdinal: null,
       });
-      intent = classifyAssistantIntent({
+      const classifiedIntent = classifyAssistantIntent({
         query: accepted.message.content,
         uiContext,
         history: detail.messages,
         currentUserMessageId: accepted.message.id,
       });
+      const proposalContext = await resolveAssistantProposalContext({
+        source: dependencies.proposalContextSource,
+        context,
+        query: accepted.message.content,
+        history: detail.messages,
+        currentUserMessageId: accepted.message.id,
+        intent: classifiedIntent,
+      });
+      intent = proposalContext.intent;
       const prompt = buildAssistantPromptInput({
         userMessage: accepted.message,
         history: detail.messages,
@@ -368,6 +380,7 @@ export const createPlatformAssistantStreamingApplication = (
         operatingGuidance: intentUsesOperatingGuidance(intent.intent)
           ? knowledge.evidence
           : [],
+        proposalEvidence: proposalContext.evidence,
         uiContext,
         intent,
       });

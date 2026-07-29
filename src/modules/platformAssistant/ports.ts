@@ -41,6 +41,31 @@ export interface AssistantKnowledgeSource {
   ): Promise<AssistantKnowledgeResult>;
 }
 
+export type AssistantProposalContextResolution =
+  | {
+      state: "matched";
+      proposalName: string;
+      evidence: AssistantPromptEvidence[];
+    }
+  | {
+      state: "ambiguous";
+      proposalNames: string[];
+      evidence: [];
+    }
+  | {
+      state: "not_found";
+      evidence: [];
+    };
+
+export interface AssistantProposalContextSource {
+  resolve(
+    input: PlatformAssistantContext & {
+      query: string;
+      recentUserMessages: string[];
+    },
+  ): Promise<AssistantProposalContextResolution>;
+}
+
 export interface AssistantResponseProvider {
   readonly provider: string;
   readonly model: string;
@@ -96,6 +121,7 @@ export interface AssistantStreamingResponseProvider {
 export type PlatformAssistantGuidanceDependencies = {
   knowledgeSource: AssistantKnowledgeSource;
   responseProvider: AssistantResponseProvider;
+  proposalContextSource?: AssistantProposalContextSource;
 };
 
 export type GenerateAssistantGuidanceResult = {

@@ -79,6 +79,7 @@ const setup = (providerEvents, options = {}) => {
   const updates = [];
   const assistantPlaceholders = [];
   let providerCalls = 0;
+  let capturedPrompt = null;
   const repository = {
     async createThread() {
       throw new Error("not used");
@@ -123,8 +124,9 @@ const setup = (providerEvents, options = {}) => {
   const provider = {
     provider: "fake",
     model: "fake-model",
-    async *stream() {
+    async *stream(prompt) {
       providerCalls += 1;
+      capturedPrompt = prompt;
       for (const event of providerEvents) yield event;
     },
   };
@@ -138,16 +140,92 @@ const setup = (providerEvents, options = {}) => {
       },
     },
     responseProvider: provider,
+    ...(options.proposalContextSource
+      ? { proposalContextSource: options.proposalContextSource }
+      : {}),
   });
   return {
     application,
     updates,
     assistantPlaceholders,
     providerCalls: () => providerCalls,
+    capturedPrompt: () => capturedPrompt,
     pending,
     user,
   };
 };
+
+test("streaming application injects matched proposal evidence and promotes the intent", async () => {
+  await withEnabledAssistant(async () => {
+    const content =
+      "The saved proposal is a Hybrid event for 1,500 attendees.";
+    const setupResult = setup(
+      [
+        {
+          type: "started",
+          providerResponseId: "resp_proposal",
+          model: "effective-model",
+        },
+        { type: "text_delta", delta: content },
+        {
+          type: "completed",
+          providerResponseId: "resp_proposal",
+          model: "effective-model",
+          usage: { inputTokens: 30, outputTokens: 12 },
+          output: {
+            kind: "answer",
+            content,
+            citationIds: ["selected-proposal:overview"],
+          },
+        },
+      ],
+      {
+        userContent:
+          "Momentum 2027 Sales Kickoff ei proposal somporke bolo",
+        proposalContextSource: {
+          async resolve(input) {
+            assert.equal(
+              input.query,
+              "Momentum 2027 Sales Kickoff ei proposal somporke bolo",
+            );
+            return {
+              state: "matched",
+              proposalName: "Momentum 2027 Sales Kickoff",
+              evidence: [
+                {
+                  id: "selected-proposal:overview",
+                  sourceType: "selected_proposal",
+                  trust: "authorized_private_data",
+                  title:
+                    "Selected proposal: Momentum 2027 Sales Kickoff",
+                  content:
+                    '{"proposalName":"Momentum 2027 Sales Kickoff","event":{"eventFormat":"Hybrid","attendees":"1500"}}',
+                  href: "/proposals",
+                },
+              ],
+            };
+          },
+        },
+      },
+    );
+
+    const output = await invoke(
+      setupResult.application,
+      new AbortController().signal,
+      undefined,
+      "Momentum 2027 Sales Kickoff ei proposal somporke bolo",
+    );
+    const prompt = setupResult.capturedPrompt();
+
+    assert.equal(prompt.intent.intent, "proposal_specific_request");
+    assert.equal(prompt.evidence[0].id, "selected-proposal:overview");
+    assert.equal(output.result.assistantMessage.status, "complete");
+    assert.equal(
+      output.result.assistantMessage.citations[0].sourceId,
+      "selected-proposal:overview",
+    );
+  });
+});
 
 const invoke = async (
   application,

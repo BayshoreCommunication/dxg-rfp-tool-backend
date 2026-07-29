@@ -4,6 +4,7 @@ import { deterministicAssistantProvider } from "./deterministicAssistantProvider
 import { openAiAssistantProvider } from "./openAiAssistantProvider";
 import { postgresAssistantRepository } from "./postgresAssistantRepository";
 import { createPlatformAssistantStreamingApplication } from "./streamingApplication";
+import { mongoAssistantProposalContextSource } from "./selectedProposalSource";
 
 export const platformAssistantRepository = postgresAssistantRepository;
 export const platformAssistantApplication = createPlatformAssistantApplication(
@@ -11,6 +12,7 @@ export const platformAssistantApplication = createPlatformAssistantApplication(
   {
     knowledgeSource: approvedKnowledgeSource,
     responseProvider: deterministicAssistantProvider,
+    proposalContextSource: mongoAssistantProposalContextSource,
   },
 );
 
@@ -18,4 +20,5 @@ export const platformAssistantStreamingApplication =
   createPlatformAssistantStreamingApplication(platformAssistantRepository, {
     knowledgeSource: approvedKnowledgeSource,
     responseProvider: openAiAssistantProvider,
+    proposalContextSource: mongoAssistantProposalContextSource,
   });

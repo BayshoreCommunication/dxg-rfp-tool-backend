@@ -181,8 +181,14 @@ export type AssistantThreadDetail = {
 
 export type AssistantPromptEvidence = {
   id: string;
-  sourceType: "platform_fact" | "operating_guidance";
-  trust: "trusted_platform_fact" | "untrusted_retrieved_content";
+  sourceType:
+    | "platform_fact"
+    | "operating_guidance"
+    | "selected_proposal";
+  trust:
+    | "trusted_platform_fact"
+    | "untrusted_retrieved_content"
+    | "authorized_private_data";
   title: string;
   content: string;
   href?: string;
