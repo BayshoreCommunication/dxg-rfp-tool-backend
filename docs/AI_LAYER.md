@@ -32,10 +32,19 @@ The proprietary baseline v3 workbook contains 433 items, 22 regional factors, 13
 - Auto-apply only validated, high-confidence, single candidates into empty draft fields; use optimistic version checks.
 - Require human action for conflicts and publication.
 - Record provider attempts before calls to close duplicate-charge windows.
+- Build structured-output schemas only from keywords strict mode accepts. A
+  rejected keyword fails the whole request, and because every call site softens
+  provider errors into a fallback, the feature silently stops using the model
+  instead of erroring. `uniqueItems` disabled live conversation replies
+  entirely; `tests/live-ai-schema-keywords.test.js` guards the list.
+- Present stored values in the form the reader expects before they become
+  evidence. Schedule fields are UTC instants, so the drafting model printed the
+  UTC clock face and labelled it with the event's zone until draft evidence
+  carried the venue reading.
 
 ## Open gaps
 
-Typed chat extraction, array/room extraction, weighted completeness, invalid-operation UI, vendor attempt-ledger coverage, bid comparison, report export, and a written OpenAI-versus-Anthropic comparison remain open. Room recommendations partially offset the room gap with a review-first deterministic capability (crew application, production knowledge retrieval, and any AI enrichment stage remain deferred). See [ROADMAP.md](ROADMAP.md).
+Array/room extraction, weighted completeness, invalid-operation UI, vendor attempt-ledger coverage, bid comparison, report export, and a written OpenAI-versus-Anthropic comparison remain open. Typed chat extraction shipped behind `CONVERSATION_EXTRACTION_ENABLED` (2026-07-29). Room recommendations partially offset the room gap with a review-first deterministic capability (crew application, production knowledge retrieval, and any AI enrichment stage remain deferred). See [ROADMAP.md](ROADMAP.md).
 
 ## Detailed references
 

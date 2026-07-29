@@ -89,7 +89,7 @@ titles, descriptions and small evaluate functions, individually testable.
 | ROOM_CREW_CAMERA_OPS_001 | Cameras → Camera Operator |
 | ROOM_CREW_TELEPROMPTER_001 | Teleprompter → Teleprompter Operator |
 | ROOM_CREW_LIGHTING_L1_001 | Programmable lighting → L1 |
-| ROOM_AUDIO_QA_001 | Passed-mic Q&A → handheld wireless mics; qty from knowledge, bounded by attendance |
+| ROOM_AUDIO_QA_001 | Passed-mic Q&A → handheld wireless mics; qty from knowledge, bounded by attendance. Keyed off `audienceQaMethod` (see below) |
 | ROOM_RECORDING_CLARIFY_001 | Recording → questions: camera count, composition, media ownership |
 | ROOM_SCHEDULE_END_001 | Show end ≤ show start → blocking warning |
 | ROOM_SCHEDULE_LOADIN_001 | Load-in after show start → blocking warning |
@@ -97,6 +97,21 @@ titles, descriptions and small evaluate functions, individually testable.
 | ROOM_PURPOSE_MISSING_001 / ROOM_ATTENDANCE_MISSING_001 | Missing core facts → clarification questions; value-producing rules are suppressed for that room |
 | ROOM_COUNT_MISMATCH_001 | Declared room count ≠ room modules → warning (proposal scope) |
 | ROOM_HYBRID_CLARIFY_001 | Hybrid/virtual → questions: streaming platform, remote speakers, virtual production ownership (proposal scope) |
+
+### Audience Q&A is the method, not a flag (2026-07-29)
+
+`ROOM_AUDIO_QA_001` originally required `audienceQa.audienceQa === "Yes"`. The
+Room Specifications form has no Q&A yes/no control — it writes only
+`audienceQaMethod` — so the rule was **unreachable from the app**, and every
+fixture had set the flag by hand. The wizard's save normalisation then *cleared*
+`audienceQaMethod` whenever that same flag was not `"Yes"`, so a planner's Q&A
+selection was discarded on every save.
+
+The method now carries the answer: a chosen method other than "No Q&A" entails
+the Q&A, an explicit `"No"` still wins, and the dashboard derives the legacy
+flag from the method rather than clearing it. `tests/room-recommendation.test.js`
+carries UI-shaped fixtures — method set, flag empty, exactly as the form
+saves — because hand-shaped fixtures are what hid this.
 
 ## Knowledge governance
 
