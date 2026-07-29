@@ -228,6 +228,7 @@ export type PlatformAssistantContext = {
   organizationMongoId: string;
   actorUserMongoId: string;
   correlationId: string;
+  analyticsSessionId?: string;
 };
 
 export class PlatformAssistantError extends Error {

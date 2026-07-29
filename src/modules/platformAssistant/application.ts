@@ -35,6 +35,30 @@ import type {
   PlatformAssistantGuidanceDependencies,
   PlatformAssistantRepository,
 } from "./ports";
+import {
+  assistantProductAnalyticsEnabled,
+  type AssistantClientProductEventInput,
+  type AssistantProductEventInput,
+} from "./productAnalytics";
+
+const recordProductEventBestEffort = async (
+  repository: PlatformAssistantRepository,
+  context: PlatformAssistantContext,
+  input: AssistantProductEventInput,
+): Promise<void> => {
+  if (
+    !assistantProductAnalyticsEnabled() ||
+    !repository.recordProductEvent
+  ) {
+    return;
+  }
+  try {
+    await repository.recordProductEvent({ ...context, ...input });
+  } catch {
+    // Product analytics is non-authoritative and must not change chat,
+    // feedback, or proposal behavior.
+  }
+};
 
 export const createPlatformAssistantApplication = (
   repository: PlatformAssistantRepository,
@@ -98,7 +122,7 @@ export const createPlatformAssistantApplication = (
     });
   },
 
-  submitFeedback(
+  async submitFeedback(
     context: PlatformAssistantContext,
     input: {
       threadId: unknown;
@@ -110,12 +134,42 @@ export const createPlatformAssistantApplication = (
     // Feedback remains available when generation is killed so users can rate
     // already completed responses.
     assertPlatformAssistantOrganizationEnabled(context.organizationMongoId);
-    return repository.submitFeedback({
+    const parsed = {
       ...context,
       threadId: parseAssistantThreadId(input.threadId),
       messageId: parseAssistantMessageId(input.messageId),
       ...parseAssistantFeedbackInput(input.body),
       idempotencyKey: parseAssistantIdempotencyKey(input.idempotencyKey),
+    };
+    const result = await repository.submitFeedback(parsed);
+    await recordProductEventBestEffort(repository, context, {
+      eventType: "feedback_submitted",
+      threadId: parsed.threadId,
+      messageId: parsed.messageId,
+      feedbackValue: parsed.value,
+      feedbackReason: parsed.reason,
+      completionOutcome: "completed",
+      idempotencyKey: `assistant-event:feedback:${parsed.idempotencyKey}`,
+    });
+    return result;
+  },
+
+  recordProductEvent(
+    context: PlatformAssistantContext,
+    input: AssistantClientProductEventInput,
+    idempotencyKey: unknown,
+  ) {
+    assertPlatformAssistantOrganizationEnabled(context.organizationMongoId);
+    if (
+      !assistantProductAnalyticsEnabled() ||
+      !repository.recordProductEvent
+    ) {
+      return Promise.resolve({ created: false });
+    }
+    return repository.recordProductEvent({
+      ...context,
+      ...input,
+      idempotencyKey: parseAssistantIdempotencyKey(idempotencyKey),
     });
   },
 
@@ -152,6 +206,14 @@ export const createPlatformAssistantApplication = (
       threadId,
       content,
       idempotencyKey,
+    });
+    await recordProductEventBestEffort(repository, context, {
+      eventType: "message_submitted",
+      threadId,
+      messageId: accepted.message.id,
+      routeCategory: uiContext?.routeCategory ?? "other",
+      completionOutcome: "completed",
+      idempotencyKey: `assistant-event:message-submitted:${accepted.message.id}`,
     });
     const preliminaryIntent = classifyAssistantIntent({
       query: accepted.message.content,
@@ -261,6 +323,25 @@ export const createPlatformAssistantApplication = (
         firstTokenMs: completionLatencyMs,
         completionLatencyMs,
       });
+      await recordProductEventBestEffort(repository, context, {
+        eventType: "first_token_received",
+        threadId,
+        messageId: assistantMessage.id,
+        routeCategory: uiContext?.routeCategory ?? "other",
+        intent: intent.intent,
+        firstTokenMs: completionLatencyMs,
+        idempotencyKey: `assistant-event:first-token:${assistantMessage.id}`,
+      });
+      await recordProductEventBestEffort(repository, context, {
+        eventType: "response_completed",
+        threadId,
+        messageId: assistantMessage.id,
+        routeCategory: uiContext?.routeCategory ?? "other",
+        intent: intent.intent,
+        responseKind: validated.kind,
+        completionOutcome: "completed",
+        idempotencyKey: `assistant-event:response-completed:${assistantMessage.id}`,
+      });
       return {
         userMessage: accepted.message,
         assistantMessage,
@@ -272,7 +353,7 @@ export const createPlatformAssistantApplication = (
           ? error.code
           : "ASSISTANT_PROVIDER_FAILED";
       try {
-        await repository.updateAssistantMessage({
+        const failed = await repository.updateAssistantMessage({
           ...context,
           threadId,
           messageId: placeholder.message.id,
@@ -281,6 +362,16 @@ export const createPlatformAssistantApplication = (
           model: guidanceDependencies.responseProvider.model,
           safeErrorCode: safeCode,
           intent: selectedIntent,
+        });
+        await recordProductEventBestEffort(repository, context, {
+          eventType: "response_failed",
+          threadId,
+          messageId: failed.id,
+          routeCategory: uiContext?.routeCategory ?? "other",
+          intent: selectedIntent.intent,
+          errorCode: safeCode,
+          completionOutcome: "failed",
+          idempotencyKey: `assistant-event:response-failed:${failed.id}`,
         });
       } catch {
         // Preserve the original generation or validation failure.

@@ -33,6 +33,10 @@ import type {
   AssistantStreamingResponseProvider,
   PlatformAssistantRepository,
 } from "./ports";
+import {
+  assistantProductAnalyticsEnabled,
+  type AssistantProductEventInput,
+} from "./productAnalytics";
 
 export type AssistantProductStreamEvent =
   | {
@@ -79,6 +83,24 @@ export type StreamAssistantGuidanceResult = {
 type Emit = (
   event: AssistantProductStreamEvent,
 ) => void | Promise<void>;
+
+const recordProductEventBestEffort = async (
+  repository: PlatformAssistantRepository,
+  context: PlatformAssistantContext,
+  input: AssistantProductEventInput,
+): Promise<void> => {
+  if (
+    !assistantProductAnalyticsEnabled() ||
+    !repository.recordProductEvent
+  ) {
+    return;
+  }
+  try {
+    await repository.recordProductEvent({ ...context, ...input });
+  } catch {
+    // Analytics must never change the response stream or persisted message.
+  }
+};
 
 const unavailableKnowledge = (error: unknown) => ({
   status: {
@@ -138,6 +160,14 @@ export const createPlatformAssistantStreamingApplication = (
       threadId,
       content,
       idempotencyKey,
+    });
+    await recordProductEventBestEffort(repository, context, {
+      eventType: "message_submitted",
+      threadId,
+      messageId: accepted.message.id,
+      routeCategory: uiContext?.routeCategory ?? "other",
+      completionOutcome: "completed",
+      idempotencyKey: `assistant-event:message-submitted:${accepted.message.id}`,
     });
     const preliminaryIntent = classifyAssistantIntent({
       query: accepted.message.content,
@@ -269,6 +299,16 @@ export const createPlatformAssistantStreamingApplication = (
         // Preserve the safe stream failure even if terminal persistence is
         // temporarily unavailable. The pending row remains recoverable.
       }
+      await recordProductEventBestEffort(repository, context, {
+        eventType: "response_failed",
+        threadId,
+        messageId: placeholder.message.id,
+        routeCategory: uiContext?.routeCategory ?? "other",
+        intent: intent.intent,
+        errorCode: code,
+        completionOutcome: aborted ? "aborted" : "failed",
+        idempotencyKey: `assistant-event:response-failed:${placeholder.message.id}`,
+      });
       await input.emit({
         type: "response.failed",
         version: 1,
@@ -388,6 +428,15 @@ export const createPlatformAssistantStreamingApplication = (
             assistantMessageId: placeholder.message.id,
             delta: accumulated,
           });
+          await recordProductEventBestEffort(repository, context, {
+            eventType: "first_token_received",
+            threadId,
+            messageId: placeholder.message.id,
+            routeCategory: uiContext?.routeCategory ?? "other",
+            intent: intent.intent,
+            firstTokenMs,
+            idempotencyKey: `assistant-event:first-token:${placeholder.message.id}`,
+          });
         } else {
           accumulated = validated.content;
         }
@@ -406,6 +455,16 @@ export const createPlatformAssistantStreamingApplication = (
           knowledgeVersion,
           firstTokenMs,
           completionLatencyMs: elapsedMs(),
+        });
+        await recordProductEventBestEffort(repository, context, {
+          eventType: "response_completed",
+          threadId,
+          messageId: assistantMessage.id,
+          routeCategory: uiContext?.routeCategory ?? "other",
+          intent: intent.intent,
+          responseKind: validated.kind,
+          completionOutcome: "completed",
+          idempotencyKey: `assistant-event:response-completed:${assistantMessage.id}`,
         });
         await input.emit({
           type: "response.completed",
@@ -440,6 +499,7 @@ export const createPlatformAssistantStreamingApplication = (
         }
 
         if (event.type === "text_delta") {
+          const receivedFirstToken = firstTokenMs === null;
           firstTokenMs ??= elapsedMs();
           if (!streamingPersisted) {
             assistantMessage = await repository.updateAssistantMessage({
@@ -456,6 +516,17 @@ export const createPlatformAssistantStreamingApplication = (
               firstTokenMs,
             });
             streamingPersisted = true;
+          }
+          if (receivedFirstToken) {
+            await recordProductEventBestEffort(repository, context, {
+              eventType: "first_token_received",
+              threadId,
+              messageId: placeholder.message.id,
+              routeCategory: uiContext?.routeCategory ?? "other",
+              intent: intent.intent,
+              firstTokenMs,
+              idempotencyKey: `assistant-event:first-token:${placeholder.message.id}`,
+            });
           }
           accumulated += event.delta;
           if (accumulated.length > ASSISTANT_RESPONSE_MAX_CHARACTERS) {
@@ -520,6 +591,16 @@ export const createPlatformAssistantStreamingApplication = (
           knowledgeVersion,
           firstTokenMs,
           completionLatencyMs: elapsedMs(),
+        });
+        await recordProductEventBestEffort(repository, context, {
+          eventType: "response_completed",
+          threadId,
+          messageId: assistantMessage.id,
+          routeCategory: uiContext?.routeCategory ?? "other",
+          intent: intent.intent,
+          responseKind: validated.kind,
+          completionOutcome: "completed",
+          idempotencyKey: `assistant-event:response-completed:${assistantMessage.id}`,
         });
         await input.emit({
           type: "response.completed",

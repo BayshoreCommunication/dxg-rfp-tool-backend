@@ -13,6 +13,7 @@ import {
   platformAssistantApplication,
   platformAssistantStreamingApplication,
 } from "../src/modules/platformAssistant/composition";
+import { parseAssistantClientProductEvent } from "../src/modules/platformAssistant/productAnalytics";
 import {
   assistantOperationalLimiter,
   type AssistantOperationalLimiter,
@@ -34,12 +35,20 @@ const context = (req: AuthRequest): PlatformAssistantContext => {
   }
   const requestCorrelation = (req as AuthRequest & { correlationId?: string })
     .correlationId;
+  const analyticsSessionId = String(
+    req.headers["assistant-analytics-session-id"] || "",
+  ).trim();
   return {
     organizationMongoId: req.user.organizationId,
     actorUserMongoId: req.user.userId,
     correlationId:
       requestCorrelation ||
       String(req.headers["x-correlation-id"] || crypto.randomUUID()),
+    ...(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      analyticsSessionId,
+    )
+      ? { analyticsSessionId: analyticsSessionId.toLowerCase() }
+      : {}),
   };
 };
 
@@ -140,6 +149,20 @@ export const createPlatformAssistantController = (dependencies?: {
             ),
           },
         });
+      } catch (error) {
+        writePlatformAssistantProblem(res, error);
+      }
+    },
+
+    async recordProductEvent(req: AuthRequest, res: Response) {
+      try {
+        requireJson(req);
+        const result = await application.recordProductEvent(
+          context(req),
+          parseAssistantClientProductEvent(req.body),
+          idempotencyKey(req),
+        );
+        res.status(result.created ? 201 : 200).json({ data: result });
       } catch (error) {
         writePlatformAssistantProblem(res, error);
       }
@@ -333,6 +356,7 @@ type AssistantLimitLeaseLike = {
 const controller = createPlatformAssistantController();
 
 export const getAssistantAccess = controller.getAccess;
+export const recordAssistantProductEvent = controller.recordProductEvent;
 export const listAssistantThreads = controller.listThreads;
 export const createAssistantThread = controller.createThread;
 export const getAssistantThread = controller.getThread;

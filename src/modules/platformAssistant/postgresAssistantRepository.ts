@@ -22,6 +22,18 @@ import type {
   AssistantIntentClassification,
   AssistantIntentSource,
 } from "./intentRouter";
+import {
+  assistantModelPrice,
+  estimatedAssistantCostUsd,
+} from "./evaluation";
+import {
+  ASSISTANT_PRODUCT_EVENT_SCHEMA_VERSION,
+  assistantErrorCategory,
+  assistantLatencyBucket,
+  assistantOrganizationCohort,
+  type AssistantCompletionOutcome,
+  type AssistantProductEventInput,
+} from "./productAnalytics";
 import type { PlatformAssistantRepository } from "./ports";
 
 type ThreadRow = {
@@ -77,6 +89,26 @@ type FeedbackRow = {
   created_at: Date | string;
   updated_at: Date | string;
 };
+
+type ProductEventRow = {
+  id: string;
+  input_checksum: string;
+};
+
+type AnalyticsMessageRow = Pick<
+  MessageRow,
+  | "intent"
+  | "response_kind"
+  | "model"
+  | "prompt_version"
+  | "knowledge_version"
+  | "first_token_ms"
+  | "completion_latency_ms"
+  | "input_tokens"
+  | "output_tokens"
+  | "safe_error_code"
+  | "citations"
+>;
 
 const toIso = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString();
@@ -160,6 +192,72 @@ const mapFeedback = (row: FeedbackRow): AssistantFeedback => ({
   createdAt: toIso(row.created_at),
   updatedAt: toIso(row.updated_at),
 });
+
+const analyticsPseudonym = (value: string, length: 16 | 32): string => {
+  const configured = String(
+    process.env.AI_ANALYTICS_PSEUDONYM_KEY ||
+      process.env.TELEMETRY_PSEUDONYM_KEY ||
+      "",
+  );
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.AI_ASSISTANT_ANALYTICS_ENABLED === "true" &&
+    configured.length < 32
+  ) {
+    throw new PlatformAssistantError(
+      "ASSISTANT_ANALYTICS_NOT_CONFIGURED",
+      "Assistant analytics is not configured.",
+      503,
+    );
+  }
+  return crypto
+    .createHmac(
+      "sha256",
+      configured || "test-only-assistant-analytics-key",
+    )
+    .update(value)
+    .digest("hex")
+    .slice(0, length);
+};
+
+const boundedAnalyticsString = (
+  value: string | null | undefined,
+): string | null => {
+  const normalized = String(value || "").trim();
+  return normalized && normalized.length <= 100 ? normalized : null;
+};
+
+const completionOutcome = (
+  input: AssistantProductEventInput,
+): AssistantCompletionOutcome | null => {
+  if (input.completionOutcome) return input.completionOutcome;
+  switch (input.eventType) {
+    case "response_completed":
+    case "analysis_completed":
+    case "field_change_applied":
+    case "feedback_submitted":
+      return "completed";
+    case "response_failed":
+      return "failed";
+    case "response_retried":
+      return "retried";
+    case "citation_opened":
+    case "internal_route_opened":
+    case "proposal_handoff_started":
+    case "proposal_handoff_completed":
+      return "navigated";
+    case "suggestion_selected":
+    case "finding_reviewed":
+    case "field_change_proposed":
+      return "selected";
+    case "suggestion_shown":
+      return "shown";
+    case "assistant_opened":
+      return "opened";
+    default:
+      return null;
+  }
+};
 
 const resolveTenant = async (
   client: PoolClient,
@@ -754,6 +852,218 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
         created: !existing.rows[0],
         feedback: mapFeedback(saved.rows[0]),
       };
+    });
+  },
+
+  recordProductEvent(input) {
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await resolveTenant(client, input);
+      if (input.threadId) {
+        await ownedThread(client, {
+          threadId: input.threadId,
+          actorUserMongoId: input.actorUserMongoId,
+        });
+      }
+      let message: AnalyticsMessageRow | null = null;
+      if (input.messageId) {
+        if (!input.threadId) {
+          throw new PlatformAssistantError(
+            "INVALID_ASSISTANT_ANALYTICS_EVENT",
+            "A message event requires its conversation.",
+            422,
+          );
+        }
+        const result = await client.query<AnalyticsMessageRow>(
+          `SELECT m.intent,m.response_kind,m.model,m.prompt_version,
+                  m.knowledge_version,m.first_token_ms,
+                  m.completion_latency_ms,m.input_tokens,m.output_tokens,
+                  m.safe_error_code,m.citations
+           FROM rfpilot.assistant_messages m
+           JOIN rfpilot.assistant_threads t
+             ON t.organization_id=m.organization_id AND t.id=m.thread_id
+           WHERE m.organization_id=$1 AND m.thread_id=$2 AND m.id=$3
+             AND t.owner_external_user_id=$4`,
+          [
+            organizationId,
+            input.threadId,
+            input.messageId,
+            input.actorUserMongoId,
+          ],
+        );
+        message = result.rows[0] ?? null;
+        if (!message) {
+          throw new PlatformAssistantError(
+            "ASSISTANT_MESSAGE_NOT_FOUND",
+            "The assistant message was not found.",
+            404,
+          );
+        }
+      }
+
+      const sessionReference =
+        input.analyticsSessionId ||
+        input.sessionId ||
+        input.threadId;
+      if (!sessionReference) {
+        throw new PlatformAssistantError(
+          "INVALID_ASSISTANT_ANALYTICS_SESSION",
+          "The assistant analytics session is required.",
+          422,
+        );
+      }
+      const actorPseudonym = analyticsPseudonym(
+        `${organizationId}:${input.actorUserMongoId}`,
+        16,
+      );
+      const sessionKey = analyticsPseudonym(
+        `${organizationId}:${input.actorUserMongoId}:${sessionReference}`,
+        32,
+      );
+      const firstTokenMs =
+        input.firstTokenMs ?? message?.first_token_ms ?? null;
+      const completionLatencyMs =
+        input.completionLatencyMs ??
+        message?.completion_latency_ms ??
+        null;
+      const latencyValue =
+        input.eventType === "first_token_received"
+          ? firstTokenMs
+          : completionLatencyMs ?? firstTokenMs;
+      const citations = Array.isArray(message?.citations)
+        ? message.citations
+        : [];
+      const inputTokens =
+        input.inputTokens ?? message?.input_tokens ?? null;
+      const outputTokens =
+        input.outputTokens ?? message?.output_tokens ?? null;
+      const price = message?.model
+        ? assistantModelPrice(message.model)
+        : null;
+      const estimatedCostMicros =
+        input.estimatedCostMicros ??
+        (price && inputTokens !== null && outputTokens !== null
+          ? Math.round(
+              estimatedAssistantCostUsd(
+                Number(inputTokens),
+                Number(outputTokens),
+                price,
+              ) * 1_000_000,
+            )
+          : null);
+      const values = {
+        eventSchemaVersion: ASSISTANT_PRODUCT_EVENT_SCHEMA_VERSION,
+        eventType: input.eventType,
+        organizationCohort: assistantOrganizationCohort(),
+        routeCategory: input.routeCategory ?? null,
+        intent: message?.intent ?? input.intent ?? null,
+        responseKind:
+          message?.response_kind ?? input.responseKind ?? null,
+        model: boundedAnalyticsString(message?.model ?? input.model),
+        promptVersion: boundedAnalyticsString(
+          message?.prompt_version ?? input.promptVersion,
+        ),
+        knowledgeVersion: boundedAnalyticsString(
+          message?.knowledge_version ?? input.knowledgeVersion,
+        ),
+        ruleVersion: boundedAnalyticsString(input.ruleVersion),
+        pricingVersion: boundedAnalyticsString(input.pricingVersion),
+        cited: input.cited ?? (message ? citations.length > 0 : null),
+        latencyBucket: assistantLatencyBucket(latencyValue),
+        firstTokenMs:
+          firstTokenMs === null ? null : Number(firstTokenMs),
+        completionLatencyMs:
+          completionLatencyMs === null
+            ? null
+            : Number(completionLatencyMs),
+        inputTokens:
+          inputTokens === null ? null : Number(inputTokens),
+        outputTokens:
+          outputTokens === null ? null : Number(outputTokens),
+        estimatedCostMicros,
+        errorCategory: assistantErrorCategory(
+          input.errorCode ?? message?.safe_error_code,
+        ),
+        findingCategory: input.findingCategory ?? null,
+        completionOutcome: completionOutcome(input),
+        feedbackValue: input.feedbackValue ?? null,
+        feedbackReason: input.feedbackReason ?? null,
+      };
+      const inputChecksum = crypto
+        .createHash("sha256")
+        .update(
+          JSON.stringify({
+            actorPseudonym,
+            sessionKey,
+            ...values,
+          }),
+        )
+        .digest("hex");
+      const inserted = await client.query<ProductEventRow>(
+        `INSERT INTO rfpilot.assistant_product_events(
+           id,organization_id,actor_pseudonym,session_key,
+           event_schema_version,event_type,organization_cohort,
+           route_category,intent,response_kind,model,prompt_version,
+           knowledge_version,rule_version,pricing_version,cited,
+           latency_bucket,first_token_ms,completion_latency_ms,
+           input_tokens,output_tokens,estimated_cost_micros,error_category,
+           finding_category,completion_outcome,feedback_value,feedback_reason,
+           idempotency_key,input_checksum
+         ) VALUES(
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+           $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29
+         )
+         ON CONFLICT (
+           organization_id,actor_pseudonym,idempotency_key
+         ) DO NOTHING
+         RETURNING id,input_checksum`,
+        [
+          uuidv7(),
+          organizationId,
+          actorPseudonym,
+          sessionKey,
+          values.eventSchemaVersion,
+          values.eventType,
+          values.organizationCohort,
+          values.routeCategory,
+          values.intent,
+          values.responseKind,
+          values.model,
+          values.promptVersion,
+          values.knowledgeVersion,
+          values.ruleVersion,
+          values.pricingVersion,
+          values.cited,
+          values.latencyBucket,
+          values.firstTokenMs,
+          values.completionLatencyMs,
+          values.inputTokens,
+          values.outputTokens,
+          values.estimatedCostMicros,
+          values.errorCategory,
+          values.findingCategory,
+          values.completionOutcome,
+          values.feedbackValue,
+          values.feedbackReason,
+          input.idempotencyKey,
+          inputChecksum,
+        ],
+      );
+      if (inserted.rows[0]) return { created: true };
+      const replay = await client.query<ProductEventRow>(
+        `SELECT id,input_checksum
+         FROM rfpilot.assistant_product_events
+         WHERE organization_id=$1 AND actor_pseudonym=$2
+           AND idempotency_key=$3`,
+        [organizationId, actorPseudonym, input.idempotencyKey],
+      );
+      if (!replay.rows[0] || replay.rows[0].input_checksum !== inputChecksum) {
+        throw new PlatformAssistantError(
+          "ASSISTANT_IDEMPOTENCY_CONFLICT",
+          "The idempotency key was already used for a different analytics event.",
+          409,
+        );
+      }
+      return { created: false };
     });
   },
 };

@@ -124,6 +124,40 @@ metadata and cited source identifiers—never the prompt, response, provider
 payload, or hidden reasoning. Feedback is an evaluation signal only: it
 cannot automatically publish or change prompts, knowledge, rules, or prices.
 
+Migration `033_assistant_product_analytics` adds an append-oriented,
+tenant-isolated lifecycle-event store. The existing authenticated Assistant
+boundary records server-authoritative message, first-token, completion,
+failure, and feedback events. A same-origin dashboard endpoint accepts only a
+fixed set of interaction events. Actor and 30-minute browser-session
+identifiers are one-way HMAC pseudonyms; thread, message, proposal, and client
+identifiers are verified for authorization but are not stored in analytics.
+
+The analytics schema contains only allowlisted cohort, route, intent,
+response-kind, model/version, citation, latency, safe error, finding,
+completion, feedback, token-count, and estimated-cost metadata. It cannot
+store prompts, responses, proposal text, contact details, provider payloads,
+URLs, query strings, or hidden reasoning. Analytics writes are idempotent and
+non-authoritative: an analytics failure never changes chat, feedback, or
+proposal behavior.
+
+### Resolved-session metric
+
+An **eligible session** is a pseudonymous 30-minute Assistant session with at
+least one `message_submitted` event. A session is **resolved** only when it has
+at least one `response_completed` event and a later explicit resolution signal:
+Helpful feedback, a citation/internal route open, or a completed proposal
+handoff. The resolved-session rate is resolved eligible sessions divided by
+all eligible sessions for the same date/filter window. This conservative
+definition does not infer success from silence and excludes sessions that only
+opened the Assistant or viewed a suggestion.
+
+Supporting rates use the same distinct eligible-session denominator unless
+their label explicitly says per response. A rephrased question is a second
+`message_submitted` before an explicit resolution signal. Cost per resolved
+session is the sum of versioned model-price estimates on completed responses
+divided by resolved sessions; unavailable model prices remain unavailable
+rather than being guessed.
+
 ### Deterministic-first intent routing
 
 `intentRouter.ts` owns the initial versioned taxonomy. High-confidence

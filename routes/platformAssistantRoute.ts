@@ -6,6 +6,7 @@ import {
   listAssistantThreads,
   patchAssistantThread,
   putAssistantFeedback,
+  recordAssistantProductEvent,
   streamAssistantMessage,
 } from "../controller/platformAssistantController";
 import { authenticate, authorizeAction } from "../middleware/auth";
@@ -17,6 +18,12 @@ router.get(
   authenticate,
   authorizeAction("assistant:use"),
   getAssistantAccess,
+);
+router.post(
+  "/assistant/analytics/events",
+  authenticate,
+  authorizeAction("assistant:use"),
+  recordAssistantProductEvent,
 );
 router.get(
   "/assistant/threads",

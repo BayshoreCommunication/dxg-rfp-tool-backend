@@ -14,6 +14,7 @@ import type {
   PlatformAssistantContext,
 } from "./domain";
 import type { AssistantIntentClassification } from "./intentRouter";
+import type { AssistantProductEventInput } from "./productAnalytics";
 
 export type CreateAssistantThreadResult = {
   created: boolean;
@@ -180,4 +181,8 @@ export interface PlatformAssistantRepository {
       idempotencyKey: string;
     },
   ): Promise<{ created: boolean; feedback: AssistantFeedback }>;
+
+  recordProductEvent?(
+    input: PlatformAssistantContext & AssistantProductEventInput,
+  ): Promise<{ created: boolean }>;
 }
