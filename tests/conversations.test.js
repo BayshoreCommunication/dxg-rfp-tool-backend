@@ -113,6 +113,17 @@ test("important-field whitelist only contains approved candidate paths with plai
     assert.ok(seen.has(path), path);
 });
 
+test("the opening question set covers attendance, the biggest cost driver", () => {
+  const opening = IMPORTANT_FIELD_QUESTIONS.slice(0, MAX_OPEN_FIELD_QUESTIONS).map((field) => field.path);
+  // Attendance used to rank below venue state — which the city answer fills in
+  // automatically — and so fell outside the cap and was never asked at all.
+  assert.ok(opening.includes("/content/event/attendees"), "attendance must be asked before the first draft");
+  assert.ok(opening.includes("/content/event/eventName"));
+  assert.ok(opening.includes("/content/event/startDate"));
+  assert.ok(opening.includes("/content/event/endDate"));
+  assert.ok(opening.includes("/content/venueSchedule/venueCity"));
+});
+
 test("guided intake asks event type using the editor's supported choices", () => {
   const question = IMPORTANT_FIELD_QUESTIONS.find((item) => item.path === "/content/event/eventType/eventType");
   assert.ok(question);

@@ -12,7 +12,14 @@ const parseExpiryDays = (expirySetting?: string): number | null => {
 
 export const runExpirationCheck = async () => {
   try {
-    const activeProposals = await Proposal.find({ isActive: true });
+    // Expiry is a published-proposal lifecycle: it closes something vendors can
+    // see. isActive defaults to true, so unsubmitted drafts were being swept up
+    // too — warned about, then auto-expired to "rejected" a week after creation
+    // even though they had never left the planner's hands.
+    const activeProposals = await Proposal.find({
+      isActive: true,
+      status: { $ne: "unsubmitted" },
+    });
     const settingsByUserId = new Map<string, any>();
     
     for (const proposal of activeProposals) {

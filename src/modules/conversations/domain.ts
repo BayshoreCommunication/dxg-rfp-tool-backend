@@ -158,9 +158,13 @@ export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Obje
   { path: "/content/event/eventType/eventType", prompt: "What type of event are you planning?", impact: "scope", answerType: "choice", options: EVENT_TYPES },
   { path: "/content/venueSchedule/venueName", prompt: "Which venue will host the event? Enter the venue name, or use Skip if it is still undecided.", impact: "cost", answerType: "text" },
   { path: "/content/venueSchedule/venueCity", prompt: "Which city will host the event? Add the state for ambiguous city names (for example, Portland, OR).", impact: "cost", answerType: "text" },
+  // Attendance drives room sizing, crew and nearly every line a vendor quotes,
+  // so it belongs in the opening set. It used to sit below venue state — which
+  // the city answer fills in automatically — and fell outside the cap, leaving
+  // the readiness check and the investment estimate to guess at head count.
+  { path: "/content/event/attendees", prompt: "How many in-person attendees are expected?", impact: "cost", answerType: "number" },
   { path: "/content/venueSchedule/venueState", prompt: "Which state or region will host the event?", impact: "cost", answerType: "text" },
   { path: "/content/venueSchedule/venueType", prompt: "What type of venue will host the event?", impact: "cost", answerType: "choice", options: VENUE_TYPES },
-  { path: "/content/event/attendees", prompt: "How many in-person attendees are expected?", impact: "cost", answerType: "number" },
   { path: "/content/venueSchedule/numberOfEventRooms", prompt: "How many event rooms are required?", impact: "cost", answerType: "number" },
   // Asked only after a real venue is selected.
   { path: "/content/venueSchedule/venueConfirmedStatus", prompt: "What is the venue status?", impact: "cost", answerType: "choice", options: Object.freeze(["Contract signed", "Verbally confirmed", "Preferred", "Not selected"]) },
