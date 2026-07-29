@@ -26,14 +26,21 @@ once per physical room.
 
 ## Trust boundary
 
-> **Policy change (2026-07-27, product decision):** recommendations now apply
+> **Policy change (2026-07-27, product decision):** recommendations apply
 > **automatically into empty room fields** — the planner adjusts values in the
 > form instead of approving each one first. This supersedes the original
-> review-first gate for `recommended_assumption` values and extends the
-> platform's existing empty-field auto-apply boundary (candidate application)
-> to room recommendations, including assumptions below the 0.8 automatic
-> confidence bar. Like the earlier auto-apply boundary move, **this should be
-> flagged to DXG explicitly.** The invariants that remain non-negotiable:
+> review-first gate for `recommended_assumption` values, and includes
+> assumptions below the 0.8 automatic confidence bar.
+>
+> **Scope note (2026-07-29):** this is now the platform's *only* unattended
+> application path. Extracted field candidates no longer auto-apply — the
+> dashboard's `useAutoApply` was removed in "require explicit field change
+> review", and `applyCandidatesAction` sends explicit `operationIds`. The
+> backend still accepts `automatic` for candidates behind
+> `AUTO_APPLY_MIN_CONFIDENCE`, but nothing calls it. So room recommendations no
+> longer *extend* a shared boundary, as this record previously said; they are
+> the deliberate exception to it, and **that should be flagged to DXG
+> explicitly.** The invariants that remain non-negotiable:
 > filled fields are never overwritten (skipped and reported), only allowlisted
 > fields can be written, crew changes are `$addToSet` appends (never removals),
 > version CAS and per-room identity checks still gate every write, and every

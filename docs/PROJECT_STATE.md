@@ -168,10 +168,11 @@ follow-up open. Existing state or time-zone values are not overwritten.
 **Policy note for DXG:** originally built review-first; changed the same day
 by product decision to **apply automatically into empty room fields** (the
 planner adjusts values in the form; filled fields are never overwritten and
-are reported as skipped). This extends the empty-field auto-apply boundary
-already flagged for extraction and includes `recommended_assumption` values
-below the 0.8 automatic-confidence bar — tell DXG together with the earlier
-boundary change. Engine is `room-rules.v3`; v3 evaluates every function in a
+are reported as skipped), including `recommended_assumption` values below the
+0.8 automatic-confidence bar. As of 2026-07-29 this is the platform's **only**
+unattended application path: extracted field candidates now require explicit
+review, so this no longer extends a shared boundary — it is the single
+exception to one, which is what DXG needs told. Engine is `room-rules.v3`; v3 evaluates every function in a
 physical room, sizes shared AV guidance from peak function attendance, and
 validates each function schedule independently. Migration 031 added
 automatic/skipped columns. The paragraph below otherwise stands, with crew
@@ -261,7 +262,8 @@ entitlement or deployment allowlist exists.
    in-house subtotal (the engine assumes yes, matching his 1.40 × 1.22
    scenario)? Can the questionnaire gain **projector lumens** and an
    **in-house-vs-outside-AV** flag (worth ~20 confidence points on every
-   estimate)? And confirmation of the auto-apply policy change above.
+   estimate)? And confirmation that room recommendations may keep filling empty
+   room fields unattended, now that extracted candidates no longer do.
 
 **Product gaps**
 - ~~**Typed conversation is not extracted.**~~ **Closed 2026-07-29.** The
