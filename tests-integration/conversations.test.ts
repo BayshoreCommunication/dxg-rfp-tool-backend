@@ -55,7 +55,7 @@ test("read creates the conversation and opens the beginner intake questions", as
 
   // read syncs field-gap questions from the Mongo proposal, which is the whole
   // reason it needs a Mongo connection. The fixture has only an event name, so
-  // the next seven of the eight highest-impact fields are asked and eventName
+  // the next seven highest-impact fields are asked and eventName
   // is not — a filled field is never asked about.
   assert.deepEqual(
     result.questions.map((question) => question.code),
@@ -63,10 +63,10 @@ test("read creates the conversation and opens the beginner intake questions", as
       "MISSING_FIELD:/content/event/startDate",
       "MISSING_FIELD:/content/event/endDate",
       "MISSING_FIELD:/content/event/eventFormat",
+      "MISSING_FIELD:/content/event/eventType/eventType",
       "MISSING_FIELD:/content/venueSchedule/venueName",
-      "MISSING_FIELD:/content/event/attendees",
-      "MISSING_FIELD:/content/venueSchedule/numberOfEventRooms",
       "MISSING_FIELD:/content/venueSchedule/venueCity",
+      "MISSING_FIELD:/content/event/attendees",
     ],
   );
   assert.ok(result.questions.every((question) => question.status === "open" && question.contextRunId === null));

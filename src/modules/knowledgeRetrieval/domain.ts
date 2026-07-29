@@ -33,4 +33,4 @@ export const parseRetrievalInput=(value:Record<string,unknown>)=>{
  const parsed=parseRetrievalFilters(value);
  return{fixture:fixture as RetrievalFixture|"free_text",query:RETRIEVAL_FIXTURES[fixture],filters:parsed.filters,limit:parsed.limit};
 };
-export const retrievalFingerprint=(input:{fixture:RetrievalFixture|"free_text";query?:string;filters:RetrievalFilters;limit:number})=>crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
+export const retrievalFingerprint=(input:{fixture:RetrievalFixture|"free_text";query?:string;filters:RetrievalFilters;limit:number;purpose?:"retrieval_test"|"knowledge_retrieval"})=>crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");

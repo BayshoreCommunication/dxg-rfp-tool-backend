@@ -153,3 +153,41 @@ test("automatic application is confidence-gated on the server, not just in the b
   const domain = read("src/modules/candidateApplication/domain.ts");
   assert.match(domain, /automatic:value\.automatic===true/, "the flag is parsed, defaulting to attended");
 });
+
+test("successful field application records an append-only content-free audit event", () => {
+  const source = fs.readFileSync(
+    path.join(
+      __dirname,
+      "..",
+      "src",
+      "modules",
+      "candidateApplication",
+      "postgresCandidateApplicationRepository.ts",
+    ),
+    "utf8",
+  );
+  assert.match(source, /candidate_fields_applied/);
+  assert.match(source, /fromProposalVersion/);
+  assert.match(source, /resultingProposalVersion/);
+  assert.match(source, /beforeChecksumRecorded/);
+  assert.match(source, /afterChecksumRecorded/);
+  assert.doesNotMatch(source, /audit_events[\s\S]{0,500}(modified_value|mongoValue)/);
+});
+
+test("application read supplies manual recovery information without an automatic undo", () => {
+  const source = fs.readFileSync(
+    path.join(
+      __dirname,
+      "..",
+      "src",
+      "modules",
+      "candidateApplication",
+      "postgresCandidateApplicationRepository.ts",
+    ),
+    "utf8",
+  );
+  assert.match(source, /mode: "manual_restore"/);
+  assert.match(source, /fromProposalVersion/);
+  assert.match(source, /resultingProposalVersion/);
+  assert.doesNotMatch(source, /automatic_undo|undoCandidateApplication/);
+});

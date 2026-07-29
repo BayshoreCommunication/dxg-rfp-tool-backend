@@ -7,7 +7,7 @@ import { withPostgresTransaction } from "../../../config/postgres";
 // the call leaves a durable 'pending_call' row (later marked 'orphaned') and a
 // retried run cannot silently re-charge the provider without an audit trail.
 export type ProviderAttemptContext = {
-  runType: "proposal_context" | "proposal_draft" | "conversation_chat" | "vendor_response_analyze";
+  runType: "proposal_context" | "proposal_draft" | "conversation_chat" | "vendor_response_analyze" | "platform_assistant";
   runId: string;
   organizationId: string;
 };

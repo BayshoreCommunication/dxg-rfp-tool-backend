@@ -5,13 +5,21 @@ const { hasOrganizationAction, legacyAuthorizationRoles } = require("../src/modu
 
 test("planner can create proposals but cannot administer security", () => {
   assert.equal(hasOrganizationAction(["planner"], "proposal:write"), true);
+  assert.equal(hasOrganizationAction(["planner"], "assistant:use"), true);
   assert.equal(hasOrganizationAction(["planner"], "security:admin"), false);
 });
 
 test("knowledge duties remain separable", () => {
   assert.equal(hasOrganizationAction(["knowledge_editor"], "knowledge:write"), true);
   assert.equal(hasOrganizationAction(["knowledge_editor"], "knowledge:approve"), false);
+  assert.equal(hasOrganizationAction(["knowledge_editor"], "assistant:use"), false);
   assert.equal(hasOrganizationAction(["knowledge_approver"], "knowledge:approve"), true);
+});
+
+test("customer and administrator roles receive the assistant permission", () => {
+  for (const role of ["planner", "organization_admin", "dxg_producer", "dxg_admin", "super_admin"]) {
+    assert.equal(hasOrganizationAction([role], "assistant:use"), true, role);
+  }
 });
 
 test("legacy route guards map to membership roles during transition", () => {

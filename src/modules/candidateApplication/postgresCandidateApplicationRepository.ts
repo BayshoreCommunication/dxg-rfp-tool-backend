@@ -469,7 +469,24 @@ export const candidateApplicationRepository = {
     afterChecksum: string | null;
   }) {
     return withPostgresTransaction(async (c) => {
-      await tenant(c, input.organizationMongoId);
+      const organizationId = await tenant(c, input.organizationMongoId);
+      const application = await c.query<{
+        proposal_reference_id: string;
+        actor_external_user_id: string;
+        expected_proposal_version: number;
+        selected_count: number;
+        correlation_id: string;
+        status: string;
+      }>(
+        "SELECT proposal_reference_id,actor_external_user_id,expected_proposal_version,selected_count,correlation_id,status FROM rfpilot.candidate_applications WHERE id=$1 FOR UPDATE",
+        [input.applicationId],
+      );
+      if (!application.rows[0])
+        throw new CandidateApplicationError(
+          "APPLICATION_NOT_FOUND",
+          "Application was not found.",
+          404,
+        );
       await c.query(
         "UPDATE rfpilot.candidate_applications SET status='applied',resulting_proposal_version=$2,before_checksum=coalesce($3,before_checksum),after_checksum=coalesce($4,after_checksum),completed_at=now(),updated_at=now() WHERE id=$1",
         [
@@ -479,6 +496,29 @@ export const candidateApplicationRepository = {
           input.afterChecksum,
         ],
       );
+      if (application.rows[0].status !== "applied")
+        await c.query(
+          `INSERT INTO rfpilot.audit_events(
+             id,organization_id,actor_external_user_id,action,target_type,target_id,
+             decision,correlation_id,metadata
+           ) VALUES($1,$2,$3,'candidate_fields_applied','candidate_application',$4,'allowed',$5,$6::jsonb)`,
+          [
+            uuidv7(),
+            organizationId,
+            application.rows[0].actor_external_user_id,
+            input.applicationId,
+            application.rows[0].correlation_id,
+            JSON.stringify({
+              proposalReferenceId: application.rows[0].proposal_reference_id,
+              fromProposalVersion:
+                application.rows[0].expected_proposal_version,
+              resultingProposalVersion: input.version,
+              selectedCount: application.rows[0].selected_count,
+              beforeChecksumRecorded: input.beforeChecksum !== null,
+              afterChecksumRecorded: input.afterChecksum !== null,
+            }),
+          ],
+        );
     });
   },
   markConflict(input: {
@@ -521,7 +561,22 @@ export const candidateApplicationRepository = {
         "SELECT canonical_path,outcome,safe_error_code FROM rfpilot.candidate_application_items WHERE application_id=$1 ORDER BY ordinal",
         [input.applicationId],
       );
-      return { ...a.rows[0], items: items.rows };
+      return {
+        ...a.rows[0],
+        items: items.rows,
+        recovery: {
+          mode: "manual_restore",
+          fromProposalVersion: Number(a.rows[0].expected_proposal_version),
+          resultingProposalVersion:
+            a.rows[0].resulting_proposal_version === null
+              ? null
+              : Number(a.rows[0].resulting_proposal_version),
+          message:
+            a.rows[0].status === "applied"
+              ? "Restore prior values through the proposal editor or contact an administrator with this application ID."
+              : "No field recovery is needed because this application did not complete.",
+        },
+      };
     });
   },
 };

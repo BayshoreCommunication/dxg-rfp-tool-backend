@@ -30,6 +30,35 @@ are surfaced with honest statuses: estimated / venue_dependent / no_data.
 Reports persist to `investment_guidance_reports`.
 Endpoints: `POST/GET /api/v1/proposals/:id/investment-guidance-reports(/latest)`.
 
+### Deterministic budget analysis
+
+Migration `037_deterministic_budget_analysis` advances the existing engine to
+`dxg-av-pricing-engine.v3`; it does not introduce a second pricing engine.
+Every new report records:
+
+- `deterministic-budget.v1`;
+- a stable approved-pricing release fingerprint;
+- a stable approved-rule release fingerprint; and
+- a structured budget analysis retained with that historical report.
+
+Money stays in integer minor units. Multiplier stacks use scaled integer and
+`BigInt` arithmetic, with bounded conversion only after rounding. The analysis
+separates included, missing, confirmation-required, optional, and
+possible-savings items. Unavailable rates keep the estimate incomplete and
+never receive a fabricated value.
+
+Breakdowns cover approved categories, equipment, labor, identified rooms, and
+shared services. Aggregate package ranges may be allocated evenly to matching
+room groups for review, and the allocation basis is always displayed. It is
+not represented as a vendor quote or a room-specific approved rate.
+
+Budget warnings cover currency mismatch, ranges above or overlapping a stated
+ceiling, required zero-value categories, equipment without labor, and missing
+setup/rehearsal/strike windows. A numerical impact appears only when it can be
+derived from the same-currency approved range. Travel/accommodation, delivery,
+venue, rigging, power, insurance, tax/service charge, and contingency remain
+explicit estimated, venue-dependent, or unavailable components.
+
 ## Vendor analysis (SOW Workstream 4, MVP)
 
 Durable job `vendor_response_analyze`: requirements are derived
@@ -49,6 +78,6 @@ Endpoints: `POST /api/v1/vendor-responses/:id/analysis-jobs`,
 
 - Attempt-ledger coverage for the vendor-analysis operation (needs widening
   the migration-016 `run_type` CHECK).
-- Pricing comparison against other submitted bids and guidance ranges inside
-  the analysis prompt; exportable client-presentable report; per-person and
-  per-hour units in the range engine (need attendee counts / labor schedules).
+- Pricing comparison against submitted bids inside the analysis prompt;
+  exportable client-presentable report; per-person units where authoritative
+  attendee allocation is unavailable.

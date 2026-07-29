@@ -1,6 +1,6 @@
 # AI Layer
 
-> Purpose: current governed AI capabilities and invariants. Last updated: 2026-07-22. Owner: AI engineering.
+> Purpose: current governed AI capabilities and invariants. Last updated: 2026-07-27. Owner: AI engineering.
 
 ## Current status
 
@@ -18,6 +18,7 @@ The M1–M6 audit roadmap is implemented behind deny-by-default flags. The pinne
 | Room recommendations | Confirmed room/event facts plus approved knowledge fixtures | Deterministic, classified, review-gated suggestions; explicit selective application to a tiny allowlisted room-field set with version and room-identity checks. See [architecture/ROOM_RECOMMENDATIONS.md](architecture/ROOM_RECOMMENDATIONS.md). |
 | Investment guidance | Approved pricing corpus and factors | Deterministic estimate or explicit refusal; never invent a number. |
 | Vendor analysis | Clean vendor response sources | Cited findings and escalation flags; comparison/export remain gaps. |
+| Platform Assistant | Personal chat history, versioned platform facts, eligible approved operating guidance | Read-only, cited platform/workflow guidance streamed through product SSE; cannot mutate or send product data. |
 
 ## Pricing model
 
@@ -41,6 +42,10 @@ The proprietary baseline v3 workbook contains 433 items, 22 regional factors, 13
   evidence. Schedule fields are UTC instants, so the drafting model printed the
   UTC clock face and labelled it with the event's zone until draft evidence
   carried the venue reading.
+- Keep Platform Assistant history private to its owning user, including from
+  other users in the same organization.
+- Require an explicit organization cohort for production Platform Assistant
+  access; the global feature flag is not a cohort mechanism.
 
 ## Open gaps
 

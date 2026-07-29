@@ -3,13 +3,21 @@
 **Status:** Accepted by DXG in isolated test  
 **Environment:** Isolated test only  
 **Depends on:** Accepted Slice 2D proposal-context extraction  
-**Mutation authorization:** Not granted
+**Mutation authorization:** Explicit reviewed application implemented; production activation not granted
 
 ## Executive Summary
 
 Slice 2E is the proposed bridge between read-only AI suggestions and editable proposal fields. A proposal owner reviews each extracted suggestion, may accept it, edit it, or reject it, and explicitly chooses which accepted values to apply. The system validates paths and values, checks that the proposal has not changed since extraction, applies only selected fields through an owner-scoped atomic MongoDB update, increments the proposal version, and records a durable PostgreSQL application ledger.
 
-No AI makes the application decision. There is no automatic “accept all,” no drafting, no publication, and no background proposal mutation without a user command.
+No AI makes the application decision. There is no automatic “accept all,” no
+empty-field auto-application, no publication, and no background proposal
+mutation without a user command. The proposal assistant only links to the
+review surface.
+
+Phase 9 adds a second explicit confirmation screen after per-field decisions.
+It repeats current and proposed values, reason, and citation provenance before
+the user can choose **Confirm and apply**. A stable application idempotency key
+is reused across an uncertain network retry.
 
 ### Mandatory correction before application
 
@@ -44,17 +52,20 @@ Directly applying Slice 2D output is therefore prohibited. Slice 2E must first n
 4. Edited values retain links to the original candidate and evidence.
 5. Review decisions are stored separately; immutable Slice 2D candidates are never modified.
 6. The UI shows current proposal value, suggested value, confidence, evidence count, and conflict state.
-7. The owner explicitly selects accepted/edited candidates and chooses **Apply selected fields**.
+7. The owner explicitly selects accepted/edited candidates, reviews the
+   current-versus-proposed confirmation, and chooses **Confirm and apply**.
 8. Application requires an idempotency key and expected proposal version.
 9. Paths and values are normalized and validated against a versioned allowlist and Proposal V1 contract.
 10. Only draft/unsubmitted, active, non-archived proposals may be changed in the initial increment.
 11. MongoDB applies all selected fields atomically with owner, tenant, lifecycle, version, and idempotency filters.
 12. The proposal version increments exactly once per successful application.
-13. PostgreSQL records before/after checksums, selected operation references, outcome, actor, and correlation.
+13. PostgreSQL records before/after checksums, selected operation references,
+    outcome, actor, correlation, and an append-only content-free audit event.
 14. Retrying the same application never applies the mutation twice.
 15. A stale proposal version returns a conflict and performs no mutation.
 16. Applied candidates become read-only; rejected/pending candidates remain unapplied.
-17. The response returns changed canonical paths and the new version, not unrestricted Mongo update data.
+17. The application read returns bounded manual-recovery guidance and versions,
+    not unrestricted Mongo update data or an automatic undo command.
 
 ### Non-functional requirements
 

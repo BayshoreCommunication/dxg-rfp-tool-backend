@@ -50,3 +50,55 @@ test("schema migration journal matches the checked-in migration files", async ()
     "rfpilot_schema_migrations should record exactly the versions on disk",
   );
 });
+
+test("latest assistant retention migration rolls back cleanly and reapplies", async () => {
+  const rollback = runMigrationCommand("rollback");
+  assert.equal(
+    rollback.status,
+    0,
+    `assistant retention rollback failed:\n${rollback.stderr}${rollback.stdout}`,
+  );
+  assert.match(rollback.stdout, /Rolled back 043_assistant_retention_privacy/);
+
+  try {
+    const rolledBack = await postgresPool().query<{
+      policies: string | null;
+      deletion_requests: string | null;
+      legal_holds: string | null;
+    }>(
+      `
+        SELECT
+          to_regclass('rfpilot.assistant_retention_policies')::text AS policies,
+          to_regclass('rfpilot.assistant_deletion_requests')::text AS deletion_requests,
+          to_regclass('rfpilot.assistant_legal_holds')::text AS legal_holds
+      `,
+    );
+    assert.equal(rolledBack.rows[0]?.policies, null);
+    assert.equal(rolledBack.rows[0]?.deletion_requests, null);
+    assert.equal(rolledBack.rows[0]?.legal_holds, null);
+  } finally {
+    const reapply = runMigrationCommand("up");
+    assert.equal(
+      reapply.status,
+      0,
+      `assistant retention reapply failed:\n${reapply.stderr}${reapply.stdout}`,
+    );
+    assert.match(reapply.stdout, /Applied 043_assistant_retention_privacy/);
+  }
+
+  const reapplied = await postgresPool().query<{
+    policies: string | null;
+    deletion_requests: string | null;
+    legal_holds: string | null;
+  }>(
+    `
+      SELECT
+        to_regclass('rfpilot.assistant_retention_policies')::text AS policies,
+        to_regclass('rfpilot.assistant_deletion_requests')::text AS deletion_requests,
+        to_regclass('rfpilot.assistant_legal_holds')::text AS legal_holds
+    `,
+  );
+  assert.equal(reapplied.rows[0]?.policies, "rfpilot.assistant_retention_policies");
+  assert.equal(reapplied.rows[0]?.deletion_requests, "rfpilot.assistant_deletion_requests");
+  assert.equal(reapplied.rows[0]?.legal_holds, "rfpilot.assistant_legal_holds");
+});
