@@ -614,6 +614,100 @@ test("deterministic guidance fixtures enforce grounding, refusal, and abstention
   }
 });
 
+test("deterministic provider reports exact authorized proposal portfolio counts", async () => {
+  const provider = new DeterministicAssistantProvider();
+  const evidence = {
+    id: "proposal-portfolio:counts",
+    sourceType: "proposal_portfolio",
+    trust: "authorized_private_data",
+    title: "Your proposal counts",
+    content: JSON.stringify({
+      schemaVersion: "assistant-proposal-portfolio.v1",
+      scope: "authenticated_owner_and_organization",
+      totalCreated: 83,
+      mainList: 68,
+      draft: 48,
+      live: 4,
+      favorite: 0,
+      expired: 16,
+      archived: 14,
+      savedCopies: 1,
+    }),
+    href: "/proposals",
+  };
+  const prompt = buildAssistantPromptInput({
+    userMessage: message({
+      id: "portfolio-count-user",
+      content: "How many proposals have I created?",
+    }),
+    history: [],
+    platformFacts: [],
+    operatingGuidance: [],
+    proposalEvidence: [evidence],
+    intent: {
+      intent: "proposal_specific_request",
+      version: "assistant-intent-router.v1",
+      source: "deterministic",
+      confidence: "high",
+    },
+  });
+
+  const response = validateAssistantProviderResponse(
+    await provider.generate(prompt),
+    prompt.evidence,
+  );
+
+  assert.equal(response.kind, "answer");
+  assert.match(response.content, /\*\*83 proposals\*\*/);
+  assert.match(response.content, /\*\*68\*\*/);
+  assert.match(response.content, /\*\*48 drafts\*\*/);
+  assert.match(response.content, /\*\*4 live\*\*/);
+  assert.match(response.content, /\*\*16 expired\*\*/);
+  assert.match(response.content, /\*\*14 archived\*\*/);
+  assert.match(response.content, /\*\*1 saved copy\*\*/);
+  assert.match(response.content, /\[Open Proposals\]\(\/proposals\)/);
+  assert.deepEqual(response.citationIds, ["proposal-portfolio:counts"]);
+});
+
+test("deterministic provider answers a requested proposal status count concisely", async () => {
+  const provider = new DeterministicAssistantProvider();
+  const prompt = buildAssistantPromptInput({
+    userMessage: message({
+      id: "draft-count-user",
+      content: "How many draft proposals do I have?",
+    }),
+    history: [],
+    platformFacts: [],
+    operatingGuidance: [],
+    proposalEvidence: [
+      {
+        id: "proposal-portfolio:counts",
+        sourceType: "proposal_portfolio",
+        trust: "authorized_private_data",
+        title: "Your proposal counts",
+        content: JSON.stringify({ totalCreated: 83, draft: 48 }),
+        href: "/proposals",
+      },
+    ],
+    intent: {
+      intent: "proposal_specific_request",
+      version: "assistant-intent-router.v1",
+      source: "deterministic",
+      confidence: "high",
+    },
+  });
+
+  const response = validateAssistantProviderResponse(
+    await provider.generate(prompt),
+    prompt.evidence,
+  );
+
+  assert.equal(response.kind, "answer");
+  assert.match(response.content, /\*\*48 draft proposals\*\*/);
+  assert.doesNotMatch(response.content, /current proposal list/i);
+  assert.deepEqual(response.citationIds, ["proposal-portfolio:counts"]);
+});
+
 test("deterministic fallback explains the guided intake and safe manual action paths", async () => {
   const provider = new DeterministicAssistantProvider();
 

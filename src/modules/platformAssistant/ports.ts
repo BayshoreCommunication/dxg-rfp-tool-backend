@@ -48,6 +48,10 @@ export type AssistantProposalContextResolution =
       evidence: AssistantPromptEvidence[];
     }
   | {
+      state: "portfolio_summary";
+      evidence: AssistantPromptEvidence[];
+    }
+  | {
       state: "ambiguous";
       proposalNames: string[];
       evidence: [];

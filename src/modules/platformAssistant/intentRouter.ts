@@ -213,6 +213,7 @@ const allowedPlatformPrefixes: Readonly<
   ],
   proposal_specific_request: [
     "selected-proposal:",
+    "proposal-portfolio:",
     "platform:assistant:proposal-workspace",
     "platform:navigation:proposals",
   ],

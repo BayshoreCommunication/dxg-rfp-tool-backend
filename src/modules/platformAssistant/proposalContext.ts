@@ -52,6 +52,17 @@ export const resolveAssistantProposalContext = async (input: {
         )
         .map((message) => message.content),
     });
+    if (resolution.state === "portfolio_summary") {
+      return {
+        intent: {
+          intent: "proposal_specific_request",
+          version: ASSISTANT_INTENT_VERSION,
+          source: "deterministic",
+          confidence: "high",
+        },
+        evidence: resolution.evidence,
+      };
+    }
     if (resolution.state !== "matched") {
       return { intent: input.intent, evidence: [] };
     }

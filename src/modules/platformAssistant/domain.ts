@@ -184,7 +184,8 @@ export type AssistantPromptEvidence = {
   sourceType:
     | "platform_fact"
     | "operating_guidance"
-    | "selected_proposal";
+    | "selected_proposal"
+    | "proposal_portfolio";
   trust:
     | "trusted_platform_fact"
     | "untrusted_retrieved_content"
