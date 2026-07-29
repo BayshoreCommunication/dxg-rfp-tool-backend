@@ -69,8 +69,29 @@ export interface IProposal extends Document {
 // Contact details are only mandatory once a proposal leaves the draft stage:
 // assisted/lazy creation starts an unsubmitted draft with no contact yet, and
 // the final submit step still enforces these fields.
-function contactRequired(this: { status?: string; isDraft?: boolean }): boolean {
-  return !(this.isDraft === true && (this.status ?? "unsubmitted") === "unsubmitted");
+//
+// Two binding contexts reach this predicate. On save() `this` is the document.
+// On findOneAndUpdate with runValidators + context:"query" `this` is the Query,
+// which cannot see the stored isDraft/status — so the pending update decides:
+// only an update that promotes the proposal out of draft demands contact.
+// Without this branch every draft save of a contactless proposal failed with an
+// opaque "Validation failed".
+type ContactRequiredScope = {
+  status?: string;
+  isDraft?: boolean;
+  getUpdate?: () => Record<string, unknown> | null;
+};
+
+function contactRequired(this: ContactRequiredScope | undefined): boolean {
+  const scope: ContactRequiredScope = this ?? {};
+  if (typeof scope.getUpdate === "function") {
+    const update = scope.getUpdate() ?? {};
+    const set = (update.$set ?? {}) as Record<string, unknown>;
+    const status = (set.status ?? update.status) as string | undefined;
+    const isDraft = (set.isDraft ?? update.isDraft) as boolean | undefined;
+    return status === "submitted" || isDraft === false;
+  }
+  return !(scope.isDraft === true && (scope.status ?? "unsubmitted") === "unsubmitted");
 }
 
 const proposalSchema = new Schema<IProposal>(

@@ -32,6 +32,11 @@ export const parseAssistantActions = (value: unknown): AssistantActionId[] => {
 
 export const asksForRoomScheduleHelp = (message: string): boolean => {
   const normalized = message.trim().toLowerCase();
+  // Naming the feature is enough on its own: planners ask for help with "the
+  // room schedule" far more often than they mention a spreadsheet, and the old
+  // room-word AND sheet-word pairing sent those turns to the generic fallback.
+  if (/\broom (schedule|schedules|by room|grid|matrix)\b/.test(normalized)) return true;
+  if (/\b(schedule|function) (template|sheet|spreadsheet|upload|import)\b/.test(normalized)) return true;
   const roomContext = /\b(room|rooms|function|functions|schedule)\b/.test(normalized);
   const sheetContext = /\b(excel|xlsx|spreadsheet|sheet|template|upload|download|import)\b/.test(normalized);
   return roomContext && sheetContext;

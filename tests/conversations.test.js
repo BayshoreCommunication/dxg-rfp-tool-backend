@@ -59,6 +59,12 @@ test("message input validation bounds content, intent, sources and version", () 
 test("room schedule help selects only allowlisted assistant actions", () => {
   assert.equal(asksForRoomScheduleHelp("Can I upload an Excel room schedule?"), true);
   assert.equal(asksForRoomScheduleHelp("Tell me about the event schedule"), false);
+  // Naming the feature without a spreadsheet word used to fall through to the
+  // generic acknowledgement, which is how planners actually phrase the ask.
+  assert.equal(asksForRoomScheduleHelp("Can you help me set up the room schedule?"), true);
+  assert.equal(asksForRoomScheduleHelp("How do I fill in the room by room?"), true);
+  assert.equal(asksForRoomScheduleHelp("I need to import my schedule template"), true);
+  assert.equal(asksForRoomScheduleHelp("What time does the room open?"), false);
   assert.deepEqual(
     parseAssistantActions(["download_room_schedule_template", "delete_proposal", "open_room_specifications"]),
     ["download_room_schedule_template", "open_room_specifications"],

@@ -224,16 +224,22 @@ export const ROOM_RULES: RoomRule[] = [
     requiresCoreFacts: true,
     evaluate: (ctx) => {
       const qa = nested(ctx.room.raw, "audienceQa", "audienceQa");
-      const method = nested(ctx.room.raw, "audienceQa", "audienceQaMethod").toLowerCase();
-      if (!isYes(qa) || !method) return [];
+      const methodRaw = nested(ctx.room.raw, "audienceQa", "audienceQaMethod");
+      const method = methodRaw.toLowerCase();
+      if (!method) return [];
+      // The wizard only ever writes audienceQaMethod — it has no separate
+      // yes/no toggle — so requiring audienceQa === "Yes" made this rule
+      // unreachable from the UI. A chosen method other than "no Q&A" is itself
+      // the confirmation that the room takes audience questions; an explicit
+      // "No" on the legacy field still wins.
+      const declinesQa = /\bno\b/.test(qa.trim().toLowerCase()) || method.startsWith("no q&a");
+      if (declinesQa) return [];
       const entry = ctx.knowledge.find((candidate) =>
         (candidate.applicability.audienceQaMethodIncludes ?? []).some((fragment) => method.includes(fragment)));
       if (!entry || !entry.guidance.handheldMicBands) return [];
       const outputs: RuleOutput[] = [];
-      const micEvidence = [
-        fact(ctx.room.index, "audienceQa/audienceQa", qa),
-        fact(ctx.room.index, "audienceQa/audienceQaMethod", nested(ctx.room.raw, "audienceQa", "audienceQaMethod")),
-      ];
+      const micEvidence = [fact(ctx.room.index, "audienceQa/audienceQaMethod", methodRaw)];
+      if (qa) micEvidence.unshift(fact(ctx.room.index, "audienceQa/audienceQa", qa));
       const micsSelected = nested(ctx.room.raw, "wirelessMics", "wirelessMics");
       if (!isYes(micsSelected)) {
         outputs.push({

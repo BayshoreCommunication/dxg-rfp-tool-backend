@@ -324,6 +324,38 @@ test("hostile source text cannot alter policy, classification or schema", () => 
   assert.equal(allRecommendations(second).find((r) => r.path.endsWith("wirelessMicsQty")).value, "3");
 });
 
+// ── Scenario 10b: UI-shaped Q&A room — the wizard writes only the method ──
+// The Room Specifications form has no audienceQa yes/no control, so a real
+// planner's room always arrives with that field empty. Fixtures that set it to
+// "Yes" hid the fact that these recommendations were unreachable in the app.
+test("a Q&A method alone drives the mic recommendations, as the wizard saves it", () => {
+  const recommendations = allRecommendations(generate({
+    event: { eventFormat: "In-Person", attendees: "450" }, venueSchedule: {},
+    roomByRoom: [room({
+      audienceQa: { audienceQa: "", audienceQaMethod: "Passed Handheld Mic — Staff walks mics to audience" },
+    })],
+  }));
+  const byPath = (suffix) => recommendations.find((r) => r.path.endsWith(suffix));
+  assert.equal(byPath("wirelessMics/wirelessMics").value, "Yes");
+  assert.equal(byPath("wirelessMicsType").value, "Handhelds");
+  assert.equal(byPath("wirelessMicsQty").value, "3");
+  assert.equal(byPath("wirelessMicsQty").classification, "recommended_assumption");
+  assert.ok(byPath("wirelessMicsQty").assumptions.length > 0);
+});
+
+test("an explicit no-Q&A selection still produces no microphone recommendations", () => {
+  for (const audienceQa of [
+    { audienceQa: "No", audienceQaMethod: "Passed Handheld Mic — Staff walks mics to audience" },
+    { audienceQa: "", audienceQaMethod: "No Q&A — Presentation only" },
+  ]) {
+    const recommendations = allRecommendations(generate({
+      event: { eventFormat: "In-Person", attendees: "450" }, venueSchedule: {},
+      roomByRoom: [room({ audienceQa })],
+    }));
+    assert.equal(recommendations.filter((r) => r.path.includes("wirelessMics")).length, 0);
+  }
+});
+
 // ── Scenario 11: duplicate request — deterministic repeatability ──
 test("generation is deterministic and the fingerprint is stable for identical input", () => {
   const proposal = {
