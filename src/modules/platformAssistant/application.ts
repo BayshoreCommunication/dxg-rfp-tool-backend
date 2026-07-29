@@ -79,7 +79,11 @@ export const createPlatformAssistantApplication = (
 
   listThreads(
     context: PlatformAssistantContext,
-    input: { limit?: unknown; updatedBefore?: Date | null } = {},
+    input: {
+      limit?: unknown;
+      updatedBefore?: Date | null;
+      deletionState?: "available" | "deleted";
+    } = {},
   ) {
     assertPlatformAssistantOrganizationEnabled(context.organizationMongoId);
     return repository.listThreads({
@@ -90,6 +94,8 @@ export const createPlatformAssistantApplication = (
         25,
       ),
       updatedBefore: input.updatedBefore,
+      deletionState:
+        input.deletionState === "deleted" ? "deleted" : "available",
     });
   },
 
@@ -117,6 +123,25 @@ export const createPlatformAssistantApplication = (
   archiveThread(context: PlatformAssistantContext, threadId: unknown) {
     assertPlatformAssistantOrganizationEnabled(context.organizationMongoId);
     return repository.archiveThread({
+      ...context,
+      threadId: parseAssistantThreadId(threadId),
+    });
+  },
+
+  requestThreadDeletion(
+    context: PlatformAssistantContext,
+    threadId: unknown,
+  ) {
+    assertPlatformAssistantOrganizationEnabled(context.organizationMongoId);
+    return repository.requestThreadDeletion({
+      ...context,
+      threadId: parseAssistantThreadId(threadId),
+    });
+  },
+
+  restoreThread(context: PlatformAssistantContext, threadId: unknown) {
+    assertPlatformAssistantOrganizationEnabled(context.organizationMongoId);
+    return repository.restoreThread({
       ...context,
       threadId: parseAssistantThreadId(threadId),
     });

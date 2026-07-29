@@ -139,6 +139,9 @@ export type AssistantThread = {
   status: AssistantThreadStatus;
   messageCount: number;
   lastMessageAt: string | null;
+  deletedAt: string | null;
+  purgeAfter: string | null;
+  recoverable: boolean;
   createdAt: string;
   updatedAt: string;
 };

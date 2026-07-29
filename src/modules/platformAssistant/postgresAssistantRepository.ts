@@ -43,6 +43,8 @@ type ThreadRow = {
   message_count: number;
   idempotency_key: string | null;
   last_message_at: Date | string | null;
+  deleted_at: Date | string | null;
+  purge_after: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -122,6 +124,12 @@ const mapThread = (row: ThreadRow): AssistantThread => ({
   status: row.status,
   messageCount: Number(row.message_count),
   lastMessageAt: toOptionalIso(row.last_message_at),
+  deletedAt: toOptionalIso(row.deleted_at),
+  purgeAfter: toOptionalIso(row.purge_after),
+  recoverable:
+    row.deleted_at !== null &&
+    row.purge_after !== null &&
+    new Date(row.purge_after).getTime() > Date.now(),
   createdAt: toIso(row.created_at),
   updatedAt: toIso(row.updated_at),
 });
@@ -330,12 +338,15 @@ const ownedThread = async (
     threadId: string;
     actorUserMongoId: string;
     forUpdate?: boolean;
+    includeDeleted?: boolean;
   },
 ): Promise<ThreadRow> => {
   const result = await client.query<ThreadRow>(
-    `SELECT id,title,status,message_count,idempotency_key,last_message_at,created_at,updated_at
+    `SELECT id,title,status,message_count,idempotency_key,last_message_at,
+            deleted_at,purge_after,created_at,updated_at
      FROM rfpilot.assistant_threads
      WHERE id=$1 AND owner_external_user_id=$2
+       ${input.includeDeleted ? "" : "AND deleted_at IS NULL"}
      ${input.forUpdate ? "FOR UPDATE" : ""}`,
     [input.threadId, input.actorUserMongoId],
   );
@@ -347,6 +358,19 @@ const ownedThread = async (
     );
   }
   return result.rows[0];
+};
+
+const deletionGraceDays = async (
+  client: PoolClient,
+  organizationId: string,
+): Promise<number> => {
+  const result = await client.query<{ deletion_grace_days: number }>(
+    `SELECT deletion_grace_days
+     FROM rfpilot.assistant_retention_policies
+     WHERE organization_id=$1 AND status='approved'`,
+    [organizationId],
+  );
+  return Number(result.rows[0]?.deletion_grace_days ?? 30);
 };
 
 const assertThreadActive = (thread: ThreadRow): void => {
@@ -448,9 +472,11 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
     return withPostgresTransaction(async (client) => {
       const organizationId = await resolveTenant(client, input);
       const existing = await client.query<ThreadRow>(
-        `SELECT id,title,status,message_count,idempotency_key,last_message_at,created_at,updated_at
+        `SELECT id,title,status,message_count,idempotency_key,last_message_at,
+                deleted_at,purge_after,created_at,updated_at
          FROM rfpilot.assistant_threads
-         WHERE owner_external_user_id=$1 AND idempotency_key=$2`,
+         WHERE owner_external_user_id=$1 AND idempotency_key=$2
+           AND deleted_at IS NULL`,
         [input.actorUserMongoId, input.idempotencyKey],
       );
       if (existing.rows[0]) {
@@ -470,7 +496,8 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
          ON CONFLICT (
            organization_id,owner_external_user_id,idempotency_key
          ) WHERE idempotency_key IS NOT NULL DO NOTHING
-         RETURNING id,title,status,message_count,idempotency_key,last_message_at,created_at,updated_at`,
+         RETURNING id,title,status,message_count,idempotency_key,last_message_at,
+                   deleted_at,purge_after,created_at,updated_at`,
         [
           uuidv7(),
           organizationId,
@@ -481,9 +508,11 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
       );
       if (!inserted.rows[0]) {
         const replay = await client.query<ThreadRow>(
-          `SELECT id,title,status,message_count,idempotency_key,last_message_at,created_at,updated_at
+          `SELECT id,title,status,message_count,idempotency_key,last_message_at,
+                  deleted_at,purge_after,created_at,updated_at
            FROM rfpilot.assistant_threads
-           WHERE owner_external_user_id=$1 AND idempotency_key=$2`,
+           WHERE owner_external_user_id=$1 AND idempotency_key=$2
+             AND deleted_at IS NULL`,
           [input.actorUserMongoId, input.idempotencyKey],
         );
         if (!replay.rows[0] || replay.rows[0].title !== input.title) {
@@ -510,18 +539,27 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
   listThreads(input) {
     return withPostgresTransaction(async (client) => {
       await resolveTenant(client, input);
+      const deletionPredicate =
+        input.deletionState === "deleted"
+          ? "deleted_at IS NOT NULL"
+          : "deleted_at IS NULL";
       const result = input.updatedBefore
         ? await client.query<ThreadRow>(
-            `SELECT id,title,status,message_count,idempotency_key,last_message_at,created_at,updated_at
+            `SELECT id,title,status,message_count,idempotency_key,last_message_at,
+                    deleted_at,purge_after,created_at,updated_at
              FROM rfpilot.assistant_threads
-             WHERE owner_external_user_id=$1 AND updated_at<$2
+             WHERE owner_external_user_id=$1
+               AND ${deletionPredicate}
+               AND updated_at<$2
              ORDER BY updated_at DESC,id DESC LIMIT $3`,
             [input.actorUserMongoId, input.updatedBefore, input.limit],
           )
         : await client.query<ThreadRow>(
-            `SELECT id,title,status,message_count,idempotency_key,last_message_at,created_at,updated_at
+            `SELECT id,title,status,message_count,idempotency_key,last_message_at,
+                    deleted_at,purge_after,created_at,updated_at
              FROM rfpilot.assistant_threads
              WHERE owner_external_user_id=$1
+               AND ${deletionPredicate}
              ORDER BY updated_at DESC,id DESC LIMIT $2`,
             [input.actorUserMongoId, input.limit],
           );
@@ -579,13 +617,109 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
         `UPDATE rfpilot.assistant_threads
          SET status='archived',updated_at=now()
          WHERE id=$1 AND owner_external_user_id=$2
-         RETURNING id,title,status,message_count,idempotency_key,last_message_at,created_at,updated_at`,
+         RETURNING id,title,status,message_count,idempotency_key,last_message_at,
+                   deleted_at,purge_after,created_at,updated_at`,
         [thread.id, input.actorUserMongoId],
       );
       await audit(client, {
         organizationId,
         actorUserMongoId: input.actorUserMongoId,
         action: "assistant.thread.archive",
+        targetType: "assistant_thread",
+        targetId: thread.id,
+        correlationId: input.correlationId,
+      });
+      return mapThread(updated.rows[0]);
+    });
+  },
+
+  requestThreadDeletion(input) {
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await resolveTenant(client, input);
+      const thread = await ownedThread(client, {
+        ...input,
+        forUpdate: true,
+        includeDeleted: true,
+      });
+      if (thread.deleted_at) return mapThread(thread);
+      const graceDays = await deletionGraceDays(client, organizationId);
+      const updated = await client.query<ThreadRow>(
+        `UPDATE rfpilot.assistant_threads
+         SET status='archived',
+             deleted_at=now(),
+             purge_after=now()+($3::text||' days')::interval,
+             updated_at=now()
+         WHERE id=$1 AND owner_external_user_id=$2 AND deleted_at IS NULL
+         RETURNING id,title,status,message_count,idempotency_key,last_message_at,
+                   deleted_at,purge_after,created_at,updated_at`,
+        [thread.id, input.actorUserMongoId, graceDays],
+      );
+      await client.query(
+        `INSERT INTO rfpilot.assistant_deletion_requests(
+           id,organization_id,thread_id,actor_external_user_id,status,
+           purge_after,correlation_id
+         ) VALUES($1,$2,$3,$4,'pending',$5,$6)
+         ON CONFLICT (organization_id,thread_id)
+           WHERE status='pending' DO NOTHING`,
+        [
+          uuidv7(),
+          organizationId,
+          thread.id,
+          input.actorUserMongoId,
+          updated.rows[0].purge_after,
+          input.correlationId,
+        ],
+      );
+      await audit(client, {
+        organizationId,
+        actorUserMongoId: input.actorUserMongoId,
+        action: "assistant.thread.delete.request",
+        targetType: "assistant_thread",
+        targetId: thread.id,
+        correlationId: input.correlationId,
+        metadata: { graceDays },
+      });
+      return mapThread(updated.rows[0]);
+    });
+  },
+
+  restoreThread(input) {
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await resolveTenant(client, input);
+      const thread = await ownedThread(client, {
+        ...input,
+        forUpdate: true,
+        includeDeleted: true,
+      });
+      if (!thread.deleted_at) return mapThread(thread);
+      if (
+        !thread.purge_after ||
+        new Date(thread.purge_after).getTime() <= Date.now()
+      ) {
+        throw new PlatformAssistantError(
+          "ASSISTANT_THREAD_RECOVERY_EXPIRED",
+          "This conversation can no longer be restored.",
+          410,
+        );
+      }
+      const updated = await client.query<ThreadRow>(
+        `UPDATE rfpilot.assistant_threads
+         SET status='active',deleted_at=NULL,purge_after=NULL,updated_at=now()
+         WHERE id=$1 AND owner_external_user_id=$2
+         RETURNING id,title,status,message_count,idempotency_key,last_message_at,
+                   deleted_at,purge_after,created_at,updated_at`,
+        [thread.id, input.actorUserMongoId],
+      );
+      await client.query(
+        `UPDATE rfpilot.assistant_deletion_requests
+         SET status='restored',restored_at=now(),updated_at=now()
+         WHERE organization_id=$1 AND thread_id=$2 AND status='pending'`,
+        [organizationId, thread.id],
+      );
+      await audit(client, {
+        organizationId,
+        actorUserMongoId: input.actorUserMongoId,
+        action: "assistant.thread.restore",
         targetType: "assistant_thread",
         targetId: thread.id,
         correlationId: input.correlationId,

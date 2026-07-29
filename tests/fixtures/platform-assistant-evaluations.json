@@ -1,5 +1,10 @@
 {
   "version": "platform-assistant-evaluation.v2",
+  "provenance": {
+    "source": "synthetic_and_reviewed",
+    "containsProductionConversationContent": false,
+    "deletionReconciliation": "not_applicable"
+  },
   "baseline": {
     "datasetRevision": "2026-07-29.1",
     "promptVersion": "platform-assistant-prompt.v5",

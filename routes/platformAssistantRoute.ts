@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   createAssistantThread,
+  deleteAssistantThread,
   getAssistantAccess,
   getAssistantQualityReport,
   getAssistantThread,
@@ -8,6 +9,7 @@ import {
   patchAssistantThread,
   putAssistantFeedback,
   recordAssistantProductEvent,
+  restoreAssistantThread,
   streamAssistantMessage,
 } from "../controller/platformAssistantController";
 import { authenticate, authorizeAction } from "../middleware/auth";
@@ -55,6 +57,18 @@ router.patch(
   authenticate,
   authorizeAction("assistant:use"),
   patchAssistantThread,
+);
+router.delete(
+  "/assistant/threads/:threadId",
+  authenticate,
+  authorizeAction("assistant:use"),
+  deleteAssistantThread,
+);
+router.post(
+  "/assistant/threads/:threadId/restore",
+  authenticate,
+  authorizeAction("assistant:use"),
+  restoreAssistantThread,
 );
 router.put(
   "/assistant/threads/:threadId/messages/:messageId/feedback",

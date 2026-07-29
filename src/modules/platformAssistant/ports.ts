@@ -116,6 +116,7 @@ export interface PlatformAssistantRepository {
     input: PlatformAssistantContext & {
       limit: number;
       updatedBefore?: Date | null;
+      deletionState?: "available" | "deleted";
     },
   ): Promise<AssistantThread[]>;
 
@@ -128,6 +129,18 @@ export interface PlatformAssistantRepository {
   ): Promise<AssistantThreadDetail>;
 
   archiveThread(
+    input: PlatformAssistantContext & {
+      threadId: string;
+    },
+  ): Promise<AssistantThread>;
+
+  requestThreadDeletion(
+    input: PlatformAssistantContext & {
+      threadId: string;
+    },
+  ): Promise<AssistantThread>;
+
+  restoreThread(
     input: PlatformAssistantContext & {
       threadId: string;
     },

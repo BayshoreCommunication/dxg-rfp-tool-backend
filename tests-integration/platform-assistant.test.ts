@@ -269,3 +269,59 @@ test("archived threads remain readable but reject new messages", async () => {
       (error as { code?: string }).code === "ASSISTANT_THREAD_ARCHIVED",
   );
 });
+
+test("owner can request recoverable deletion and restore within the grace window", async () => {
+  const created = await platformAssistantApplication.createThread(
+    context(),
+    { title: "Recoverable conversation" },
+    `assistant-retention:${crypto.randomUUID()}`,
+  );
+  const deleted = await platformAssistantApplication.requestThreadDeletion(
+    context(),
+    created.thread.id,
+  );
+  assert.ok(deleted.deletedAt);
+  assert.ok(deleted.purgeAfter);
+  assert.equal(deleted.recoverable, true);
+
+  const available = await platformAssistantApplication.listThreads(
+    context(),
+    { limit: 100 },
+  );
+  assert.equal(
+    available.some((thread) => thread.id === created.thread.id),
+    false,
+  );
+  const recentlyDeleted = await platformAssistantApplication.listThreads(
+    context(),
+    { limit: 100, deletionState: "deleted" },
+  );
+  assert.equal(
+    recentlyDeleted.some((thread) => thread.id === created.thread.id),
+    true,
+  );
+  await assert.rejects(
+    platformAssistantApplication.getThread(context(), {
+      threadId: created.thread.id,
+    }),
+    (error: unknown) =>
+      (error as { code?: string }).code === "ASSISTANT_THREAD_NOT_FOUND",
+  );
+  await assert.rejects(
+    platformAssistantApplication.requestThreadDeletion(
+      context(sameOrganizationActor),
+      created.thread.id,
+    ),
+    (error: unknown) =>
+      (error as { code?: string }).code === "ASSISTANT_THREAD_NOT_FOUND",
+  );
+
+  const restored = await platformAssistantApplication.restoreThread(
+    context(),
+    created.thread.id,
+  );
+  assert.equal(restored.status, "active");
+  assert.equal(restored.deletedAt, null);
+  assert.equal(restored.purgeAfter, null);
+  assert.equal(restored.recoverable, false);
+});

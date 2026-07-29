@@ -199,6 +199,8 @@ export const createPlatformAssistantController = (dependencies?: {
           data: await application.listThreads(ctx, {
             limit: req.query.limit,
             updatedBefore: cursorDate(req.query.cursor),
+            deletionState:
+              req.query.view === "deleted" ? "deleted" : "available",
           }),
         });
       } catch (error) {
@@ -250,6 +252,32 @@ export const createPlatformAssistantController = (dependencies?: {
         }
         res.json({
           data: await application.archiveThread(
+            context(req),
+            req.params.threadId,
+          ),
+        });
+      } catch (error) {
+        writePlatformAssistantProblem(res, error);
+      }
+    },
+
+    async deleteThread(req: AuthRequest, res: Response) {
+      try {
+        res.status(202).json({
+          data: await application.requestThreadDeletion(
+            context(req),
+            req.params.threadId,
+          ),
+        });
+      } catch (error) {
+        writePlatformAssistantProblem(res, error);
+      }
+    },
+
+    async restoreThread(req: AuthRequest, res: Response) {
+      try {
+        res.json({
+          data: await application.restoreThread(
             context(req),
             req.params.threadId,
           ),
@@ -386,5 +414,7 @@ export const listAssistantThreads = controller.listThreads;
 export const createAssistantThread = controller.createThread;
 export const getAssistantThread = controller.getThread;
 export const patchAssistantThread = controller.patchThread;
+export const deleteAssistantThread = controller.deleteThread;
+export const restoreAssistantThread = controller.restoreThread;
 export const putAssistantFeedback = controller.putFeedback;
 export const streamAssistantMessage = controller.streamMessage;

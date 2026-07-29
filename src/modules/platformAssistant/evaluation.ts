@@ -312,6 +312,19 @@ export const parseAssistantEvaluationFixtures = (
         ),
       )
     : null;
+  const provenance = isRecord(value.provenance)
+    ? value.provenance
+    : null;
+
+  if (
+    provenance?.source !== "synthetic_and_reviewed" ||
+    provenance?.containsProductionConversationContent !== false ||
+    provenance?.deletionReconciliation !== "not_applicable"
+  ) {
+    errors.push(
+      "provenance must confirm synthetic/reviewed fixtures contain no production conversation content",
+    );
+  }
 
   for (const key of [
     "datasetRevision",
