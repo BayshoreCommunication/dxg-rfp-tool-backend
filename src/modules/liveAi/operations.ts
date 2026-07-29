@@ -4,6 +4,7 @@ import {executeOpenAiJson} from "./openAiProvider";
 import type {ProviderAttemptContext} from "./attemptLedger";
 import {extractionPathEnum} from "../candidateApplication/canonicalMapping";
 import {DRAFT_SECTION_KEYS,type DraftSectionKey} from "../proposalDraft/domain";
+import {withEventZoneScheduleTimes} from "./scheduleTimes";
 
 const fixtureEvidence={
  "synthetic-conference-simple":[
@@ -135,10 +136,15 @@ const flattenProposalEvidence=(value:unknown,path:string):Array<{id:string;value
  if(typeof value!=="object")return[{id:path,value}];
  return Object.entries(value as Record<string,unknown>).flatMap(([key,child])=>flattenProposalEvidence(child,`${path}/${key}`));
 };
-export const proposalDraftEvidence=(proposal:Record<string,unknown>)=>
- Object.entries(proposal)
+export const proposalDraftEvidence=(proposal:Record<string,unknown>)=>{
+ // Schedule fields are stored as UTC instants. Presented raw, the model prints
+ // the UTC clock face and labels it with the event's zone, so the RFP quotes
+ // vendors the wrong show times. Convert to the venue reading first.
+ const timeZone=(proposal.venueSchedule as Record<string,unknown>|undefined)?.timeZone;
+ return Object.entries(proposal)
   .filter(([section])=>!section.startsWith("_")&&!["userId","organizationId","status","createdAt","updatedAt","version"].includes(section))
-  .flatMap(([section,value])=>flattenProposalEvidence(value,`/content/${section}`));
+  .flatMap(([section,value])=>flattenProposalEvidence(withEventZoneScheduleTimes(value,timeZone),`/content/${section}`));
+};
 
 export async function liveProposalDraft(proposal:Record<string,unknown>,ledger?:ProviderAttemptContext,sectionScope?:string|null,knowledgeEvidence?:Array<{id:string;text:string}>){
  const proposalEvidence=proposalDraftEvidence(proposal);
