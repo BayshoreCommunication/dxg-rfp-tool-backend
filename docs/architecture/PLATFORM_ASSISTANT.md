@@ -9,6 +9,22 @@ navigation, onboarding, proposal workflows, and event-planning concepts. It is
 separate from the proposal-specific assistant and cannot edit, publish, send,
 archive, or delete product data on a user's behalf.
 
+### Safe workflow handoffs
+
+The general assistant does not receive private proposal content. A
+proposal-specific intent produces clarification guidance while the dashboard
+offers an owner-scoped proposal selector through a same-origin BFF. That BFF
+returns only an opaque proposal ID, bounded display label, and whether the
+submitted proposal is eligible for the email workflow. The client constructs
+destinations from a fixed allowlist; provider-generated URLs never control
+structured actions.
+
+The dedicated proposal assistant route revalidates the proposal through the
+authenticated, owner-scoped proposal read before rendering. Editor, email, and
+vendor-response destinations retain their existing authenticated guards.
+Optionally carried question text uses expiring `sessionStorage`, is consumed
+once, and populates an unsent draft only.
+
 The bounded module lives under `src/modules/platformAssistant/`. Its
 application and domain layers depend on ports for persistence, approved
 knowledge, generation, attempt accounting, and operational limits. Express

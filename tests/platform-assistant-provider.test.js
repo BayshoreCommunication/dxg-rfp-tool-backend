@@ -15,6 +15,7 @@ const {
   platformFactsForQuery,
 } = require("../src/modules/platformAssistant/platformKnowledge");
 const {
+  PLATFORM_ASSISTANT_INSTRUCTIONS,
   buildAssistantPromptInput,
   normalizeConversationalAssistantResponse,
   validateAssistantProviderResponse,
@@ -102,7 +103,7 @@ const withEnabledAssistant = async (work) => {
 };
 
 test("platform map is versioned, bounded, and contains internal routes only", () => {
-  assert.equal(PLATFORM_KNOWLEDGE_VERSION, "rfpilot-platform-map.v4");
+  assert.equal(PLATFORM_KNOWLEDGE_VERSION, "rfpilot-platform-map.v5");
   assert.ok(PLATFORM_FACTS.length >= 8);
   assert.equal(new Set(PLATFORM_FACTS.map((fact) => fact.id)).size, PLATFORM_FACTS.length);
   for (const fact of PLATFORM_FACTS) {
@@ -323,7 +324,7 @@ test("prompt builder bounds history and labels retrieved guidance as untrusted",
     operatingGuidance: guidance,
   });
 
-  assert.equal(prompt.schemaVersion, "platform-assistant-prompt.v4");
+  assert.equal(prompt.schemaVersion, "platform-assistant-prompt.v5");
   assert.equal(prompt.intent.intent, "event_planning");
   assert.equal(prompt.uiContext, null);
   assert.ok(prompt.history.length <= 30);
@@ -464,6 +465,20 @@ test("provider response validation enforces citations and safe internal links", 
         error.code === "ASSISTANT_RESPONSE_INVALID",
     );
   }
+});
+
+test("proposal-specific handoff requires selection and never guesses private context", () => {
+  const instructions = PLATFORM_ASSISTANT_INSTRUCTIONS.join("\n");
+  assert.match(instructions, /authorized proposal selector/i);
+  assert.match(instructions, /Do not ask the user to paste private proposal content/i);
+  const fact = PLATFORM_FACTS.find(
+    (item) => item.id === "platform:assistant:proposal-workspace",
+  );
+  assert.ok(fact);
+  assert.match(fact.content, /only proposals available to that account/i);
+  assert.match(fact.content, /checks access and availability again/i);
+  assert.match(fact.content, /unsent browser-session draft/i);
+  assert.doesNotMatch(fact.content, /\/proposals\/[0-9a-f]{24}\/assistant/i);
 });
 
 test("greeting-only uncited answers normalize without weakening substantive validation", () => {

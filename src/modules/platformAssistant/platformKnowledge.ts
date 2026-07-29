@@ -5,7 +5,7 @@ import {
 } from "./proposalFormGuidance";
 import type { AssistantUiContext } from "./domain";
 
-export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v4";
+export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v5";
 
 type PlatformFact = Omit<AssistantPromptEvidence, "sourceType" | "trust" | "releaseId"> & {
   keywords: readonly string[];
@@ -59,7 +59,7 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = Object.freeze([
     id: "platform:assistant:proposal-workspace",
     title: "General assistant and proposal assistant",
     content:
-      "The platform AI Assistant provides general guidance and does not automatically read a specific proposal. Work on a specific proposal belongs in that proposal's dedicated assistant at /proposals/{proposalId}/assistant.",
+      "The platform AI Assistant provides general guidance and does not automatically read a specific proposal. When a user wants help with a specific proposal, the product offers a selector containing only proposals available to that account. After an explicit selection, work can continue in the dedicated proposal assistant or editor. The destination checks access and availability again. A user's question may be carried only as an unsent browser-session draft; it is never submitted automatically.",
     href: "/proposals",
     keywords: ["proposal assistant", "specific proposal", "my proposal", "this proposal", "difference"],
   },
