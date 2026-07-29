@@ -38,11 +38,27 @@ export const ASSISTANT_RESPONSE_KINDS = [
   "refusal",
   "abstention",
 ] as const;
+export const ASSISTANT_FEEDBACK_VALUES = [
+  "helpful",
+  "not_helpful",
+] as const;
+export const ASSISTANT_FEEDBACK_REASONS = [
+  "incorrect",
+  "outdated",
+  "did_not_understand",
+  "missing_steps",
+  "irrelevant",
+  "other",
+] as const;
 
 export type AssistantThreadStatus = (typeof ASSISTANT_THREAD_STATUSES)[number];
 export type AssistantMessageRole = (typeof ASSISTANT_MESSAGE_ROLES)[number];
 export type AssistantMessageStatus = (typeof ASSISTANT_MESSAGE_STATUSES)[number];
 export type AssistantResponseKind = (typeof ASSISTANT_RESPONSE_KINDS)[number];
+export type AssistantFeedbackValue =
+  (typeof ASSISTANT_FEEDBACK_VALUES)[number];
+export type AssistantFeedbackReason =
+  (typeof ASSISTANT_FEEDBACK_REASONS)[number];
 
 export const ASSISTANT_ROUTE_CATEGORIES = [
   "dashboard",
@@ -104,6 +120,19 @@ export type AssistantCitation = {
   fragmentId?: string;
 };
 
+export type AssistantMessageFeedback = {
+  value: AssistantFeedbackValue;
+  reason: AssistantFeedbackReason | null;
+  updatedAt: string;
+};
+
+export type AssistantFeedback = AssistantMessageFeedback & {
+  id: string;
+  threadId: string;
+  messageId: string;
+  createdAt: string;
+};
+
 export type AssistantThread = {
   id: string;
   title: string;
@@ -130,7 +159,13 @@ export type AssistantMessage = {
   intentVersion: string | null;
   intentSource: AssistantIntentSource | null;
   intentConfidence: AssistantIntentClassification["confidence"] | null;
+  responseKind: AssistantResponseKind | null;
+  promptVersion: string | null;
+  knowledgeVersion: string | null;
+  firstTokenMs: number | null;
+  completionLatencyMs: number | null;
   citations: AssistantCitation[];
+  feedback: AssistantMessageFeedback | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -321,6 +356,22 @@ export const parseAssistantThreadId = (value: unknown): string => {
   return id;
 };
 
+export const parseAssistantMessageId = (value: unknown): string => {
+  const id = String(value ?? "").trim();
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      id,
+    )
+  ) {
+    throw new PlatformAssistantError(
+      "ASSISTANT_MESSAGE_NOT_FOUND",
+      "The assistant message was not found.",
+      404,
+    );
+  }
+  return id;
+};
+
 export const parseAssistantIdempotencyKey = (value: unknown): string => {
   const key = typeof value === "string" ? value.trim() : "";
   if (!key || key.length > ASSISTANT_IDEMPOTENCY_KEY_MAX_LENGTH) {
@@ -376,6 +427,34 @@ const oneOf = <T extends string>(
   value: unknown,
   allowed: readonly T[],
 ): value is T => typeof value === "string" && allowed.includes(value as T);
+
+export const parseAssistantFeedbackInput = (
+  value: unknown,
+): {
+  value: AssistantFeedbackValue;
+  reason: AssistantFeedbackReason | null;
+} => {
+  const body = isRecord(value) ? value : {};
+  if (!oneOf(body.value, ASSISTANT_FEEDBACK_VALUES)) {
+    throw new PlatformAssistantError(
+      "INVALID_ASSISTANT_FEEDBACK",
+      "Choose Helpful or Not helpful.",
+    );
+  }
+  const reason =
+    body.reason === undefined || body.reason === null || body.reason === ""
+      ? null
+      : oneOf(body.reason, ASSISTANT_FEEDBACK_REASONS)
+        ? body.reason
+        : undefined;
+  if (reason === undefined || (body.value === "helpful" && reason !== null)) {
+    throw new PlatformAssistantError(
+      "INVALID_ASSISTANT_FEEDBACK",
+      "The selected feedback reason is invalid.",
+    );
+  }
+  return { value: body.value, reason };
+};
 
 export const parseAssistantUiContext = (
   value: unknown,

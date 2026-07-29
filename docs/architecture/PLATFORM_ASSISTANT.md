@@ -116,6 +116,14 @@ requires all four values together, and the organization-scoped index supports
 privacy-safe quality aggregation without storing raw conversation data in
 analytics.
 
+Migration `032_assistant_feedback` adds bounded response-kind,
+prompt/knowledge-version, and latency metadata to assistant messages and a
+tenant-scoped feedback record for completed assistant responses. Feedback is
+updateable and idempotent per user and message. It snapshots only controlled
+metadata and cited source identifiers—never the prompt, response, provider
+payload, or hidden reasoning. Feedback is an evaluation signal only: it
+cannot automatically publish or change prompts, knowledge, rules, or prices.
+
 ### Deterministic-first intent routing
 
 `intentRouter.ts` owns the initial versioned taxonomy. High-confidence

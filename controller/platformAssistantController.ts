@@ -212,6 +212,21 @@ export const createPlatformAssistantController = (dependencies?: {
       }
     },
 
+    async putFeedback(req: AuthRequest, res: Response) {
+      try {
+        requireJson(req);
+        const result = await application.submitFeedback(context(req), {
+          threadId: req.params.threadId,
+          messageId: req.params.messageId,
+          body: req.body,
+          idempotencyKey: idempotencyKey(req),
+        });
+        res.status(result.created ? 201 : 200).json({ data: result });
+      } catch (error) {
+        writePlatformAssistantProblem(res, error);
+      }
+    },
+
     async streamMessage(req: AuthRequest, res: Response) {
       let lease: AssistantLimitLeaseLike | null = null;
       let heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -322,4 +337,5 @@ export const listAssistantThreads = controller.listThreads;
 export const createAssistantThread = controller.createThread;
 export const getAssistantThread = controller.getThread;
 export const patchAssistantThread = controller.patchThread;
+export const putAssistantFeedback = controller.putFeedback;
 export const streamAssistantMessage = controller.streamMessage;

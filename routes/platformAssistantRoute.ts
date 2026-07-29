@@ -5,6 +5,7 @@ import {
   getAssistantThread,
   listAssistantThreads,
   patchAssistantThread,
+  putAssistantFeedback,
   streamAssistantMessage,
 } from "../controller/platformAssistantController";
 import { authenticate, authorizeAction } from "../middleware/auth";
@@ -40,6 +41,12 @@ router.patch(
   authenticate,
   authorizeAction("assistant:use"),
   patchAssistantThread,
+);
+router.put(
+  "/assistant/threads/:threadId/messages/:messageId/feedback",
+  authenticate,
+  authorizeAction("assistant:use"),
+  putAssistantFeedback,
 );
 router.post(
   "/assistant/threads/:threadId/messages",

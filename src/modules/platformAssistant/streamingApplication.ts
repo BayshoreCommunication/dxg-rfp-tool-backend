@@ -227,6 +227,12 @@ export const createPlatformAssistantStreamingApplication = (
     let effectiveModel = dependencies.responseProvider.model;
     let started = false;
     let streamingPersisted = false;
+    const responseStartedAt = Date.now();
+    let promptVersion: string | null = null;
+    let knowledgeVersion: string | null = null;
+    let firstTokenMs: number | null = null;
+    const elapsedMs = () =>
+      Math.min(Date.now() - responseStartedAt, 3_600_000);
 
     const persistFailure = async (inputFailure: {
       code: string;
@@ -254,6 +260,10 @@ export const createPlatformAssistantStreamingApplication = (
           model: effectiveModel,
           safeErrorCode: code,
           intent,
+          promptVersion,
+          knowledgeVersion,
+          firstTokenMs,
+          completionLatencyMs: elapsedMs(),
         });
       } catch {
         // Preserve the safe stream failure even if terminal persistence is
@@ -321,6 +331,8 @@ export const createPlatformAssistantStreamingApplication = (
         uiContext,
         intent,
       });
+      promptVersion = prompt.schemaVersion;
+      knowledgeVersion = prompt.platformKnowledgeVersion;
       const completeValidationFallback = async () => {
         let validated;
         const fallbackProvider =
@@ -369,6 +381,7 @@ export const createPlatformAssistantStreamingApplication = (
         }
         if (!accumulated) {
           accumulated = validated.content;
+          firstTokenMs ??= elapsedMs();
           await input.emit({
             type: "response.delta",
             version: 1,
@@ -388,6 +401,11 @@ export const createPlatformAssistantStreamingApplication = (
           providerResponseId,
           model: effectiveModel,
           intent,
+          responseKind: validated.kind,
+          promptVersion,
+          knowledgeVersion,
+          firstTokenMs,
+          completionLatencyMs: elapsedMs(),
         });
         await input.emit({
           type: "response.completed",
@@ -422,6 +440,7 @@ export const createPlatformAssistantStreamingApplication = (
         }
 
         if (event.type === "text_delta") {
+          firstTokenMs ??= elapsedMs();
           if (!streamingPersisted) {
             assistantMessage = await repository.updateAssistantMessage({
               ...context,
@@ -432,6 +451,9 @@ export const createPlatformAssistantStreamingApplication = (
               providerResponseId,
               model: effectiveModel,
               intent,
+              promptVersion,
+              knowledgeVersion,
+              firstTokenMs,
             });
             streamingPersisted = true;
           }
@@ -493,6 +515,11 @@ export const createPlatformAssistantStreamingApplication = (
           inputTokens: event.usage.inputTokens,
           outputTokens: event.usage.outputTokens,
           intent,
+          responseKind: validated.kind,
+          promptVersion,
+          knowledgeVersion,
+          firstTokenMs,
+          completionLatencyMs: elapsedMs(),
         });
         await input.emit({
           type: "response.completed",

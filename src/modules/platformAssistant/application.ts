@@ -6,8 +6,10 @@ import {
   assertPlatformAssistantOrganizationAvailable,
   assertPlatformAssistantOrganizationEnabled,
   parseAssistantBeforeOrdinal,
+  parseAssistantFeedbackInput,
   parseAssistantIdempotencyKey,
   parseAssistantListLimit,
+  parseAssistantMessageId,
   parseAssistantMessageInput,
   parseAssistantThreadId,
   parseCreateAssistantThreadInput,
@@ -93,6 +95,27 @@ export const createPlatformAssistantApplication = (
     return repository.archiveThread({
       ...context,
       threadId: parseAssistantThreadId(threadId),
+    });
+  },
+
+  submitFeedback(
+    context: PlatformAssistantContext,
+    input: {
+      threadId: unknown;
+      messageId: unknown;
+      body: unknown;
+      idempotencyKey: unknown;
+    },
+  ) {
+    // Feedback remains available when generation is killed so users can rate
+    // already completed responses.
+    assertPlatformAssistantOrganizationEnabled(context.organizationMongoId);
+    return repository.submitFeedback({
+      ...context,
+      threadId: parseAssistantThreadId(input.threadId),
+      messageId: parseAssistantMessageId(input.messageId),
+      ...parseAssistantFeedbackInput(input.body),
+      idempotencyKey: parseAssistantIdempotencyKey(input.idempotencyKey),
     });
   },
 
@@ -212,10 +235,16 @@ export const createPlatformAssistantApplication = (
         uiContext,
         intent,
       });
-      const generated = await guidanceDependencies.responseProvider.generate(prompt);
+      const generationStartedAt = Date.now();
+      const generated =
+        await guidanceDependencies.responseProvider.generate(prompt);
       const validated = validateAssistantProviderResponse(
         generated,
         prompt.evidence,
+      );
+      const completionLatencyMs = Math.min(
+        Date.now() - generationStartedAt,
+        3_600_000,
       );
       const assistantMessage = await repository.updateAssistantMessage({
         ...context,
@@ -226,6 +255,11 @@ export const createPlatformAssistantApplication = (
         citations: validated.citations,
         model: guidanceDependencies.responseProvider.model,
         intent,
+        responseKind: validated.kind,
+        promptVersion: prompt.schemaVersion,
+        knowledgeVersion: prompt.platformKnowledgeVersion,
+        firstTokenMs: completionLatencyMs,
+        completionLatencyMs,
       });
       return {
         userMessage: accepted.message,

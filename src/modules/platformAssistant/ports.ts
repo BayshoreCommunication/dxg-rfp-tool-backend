@@ -1,10 +1,14 @@
 import type {
   AssistantCitation,
+  AssistantFeedback,
+  AssistantFeedbackReason,
+  AssistantFeedbackValue,
   AssistantKnowledgeStatus,
   AssistantMessage,
   AssistantPromptEvidence,
   AssistantPromptInput,
   AssistantMessageStatus,
+  AssistantResponseKind,
   AssistantThread,
   AssistantThreadDetail,
   PlatformAssistantContext,
@@ -159,6 +163,21 @@ export interface PlatformAssistantRepository {
       outputTokens?: number | null;
       safeErrorCode?: string | null;
       intent?: AssistantIntentClassification;
+      responseKind?: AssistantResponseKind | null;
+      promptVersion?: string | null;
+      knowledgeVersion?: string | null;
+      firstTokenMs?: number | null;
+      completionLatencyMs?: number | null;
     },
   ): Promise<AssistantMessage>;
+
+  submitFeedback(
+    input: PlatformAssistantContext & {
+      threadId: string;
+      messageId: string;
+      value: AssistantFeedbackValue;
+      reason: AssistantFeedbackReason | null;
+      idempotencyKey: string;
+    },
+  ): Promise<{ created: boolean; feedback: AssistantFeedback }>;
 }

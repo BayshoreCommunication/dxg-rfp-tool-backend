@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
@@ -5,9 +6,13 @@ import {
   canTransitionAssistantMessage,
   PlatformAssistantError,
   type AssistantCitation,
+  type AssistantFeedback,
+  type AssistantFeedbackReason,
+  type AssistantFeedbackValue,
   type AssistantMessage,
   type AssistantMessageRole,
   type AssistantMessageStatus,
+  type AssistantResponseKind,
   type AssistantThread,
   type AssistantThreadStatus,
   type PlatformAssistantContext,
@@ -47,10 +52,30 @@ type MessageRow = {
   intent_version: string | null;
   intent_source: AssistantIntentSource | null;
   intent_confidence: AssistantIntentClassification["confidence"] | null;
+  response_kind: AssistantResponseKind | null;
+  prompt_version: string | null;
+  knowledge_version: string | null;
+  first_token_ms: number | null;
+  completion_latency_ms: number | null;
   citations: unknown;
+  feedback_value?: AssistantFeedbackValue | null;
+  feedback_reason?: AssistantFeedbackReason | null;
+  feedback_updated_at?: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
   completed_at: Date | string | null;
+};
+
+type FeedbackRow = {
+  id: string;
+  thread_id: string;
+  message_id: string;
+  feedback_value: AssistantFeedbackValue;
+  feedback_reason: AssistantFeedbackReason | null;
+  idempotency_key: string;
+  input_checksum: string;
+  created_at: Date | string;
+  updated_at: Date | string;
 };
 
 const toIso = (value: Date | string): string =>
@@ -98,15 +123,42 @@ const mapMessage = (row: MessageRow): AssistantMessage => ({
   intentVersion: row.intent_version,
   intentSource: row.intent_source,
   intentConfidence: row.intent_confidence,
+  responseKind: row.response_kind ?? null,
+  promptVersion: row.prompt_version ?? null,
+  knowledgeVersion: row.knowledge_version ?? null,
+  firstTokenMs:
+    row.first_token_ms == null ? null : Number(row.first_token_ms),
+  completionLatencyMs:
+    row.completion_latency_ms == null
+      ? null
+      : Number(row.completion_latency_ms),
   citations: Array.isArray(row.citations)
     ? row.citations.flatMap((item) => {
         const citation = mapCitation(item);
         return citation ? [citation] : [];
       })
     : [],
+  feedback:
+    row.feedback_value && row.feedback_updated_at
+      ? {
+          value: row.feedback_value,
+          reason: row.feedback_reason ?? null,
+          updatedAt: toIso(row.feedback_updated_at),
+        }
+      : null,
   createdAt: toIso(row.created_at),
   updatedAt: toIso(row.updated_at),
   completedAt: toOptionalIso(row.completed_at),
+});
+
+const mapFeedback = (row: FeedbackRow): AssistantFeedback => ({
+  id: row.id,
+  threadId: row.thread_id,
+  messageId: row.message_id,
+  value: row.feedback_value,
+  reason: row.feedback_reason,
+  createdAt: toIso(row.created_at),
+  updatedAt: toIso(row.updated_at),
 });
 
 const resolveTenant = async (
@@ -385,16 +437,33 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
       const thread = await ownedThread(client, input);
       const messages = input.beforeOrdinal
         ? await client.query<MessageRow>(
-            `SELECT * FROM rfpilot.assistant_messages
-             WHERE thread_id=$1 AND ordinal<$2
-             ORDER BY ordinal DESC LIMIT $3`,
-            [thread.id, input.beforeOrdinal, input.messageLimit],
+            `SELECT m.*,f.feedback_value,f.feedback_reason,
+                    f.updated_at AS feedback_updated_at
+             FROM rfpilot.assistant_messages m
+             LEFT JOIN rfpilot.assistant_feedback f
+               ON f.organization_id=m.organization_id
+              AND f.message_id=m.id
+              AND f.actor_external_user_id=$2
+             WHERE m.thread_id=$1 AND m.ordinal<$3
+             ORDER BY m.ordinal DESC LIMIT $4`,
+            [
+              thread.id,
+              input.actorUserMongoId,
+              input.beforeOrdinal,
+              input.messageLimit,
+            ],
           )
         : await client.query<MessageRow>(
-            `SELECT * FROM rfpilot.assistant_messages
-             WHERE thread_id=$1
-             ORDER BY ordinal DESC LIMIT $2`,
-            [thread.id, input.messageLimit],
+            `SELECT m.*,f.feedback_value,f.feedback_reason,
+                    f.updated_at AS feedback_updated_at
+             FROM rfpilot.assistant_messages m
+             LEFT JOIN rfpilot.assistant_feedback f
+               ON f.organization_id=m.organization_id
+              AND f.message_id=m.id
+              AND f.actor_external_user_id=$2
+             WHERE m.thread_id=$1
+             ORDER BY m.ordinal DESC LIMIT $3`,
+            [thread.id, input.actorUserMongoId, input.messageLimit],
           );
       return {
         thread: mapThread(thread),
@@ -493,7 +562,12 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
              intent_version=COALESCE($11,intent_version),
              intent_source=COALESCE($12,intent_source),
              intent_confidence=COALESCE($13,intent_confidence),
-             completed_at=CASE WHEN $14 THEN COALESCE(completed_at,now()) ELSE NULL END,
+             response_kind=COALESCE($14,response_kind),
+             prompt_version=COALESCE($15,prompt_version),
+             knowledge_version=COALESCE($16,knowledge_version),
+             first_token_ms=COALESCE($17,first_token_ms),
+             completion_latency_ms=COALESCE($18,completion_latency_ms),
+             completed_at=CASE WHEN $19 THEN COALESCE(completed_at,now()) ELSE NULL END,
              updated_at=now()
          WHERE id=$1
          RETURNING *`,
@@ -511,6 +585,11 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
           input.intent?.version ?? null,
           input.intent?.source ?? null,
           input.intent?.confidence ?? null,
+          input.responseKind ?? null,
+          input.promptVersion ?? null,
+          input.knowledgeVersion ?? null,
+          input.firstTokenMs ?? null,
+          input.completionLatencyMs ?? null,
           terminal,
         ],
       );
@@ -530,6 +609,151 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
         });
       }
       return mapMessage(updated.rows[0]);
+    });
+  },
+
+  submitFeedback(input) {
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await resolveTenant(client, input);
+      await ownedThread(client, input);
+      const message = await client.query<MessageRow>(
+        `SELECT m.* FROM rfpilot.assistant_messages m
+         JOIN rfpilot.assistant_threads t
+           ON t.organization_id=m.organization_id AND t.id=m.thread_id
+         WHERE m.organization_id=$1 AND m.thread_id=$2 AND m.id=$3
+           AND m.role='assistant' AND m.status='complete'
+           AND t.owner_external_user_id=$4
+         FOR UPDATE OF m`,
+        [
+          organizationId,
+          input.threadId,
+          input.messageId,
+          input.actorUserMongoId,
+        ],
+      );
+      if (!message.rows[0]) {
+        throw new PlatformAssistantError(
+          "ASSISTANT_MESSAGE_NOT_FOUND",
+          "The completed assistant message was not found.",
+          404,
+        );
+      }
+      const inputChecksum = crypto
+        .createHash("sha256")
+        .update(
+          JSON.stringify({
+            messageId: input.messageId,
+            value: input.value,
+            reason: input.reason,
+          }),
+        )
+        .digest("hex");
+      const replay = await client.query<FeedbackRow>(
+        `SELECT * FROM rfpilot.assistant_feedback
+         WHERE organization_id=$1 AND actor_external_user_id=$2
+           AND idempotency_key=$3`,
+        [organizationId, input.actorUserMongoId, input.idempotencyKey],
+      );
+      if (replay.rows[0]) {
+        if (replay.rows[0].input_checksum !== inputChecksum) {
+          throw new PlatformAssistantError(
+            "ASSISTANT_IDEMPOTENCY_CONFLICT",
+            "The idempotency key was already used for different feedback.",
+            409,
+          );
+        }
+        return {
+          created: false,
+          feedback: mapFeedback(replay.rows[0]),
+        };
+      }
+      const existing = await client.query<FeedbackRow>(
+        `SELECT * FROM rfpilot.assistant_feedback
+         WHERE organization_id=$1 AND actor_external_user_id=$2
+           AND message_id=$3
+         FOR UPDATE`,
+        [organizationId, input.actorUserMongoId, input.messageId],
+      );
+      const citedSourceIds = Array.isArray(message.rows[0].citations)
+        ? [
+            ...new Set(
+              message.rows[0].citations.flatMap((item) => {
+                const citation = mapCitation(item);
+                return citation ? [citation.sourceId.slice(0, 300)] : [];
+              }),
+            ),
+          ].slice(0, 12)
+        : [];
+      const values = [
+        input.value,
+        input.reason,
+        message.rows[0].intent,
+        message.rows[0].response_kind ?? "legacy_unclassified",
+        message.rows[0].model,
+        message.rows[0].prompt_version,
+        message.rows[0].knowledge_version,
+        citedSourceIds,
+        message.rows[0].first_token_ms,
+        message.rows[0].completion_latency_ms,
+        input.idempotencyKey,
+        inputChecksum,
+      ] as const;
+      const saved = existing.rows[0]
+        ? await client.query<FeedbackRow>(
+            `UPDATE rfpilot.assistant_feedback
+             SET feedback_value=$2,feedback_reason=$3,intent=$4,
+                 response_kind=$5,model=$6,prompt_version=$7,
+                 knowledge_version=$8,cited_source_ids=$9,
+                 first_token_ms=$10,completion_latency_ms=$11,
+                 idempotency_key=$12,input_checksum=$13,updated_at=now()
+             WHERE id=$1
+             RETURNING *`,
+            [existing.rows[0].id, ...values],
+          )
+        : await client.query<FeedbackRow>(
+            `INSERT INTO rfpilot.assistant_feedback(
+               id,organization_id,thread_id,message_id,
+               actor_external_user_id,feedback_value,feedback_reason,intent,
+               response_kind,model,prompt_version,knowledge_version,
+               cited_source_ids,first_token_ms,completion_latency_ms,
+               idempotency_key,input_checksum
+             ) VALUES(
+               $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
+             )
+             RETURNING *`,
+            [
+              uuidv7(),
+              organizationId,
+              input.threadId,
+              input.messageId,
+              input.actorUserMongoId,
+              ...values,
+            ],
+          );
+      await audit(client, {
+        organizationId,
+        actorUserMongoId: input.actorUserMongoId,
+        action: existing.rows[0]
+          ? "assistant.feedback.update"
+          : "assistant.feedback.create",
+        targetType: "assistant_feedback",
+        targetId: saved.rows[0].id,
+        correlationId: input.correlationId,
+        metadata: {
+          feedbackValue: input.value,
+          feedbackReason: input.reason,
+          intent: message.rows[0].intent,
+          responseKind:
+            message.rows[0].response_kind ?? "legacy_unclassified",
+          promptVersion: message.rows[0].prompt_version,
+          knowledgeVersion: message.rows[0].knowledge_version,
+          citedSourceCount: citedSourceIds.length,
+        },
+      });
+      return {
+        created: !existing.rows[0],
+        feedback: mapFeedback(saved.rows[0]),
+      };
     });
   },
 };
