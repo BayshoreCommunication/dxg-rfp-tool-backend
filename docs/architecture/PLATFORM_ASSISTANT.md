@@ -1,6 +1,6 @@
 # Platform AI Assistant
 
-> Current implementation record. Last updated: 2026-07-27. Owner: AI engineering.
+> Current implementation record. Last updated: 2026-07-29. Owner: AI engineering.
 
 ## Purpose and boundary
 
@@ -11,13 +11,22 @@ archive, or delete product data on a user's behalf.
 
 ### Safe workflow handoffs
 
-The general assistant does not receive private proposal content. A
-proposal-specific intent produces clarification guidance while the dashboard
-offers an owner-scoped proposal selector through a same-origin BFF. That BFF
-returns only an opaque proposal ID, bounded display label, and whether the
-submitted proposal is eligible for the email workflow. The client constructs
-destinations from a fixed allowlist; provider-generated URLs never control
-structured actions.
+When a user names an existing proposal, the backend resolves the exact title
+only inside that actor's owner and organization scope. A unique match supplies
+a fresh, bounded, privacy-filtered, read-only snapshot of event, venue,
+room-by-room, production, hybrid, creative, recording, technical, budget, and
+deterministic readiness data. Contact values, uploads, private notes,
+credentials, and storage/source identifiers are never supplied. Duplicate or
+missing matches remain a clarification and the dashboard offers the existing
+owner-scoped proposal selector through a same-origin BFF.
+
+The browser does not choose or authorize the proposal used for a typed-name
+question. The backend revalidates owner, organization, and archive state, and a
+recent exact match may be reused only within the same bounded conversation for
+follow-up questions. The selector BFF still returns only an opaque proposal ID,
+bounded display label, and whether a submitted proposal is eligible for the
+email workflow. The client constructs destinations from a fixed allowlist;
+provider-generated URLs never control structured actions.
 
 The dedicated proposal assistant route revalidates the proposal through the
 authenticated, owner-scoped proposal read before rendering. Editor, email, and
@@ -193,7 +202,9 @@ The selected intent is product metadata, not an instruction. It:
 - skips operating-guidance retrieval when the intent does not need it;
 - is included in the private provider payload and provider metadata;
 - is reclassified from bounded history before final persistence;
-- does not grant proposal access or enable any mutation.
+- may be promoted to `proposal_specific_request` only after the server-side
+  proposal context source returns one owner-authorized exact match;
+- does not grant proposal access or enable any mutation by itself.
 
 ## Governed knowledge, rule, and price assets
 

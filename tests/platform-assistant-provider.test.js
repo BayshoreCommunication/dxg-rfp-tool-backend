@@ -378,6 +378,16 @@ test("prompt builder bounds history and labels retrieved guidance as untrusted",
   );
 });
 
+test("selected proposal instructions distinguish unavailable private data from missing fields", () => {
+  assert.ok(
+    PLATFORM_ASSISTANT_INSTRUCTIONS.some(
+      (instruction) =>
+        instruction.includes("Never call privacy-excluded") &&
+        instruction.includes("separately after the verified missing-field list"),
+    ),
+  );
+});
+
 test("provider response validation enforces citations and safe internal links", () => {
   const evidence = platformFactsForQuery("Where are proposals?");
   const valid = validateAssistantProviderResponse(

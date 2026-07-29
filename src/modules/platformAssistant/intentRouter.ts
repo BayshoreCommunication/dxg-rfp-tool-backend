@@ -212,20 +212,24 @@ const allowedPlatformPrefixes: Readonly<
     "platform:navigation:create-proposal",
   ],
   proposal_specific_request: [
+    "selected-proposal:",
     "platform:assistant:proposal-workspace",
     "platform:navigation:proposals",
   ],
   equipment_scope_review: [
+    "selected-proposal:",
     "platform:event:",
     "platform:proposal:venue-room-fields",
     "platform:assistant:proposal-workspace",
   ],
   budget_estimation: [
+    "selected-proposal:",
     "platform:proposal:final-fields",
     "platform:event:",
     "platform:assistant:proposal-workspace",
   ],
   historical_reference_request: [
+    "selected-proposal:",
     "platform:assistant:proposal-workspace",
     "platform:assistant:scope",
   ],

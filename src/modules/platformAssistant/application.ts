@@ -25,6 +25,7 @@ import {
   buildAssistantPromptInput,
   validateAssistantProviderResponse,
 } from "./prompt";
+import { resolveAssistantProposalContext } from "./proposalContext";
 import {
   classifyAssistantIntent,
   evidenceAllowedForIntent,
@@ -298,12 +299,21 @@ export const createPlatformAssistantApplication = (
         messageLimit: ASSISTANT_MESSAGE_LIST_MAX_LIMIT,
         beforeOrdinal: null,
       });
-      const intent = classifyAssistantIntent({
+      const classifiedIntent = classifyAssistantIntent({
         query: accepted.message.content,
         uiContext,
         history: detail.messages,
         currentUserMessageId: accepted.message.id,
       });
+      const proposalContext = await resolveAssistantProposalContext({
+        source: guidanceDependencies.proposalContextSource,
+        context,
+        query: accepted.message.content,
+        history: detail.messages,
+        currentUserMessageId: accepted.message.id,
+        intent: classifiedIntent,
+      });
+      const intent = proposalContext.intent;
       selectedIntent = intent;
       const prompt = buildAssistantPromptInput({
         userMessage: accepted.message,
@@ -319,6 +329,7 @@ export const createPlatformAssistantApplication = (
         operatingGuidance: intentUsesOperatingGuidance(intent.intent)
           ? knowledge.evidence
           : [],
+        proposalEvidence: proposalContext.evidence,
         uiContext,
         intent,
       });

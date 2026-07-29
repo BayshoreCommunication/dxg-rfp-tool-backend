@@ -100,6 +100,84 @@ const relevantOperatingGuidance = (
     return eventTerms.filter((term) => normalized.includes(term)).length >= 2;
   });
 
+const record = (value: unknown): Record<string, unknown> | null =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
+const selectedProposalOverview = (
+  input: AssistantPromptInput,
+): { evidence: AssistantPromptEvidence; value: Record<string, unknown> } | null => {
+  const evidence = input.evidence.find(
+    (item) =>
+      item.sourceType === "selected_proposal" &&
+      item.id === "selected-proposal:overview",
+  );
+  if (!evidence) return null;
+  try {
+    const value = record(JSON.parse(evidence.content));
+    return value ? { evidence, value } : null;
+  } catch {
+    return null;
+  }
+};
+
+const displayValue = (value: unknown): string | null => {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (Array.isArray(value) && value.length) {
+    const items = value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return items.length ? items.join(", ") : null;
+  }
+  const nested = record(value);
+  if (nested) {
+    return (
+      displayValue(nested.eventType) ??
+      displayValue(nested.name) ??
+      displayValue(nested.value)
+    );
+  }
+  return null;
+};
+
+const selectedProposalAnswer = (
+  input: AssistantPromptInput,
+): AssistantProviderResponse | null => {
+  const overview = selectedProposalOverview(input);
+  if (!overview) return null;
+  const event = record(overview.value.event) ?? {};
+  const lifecycle = record(overview.value.lifecycle) ?? {};
+  const name =
+    displayValue(overview.value.proposalName) ??
+    displayValue(event.eventName) ??
+    "the selected proposal";
+  const details = [
+    ["Status", displayValue(lifecycle.status)],
+    ["Draft", lifecycle.draft === true ? "Yes" : lifecycle.draft === false ? "No" : null],
+    ["Event format", displayValue(event.eventFormat)],
+    ["Dates", [displayValue(event.startDate), displayValue(event.endDate)].filter(Boolean).join(" to ") || null],
+    ["Attendees", displayValue(event.attendees)],
+    ["Event type", displayValue(event.eventType)],
+    ["Theme", displayValue(event.eventTheme)],
+    ["Objectives", displayValue(event.eventObjectives)],
+  ]
+    .filter((item): item is [string, string] => Boolean(item[1]))
+    .slice(0, 7)
+    .map(([label, value]) => `- **${label}:** ${value}`);
+  const suffix =
+    details.length > 0
+      ? details.join("\n")
+      : "- The proposal exists, but its event overview does not yet contain enough completed details to summarize.";
+  return result(
+    "answer",
+    `Here’s the current saved overview for **${name}**:\n\n${suffix}\n\nI can also review its venue, rooms, production, hybrid, creative, recording, or budget details if you ask.`,
+    [overview.evidence.id],
+  );
+};
+
 export class DeterministicAssistantProvider implements AssistantResponseProvider {
   readonly provider = "mock";
   readonly model = "platform-assistant-deterministic-v1";
@@ -168,6 +246,9 @@ export class DeterministicAssistantProvider implements AssistantResponseProvider
         );
       }
     }
+
+    const proposalAnswer = selectedProposalAnswer(input);
+    if (proposalAnswer) return proposalAnswer;
 
     if (input.intent.intent === "form_field_help") {
       const fieldEvidence = input.evidence.find((item) =>
