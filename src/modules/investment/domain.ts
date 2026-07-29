@@ -7,6 +7,10 @@ import {
 } from "./factors";
 import { evaluateCondition, readFacts, type ProposalFacts, type UnknownRecord } from "./proposalAccess";
 import { deriveDrivers, PACKAGE_TEMPLATES, type Component, type Drivers, type PackageTemplate } from "./templates";
+import {
+  buildBudgetAnalysis,
+  type BudgetAnalysis,
+} from "./budgetAnalysis";
 
 export { evaluateCondition } from "./proposalAccess";
 export type { AppliedFactor, Confidence, ConfidenceRule, PricingModifier, RegionalFactor } from "./factors";
@@ -23,11 +27,13 @@ export type PricingRecord = {
   currency: string; market: string | null; dayType: string; laborRole: string | null;
   subcategory?: string | null; spec?: string | null; unitLabel?: string | null;
   quantityDimension?: string | null; calibrationTier?: string | null;
+  revision?: number;
 };
 export type ExpertRule = {
   id: string; ruleKey: string; title: string; explanation: string;
   conditions: Array<{ path: string; op: string; value?: unknown }>;
   effect: { kind: string; category?: string | null; guidanceText?: string; factorPercent?: number };
+  revision?: number;
 };
 export type LineItem = {
   category: string; label: string; currency: string;
@@ -54,6 +60,7 @@ export type InvestmentResult = {
   lineItems: LineItem[]; refusals: Refusal[]; ancillary: AncillaryFactor[];
   recommendations: Array<{ ruleKey: string; title: string; guidanceText: string; explanation: string }>;
   confidence: Confidence; assumptions: Assumption[]; scenarios: Scenario[]; basis: PricingBasis;
+  budgetAnalysis: BudgetAnalysis;
 };
 
 const TIERS = ["low", "mid", "high"] as const;
@@ -61,15 +68,43 @@ type Tier = (typeof TIERS)[number];
 const amountAt = (record: PricingRecord, tier: Tier) =>
   tier === "low" ? record.amountLowMinor : tier === "mid" ? record.amountMidMinor : record.amountHighMinor;
 const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+const FACTOR_SCALE = 1_000_000;
+const scaledMinor = (
+  baseMinor: number,
+  quantity: number,
+  factors: number[],
+): number => {
+  let numerator = BigInt(baseMinor) * BigInt(quantity);
+  let denominator = 1n;
+  for (const factor of factors) {
+    const scaled = Math.round(factor * FACTOR_SCALE);
+    if (!Number.isSafeInteger(scaled) || scaled < 0)
+      throw new InvestmentError(
+        "INVALID_PRICING_FACTOR",
+        "An approved pricing factor is outside the supported range.",
+      );
+    numerator *= BigInt(scaled);
+    denominator *= BigInt(FACTOR_SCALE);
+  }
+  const rounded = (numerator + denominator / 2n) / denominator;
+  const output = Number(rounded);
+  if (!Number.isSafeInteger(output))
+    throw new InvestmentError(
+      "PRICING_RANGE_EXCEEDED",
+      "The calculated amount exceeds the supported currency range.",
+    );
+  return output;
+};
 
 const ANCILLARY_FACTORS: Array<{ factor: string; category: string; venueDependent: boolean; note: string }> = [
-  { factor: "Trucking & freight", category: "trucking_freight", venueDependent: false, note: "Depends on vendor location and equipment volume." },
-  { factor: "Crew travel & per diem", category: "travel_per_diem", venueDependent: false, note: "Depends on crew origin and event duration." },
+  { factor: "Trucking & freight", category: "trucking_freight", venueDependent: false, note: "Includes delivery planning; depends on vendor location, equipment volume, delivery windows, and venue access." },
+  { factor: "Crew travel & per diem", category: "travel_per_diem", venueDependent: false, note: "Includes accommodation planning; depends on crew origin, lodging nights, travel policy, and event duration." },
   { factor: "Venue fees & exclusivity", category: "venue_fee", venueDependent: true, note: "Ask the venue for AV exclusivity, patch and facility fees." },
   { factor: "Rigging fees", category: "rigging", venueDependent: true, note: "Ask the venue for rigging rates and required house riggers." },
   { factor: "Power charges", category: "power", venueDependent: true, note: "Ask the venue for power drop rates and available amperage." },
   { factor: "Insurance", category: "insurance", venueDependent: false, note: "Confirm COI requirements and coverage limits." },
   { factor: "Service charges & taxes", category: "service_charge_tax", venueDependent: true, note: "Ask the venue and vendors for service charge and tax percentages." },
+  { factor: "Contingency", category: "contingency", venueDependent: false, note: "No contingency is included unless an approved contingency rule or rate is loaded." },
 ];
 
 // A component resolves to the median-priced approved record for each tier, so a
@@ -143,14 +178,12 @@ const buildLine = (selection: Selection, context: StackContext, stack: StackChoi
     label: context.market.market ? `Regional factor - ${context.market.market}` : "Regional factor - national baseline (market not matched)",
     factor: context.market.factor,
   }];
-  let multiplier = context.market.factor;
   if (
     isEquipment &&
     heldByDay &&
     context.multiDay.factor !== 1 &&
     (context.multiDay.source || context.multiDay.rehearsalSource)
   ) {
-    multiplier *= context.multiDay.factor;
     factors.push({
       kind: "multi_day",
       label:
@@ -168,7 +201,6 @@ const buildLine = (selection: Selection, context: StackContext, stack: StackChoi
       context.laborRules,
     );
     if (factor !== 1) {
-      multiplier *= factor;
       factors.push({
         kind: "overtime",
         label: `Overtime and double-time rules across a ${hours}-hour call`,
@@ -177,15 +209,12 @@ const buildLine = (selection: Selection, context: StackContext, stack: StackChoi
     }
   }
   if (!isEquipment && !component.unionExempt && union && union.factor !== 1) {
-    multiplier *= union.factor;
     factors.push({ kind: "union", label: union.label, factor: union.factor });
   }
   if (isEquipment && !component.inHouseExempt && inHouse && inHouse.factor !== 1) {
-    multiplier *= inHouse.factor;
     factors.push({ kind: "in_house", label: inHouse.label, factor: inHouse.factor });
   }
   if (serviceCharge) {
-    multiplier *= serviceCharge.factor;
     factors.push({ kind: "service_charge", label: serviceCharge.label, factor: serviceCharge.factor });
   }
 
@@ -194,9 +223,21 @@ const buildLine = (selection: Selection, context: StackContext, stack: StackChoi
     category: component.category,
     label: `${template.label} - ${component.label}`,
     currency: context.currency,
-    lowMinor: Math.round(amountAt(picks.low, "low") * quantity * multiplier),
-    midMinor: Math.round(amountAt(picks.mid, "mid") * quantity * multiplier),
-    highMinor: Math.round(amountAt(picks.high, "high") * quantity * multiplier),
+    lowMinor: scaledMinor(
+      amountAt(picks.low, "low"),
+      quantity,
+      factors.map((factor) => factor.factor),
+    ),
+    midMinor: scaledMinor(
+      amountAt(picks.mid, "mid"),
+      quantity,
+      factors.map((factor) => factor.factor),
+    ),
+    highMinor: scaledMinor(
+      amountAt(picks.high, "high"),
+      quantity,
+      factors.map((factor) => factor.factor),
+    ),
     templateKey: template.key,
     componentKey: component.key,
     kind: component.kind,
@@ -214,9 +255,9 @@ const applyCostFactorRules = (lines: LineItem[], matchedRules: ExpertRule[]) => 
     const factor = 1 + rule.effect.factorPercent / 100;
     for (const line of lines) {
       if (rule.effect.category && line.category !== rule.effect.category) continue;
-      line.lowMinor = Math.round(line.lowMinor * factor);
-      line.midMinor = Math.round(line.midMinor * factor);
-      line.highMinor = Math.round(line.highMinor * factor);
+      line.lowMinor = scaledMinor(line.lowMinor, 1, [factor]);
+      line.midMinor = scaledMinor(line.midMinor, 1, [factor]);
+      line.highMinor = scaledMinor(line.highMinor, 1, [factor]);
       line.provenance.ruleIds.push(rule.id);
       line.appliedFactors.push({ kind: "expert_rule", label: rule.title, factor });
     }
@@ -227,8 +268,27 @@ const applyCostFactorRules = (lines: LineItem[], matchedRules: ExpertRule[]) => 
 const priceStack = (selections: Selection[], context: StackContext, stack: StackChoice, matchedRules: ExpertRule[]) =>
   applyCostFactorRules(selections.map((selection) => buildLine(selection, context, stack)), matchedRules);
 
-const sumTier = (lines: LineItem[], tier: Tier) =>
-  lines.reduce((total, line) => total + (tier === "low" ? line.lowMinor : tier === "mid" ? line.midMinor : line.highMinor), 0);
+const sumTier = (lines: LineItem[], tier: Tier) => {
+  const total = lines.reduce(
+    (value, line) =>
+      value +
+      BigInt(
+        tier === "low"
+          ? line.lowMinor
+          : tier === "mid"
+            ? line.midMinor
+            : line.highMinor,
+      ),
+    0n,
+  );
+  const output = Number(total);
+  if (!Number.isSafeInteger(output))
+    throw new InvestmentError(
+      "PRICING_RANGE_EXCEEDED",
+      "The calculated subtotal exceeds the supported currency range.",
+    );
+  return output;
+};
 
 const quantityFor = (unit: string, facts: ProposalFacts): { quantity: number; driver: string } | null => {
   if (unit === "per_day") return { quantity: facts.days, driver: "days" };
@@ -380,9 +440,9 @@ export const computeInvestmentGuidance = (
         const scaled = quantityFor(record.unit, facts);
         if (!scaled) continue;
         priced = true;
-        low += record.amountLowMinor * scaled.quantity;
-        mid += record.amountMidMinor * scaled.quantity;
-        high += record.amountHighMinor * scaled.quantity;
+        low += scaledMinor(record.amountLowMinor, scaled.quantity, []);
+        mid += scaledMinor(record.amountMidMinor, scaled.quantity, []);
+        high += scaledMinor(record.amountHighMinor, scaled.quantity, []);
       }
       if (priced) return { factor: item.factor, status: "estimated" as const, note: item.note, lowMinor: low, midMinor: mid, highMinor: high };
       return { factor: item.factor, status: item.venueDependent ? ("venue_dependent" as const) : ("no_data" as const), note: item.note };
@@ -399,7 +459,7 @@ export const computeInvestmentGuidance = (
     .map((rule) => ({ ruleKey: rule.ruleKey, title: rule.title, guidanceText: rule.effect.guidanceText!, explanation: rule.explanation }));
 
   const hasLines = lineItems.length > 0;
-  return {
+  const resultWithoutAnalysis = {
     currency: hasLines ? currency : null,
     totalLowMinor: hasLines ? sumTier(lineItems, "low") : null,
     totalMidMinor: hasLines ? sumTier(lineItems, "mid") : null,
@@ -422,5 +482,25 @@ export const computeInvestmentGuidance = (
           : "") +
         ` (${facts.days} show days).`,
     },
+  };
+  return {
+    ...resultWithoutAnalysis,
+    budgetAnalysis: buildBudgetAnalysis({
+      proposal,
+      currency: resultWithoutAnalysis.currency,
+      totalLowMinor: resultWithoutAnalysis.totalLowMinor,
+      totalMidMinor: resultWithoutAnalysis.totalMidMinor,
+      totalHighMinor: resultWithoutAnalysis.totalHighMinor,
+      lineItems,
+      refusals,
+      ancillary,
+      assumptions,
+      recommendations,
+      pricingRecords: records,
+      rules,
+      regionalFactors,
+      modifiers,
+      confidenceRules,
+    }),
   };
 };

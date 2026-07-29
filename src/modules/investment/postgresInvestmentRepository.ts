@@ -10,7 +10,7 @@ import {
 
 type Ctx = { organizationMongoId: string; actorUserMongoId: string; correlationId: string };
 
-const ENGINE_VERSION = "dxg-av-pricing-engine.v2";
+const ENGINE_VERSION = "dxg-av-pricing-engine.v3";
 
 const tenant = async (c: PoolClient, external: string) => {
   await c.query("SELECT set_config('app.organization_mongo_id',$1,true)", [external]);
@@ -36,7 +36,7 @@ const proposalRef = async (c: PoolClient, id: string, actor: string) => {
 // the line_items payload carries an envelope; legacy array payloads still read
 // back cleanly. A migration promoting these to real columns is the follow-up.
 const envelope = (result: ReturnType<typeof computeInvestmentGuidance>) => ({
-  payloadVersion: 2,
+  payloadVersion: 3,
   lineItems: result.lineItems,
   confidence: result.confidence,
   assumptions: result.assumptions,
@@ -73,6 +73,11 @@ const present = (row: any) => {
     assumptions: payload.assumptions,
     scenarios: payload.scenarios,
     basis: payload.basis,
+    calculationVersion: row.calculation_version ?? "legacy-unversioned",
+    pricingReleaseVersion:
+      row.pricing_release_version ?? "legacy-unversioned",
+    ruleReleaseVersion: row.rule_release_version ?? "legacy-unversioned",
+    budgetAnalysis: row.budget_analysis ?? {},
     createdAt: row.created_at,
   };
 };
@@ -85,11 +90,11 @@ export const investmentRepository = {
       const org = await tenant(c, ctx.organizationMongoId);
       const p = await proposalRef(c, ctx.proposalMongoId, ctx.actorUserMongoId);
       const records = await c.query<any>(
-        "SELECT id,category,subcategory,spec,item_label,unit,unit_label,quantity_dimension,calibration_tier,amount_low_minor,amount_mid_minor,amount_high_minor,currency,market,day_type,labor_role FROM rfpilot.pricing_records WHERE organization_id=$1 AND status='approved'",
+        "SELECT id,category,subcategory,spec,item_label,unit,unit_label,quantity_dimension,calibration_tier,amount_low_minor,amount_mid_minor,amount_high_minor,currency,market,day_type,labor_role,revision FROM rfpilot.pricing_records WHERE organization_id=$1 AND status='approved'",
         [org],
       );
       const rules = await c.query<any>(
-        "SELECT id,rule_key,title,explanation,conditions,effect FROM rfpilot.expert_rules WHERE organization_id=$1 AND status='active'",
+        "SELECT id,rule_key,title,explanation,conditions,effect,revision FROM rfpilot.expert_rules WHERE organization_id=$1 AND status='active'",
         [org],
       );
       const regional = await c.query<any>(
@@ -110,10 +115,12 @@ export const investmentRepository = {
         currency: String(row.currency).trim(), market: row.market, dayType: row.day_type, laborRole: row.labor_role,
         subcategory: row.subcategory, spec: row.spec, unitLabel: row.unit_label,
         quantityDimension: row.quantity_dimension, calibrationTier: row.calibration_tier,
+        revision: Number(row.revision || 1),
       }));
       const expertRules: ExpertRule[] = rules.rows.map((row: any) => ({
         id: row.id, ruleKey: row.rule_key, title: row.title, explanation: row.explanation,
         conditions: row.conditions ?? [], effect: row.effect ?? {},
+        revision: Number(row.revision || 1),
       }));
       const regionalFactors: RegionalFactor[] = regional.rows.map((row: any) => ({
         id: row.id, market: String(row.market).trim(), factor: Number(row.factor), notes: row.notes ?? "",
@@ -127,13 +134,16 @@ export const investmentRepository = {
       }));
       const result = computeInvestmentGuidance(proposal, pricing, expertRules, regionalFactors, modifiers, confidenceRules);
       const row = await c.query<any>(
-        `INSERT INTO rfpilot.investment_guidance_reports(id,organization_id,proposal_reference_id,actor_external_user_id,proposal_version,engine_version,currency,total_low_minor,total_mid_minor,total_high_minor,line_items,refusals,ancillary,recommendations,correlation_id)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15) RETURNING *`,
+        `INSERT INTO rfpilot.investment_guidance_reports(id,organization_id,proposal_reference_id,actor_external_user_id,proposal_version,engine_version,calculation_version,pricing_release_version,rule_release_version,currency,total_low_minor,total_mid_minor,total_high_minor,line_items,refusals,ancillary,recommendations,budget_analysis,correlation_id)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb,$19) RETURNING *`,
         [
           uuidv7(), org, p, ctx.actorUserMongoId, Number(proposal.version || 1), ENGINE_VERSION,
+          result.budgetAnalysis.calculationVersion,
+          result.budgetAnalysis.pricingReleaseVersion,
+          result.budgetAnalysis.ruleReleaseVersion,
           result.currency, result.totalLowMinor, result.totalMidMinor, result.totalHighMinor,
           JSON.stringify(envelope(result)), JSON.stringify(result.refusals), JSON.stringify(result.ancillary), JSON.stringify(result.recommendations),
-          ctx.correlationId,
+          JSON.stringify(result.budgetAnalysis), ctx.correlationId,
         ],
       );
       await c.query(
