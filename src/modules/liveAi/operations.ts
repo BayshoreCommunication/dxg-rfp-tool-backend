@@ -136,12 +136,28 @@ const flattenProposalEvidence=(value:unknown,path:string):Array<{id:string;value
  if(typeof value!=="object")return[{id:path,value}];
  return Object.entries(value as Record<string,unknown>).flatMap(([key,child])=>flattenProposalEvidence(child,`${path}/${key}`));
 };
+/**
+ * The evaluation matrix ships pre-populated, so an untouched proposal still
+ * carries a full set of weights. Cited as evidence they read as the planner's
+ * scoring criteria, and vendors are scored on them. Withhold the weights until
+ * the planner has confirmed or edited them; the flag is set by the budget step.
+ */
+const withheldUnconfirmedWeightings=(proposal:Record<string,unknown>):Record<string,unknown>=>{
+ const budget=proposal.budget as Record<string,unknown>|undefined;
+ if(!budget||typeof budget!=="object")return proposal;
+ if(budget.evaluationMatrixConfirmed===true)return proposal;
+ if(budget.evaluationMatrix===undefined)return proposal;
+ const {evaluationMatrix:_withheld,...rest}=budget;
+ void _withheld;
+ return {...proposal,budget:rest};
+};
+
 export const proposalDraftEvidence=(proposal:Record<string,unknown>)=>{
  // Schedule fields are stored as UTC instants. Presented raw, the model prints
  // the UTC clock face and labels it with the event's zone, so the RFP quotes
  // vendors the wrong show times. Convert to the venue reading first.
  const timeZone=(proposal.venueSchedule as Record<string,unknown>|undefined)?.timeZone;
- return Object.entries(proposal)
+ return Object.entries(withheldUnconfirmedWeightings(proposal))
   .filter(([section])=>!section.startsWith("_")&&!["userId","organizationId","status","createdAt","updatedAt","version"].includes(section))
   .flatMap(([section,value])=>flattenProposalEvidence(withEventZoneScheduleTimes(value,timeZone),`/content/${section}`));
 };

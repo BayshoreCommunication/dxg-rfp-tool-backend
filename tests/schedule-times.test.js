@@ -76,3 +76,28 @@ test("without a known event zone the stored instant is passed through", () => {
   const rooms = evidence.find((item) => item.id === "/content/roomByRoom");
   assert.equal(rooms.value[0].functions[0].showStartDateTime, "2027-03-10T15:15:00.000Z");
 });
+
+test("unconfirmed evaluation weightings are withheld from the draft", () => {
+  // The matrix ships pre-populated, so an untouched proposal still carries a
+  // full set of weights. Cited as evidence they read as the planner's scoring
+  // criteria — and vendors are scored against them.
+  const withoutConfirmation = proposalDraftEvidence({
+    budget: {
+      estimatedAvBudget: "Standard",
+      evaluationMatrix: { technicalApproach: 25, pricing: 15 },
+    },
+  });
+  assert.equal(withoutConfirmation.find((item) => item.id.includes("evaluationMatrix")), undefined);
+  // Everything else in the section still reaches the model.
+  assert.ok(withoutConfirmation.find((item) => item.id === "/content/budget/estimatedAvBudget"));
+});
+
+test("confirmed evaluation weightings are cited normally", () => {
+  const confirmed = proposalDraftEvidence({
+    budget: {
+      evaluationMatrixConfirmed: true,
+      evaluationMatrix: { technicalApproach: 30, pricing: 20 },
+    },
+  });
+  assert.equal(confirmed.find((item) => item.id === "/content/budget/evaluationMatrix/technicalApproach")?.value, 30);
+});
