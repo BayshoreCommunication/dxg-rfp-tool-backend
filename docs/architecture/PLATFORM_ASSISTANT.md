@@ -195,6 +195,40 @@ The selected intent is product metadata, not an instruction. It:
 - is reclassified from bounded history before final persistence;
 - does not grant proposal access or enable any mutation.
 
+## Governed knowledge, rule, and price assets
+
+Migration `035_governed_assets` introduces one tenant-scoped governance
+registry for approved knowledge releases, expert rules, pricing records,
+regional factors, pricing modifiers, and pricing-confidence rules. Every asset
+has an owner, product area, locale, source reference, effective date, review
+due date, optional expiry, approval state, lifecycle state, last verified
+application release, optional replacement, and optimistic revision.
+
+Existing assets receive a content-free metadata backfill with their existing
+owner/state, locale `en-US`, a generated legacy source reference, the marker
+`legacy-migration-035`, and a 90-day review window. New source rows are
+registered automatically with a 180-day review window and remain visibly
+unverified until an administrator records the application release.
+
+Knowledge retrieval and deterministic investment guidance join this registry
+at use time. An asset is eligible only when it is approved, active, effective,
+and unexpired in both its authoritative source table and the governance
+registry. Revoked, retired, future, expired, missing-registry, or otherwise
+ineligible assets fail closed. Existing historical analysis rows are never
+rewritten and retain the calculation, pricing, and rule versions originally
+used.
+
+Governance changes require security-administrator authorization, revision
+checks, and immutable asset plus shared audit events. Approval/revocation and
+active/retired transitions are explicit. Replacements must be same-type,
+approved, active, effective, and unexpired; activating one explicitly retires
+the old asset. Assistant feedback and product analytics have no write path to
+the registry.
+
+Platform routes and form-field facts continue to derive from the code-owned
+platform map and canonical proposal schema/field registry. Governance metadata
+does not create a second copy of those machine-readable product contracts.
+
 ## Knowledge extension
 
 `PlatformAssistantKnowledgeSource` is the expansion boundary. The current

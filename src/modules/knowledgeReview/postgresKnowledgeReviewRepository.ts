@@ -390,6 +390,39 @@ export const knowledgeReviewRepository = {
           input.actorUserMongoId,
         ],
       );
+      const retiredGovernance = await c.query<any>(
+        `UPDATE rfpilot.governed_assets g SET
+           lifecycle_state='retired',replacement_asset_id=$3,
+           revision=revision+1,updated_at=now()
+         FROM rfpilot.knowledge_releases r
+         WHERE g.organization_id=$1
+           AND g.asset_type='knowledge_release'
+           AND g.asset_id=r.id
+           AND r.batch_id=$2
+           AND r.id<>$3
+           AND g.lifecycle_state='active'
+         RETURNING g.id,g.revision`,
+        [org, v.batch_id, releaseId],
+      );
+      for (const governed of retiredGovernance.rows) {
+        await c.query(
+          `INSERT INTO rfpilot.governed_asset_events(
+            id,organization_id,governed_asset_id,event_type,
+            actor_external_user_id,from_revision,to_revision,correlation_id,
+            metadata
+          ) VALUES($1,$2,$3,'replacement_activated',$4,$5,$6,$7,$8::jsonb)`,
+          [
+            uuidv7(),
+            org,
+            governed.id,
+            input.actorUserMongoId,
+            governed.revision - 1,
+            governed.revision,
+            input.correlationId,
+            JSON.stringify({ replacementAssetId: releaseId }),
+          ],
+        );
+      }
       await c.query(
         `INSERT INTO rfpilot.knowledge_release_fragments(organization_id,release_id,fragment_id,fragment_checksum)
  SELECT $1,$2,d.fragment_id,f.checksum FROM rfpilot.knowledge_fragment_decisions d JOIN rfpilot.knowledge_source_fragments f ON f.id=d.fragment_id WHERE d.review_version_id=$3 AND d.decision='accepted'`,
@@ -456,6 +489,35 @@ export const knowledgeReviewRepository = {
           "An active release was not found.",
           404,
         );
+      const governed = await c.query<any>(
+        `UPDATE rfpilot.governed_assets SET
+           approval_state='revoked',lifecycle_state='retired',
+           revision=revision+1,updated_at=now()
+         WHERE organization_id=$1
+           AND asset_type='knowledge_release'
+           AND asset_id=$2
+         RETURNING id,revision`,
+        [org, input.releaseId],
+      );
+      if (governed.rows[0]) {
+        await c.query(
+          `INSERT INTO rfpilot.governed_asset_events(
+            id,organization_id,governed_asset_id,event_type,
+            actor_external_user_id,from_revision,to_revision,correlation_id,
+            metadata
+          ) VALUES($1,$2,$3,'revoked',$4,$5,$6,$7,$8::jsonb)`,
+          [
+            uuidv7(),
+            org,
+            governed.rows[0].id,
+            input.actorUserMongoId,
+            governed.rows[0].revision - 1,
+            governed.rows[0].revision,
+            input.correlationId,
+            JSON.stringify({ reasonRecorded: true }),
+          ],
+        );
+      }
       await c.query(
         "UPDATE rfpilot.knowledge_import_batches SET status='needs_review',updated_at=now() WHERE id=$1",
         [r.rows[0].batch_id],

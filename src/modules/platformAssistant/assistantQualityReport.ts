@@ -365,33 +365,49 @@ export const assistantQualityReport = async (
 
     const [knowledge, rules, approvedPriceCategories] = await Promise.all([
       client.query<any>(
-        `SELECT release_number,state,expires_at,
+        `SELECT r.release_number,r.state,g.expires_at,
            CASE
-             WHEN expires_at IS NOT NULL AND expires_at <= now() THEN 'expired'
+             WHEN g.expires_at IS NOT NULL AND g.expires_at <= now() THEN 'expired'
              ELSE 'expiring'
            END AS condition
-         FROM rfpilot.knowledge_releases
-         WHERE state='active' AND expires_at IS NOT NULL
-           AND expires_at <= now()+interval '30 days'
-         ORDER BY expires_at ASC LIMIT 50`,
+         FROM rfpilot.governed_assets g
+         JOIN rfpilot.knowledge_releases r ON r.id=g.asset_id
+         WHERE g.asset_type='knowledge_release'
+           AND g.approval_state='approved'
+           AND g.lifecycle_state='active'
+           AND g.expires_at IS NOT NULL
+           AND g.expires_at <= now()+interval '30 days'
+         ORDER BY g.expires_at ASC LIMIT 50`,
       ),
       client.query<any>(
-        `SELECT rule_key,status,updated_at,
+        `SELECT r.rule_key,r.status,g.updated_at,
            CASE
-             WHEN status='retired' THEN 'retired'
+             WHEN g.lifecycle_state='retired' THEN 'retired'
              ELSE 'stale'
            END AS condition
-         FROM rfpilot.expert_rules
-         WHERE status='retired'
-           OR (status='active' AND updated_at < now()-interval '180 days')
+         FROM rfpilot.governed_assets g
+         JOIN rfpilot.expert_rules r ON r.id=g.asset_id
+         WHERE g.asset_type='expert_rule'
+           AND (
+             g.lifecycle_state='retired'
+             OR g.review_due_at <= now()
+           )
          ORDER BY
-           CASE WHEN status='retired' THEN 0 ELSE 1 END,
-           updated_at ASC
+           CASE WHEN g.lifecycle_state='retired' THEN 0 ELSE 1 END,
+           g.review_due_at ASC
          LIMIT 50`,
       ),
       client.query<{ category: string }>(
-        `SELECT DISTINCT category
-         FROM rfpilot.pricing_records WHERE status='approved'`,
+        `SELECT DISTINCT p.category
+         FROM rfpilot.pricing_records p
+         JOIN rfpilot.governed_assets g
+           ON g.asset_type='pricing_record' AND g.asset_id=p.id
+          AND g.organization_id=p.organization_id
+         WHERE p.status='approved'
+           AND g.approval_state='approved'
+           AND g.lifecycle_state='active'
+           AND g.effective_at<=now()
+           AND (g.expires_at IS NULL OR g.expires_at>now())`,
       ),
     ]);
 

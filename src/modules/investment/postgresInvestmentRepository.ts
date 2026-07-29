@@ -90,23 +90,67 @@ export const investmentRepository = {
       const org = await tenant(c, ctx.organizationMongoId);
       const p = await proposalRef(c, ctx.proposalMongoId, ctx.actorUserMongoId);
       const records = await c.query<any>(
-        "SELECT id,category,subcategory,spec,item_label,unit,unit_label,quantity_dimension,calibration_tier,amount_low_minor,amount_mid_minor,amount_high_minor,currency,market,day_type,labor_role,revision FROM rfpilot.pricing_records WHERE organization_id=$1 AND status='approved'",
+        `SELECT p.id,p.category,p.subcategory,p.spec,p.item_label,p.unit,
+                p.unit_label,p.quantity_dimension,p.calibration_tier,
+                p.amount_low_minor,p.amount_mid_minor,p.amount_high_minor,
+                p.currency,p.market,p.day_type,p.labor_role,p.revision
+         FROM rfpilot.pricing_records p
+         JOIN rfpilot.governed_assets g
+           ON g.organization_id=p.organization_id
+          AND g.asset_type='pricing_record' AND g.asset_id=p.id
+         WHERE p.organization_id=$1 AND p.status='approved'
+           AND g.approval_state='approved' AND g.lifecycle_state='active'
+           AND g.effective_at<=now()
+           AND (g.expires_at IS NULL OR g.expires_at>now())`,
         [org],
       );
       const rules = await c.query<any>(
-        "SELECT id,rule_key,title,explanation,conditions,effect,revision FROM rfpilot.expert_rules WHERE organization_id=$1 AND status='active'",
+        `SELECT r.id,r.rule_key,r.title,r.explanation,r.conditions,r.effect,
+                r.revision
+         FROM rfpilot.expert_rules r
+         JOIN rfpilot.governed_assets g
+           ON g.organization_id=r.organization_id
+          AND g.asset_type='expert_rule' AND g.asset_id=r.id
+         WHERE r.organization_id=$1 AND r.status='active'
+           AND g.approval_state='approved' AND g.lifecycle_state='active'
+           AND g.effective_at<=now()
+           AND (g.expires_at IS NULL OR g.expires_at>now())`,
         [org],
       );
       const regional = await c.query<any>(
-        "SELECT id,market,factor,notes FROM rfpilot.pricing_regional_factors WHERE organization_id=$1 AND status='approved'",
+        `SELECT r.id,r.market,r.factor,r.notes
+         FROM rfpilot.pricing_regional_factors r
+         JOIN rfpilot.governed_assets g
+           ON g.organization_id=r.organization_id
+          AND g.asset_type='pricing_regional_factor' AND g.asset_id=r.id
+         WHERE r.organization_id=$1 AND r.status='approved'
+           AND g.approval_state='approved' AND g.lifecycle_state='active'
+           AND g.effective_at<=now()
+           AND (g.expires_at IS NULL OR g.expires_at>now())`,
         [org],
       );
       const modifierRows = await c.query<any>(
-        "SELECT id,kind,condition_key,label,factor,scope,notes FROM rfpilot.pricing_modifiers WHERE organization_id=$1 AND status='approved'",
+        `SELECT m.id,m.kind,m.condition_key,m.label,m.factor,m.scope,m.notes
+         FROM rfpilot.pricing_modifiers m
+         JOIN rfpilot.governed_assets g
+           ON g.organization_id=m.organization_id
+          AND g.asset_type='pricing_modifier' AND g.asset_id=m.id
+         WHERE m.organization_id=$1 AND m.status='approved'
+           AND g.approval_state='approved' AND g.lifecycle_state='active'
+           AND g.effective_at<=now()
+           AND (g.expires_at IS NULL OR g.expires_at>now())`,
         [org],
       );
       const confidenceRows = await c.query<any>(
-        "SELECT id,rule_key,label,deduction,reason FROM rfpilot.pricing_confidence_rules WHERE organization_id=$1 AND status='approved'",
+        `SELECT r.id,r.rule_key,r.label,r.deduction,r.reason
+         FROM rfpilot.pricing_confidence_rules r
+         JOIN rfpilot.governed_assets g
+           ON g.organization_id=r.organization_id
+          AND g.asset_type='pricing_confidence_rule' AND g.asset_id=r.id
+         WHERE r.organization_id=$1 AND r.status='approved'
+           AND g.approval_state='approved' AND g.lifecycle_state='active'
+           AND g.effective_at<=now()
+           AND (g.expires_at IS NULL OR g.expires_at>now())`,
         [org],
       );
       const pricing: PricingRecord[] = records.rows.map((row: any) => ({

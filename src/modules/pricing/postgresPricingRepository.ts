@@ -27,6 +27,63 @@ const audit = (
     [uuidv7(), v.org, v.actor, v.action, v.target, v.id, v.correlation, JSON.stringify(v.metadata || {})],
   );
 
+const syncGovernanceState = async (
+  c: PoolClient,
+  input: {
+    org: string;
+    assetType: "pricing_record" | "expert_rule";
+    assetId: string;
+    status: string;
+    actor: string;
+    correlation: string;
+  },
+) => {
+  const current = await c.query<{
+    id: string;
+    revision: number;
+    approval_state: string;
+    lifecycle_state: string;
+  }>(
+    `SELECT id,revision,approval_state,lifecycle_state
+     FROM rfpilot.governed_assets
+     WHERE organization_id=$1 AND asset_type=$2 AND asset_id=$3
+     FOR UPDATE`,
+    [input.org, input.assetType, input.assetId],
+  );
+  if (!current.rows[0]) return;
+  const approval =
+    input.status === "draft" ? "draft" : "approved";
+  const lifecycle =
+    input.status === "retired" ? "retired" : "active";
+  const next = await c.query<{ revision: number }>(
+    `UPDATE rfpilot.governed_assets SET
+       approval_state=$2,lifecycle_state=$3,revision=revision+1,updated_at=now()
+     WHERE id=$1 RETURNING revision`,
+    [current.rows[0].id, approval, lifecycle],
+  );
+  await c.query(
+    `INSERT INTO rfpilot.governed_asset_events(
+      id,organization_id,governed_asset_id,event_type,
+      actor_external_user_id,from_revision,to_revision,correlation_id,metadata
+    ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
+    [
+      uuidv7(),
+      input.org,
+      current.rows[0].id,
+      input.status === "retired"
+        ? "retired"
+        : input.status === "draft"
+          ? "metadata_updated"
+          : "approved",
+      input.actor,
+      current.rows[0].revision,
+      next.rows[0].revision,
+      input.correlation,
+      JSON.stringify({ source: "pricing_status_transition" }),
+    ],
+  );
+};
+
 const listLimit = (limit?: number) => Math.min(Math.max(Number(limit) || 100, 1), 200);
 
 const fragmentExists = async (c: PoolClient, fragmentId: string | null) => {
@@ -156,6 +213,14 @@ export const pricingRepository = {
         [recordId, status, ctx.actorUserMongoId],
       );
       await audit(c, { org, actor: ctx.actorUserMongoId, action: "pricing_record_status_changed", target: "pricing_record", id: recordId, correlation: ctx.correlationId, metadata: { from: existing.status, to: status } });
+      await syncGovernanceState(c, {
+        org,
+        assetType: "pricing_record",
+        assetId: recordId,
+        status,
+        actor: ctx.actorUserMongoId,
+        correlation: ctx.correlationId,
+      });
       return presentRecord(r.rows[0]);
     });
   },
@@ -242,6 +307,14 @@ export const pricingRepository = {
         [ruleId, status, ctx.actorUserMongoId],
       );
       await audit(c, { org, actor: ctx.actorUserMongoId, action: "expert_rule_status_changed", target: "expert_rule", id: ruleId, correlation: ctx.correlationId, metadata: { from: existing.status, to: status } });
+      await syncGovernanceState(c, {
+        org,
+        assetType: "expert_rule",
+        assetId: ruleId,
+        status,
+        actor: ctx.actorUserMongoId,
+        correlation: ctx.correlationId,
+      });
       return presentRule(r.rows[0]);
     });
   },

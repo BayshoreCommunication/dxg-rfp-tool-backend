@@ -105,11 +105,19 @@ export const knowledgeRetrievalRepository = {
         `SELECT r.id,b.classification
          FROM rfpilot.knowledge_releases r
          JOIN rfpilot.knowledge_import_batches b ON b.id=r.batch_id
+         JOIN rfpilot.governed_assets g
+           ON g.organization_id=r.organization_id
+          AND g.asset_type='knowledge_release'
+          AND g.asset_id=r.id
          WHERE r.id=$1
            AND r.organization_id=$2
            AND r.state='active'
            AND r.effective_at<=now()
-           AND (r.expires_at IS NULL OR r.expires_at>now())`,
+           AND (r.expires_at IS NULL OR r.expires_at>now())
+           AND g.approval_state='approved'
+           AND g.lifecycle_state='active'
+           AND g.effective_at<=now()
+           AND (g.expires_at IS NULL OR g.expires_at>now())`,
         [input.releaseId, org],
       );
       if (!release.rows[0])
@@ -262,13 +270,25 @@ export const knowledgeRetrievalRepository = {
  ts_rank_cd(to_tsvector('english',f.content),search_query.query) lexical_score,
  COALESCE(1-(e.embedding <=> $2::vector),0) vector_score
  FROM rfpilot.knowledge_releases r
+ JOIN rfpilot.governed_assets g
+   ON g.organization_id=r.organization_id
+  AND g.asset_type='knowledge_release'
+  AND g.asset_id=r.id
  JOIN rfpilot.knowledge_import_batches b ON b.id=r.batch_id
  JOIN rfpilot.knowledge_release_fragments rf ON rf.release_id=r.id
  JOIN rfpilot.knowledge_source_fragments f ON f.id=rf.fragment_id AND f.checksum=rf.fragment_checksum
  JOIN rfpilot.knowledge_import_documents doc ON doc.id=f.document_id
  LEFT JOIN rfpilot.knowledge_fragment_embeddings e ON e.release_id=r.id AND e.fragment_id=f.id AND e.embedding_model_release_id=$3
  CROSS JOIN search_query
- WHERE r.organization_id=$11 AND r.state='active' AND r.effective_at<=now() AND (r.expires_at IS NULL OR r.expires_at>now()) AND b.status='approved' AND b.classification=$13 AND (cardinality($4::text[])=0 OR b.source_type=ANY($4::text[])) AND ($5::text IS NULL OR b.market=$5) AND ($6::text IS NULL OR b.currency=$6)
+ WHERE r.organization_id=$11
+   AND r.state='active'
+   AND r.effective_at<=now()
+   AND (r.expires_at IS NULL OR r.expires_at>now())
+   AND g.approval_state='approved'
+   AND g.lifecycle_state='active'
+   AND g.effective_at<=now()
+   AND (g.expires_at IS NULL OR g.expires_at>now())
+   AND b.status='approved' AND b.classification=$13 AND (cardinality($4::text[])=0 OR b.source_type=ANY($4::text[])) AND ($5::text IS NULL OR b.market=$5) AND ($6::text IS NULL OR b.currency=$6)
  ), ranked AS (SELECT *,least(1,greatest(0,($8::numeric*lexical_score)+($9::numeric*vector_score))) fused_score FROM eligible WHERE lexical_score>0 OR vector_score>0)
  SELECT * FROM ranked WHERE fused_score>=$10 ORDER BY fused_score DESC,fragment_id LIMIT $7`,
         [
@@ -366,6 +386,10 @@ const loadResults = async (
             f.checksum,doc.id document_id,rel.id release_id,b.source_type
      FROM rfpilot.knowledge_retrieval_results rr
      JOIN rfpilot.knowledge_releases rel ON rel.id=rr.release_id
+     JOIN rfpilot.governed_assets g
+       ON g.organization_id=rel.organization_id
+      AND g.asset_type='knowledge_release'
+      AND g.asset_id=rel.id
      JOIN rfpilot.knowledge_source_fragments f
        ON f.id=rr.fragment_id AND f.checksum=rr.fragment_checksum
      JOIN rfpilot.knowledge_import_documents doc ON doc.id=f.document_id
@@ -376,6 +400,10 @@ const loadResults = async (
        AND rel.state='active'
        AND rel.effective_at<=now()
        AND (rel.expires_at IS NULL OR rel.expires_at>now())
+       AND g.approval_state='approved'
+       AND g.lifecycle_state='active'
+       AND g.effective_at<=now()
+       AND (g.expires_at IS NULL OR g.expires_at>now())
      ORDER BY rr.rank`,
     [queryId, organizationId],
   );

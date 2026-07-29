@@ -26,7 +26,7 @@ Create a release record before changing any flag. Record:
 | Release owner | Named person on duty |
 | Product approver | Named Product Owner |
 | Application versions | Backend and dashboard commit SHAs |
-| Schema version | Migrations `026_platform_assistant` through `034_assistant_quality_indexes` applied |
+| Schema version | Migrations `026_platform_assistant` through `035_governed_assets` applied |
 | Prompt version | Version in `src/modules/platformAssistant/prompt.ts` |
 | Model | Exact dated model identifier |
 | Knowledge release | Active eligible release/policy identifiers |
@@ -55,6 +55,11 @@ Create a release record before changing any flag. Record:
 10. If product analytics is enabled, confirm
     `AI_ANALYTICS_PSEUDONYM_KEY` is a backend-only secret with at least 32
     characters and the analytics privacy-canary test is clean.
+11. Confirm every knowledge/rule/price asset selected for the release is
+    approved, active, effective, unexpired, has a named owner and source
+    reference, and records the deployed application release as verified.
+12. Confirm no required governed asset remains on the temporary
+    `legacy-migration-035` marker or has an overdue review date.
 
 ## Deploy flags off
 
@@ -68,7 +73,7 @@ AI_ASSISTANT_ANALYTICS_ENABLED=false
 NEXT_PUBLIC_AI_ASSISTANT_ENABLED=false
 ```
 
-Apply migrations 026 through 034, deploy backend and dashboard, then verify normal
+Apply migrations 026 through 035, deploy backend and dashboard, then verify normal
 non-Assistant dashboard workflows before proceeding.
 
 ## Kill-switch test
