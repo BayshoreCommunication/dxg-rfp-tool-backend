@@ -39,6 +39,16 @@ export interface ProposalWriteRepository {
     ownerUserId: string;
   }): Promise<boolean>;
 
+  /**
+   * Identifiers needed to purge an archived proposal's cross-store artifacts,
+   * read before it is deleted. The tenant is only resolvable from Mongo, so
+   * once the record is gone the S3 objects and Postgres rows cannot be found.
+   */
+  findOwnedArchivedPurgeTargetById(input: {
+    proposalId: string;
+    ownerUserId: string;
+  }): Promise<{ proposalMongoId: string; organizationMongoId: string } | null>;
+
   permanentlyDeleteOwnedArchivedById(input: {
     proposalId: string;
     ownerUserId: string;

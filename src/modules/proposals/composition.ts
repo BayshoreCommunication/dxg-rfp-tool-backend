@@ -52,8 +52,16 @@ export const archiveOwnedProposal =
   createArchiveOwnedProposal(mongoProposalWriteRepository);
 export const restoreOwnedProposal =
   createRestoreOwnedProposal(mongoProposalWriteRepository);
-export const permanentlyDeleteOwnedProposal =
-  createPermanentlyDeleteOwnedProposal(mongoProposalWriteRepository);
+// The purge is imported lazily, as the archive sweep does, so the S3 and
+// Postgres clients are not pulled in merely by composing this module.
+export const permanentlyDeleteOwnedProposal = createPermanentlyDeleteOwnedProposal(
+  mongoProposalWriteRepository,
+  async (targets) => {
+    if (!targets.length) return;
+    const { purgeProposalArtifacts } = await import("../dataFoundation/purgeProposalArtifacts");
+    await purgeProposalArtifacts(targets);
+  },
+);
 export const createOwnedProposal = createCreateOwnedProposal(mutationDependencies);
 export const updateOwnedProposal = createUpdateOwnedProposal(mutationDependencies);
 export const copyOwnedProposal = createCopyOwnedProposal(mutationDependencies);

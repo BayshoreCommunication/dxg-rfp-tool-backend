@@ -71,6 +71,22 @@ export const mongoProposalWriteRepository: ProposalWriteRepository = {
     return proposal !== null;
   },
 
+  async findOwnedArchivedPurgeTargetById({ proposalId, ownerUserId }) {
+    const proposal = await Proposal.findOne({
+      _id: proposalId,
+      userId: ownerUserId,
+      isArchived: true,
+      ...tenantFilter(),
+    })
+      .select("_id organizationId")
+      .lean<{ _id: unknown; organizationId?: unknown } | null>();
+    if (!proposal) return null;
+    return {
+      proposalMongoId: String(proposal._id),
+      organizationMongoId: proposal.organizationId ? String(proposal.organizationId) : "",
+    };
+  },
+
   async permanentlyDeleteOwnedArchivedById({ proposalId, ownerUserId }) {
     const proposal = await Proposal.findOneAndDelete({
       _id: proposalId,
