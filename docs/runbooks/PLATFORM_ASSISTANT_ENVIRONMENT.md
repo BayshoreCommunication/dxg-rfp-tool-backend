@@ -35,6 +35,7 @@ REDIS_URL=<private-redis-or-rediss-url>
 # Provider secrets — backend only
 OPENAI_API_KEY=<openai-project-api-key>
 AI_SAFETY_IDENTIFIER_SECRET=<new-random-secret-of-at-least-32-characters>
+AI_ANALYTICS_PSEUDONYM_KEY=<different-random-secret-of-at-least-32-characters>
 
 # Approved Assistant release
 AI_ASSISTANT_ENABLED=true
@@ -43,6 +44,12 @@ AI_ASSISTANT_KILL_SWITCH=false
 AI_ASSISTANT_MODEL=gpt-5.4-mini-2026-03-17
 AI_ASSISTANT_REASONING_EFFORT=none
 AI_ASSISTANT_TEXT_VERBOSITY=low
+AI_ASSISTANT_ANALYTICS_ENABLED=false
+
+# Irreversible cleanup stays independently disabled during launch
+AI_RETENTION_PURGE_ENABLED=false
+AI_RETENTION_POLICY_APPROVED=false
+AI_RETENTION_PRODUCTION_EXECUTION_APPROVED=false
 
 # Provider gate
 LIVE_AI_PILOT_ENABLED=true
@@ -66,8 +73,9 @@ Generate independent secrets, for example:
 openssl rand -hex 32
 ```
 
-Do not reuse `JWT_SECRET`, `BFF_SHARED_SECRET`, or
-`AI_SAFETY_IDENTIFIER_SECRET` for one another.
+Do not reuse `JWT_SECRET`, `BFF_SHARED_SECRET`,
+`AI_SAFETY_IDENTIFIER_SECRET`, or `AI_ANALYTICS_PSEUDONYM_KEY` for one
+another.
 
 ## Dashboard
 
@@ -110,8 +118,9 @@ npm run migrate:postgres -- up
 npm run migrate:postgres -- status
 ```
 
-The last status must show `026_platform_assistant` as `applied`. Do not run
-`rollback` as part of an operational Assistant rollback; use the kill switch.
+The last status must show migrations `026_platform_assistant` through
+`036_assistant_retention_privacy` as `applied`. Do not run `rollback` as part
+of an operational Assistant rollback; use the kill switch.
 
 The signed-in user must receive `assistant:use` through the existing role and
 permission system. Verify both:
@@ -125,7 +134,8 @@ permission system. Verify both:
 
 1. Deploy the backend and dashboard with both Assistant feature flags off and
    the backend kill switch on.
-2. Apply and verify migration `026_platform_assistant`.
+2. Apply and verify migrations `026_platform_assistant` through
+   `036_assistant_retention_privacy`.
 3. Add the exact approved organization IDs and confirm `assistant:use`.
 4. Enable the backend feature while the kill switch remains on; verify a new
    message fails safely and history remains readable.
@@ -135,6 +145,9 @@ permission system. Verify both:
    `NEXT_PUBLIC_AI_ASSISTANT_ENABLED=true`.
 7. Run the staged smoke tests in
    [Platform Assistant rollout](./PLATFORM_ASSISTANT_ROLLOUT.md).
+
+Before any internal or limited pilot, complete the release record and verdict
+in [AI Assistant controlled pilot](./AI_ASSISTANT_PILOT_RELEASE.md).
 
 If a credential has ever been printed, copied into a ticket/chat, or stored in
 source control, rotate it before launch.

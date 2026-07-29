@@ -1,6 +1,6 @@
 # Platform AI Assistant Rollout
 
-> Production runbook. Last updated: 2026-07-27. Operational owner role: Platform Operations. Approval owner role: Product Owner.
+> Production runbook. Last updated: 2026-07-29. Operational owner role: Platform Operations. Approval owner role: Product Owner.
 
 ## Safety position
 
@@ -26,7 +26,7 @@ Create a release record before changing any flag. Record:
 | Release owner | Named person on duty |
 | Product approver | Named Product Owner |
 | Application versions | Backend and dashboard commit SHAs |
-| Schema version | Migrations `026_platform_assistant` through `035_governed_assets` applied |
+| Schema version | Migrations `026_platform_assistant` through `036_assistant_retention_privacy` applied |
 | Prompt version | Version in `src/modules/platformAssistant/prompt.ts` |
 | Model | Exact dated model identifier |
 | Knowledge release | Active eligible release/policy identifiers |
@@ -73,8 +73,13 @@ AI_ASSISTANT_ANALYTICS_ENABLED=false
 NEXT_PUBLIC_AI_ASSISTANT_ENABLED=false
 ```
 
-Apply migrations 026 through 035, deploy backend and dashboard, then verify normal
+Apply migrations 026 through 036, deploy backend and dashboard, then verify normal
 non-Assistant dashboard workflows before proceeding.
+
+The complete Phase 18 release record, read-only readiness checker,
+alert/support requirements, incident classification, weekly review template,
+and current verdict are in
+[AI Assistant controlled pilot](./AI_ASSISTANT_PILOT_RELEASE.md).
 
 ## Kill-switch test
 

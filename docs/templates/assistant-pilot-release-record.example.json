@@ -1,0 +1,46 @@
+{
+  "version": "assistant-pilot-release.v1",
+  "target": "production_limited",
+  "releaseOwner": "",
+  "productApprover": "",
+  "rollbackAuthority": "",
+  "supportOwner": "",
+  "application": {
+    "backendCommit": "",
+    "dashboardCommit": "",
+    "promptVersion": "platform-assistant-prompt.v5",
+    "migrationsAppliedThrough": "036"
+  },
+  "model": {
+    "baseline": "gpt-5.4-mini-2026-03-17",
+    "candidate": "gpt-5.6-terra",
+    "decision": "baseline_approved"
+  },
+  "governedAssets": {
+    "knowledgeRelease": "",
+    "ruleRelease": "",
+    "priceRelease": "",
+    "verifiedForApplicationRelease": false
+  },
+  "organizationAllowlist": [],
+  "monitoring": {
+    "startsAt": "",
+    "endsAt": "",
+    "onCallOwner": "",
+    "alertsConfigured": false
+  },
+  "privacy": {
+    "retentionPolicyApproved": false,
+    "providerTermsReviewed": false
+  },
+  "evidence": {
+    "backendCiPassed": false,
+    "dashboardCiPassed": false,
+    "evaluationPassed": false,
+    "migrationsVerified": false,
+    "smokeTestsPassed": false,
+    "killSwitchDrillPassed": false,
+    "rollbackReviewed": false,
+    "supportWorkflowReviewed": false
+  }
+}
