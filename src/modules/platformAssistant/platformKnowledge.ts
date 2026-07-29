@@ -1,5 +1,9 @@
 import type { AssistantMessage, AssistantPromptEvidence } from "./domain";
-import { proposalFormGuidanceEvidenceForQuery } from "./proposalFormGuidance";
+import {
+  proposalFormGuidanceEvidenceForField,
+  proposalFormGuidanceEvidenceForQuery,
+} from "./proposalFormGuidance";
+import type { AssistantUiContext } from "./domain";
 
 export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v4";
 
@@ -288,6 +292,34 @@ export const platformFactEvidenceForHref = (
         item.id.startsWith("platform:navigation:"),
     ) ?? PLATFORM_FACTS.find((item) => item.href === href);
   return fact ? platformFactEvidence(fact) : undefined;
+};
+
+const hrefForRouteCategory: Partial<
+  Record<AssistantUiContext["routeCategory"], string>
+> = {
+  dashboard: "/dashboard",
+  proposals: "/proposals",
+  proposal_creation: "/proposals/add-new-proposal",
+  email: "/email",
+  vendor_responses: "/vendor-responses",
+  settings: "/settings",
+};
+
+export const platformFactsForUiContext = (
+  uiContext: AssistantUiContext | null,
+): AssistantPromptEvidence[] => {
+  if (!uiContext) return [];
+  const evidence: AssistantPromptEvidence[] = [];
+  const href = hrefForRouteCategory[uiContext.routeCategory];
+  if (href) {
+    const route = platformFactEvidenceForHref(href);
+    if (route) evidence.push(route);
+  }
+  if (uiContext.fieldKeyStatus === "valid" && uiContext.fieldKey) {
+    const field = proposalFormGuidanceEvidenceForField(uiContext.fieldKey);
+    if (field) evidence.unshift(field);
+  }
+  return evidence;
 };
 
 export const platformFactsForQuery = (

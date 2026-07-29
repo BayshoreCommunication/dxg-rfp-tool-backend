@@ -2,6 +2,7 @@ import {
   aiEnvironment,
   aiRuntimeAuthorized,
 } from "../../../config/aiEnvironment";
+import { proposalFormGuidanceForField } from "./proposalFormGuidance";
 
 export const ASSISTANT_THREAD_TITLE_MAX_LENGTH = 200;
 export const ASSISTANT_MESSAGE_MAX_LENGTH = 8_000;
@@ -15,6 +16,7 @@ export const ASSISTANT_EVIDENCE_MAX_CHARACTERS = 20_000;
 export const ASSISTANT_EVIDENCE_ITEM_MAX_CHARACTERS = 3_000;
 export const ASSISTANT_RESPONSE_MAX_CHARACTERS = 12_000;
 export const ASSISTANT_RESPONSE_MAX_CITATIONS = 12;
+export const ASSISTANT_UI_CONTEXT_ROOM_IDENTIFIER_MAX_LENGTH = 64;
 
 export const ASSISTANT_THREAD_STATUSES = ["active", "archived"] as const;
 export const ASSISTANT_MESSAGE_ROLES = ["user", "assistant", "system_event"] as const;
@@ -36,6 +38,58 @@ export type AssistantThreadStatus = (typeof ASSISTANT_THREAD_STATUSES)[number];
 export type AssistantMessageRole = (typeof ASSISTANT_MESSAGE_ROLES)[number];
 export type AssistantMessageStatus = (typeof ASSISTANT_MESSAGE_STATUSES)[number];
 export type AssistantResponseKind = (typeof ASSISTANT_RESPONSE_KINDS)[number];
+
+export const ASSISTANT_ROUTE_CATEGORIES = [
+  "dashboard",
+  "proposals",
+  "proposal_creation",
+  "proposal_detail",
+  "proposal_assistant",
+  "email",
+  "vendor_responses",
+  "settings",
+  "other",
+] as const;
+export const ASSISTANT_WORKFLOWS = [
+  "proposal_intake",
+  "proposal_review",
+  "proposal_assistant",
+  "proposal_email",
+  "vendor_response_review",
+] as const;
+export const ASSISTANT_FORM_SECTION_IDS = [
+  "event_overview",
+  "venue_schedule",
+  "room_specifications",
+  "hybrid_virtual",
+  "content_creative",
+  "video_recording",
+  "venue_technical",
+  "investment_evaluation",
+  "uploads_covendors",
+  "contact_submit",
+] as const;
+export const ASSISTANT_EVENT_FORMATS = [
+  "in_person",
+  "hybrid",
+  "virtual",
+] as const;
+
+export type AssistantRouteCategory = (typeof ASSISTANT_ROUTE_CATEGORIES)[number];
+export type AssistantWorkflow = (typeof ASSISTANT_WORKFLOWS)[number];
+export type AssistantFormSectionId = (typeof ASSISTANT_FORM_SECTION_IDS)[number];
+export type AssistantEventFormat = (typeof ASSISTANT_EVENT_FORMATS)[number];
+
+export type AssistantUiContext = {
+  schemaVersion: "assistant-ui-context.v1";
+  routeCategory: AssistantRouteCategory;
+  workflow?: AssistantWorkflow;
+  sectionId?: AssistantFormSectionId;
+  fieldKey?: string;
+  fieldKeyStatus: "not_provided" | "valid" | "unknown";
+  eventFormat?: AssistantEventFormat;
+  roomIdentifier?: string;
+};
 
 export type AssistantCitation = {
   sourceId: string;
@@ -95,11 +149,12 @@ export type AssistantPromptMessage = {
 };
 
 export type AssistantPromptInput = {
-  schemaVersion: "platform-assistant-prompt.v2";
+  schemaVersion: "platform-assistant-prompt.v3";
   platformKnowledgeVersion: string;
   userMessage: string;
   history: AssistantPromptMessage[];
   evidence: AssistantPromptEvidence[];
+  uiContext: AssistantUiContext | null;
   instructions: readonly string[];
 };
 
@@ -285,7 +340,7 @@ export const parseCreateAssistantThreadInput = (
 
 export const parseAssistantMessageInput = (
   value: unknown,
-): { content: string } => {
+): { content: string; uiContext: AssistantUiContext | null } => {
   const body = isRecord(value) ? value : {};
   const content = typeof body.content === "string" ? body.content.trim() : "";
   if (!content) {
@@ -301,7 +356,98 @@ export const parseAssistantMessageInput = (
       413,
     );
   }
-  return { content };
+  return {
+    content,
+    uiContext: parseAssistantUiContext(body.uiContext),
+  };
+};
+
+const oneOf = <T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): value is T => typeof value === "string" && allowed.includes(value as T);
+
+export const parseAssistantUiContext = (
+  value: unknown,
+): AssistantUiContext | null => {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)) {
+    throw new PlatformAssistantError(
+      "INVALID_ASSISTANT_UI_CONTEXT",
+      "The assistant page context is invalid.",
+    );
+  }
+  if (
+    value.schemaVersion !== "assistant-ui-context.v1" ||
+    !oneOf(value.routeCategory, ASSISTANT_ROUTE_CATEGORIES)
+  ) {
+    throw new PlatformAssistantError(
+      "INVALID_ASSISTANT_UI_CONTEXT",
+      "The assistant page context is invalid.",
+    );
+  }
+  const workflow =
+    value.workflow === undefined
+      ? undefined
+      : oneOf(value.workflow, ASSISTANT_WORKFLOWS)
+        ? value.workflow
+        : null;
+  const sectionId =
+    value.sectionId === undefined
+      ? undefined
+      : oneOf(value.sectionId, ASSISTANT_FORM_SECTION_IDS)
+        ? value.sectionId
+        : null;
+  const eventFormat =
+    value.eventFormat === undefined
+      ? undefined
+      : oneOf(value.eventFormat, ASSISTANT_EVENT_FORMATS)
+        ? value.eventFormat
+        : null;
+  const roomIdentifier =
+    value.roomIdentifier === undefined
+      ? undefined
+      : typeof value.roomIdentifier === "string" &&
+          /^[A-Za-z0-9:_-]+$/.test(value.roomIdentifier) &&
+          value.roomIdentifier.length <=
+            ASSISTANT_UI_CONTEXT_ROOM_IDENTIFIER_MAX_LENGTH
+        ? value.roomIdentifier
+        : null;
+  if (
+    workflow === null ||
+    sectionId === null ||
+    eventFormat === null ||
+    roomIdentifier === null
+  ) {
+    throw new PlatformAssistantError(
+      "INVALID_ASSISTANT_UI_CONTEXT",
+      "The assistant page context is invalid.",
+    );
+  }
+
+  const suppliedFieldKey =
+    typeof value.fieldKey === "string" ? value.fieldKey.trim() : "";
+  let fieldKey: string | undefined;
+  let fieldKeyStatus: AssistantUiContext["fieldKeyStatus"] = "not_provided";
+  if (suppliedFieldKey) {
+    if (proposalFormGuidanceForField(suppliedFieldKey)) {
+      fieldKey = suppliedFieldKey;
+      fieldKeyStatus = "valid";
+    } else {
+      fieldKeyStatus = "unknown";
+    }
+  }
+
+  return {
+    schemaVersion: "assistant-ui-context.v1",
+    routeCategory: value.routeCategory,
+    ...(workflow ? { workflow } : {}),
+    ...(sectionId ? { sectionId } : {}),
+    ...(fieldKey ? { fieldKey } : {}),
+    fieldKeyStatus,
+    ...(eventFormat ? { eventFormat } : {}),
+    ...(roomIdentifier ? { roomIdentifier } : {}),
+  };
 };
 
 export const parseAssistantListLimit = (

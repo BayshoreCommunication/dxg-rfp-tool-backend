@@ -96,6 +96,7 @@ const promptPayload = (input: AssistantPromptInput): string =>
     userMessage: input.userMessage,
     history: input.history,
     evidence: input.evidence,
+    uiContext: input.uiContext,
   });
 
 export const assistantSafetyIdentifier = (

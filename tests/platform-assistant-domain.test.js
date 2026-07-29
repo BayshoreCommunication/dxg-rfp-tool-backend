@@ -13,6 +13,7 @@ const {
   parseAssistantIdempotencyKey,
   parseAssistantListLimit,
   parseAssistantMessageInput,
+  parseAssistantUiContext,
   parseAssistantThreadId,
   parseCreateAssistantThreadInput,
   platformAssistantEnabled,
@@ -222,7 +223,7 @@ test("thread and message input contracts normalize safe values and enforce bound
 
   assert.deepEqual(
     parseAssistantMessageInput({ content: "  How do proposals work?  " }),
-    { content: "How do proposals work?" },
+    { content: "How do proposals work?", uiContext: null },
   );
   assert.throws(
     () => parseAssistantMessageInput({ content: "   " }),
@@ -231,6 +232,60 @@ test("thread and message input contracts normalize safe values and enforce bound
   assert.throws(
     () => parseAssistantMessageInput({ content: "x".repeat(ASSISTANT_MESSAGE_MAX_LENGTH + 1) }),
     (error) => error.code === "ASSISTANT_MESSAGE_TOO_LARGE" && error.status === 413,
+  );
+});
+
+test("assistant UI context is bounded, allowlisted, and safe for stale field keys", () => {
+  assert.deepEqual(
+    parseAssistantUiContext({
+      schemaVersion: "assistant-ui-context.v1",
+      routeCategory: "proposal_creation",
+      workflow: "proposal_intake",
+      sectionId: "event_overview",
+      fieldKey: "/content/event/sacredConstraints",
+      eventFormat: "hybrid",
+      roomIdentifier: "room:2",
+      ignoredPrivateForm: { client: "must not pass through" },
+    }),
+    {
+      schemaVersion: "assistant-ui-context.v1",
+      routeCategory: "proposal_creation",
+      workflow: "proposal_intake",
+      sectionId: "event_overview",
+      fieldKey: "/content/event/sacredConstraints",
+      fieldKeyStatus: "valid",
+      eventFormat: "hybrid",
+      roomIdentifier: "room:2",
+    },
+  );
+  assert.deepEqual(
+    parseAssistantUiContext({
+      schemaVersion: "assistant-ui-context.v1",
+      routeCategory: "proposal_creation",
+      fieldKey: "/content/event/renamedField",
+    }),
+    {
+      schemaVersion: "assistant-ui-context.v1",
+      routeCategory: "proposal_creation",
+      fieldKeyStatus: "unknown",
+    },
+  );
+  assert.throws(
+    () =>
+      parseAssistantUiContext({
+        schemaVersion: "assistant-ui-context.v1",
+        routeCategory: "/proposals?client=private",
+      }),
+    (error) => error.code === "INVALID_ASSISTANT_UI_CONTEXT",
+  );
+  assert.throws(
+    () =>
+      parseAssistantUiContext({
+        schemaVersion: "assistant-ui-context.v1",
+        routeCategory: "proposal_creation",
+        roomIdentifier: "private room name with spaces",
+      }),
+    (error) => error.code === "INVALID_ASSISTANT_UI_CONTEXT",
   );
 });
 

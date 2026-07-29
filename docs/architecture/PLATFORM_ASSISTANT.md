@@ -28,7 +28,8 @@ routes and OpenAI/PostgreSQL/Redis implementations remain adapters.
 6. A user message and pending assistant placeholder are persisted
    idempotently.
 7. The prompt builder combines bounded conversation history, versioned
-   platform facts, and eligible approved `operating_guidance`. Normal
+   platform facts, an optional bounded product-generated UI context, and
+   eligible approved `operating_guidance`. Normal
    follow-ups select facts from the immediate prior user turn; context-only
    follow-ups walk backward only to the nearest standalone platform topic;
    explicit summaries and “links/pages mentioned” requests use the bounded
@@ -53,6 +54,23 @@ routes and OpenAI/PostgreSQL/Redis implementations remain adapters.
 
 The browser never receives provider credentials, prompts, provider-native
 events, or unrestricted conversation history.
+
+### Bounded UI context
+
+Message requests may include `assistant-ui-context.v1`. The server accepts
+only:
+
+- a route category, never a raw URL;
+- an approved workflow and ten-section form identifier;
+- a canonical field key that exists in the authoritative field registry;
+- an event-format enum;
+- a short opaque room identifier.
+
+Unknown field keys are removed and marked unknown so the Assistant asks for
+clarification. Invalid route, workflow, section, format, or room values reject
+the request. Extra object properties are ignored. The context contains no
+proposal values and grants no proposal access; it only selects relevant
+read-only guidance.
 
 ## Persistence and isolation
 

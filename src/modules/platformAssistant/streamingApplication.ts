@@ -11,7 +11,10 @@ import {
   type AssistantMessage,
   type PlatformAssistantContext,
 } from "./domain";
-import { platformFactsForConversation } from "./platformKnowledge";
+import {
+  platformFactsForConversation,
+  platformFactsForUiContext,
+} from "./platformKnowledge";
 import {
   buildAssistantPromptInput,
   normalizeConversationalAssistantResponse,
@@ -122,7 +125,7 @@ export const createPlatformAssistantStreamingApplication = (
   ): Promise<StreamAssistantGuidanceResult> {
     assertPlatformAssistantOrganizationAvailable(context.organizationMongoId);
     const threadId = parseAssistantThreadId(input.threadId);
-    const { content } = parseAssistantMessageInput(input.body);
+    const { content, uiContext } = parseAssistantMessageInput(input.body);
     const idempotencyKey = parseAssistantIdempotencyKey(input.idempotencyKey);
     const accepted = await repository.appendUserMessage({
       ...context,
@@ -277,12 +280,16 @@ export const createPlatformAssistantStreamingApplication = (
       const prompt = buildAssistantPromptInput({
         userMessage: accepted.message,
         history: detail.messages,
-        platformFacts: platformFactsForConversation(
-          accepted.message.content,
-          detail.messages,
-          accepted.message.id,
-        ),
+        platformFacts: [
+          ...platformFactsForUiContext(uiContext),
+          ...platformFactsForConversation(
+            accepted.message.content,
+            detail.messages,
+            accepted.message.id,
+          ),
+        ],
         operatingGuidance: knowledge.evidence,
+        uiContext,
       });
       const completeValidationFallback = async () => {
         let validated;

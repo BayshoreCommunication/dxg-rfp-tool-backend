@@ -13,7 +13,10 @@ import {
   parseCreateAssistantThreadInput,
   type PlatformAssistantContext,
 } from "./domain";
-import { platformFactsForConversation } from "./platformKnowledge";
+import {
+  platformFactsForConversation,
+  platformFactsForUiContext,
+} from "./platformKnowledge";
 import {
   buildAssistantPromptInput,
   validateAssistantProviderResponse,
@@ -112,7 +115,7 @@ export const createPlatformAssistantApplication = (
       );
     }
     const threadId = parseAssistantThreadId(input.threadId);
-    const { content } = parseAssistantMessageInput(input.body);
+    const { content, uiContext } = parseAssistantMessageInput(input.body);
     const idempotencyKey = parseAssistantIdempotencyKey(input.idempotencyKey);
     const accepted = await repository.appendUserMessage({
       ...context,
@@ -167,12 +170,16 @@ export const createPlatformAssistantApplication = (
       const prompt = buildAssistantPromptInput({
         userMessage: accepted.message,
         history: detail.messages,
-        platformFacts: platformFactsForConversation(
-          accepted.message.content,
-          detail.messages,
-          accepted.message.id,
-        ),
+        platformFacts: [
+          ...platformFactsForUiContext(uiContext),
+          ...platformFactsForConversation(
+            accepted.message.content,
+            detail.messages,
+            accepted.message.id,
+          ),
+        ],
         operatingGuidance: knowledge.evidence,
+        uiContext,
       });
       const generated = await guidanceDependencies.responseProvider.generate(prompt);
       const validated = validateAssistantProviderResponse(
