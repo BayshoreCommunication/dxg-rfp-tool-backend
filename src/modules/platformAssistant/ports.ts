@@ -9,6 +9,7 @@ import type {
   AssistantThreadDetail,
   PlatformAssistantContext,
 } from "./domain";
+import type { AssistantIntentClassification } from "./intentRouter";
 
 export type CreateAssistantThreadResult = {
   created: boolean;
@@ -141,6 +142,7 @@ export interface PlatformAssistantRepository {
       idempotencyKey: string;
       content?: string;
       status?: Extract<AssistantMessageStatus, "pending" | "complete">;
+      intent?: AssistantIntentClassification;
     },
   ): Promise<AppendAssistantMessageResult>;
 
@@ -156,6 +158,7 @@ export interface PlatformAssistantRepository {
       inputTokens?: number | null;
       outputTokens?: number | null;
       safeErrorCode?: string | null;
+      intent?: AssistantIntentClassification;
     },
   ): Promise<AssistantMessage>;
 }

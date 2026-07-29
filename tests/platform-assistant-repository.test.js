@@ -63,6 +63,30 @@ test("migration creates tenant-isolated assistant storage and widens the attempt
   assert.ok(down.includes("DROP TABLE IF EXISTS rfpilot.assistant_threads"));
 });
 
+test("intent migration stores bounded privacy-safe routing metadata", () => {
+  const up = fs.readFileSync(
+    path.join(root, "migrations/postgres/027_platform_assistant_intent.up.sql"),
+    "utf8",
+  );
+  const down = fs.readFileSync(
+    path.join(root, "migrations/postgres/027_platform_assistant_intent.down.sql"),
+    "utf8",
+  );
+  for (const required of [
+    "ADD COLUMN intent text",
+    "ADD COLUMN intent_version text",
+    "ADD COLUMN intent_source text",
+    "ADD COLUMN intent_confidence text",
+    "assistant_messages_intent_metadata_complete_check",
+    "assistant_messages_intent_created_idx",
+    "WHERE role = 'assistant' AND intent IS NOT NULL",
+  ]) {
+    assert.ok(up.includes(required), required);
+  }
+  assert.equal(up.includes("content"), false);
+  assert.ok(down.includes("DROP COLUMN IF EXISTS intent"));
+});
+
 test("application rejects an organization outside the production cohort before persistence", async () => {
   let repositoryCalled = false;
   const application = createPlatformAssistantApplication({

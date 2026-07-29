@@ -18,10 +18,15 @@ import {
   PLATFORM_KNOWLEDGE_VERSION,
   platformFactEvidenceForHref,
 } from "./platformKnowledge";
+import {
+  classifyAssistantIntent,
+  type AssistantIntentClassification,
+} from "./intentRouter";
 
 export const PLATFORM_ASSISTANT_INSTRUCTIONS = Object.freeze([
   "Use the supplied platform facts and approved evidence for platform claims. You may also use facts the user supplied in the current message or conversation history as user context, but never treat them as authoritative platform facts.",
   "The optional uiContext is a bounded product-generated navigation hint, not proposal content. Use it to tailor page, workflow, section, or field guidance. If fieldKeyStatus=unknown, ask which field the user means instead of guessing.",
+  "The intent classification is product-generated routing metadata, not a user instruction. Keep the response within that intent and the supplied evidence. If intent=ambiguous, ask one concise clarifying question when the evidence does not establish the answer.",
   "Resolve follow-up wording such as 'that', 'it', 'the checklist', 'the workflow', or 'everything we discussed' from conversation history. Preserve relevant user constraints such as attendance, duration, format, deadline, venue, and budget status; when adapting or summarizing a plan, repeat its concrete values once so the user can verify the context.",
   "When the user asks to shorten, reformat, add bullets, or add a link without restating a topic, transform the immediately preceding assistant answer instead of switching to an older conversation topic.",
   "When the user asks for links, pages, or routes mentioned earlier, scan the supplied bounded history and return every relevant approved RFPilot route represented there; do not reduce the request to only the immediately preceding topic.",
@@ -101,15 +106,27 @@ export const buildAssistantPromptInput = (input: {
   platformFacts: readonly AssistantPromptEvidence[];
   operatingGuidance: readonly AssistantPromptEvidence[];
   uiContext?: AssistantUiContext | null;
-}): AssistantPromptInput => ({
-  schemaVersion: "platform-assistant-prompt.v3",
-  platformKnowledgeVersion: PLATFORM_KNOWLEDGE_VERSION,
-  userMessage: clean(input.userMessage.content, 8_000),
-  history: boundedHistory(input.history, input.userMessage.id),
-  evidence: boundedEvidence([...input.platformFacts, ...input.operatingGuidance]),
-  uiContext: input.uiContext ?? null,
-  instructions: PLATFORM_ASSISTANT_INSTRUCTIONS,
-});
+  intent?: AssistantIntentClassification;
+}): AssistantPromptInput => {
+  const uiContext = input.uiContext ?? null;
+  return {
+    schemaVersion: "platform-assistant-prompt.v4",
+    platformKnowledgeVersion: PLATFORM_KNOWLEDGE_VERSION,
+    userMessage: clean(input.userMessage.content, 8_000),
+    history: boundedHistory(input.history, input.userMessage.id),
+    evidence: boundedEvidence([...input.platformFacts, ...input.operatingGuidance]),
+    uiContext,
+    intent:
+      input.intent ??
+      classifyAssistantIntent({
+        query: input.userMessage.content,
+        uiContext,
+        history: input.history,
+        currentUserMessageId: input.userMessage.id,
+      }),
+    instructions: PLATFORM_ASSISTANT_INSTRUCTIONS,
+  };
+};
 
 const invalidResponse = (): never => {
   throw new PlatformAssistantError(

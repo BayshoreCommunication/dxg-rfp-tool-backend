@@ -9,6 +9,7 @@ import {
   parseAssistantThreadId,
   type AssistantKnowledgeStatus,
   type AssistantMessage,
+  type AssistantPromptEvidence,
   type PlatformAssistantContext,
 } from "./domain";
 import {
@@ -21,6 +22,11 @@ import {
   validateAssistantProviderResponse,
 } from "./prompt";
 import { deterministicAssistantProvider } from "./deterministicAssistantProvider";
+import {
+  classifyAssistantIntent,
+  evidenceAllowedForIntent,
+  intentUsesOperatingGuidance,
+} from "./intentRouter";
 import type {
   AssistantKnowledgeSource,
   AssistantResponseProvider,
@@ -133,6 +139,10 @@ export const createPlatformAssistantStreamingApplication = (
       content,
       idempotencyKey,
     });
+    const preliminaryIntent = classifyAssistantIntent({
+      query: accepted.message.content,
+      uiContext,
+    });
     const responseIdempotencyKey =
       input.responseIdempotencyKey === undefined
         ? `assistant-response:${accepted.message.id}`
@@ -142,6 +152,7 @@ export const createPlatformAssistantStreamingApplication = (
       threadId,
       idempotencyKey: responseIdempotencyKey,
       status: "pending",
+      intent: preliminaryIntent,
     });
 
     await input.emit({
@@ -189,18 +200,27 @@ export const createPlatformAssistantStreamingApplication = (
       };
     }
 
-    let knowledge;
-    try {
-      knowledge = await dependencies.knowledgeSource.retrieve({
-        ...context,
-        query: accepted.message.content,
-        limit: ASSISTANT_KNOWLEDGE_MAX_RESULTS,
-        idempotencyKey: `assistant-knowledge:${placeholder.message.id}`,
-      });
-    } catch (error) {
-      knowledge = unavailableKnowledge(error);
+    let knowledge: {
+      status: AssistantKnowledgeStatus;
+      evidence: AssistantPromptEvidence[];
+    } = {
+      status: { state: "not_requested" as const },
+      evidence: [],
+    };
+    if (intentUsesOperatingGuidance(preliminaryIntent.intent)) {
+      try {
+        knowledge = await dependencies.knowledgeSource.retrieve({
+          ...context,
+          query: accepted.message.content,
+          limit: ASSISTANT_KNOWLEDGE_MAX_RESULTS,
+          idempotencyKey: `assistant-knowledge:${placeholder.message.id}`,
+        });
+      } catch (error) {
+        knowledge = unavailableKnowledge(error);
+      }
     }
 
+    let intent = preliminaryIntent;
     let assistantMessage = placeholder.message;
     let accumulated = "";
     let providerResponseId: string | null = null;
@@ -233,6 +253,7 @@ export const createPlatformAssistantStreamingApplication = (
           providerResponseId,
           model: effectiveModel,
           safeErrorCode: code,
+          intent,
         });
       } catch {
         // Preserve the safe stream failure even if terminal persistence is
@@ -277,6 +298,12 @@ export const createPlatformAssistantStreamingApplication = (
         messageLimit: ASSISTANT_MESSAGE_LIST_MAX_LIMIT,
         beforeOrdinal: null,
       });
+      intent = classifyAssistantIntent({
+        query: accepted.message.content,
+        uiContext,
+        history: detail.messages,
+        currentUserMessageId: accepted.message.id,
+      });
       const prompt = buildAssistantPromptInput({
         userMessage: accepted.message,
         history: detail.messages,
@@ -287,9 +314,12 @@ export const createPlatformAssistantStreamingApplication = (
             detail.messages,
             accepted.message.id,
           ),
-        ],
-        operatingGuidance: knowledge.evidence,
+        ].filter((item) => evidenceAllowedForIntent(item.id, intent.intent)),
+        operatingGuidance: intentUsesOperatingGuidance(intent.intent)
+          ? knowledge.evidence
+          : [],
         uiContext,
+        intent,
       });
       const completeValidationFallback = async () => {
         let validated;
@@ -333,6 +363,7 @@ export const createPlatformAssistantStreamingApplication = (
             content: "",
             providerResponseId,
             model: effectiveModel,
+            intent,
           });
           streamingPersisted = true;
         }
@@ -356,6 +387,7 @@ export const createPlatformAssistantStreamingApplication = (
           citations: validated.citations,
           providerResponseId,
           model: effectiveModel,
+          intent,
         });
         await input.emit({
           type: "response.completed",
@@ -399,6 +431,7 @@ export const createPlatformAssistantStreamingApplication = (
               content: "",
               providerResponseId,
               model: effectiveModel,
+              intent,
             });
             streamingPersisted = true;
           }
@@ -459,6 +492,7 @@ export const createPlatformAssistantStreamingApplication = (
           model: effectiveModel,
           inputTokens: event.usage.inputTokens,
           outputTokens: event.usage.outputTokens,
+          intent,
         });
         await input.emit({
           type: "response.completed",

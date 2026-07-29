@@ -323,7 +323,8 @@ test("prompt builder bounds history and labels retrieved guidance as untrusted",
     operatingGuidance: guidance,
   });
 
-  assert.equal(prompt.schemaVersion, "platform-assistant-prompt.v3");
+  assert.equal(prompt.schemaVersion, "platform-assistant-prompt.v4");
+  assert.equal(prompt.intent.intent, "event_planning");
   assert.equal(prompt.uiContext, null);
   assert.ok(prompt.history.length <= 30);
   assert.ok(

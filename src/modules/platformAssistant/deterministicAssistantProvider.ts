@@ -169,6 +169,34 @@ export class DeterministicAssistantProvider implements AssistantResponseProvider
       }
     }
 
+    if (input.intent.intent === "form_field_help") {
+      const fieldEvidence = input.evidence.find((item) =>
+        item.id.startsWith("form-field:"),
+      );
+      if (fieldEvidence) {
+        return result(
+          "answer",
+          `**${fieldEvidence.title}**\n\n${fieldEvidence.content}`,
+          [fieldEvidence.id],
+        );
+      }
+      return result(
+        "clarification",
+        "Which proposal field would you like help with? Open that field in the guided proposal form, then ask again so I can use the exact field context.",
+        idsPresent(input.evidence, [
+          "platform:proposal:guided-intake",
+          "platform:navigation:create-proposal",
+        ]),
+      );
+    }
+
+    if (input.intent.intent === "unsupported_or_off_topic") {
+      return result(
+        "abstention",
+        "I’m focused on RFPilot navigation, proposal workflows, proposal fields, and event-planning guidance. Ask me about one of those areas and I’ll help.",
+      );
+    }
+
     if (
       /\b(?:what(?:'s| is) missing|status|review|summari[sz]e|look at)\b.*\b(?:my|this)\s+proposal\b/i.test(
         normalized,

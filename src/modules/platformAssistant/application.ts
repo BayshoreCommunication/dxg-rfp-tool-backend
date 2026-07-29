@@ -11,6 +11,8 @@ import {
   parseAssistantMessageInput,
   parseAssistantThreadId,
   parseCreateAssistantThreadInput,
+  type AssistantKnowledgeStatus,
+  type AssistantPromptEvidence,
   type PlatformAssistantContext,
 } from "./domain";
 import {
@@ -21,6 +23,11 @@ import {
   buildAssistantPromptInput,
   validateAssistantProviderResponse,
 } from "./prompt";
+import {
+  classifyAssistantIntent,
+  evidenceAllowedForIntent,
+  intentUsesOperatingGuidance,
+} from "./intentRouter";
 import type {
   GenerateAssistantGuidanceResult,
   PlatformAssistantGuidanceDependencies,
@@ -123,12 +130,17 @@ export const createPlatformAssistantApplication = (
       content,
       idempotencyKey,
     });
+    const preliminaryIntent = classifyAssistantIntent({
+      query: accepted.message.content,
+      uiContext,
+    });
     const responseIdempotencyKey = `assistant-response:${accepted.message.id}`;
     const placeholder = await repository.createAssistantMessage({
       ...context,
       threadId,
       idempotencyKey: responseIdempotencyKey,
       status: "pending",
+      intent: preliminaryIntent,
     });
     if (!placeholder.created) {
       return {
@@ -138,28 +150,37 @@ export const createPlatformAssistantApplication = (
       };
     }
 
-    let knowledge;
-    try {
-      knowledge = await guidanceDependencies.knowledgeSource.retrieve({
-        ...context,
-        query: accepted.message.content,
-        limit: ASSISTANT_KNOWLEDGE_MAX_RESULTS,
-        idempotencyKey: `assistant-knowledge:${placeholder.message.id}`,
-      });
-    } catch (error) {
-      knowledge = {
-        status: {
-          state: "unavailable" as const,
-          safeCode: "ASSISTANT_KNOWLEDGE_UNAVAILABLE" as const,
-          diagnosticCode:
-            error && typeof error === "object" && "code" in error
-              ? String((error as { code?: unknown }).code || "KNOWLEDGE_SOURCE_FAILED")
-              : "KNOWLEDGE_SOURCE_FAILED",
-        },
-        evidence: [],
-      };
+    let knowledge: {
+      status: AssistantKnowledgeStatus;
+      evidence: AssistantPromptEvidence[];
+    } = {
+      status: { state: "not_requested" as const },
+      evidence: [],
+    };
+    if (intentUsesOperatingGuidance(preliminaryIntent.intent)) {
+      try {
+        knowledge = await guidanceDependencies.knowledgeSource.retrieve({
+          ...context,
+          query: accepted.message.content,
+          limit: ASSISTANT_KNOWLEDGE_MAX_RESULTS,
+          idempotencyKey: `assistant-knowledge:${placeholder.message.id}`,
+        });
+      } catch (error) {
+        knowledge = {
+          status: {
+            state: "unavailable" as const,
+            safeCode: "ASSISTANT_KNOWLEDGE_UNAVAILABLE" as const,
+            diagnosticCode:
+              error && typeof error === "object" && "code" in error
+                ? String((error as { code?: unknown }).code || "KNOWLEDGE_SOURCE_FAILED")
+                : "KNOWLEDGE_SOURCE_FAILED",
+          },
+          evidence: [],
+        };
+      }
     }
 
+    let selectedIntent = preliminaryIntent;
     try {
       const detail = await repository.getThread({
         ...context,
@@ -167,6 +188,13 @@ export const createPlatformAssistantApplication = (
         messageLimit: ASSISTANT_MESSAGE_LIST_MAX_LIMIT,
         beforeOrdinal: null,
       });
+      const intent = classifyAssistantIntent({
+        query: accepted.message.content,
+        uiContext,
+        history: detail.messages,
+        currentUserMessageId: accepted.message.id,
+      });
+      selectedIntent = intent;
       const prompt = buildAssistantPromptInput({
         userMessage: accepted.message,
         history: detail.messages,
@@ -177,9 +205,12 @@ export const createPlatformAssistantApplication = (
             detail.messages,
             accepted.message.id,
           ),
-        ],
-        operatingGuidance: knowledge.evidence,
+        ].filter((item) => evidenceAllowedForIntent(item.id, intent.intent)),
+        operatingGuidance: intentUsesOperatingGuidance(intent.intent)
+          ? knowledge.evidence
+          : [],
         uiContext,
+        intent,
       });
       const generated = await guidanceDependencies.responseProvider.generate(prompt);
       const validated = validateAssistantProviderResponse(
@@ -194,6 +225,7 @@ export const createPlatformAssistantApplication = (
         content: validated.content,
         citations: validated.citations,
         model: guidanceDependencies.responseProvider.model,
+        intent,
       });
       return {
         userMessage: accepted.message,
@@ -214,6 +246,7 @@ export const createPlatformAssistantApplication = (
           content: "",
           model: guidanceDependencies.responseProvider.model,
           safeErrorCode: safeCode,
+          intent: selectedIntent,
         });
       } catch {
         // Preserve the original generation or validation failure.

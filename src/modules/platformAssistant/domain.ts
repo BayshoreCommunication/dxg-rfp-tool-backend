@@ -3,6 +3,11 @@ import {
   aiRuntimeAuthorized,
 } from "../../../config/aiEnvironment";
 import { proposalFormGuidanceForField } from "./proposalFormGuidance";
+import type {
+  AssistantIntent,
+  AssistantIntentClassification,
+  AssistantIntentSource,
+} from "./intentRouter";
 
 export const ASSISTANT_THREAD_TITLE_MAX_LENGTH = 200;
 export const ASSISTANT_MESSAGE_MAX_LENGTH = 8_000;
@@ -121,6 +126,10 @@ export type AssistantMessage = {
   inputTokens: number | null;
   outputTokens: number | null;
   safeErrorCode: string | null;
+  intent: AssistantIntent | null;
+  intentVersion: string | null;
+  intentSource: AssistantIntentSource | null;
+  intentConfidence: AssistantIntentClassification["confidence"] | null;
   citations: AssistantCitation[];
   createdAt: string;
   updatedAt: string;
@@ -149,12 +158,13 @@ export type AssistantPromptMessage = {
 };
 
 export type AssistantPromptInput = {
-  schemaVersion: "platform-assistant-prompt.v3";
+  schemaVersion: "platform-assistant-prompt.v4";
   platformKnowledgeVersion: string;
   userMessage: string;
   history: AssistantPromptMessage[];
   evidence: AssistantPromptEvidence[];
   uiContext: AssistantUiContext | null;
+  intent: AssistantIntentClassification;
   instructions: readonly string[];
 };
 

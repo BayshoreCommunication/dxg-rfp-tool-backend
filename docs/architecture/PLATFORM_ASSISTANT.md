@@ -25,29 +25,35 @@ routes and OpenAI/PostgreSQL/Redis implementations remain adapters.
 4. Thread and message access is scoped to both organization and owning user.
 5. The Assistant kill switch blocks new messages while preserving allowed
    organizations' read-only history access.
-6. A user message and pending assistant placeholder are persisted
-   idempotently.
-7. The prompt builder combines bounded conversation history, versioned
+6. A deterministic-first, versioned intent router classifies obvious requests
+   locally. UI context and completed assistant-message intent metadata preserve
+   field help and short follow-ups without a second model call.
+7. A user message and pending assistant placeholder are persisted
+   idempotently. The assistant row stores only bounded intent metadata, never a
+   duplicate of the raw prompt.
+8. Intent constrains platform facts and whether approved operating guidance is
+   retrieved. Unrelated evidence is removed before prompt construction.
+9. The prompt builder combines bounded conversation history, versioned
    platform facts, an optional bounded product-generated UI context, and
    eligible approved `operating_guidance`. Normal
    follow-ups select facts from the immediate prior user turn; context-only
    follow-ups walk backward only to the nearest standalone platform topic;
    explicit summaries and “links/pages mentioned” requests use the bounded
    full user history.
-8. Approved knowledge is labelled as untrusted evidence. It cannot supply
+10. Approved knowledge is labelled as untrusted evidence. It cannot supply
    instructions, permissions, tools, or links outside the supplied evidence
    contract.
-9. The OpenAI adapter uses `store: false`, strict structured output, bounded
+11. The OpenAI adapter uses `store: false`, strict structured output, bounded
    tokens, an HMAC-derived safety identifier, and an attempt row committed
    before every possibly billable call.
-10. The controller emits only versioned product SSE events:
+12. The controller emits only versioned product SSE events:
    `message.accepted`, `response.started`, `response.delta`,
    `response.completed`, and `response.failed`.
-11. Provider output is completed only after response kind, citation IDs, and
+13. Provider output is completed only after response kind, citation IDs, and
    links validate. Links must resolve to the code-reviewed internal platform
    map; when an approved route is safely reused from conversation history, its
    trusted route fact is attached to the completed message automatically.
-12. If structured provider output is invalid, the failed provider attempt
+14. If structured provider output is invalid, the failed provider attempt
     remains ledgered and the application reconciles the visible draft to a
     grounded deterministic completion. Genuine transport failures after a
     delta remain interrupted and retryable.
@@ -87,6 +93,28 @@ Migration `026_platform_assistant` owns:
 PostgreSQL is authoritative for conversation history. Repository predicates
 add same-organization owner checks on top of RLS, so another user in the same
 organization cannot read or mutate a personal thread.
+
+Migration `027_platform_assistant_intent` adds the selected intent, router
+version, source, and confidence to assistant messages. A database constraint
+requires all four values together, and the organization-scoped index supports
+privacy-safe quality aggregation without storing raw conversation data in
+analytics.
+
+### Deterministic-first intent routing
+
+`intentRouter.ts` owns the initial versioned taxonomy. High-confidence
+greetings, navigation, proposal workflow, field help, proposal-specific,
+equipment, budget, historical-reference, action, and unsupported requests are
+classified without a provider call. Short follow-ups inherit only a completed
+assistant turn's prior intent; otherwise they remain `ambiguous`.
+
+The selected intent is product metadata, not an instruction. It:
+
+- limits trusted platform evidence to approved ID prefixes;
+- skips operating-guidance retrieval when the intent does not need it;
+- is included in the private provider payload and provider metadata;
+- is reclassified from bounded history before final persistence;
+- does not grant proposal access or enable any mutation.
 
 ## Knowledge extension
 

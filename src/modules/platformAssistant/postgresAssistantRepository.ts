@@ -12,6 +12,11 @@ import {
   type AssistantThreadStatus,
   type PlatformAssistantContext,
 } from "./domain";
+import type {
+  AssistantIntent,
+  AssistantIntentClassification,
+  AssistantIntentSource,
+} from "./intentRouter";
 import type { PlatformAssistantRepository } from "./ports";
 
 type ThreadRow = {
@@ -38,6 +43,10 @@ type MessageRow = {
   input_tokens: number | null;
   output_tokens: number | null;
   safe_error_code: string | null;
+  intent: AssistantIntent | null;
+  intent_version: string | null;
+  intent_source: AssistantIntentSource | null;
+  intent_confidence: AssistantIntentClassification["confidence"] | null;
   citations: unknown;
   created_at: Date | string;
   updated_at: Date | string;
@@ -85,6 +94,10 @@ const mapMessage = (row: MessageRow): AssistantMessage => ({
   inputTokens: row.input_tokens === null ? null : Number(row.input_tokens),
   outputTokens: row.output_tokens === null ? null : Number(row.output_tokens),
   safeErrorCode: row.safe_error_code,
+  intent: row.intent,
+  intentVersion: row.intent_version,
+  intentSource: row.intent_source,
+  intentConfidence: row.intent_confidence,
   citations: Array.isArray(row.citations)
     ? row.citations.flatMap((item) => {
         const citation = mapCitation(item);
@@ -205,6 +218,7 @@ const appendMessage = async (
     content: string;
     status: AssistantMessageStatus;
     idempotencyKey: string;
+    intent?: AssistantIntentClassification;
   },
 ): Promise<{ created: boolean; message: AssistantMessage }> => {
   const existing = await client.query<MessageRow>(
@@ -214,7 +228,10 @@ const appendMessage = async (
   );
   if (existing.rows[0]) {
     const row = existing.rows[0];
-    if (row.role !== input.role || (input.role === "user" && row.content !== input.content)) {
+    if (
+      row.role !== input.role ||
+      (input.role === "user" && row.content !== input.content)
+    ) {
       throw new PlatformAssistantError(
         "ASSISTANT_IDEMPOTENCY_CONFLICT",
         "The idempotency key was already used for a different assistant request.",
@@ -228,8 +245,8 @@ const appendMessage = async (
   const inserted = await client.query<MessageRow>(
     `INSERT INTO rfpilot.assistant_messages(
        id,organization_id,thread_id,ordinal,role,content,status,idempotency_key,
-       actor_external_user_id
-     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       actor_external_user_id,intent,intent_version,intent_source,intent_confidence
+     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      RETURNING *`,
     [
       uuidv7(),
@@ -241,6 +258,10 @@ const appendMessage = async (
       input.status,
       input.idempotencyKey,
       input.role === "user" ? input.actorUserMongoId : null,
+      input.intent?.intent ?? null,
+      input.intent?.version ?? null,
+      input.intent?.source ?? null,
+      input.intent?.confidence ?? null,
     ],
   );
   await client.query(
@@ -256,7 +277,18 @@ const appendMessage = async (
     targetType: "assistant_message",
     targetId: inserted.rows[0].id,
     correlationId: input.correlationId,
-    metadata: { role: input.role, threadId: input.thread.id },
+    metadata: {
+      role: input.role,
+      threadId: input.thread.id,
+      ...(input.intent
+        ? {
+            intent: input.intent.intent,
+            intentVersion: input.intent.version,
+            intentSource: input.intent.source,
+            intentConfidence: input.intent.confidence,
+          }
+        : {}),
+    },
   });
   return { created: true, message: mapMessage(inserted.rows[0]) };
 };
@@ -457,7 +489,11 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
         `UPDATE rfpilot.assistant_messages
          SET status=$2,content=$3,citations=$4::jsonb,provider_response_id=$5,
              model=$6,input_tokens=$7,output_tokens=$8,safe_error_code=$9,
-             completed_at=CASE WHEN $10 THEN COALESCE(completed_at,now()) ELSE NULL END,
+             intent=COALESCE($10,intent),
+             intent_version=COALESCE($11,intent_version),
+             intent_source=COALESCE($12,intent_source),
+             intent_confidence=COALESCE($13,intent_confidence),
+             completed_at=CASE WHEN $14 THEN COALESCE(completed_at,now()) ELSE NULL END,
              updated_at=now()
          WHERE id=$1
          RETURNING *`,
@@ -471,6 +507,10 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
           input.inputTokens ?? null,
           input.outputTokens ?? null,
           input.safeErrorCode ?? null,
+          input.intent?.intent ?? null,
+          input.intent?.version ?? null,
+          input.intent?.source ?? null,
+          input.intent?.confidence ?? null,
           terminal,
         ],
       );

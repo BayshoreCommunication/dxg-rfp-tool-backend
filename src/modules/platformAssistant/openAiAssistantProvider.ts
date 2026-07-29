@@ -97,6 +97,7 @@ const promptPayload = (input: AssistantPromptInput): string =>
     history: input.history,
     evidence: input.evidence,
     uiContext: input.uiContext,
+    intent: input.intent,
   });
 
 export const assistantSafetyIdentifier = (
@@ -205,6 +206,8 @@ const requestFor = (
       feature: "platform_assistant",
       prompt_version: input.schemaVersion,
       knowledge_version: input.platformKnowledgeVersion,
+      intent: input.intent.intent,
+      intent_version: input.intent.version,
     },
   };
 };

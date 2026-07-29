@@ -14,8 +14,8 @@ const context = {
 };
 
 const prompt = {
-  schemaVersion: "platform-assistant-prompt.v2",
-  platformKnowledgeVersion: "rfpilot-platform-map.v3",
+  schemaVersion: "platform-assistant-prompt.v4",
+  platformKnowledgeVersion: "rfpilot-platform-map.v4",
   userMessage: "Where are proposals?",
   history: [],
   evidence: [
@@ -28,6 +28,13 @@ const prompt = {
       href: "/proposals",
     },
   ],
+  uiContext: null,
+  intent: {
+    intent: "platform_navigation",
+    version: "assistant-intent-router.v1",
+    source: "deterministic",
+    confidence: "high",
+  },
   instructions: [
     "Answer from supplied evidence.",
     "Return the required structured output.",
