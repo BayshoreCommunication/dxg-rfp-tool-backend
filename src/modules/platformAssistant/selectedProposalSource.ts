@@ -17,6 +17,8 @@ const MAX_PROPOSAL_CANDIDATES = 500;
 const SAFE_PROPOSAL_FIELDS = [
   "status",
   "isDraft",
+  "isActive",
+  "isCopy",
   "version",
   "event",
   "venueSchedule",
@@ -30,6 +32,10 @@ const SAFE_PROPOSAL_FIELDS = [
 ].join(" ");
 
 type ProposalCandidate = Record<string, unknown> & {
+  status?: unknown;
+  isDraft?: unknown;
+  isActive?: unknown;
+  isCopy?: unknown;
   event?: { eventName?: unknown };
 };
 
@@ -64,9 +70,23 @@ const matchingCandidates = (
   const longestName = Math.max(
     ...matches.map((proposal) => normalize(proposalName(proposal)).length),
   );
-  return matches.filter(
+  const longestMatches = matches.filter(
     (proposal) => normalize(proposalName(proposal)).length === longestName,
   );
+  const distinctNames = new Set(
+    longestMatches.map((proposal) => normalize(proposalName(proposal))),
+  );
+  if (distinctNames.size !== 1) return longestMatches;
+
+  const activeSubmittedMatches = longestMatches.filter(
+    (proposal) =>
+      proposal.status === "submitted" &&
+      proposal.isDraft !== true &&
+      proposal.isActive !== false,
+  );
+  return activeSubmittedMatches.length === 1
+    ? activeSubmittedMatches
+    : longestMatches;
 };
 
 const proposalEvidence = (
@@ -185,6 +205,7 @@ export const mongoAssistantProposalContextSource =
     Proposal.find({
       userId: context.actorUserMongoId,
       isArchived: { $ne: true },
+      isCopy: { $ne: true },
       $or: [
         { organizationId: context.organizationMongoId },
         { organizationId: { $exists: false } },

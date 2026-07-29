@@ -90,6 +90,29 @@ test("does not guess when duplicate owned proposals have the same title", async 
   assert.equal(result.evidence.length, 0);
 });
 
+test("prefers the only active submitted proposal when duplicate titles exist", async () => {
+  const source = createAssistantProposalContextSource(async () => [
+    proposal("Northstar Leadership Summit 2026"),
+    proposal("Northstar Leadership Summit 2026", {
+      status: "submitted",
+      isDraft: false,
+      isActive: true,
+      version: 8,
+    }),
+    proposal("Northstar Leadership Summit 2026", { version: 7 }),
+  ]);
+
+  const result = await source.resolve({
+    ...context,
+    query: "Northstar Leadership Summit 2026",
+    recentUserMessages: [],
+  });
+
+  assert.equal(result.state, "matched");
+  assert.equal(result.proposalName, "Northstar Leadership Summit 2026");
+  assert.match(result.evidence[0].content, /"proposalVersion":8/);
+});
+
 test("keeps the matched proposal available for a follow-up turn", async () => {
   const source = createAssistantProposalContextSource(async () => [
     proposal("Momentum 2027 Sales Kickoff"),
