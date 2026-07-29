@@ -49,6 +49,9 @@ Content-free operational telemetry: [Observability](./OBSERVABILITY.md).
 Read-only platform guidance and personal Assistant history:
 [Platform AI Assistant](./PLATFORM_ASSISTANT.md).
 
+Deterministic proposal equipment and dependency review:
+[Scope guidance](./SCOPE_GUIDANCE.md).
+
 Controlled enablement and recovery:
 [Platform Assistant rollout](../runbooks/PLATFORM_ASSISTANT_ROLLOUT.md).
 

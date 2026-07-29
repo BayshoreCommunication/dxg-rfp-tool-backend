@@ -39,5 +39,6 @@ Evidence includes only the field path, presence/conflict state, and short
 scalar values when safe. Contact values and arbitrary long proposal text are
 not copied into the summary. Audit metadata remains content-free.
 
-Equipment dependency, room/session conflict, and budget calculation rules are
-separate later phases and must remain deterministic.
+Equipment and scope dependency checks are supplied by the separately versioned
+[`scope-guidance.v1`](./SCOPE_GUIDANCE.md) registry. Room/session analysis and
+budget calculation remain separate later phases and must remain deterministic.

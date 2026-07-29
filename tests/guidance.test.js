@@ -80,7 +80,6 @@ test("objective missing and conditional information becomes deterministic questi
     "ATTENDEE_COUNT_MISSING",
     "STREAMING_PLATFORM_MISSING",
     "CAMERA_COUNT_MISSING",
-    "CAMERA_OPERATOR_MISSING",
     "RECORDING_DELIVERY_MISSING",
     "CONTACT_DETAILS_INCOMPLETE",
   ]) {

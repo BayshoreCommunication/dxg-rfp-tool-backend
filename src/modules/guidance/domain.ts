@@ -1,5 +1,10 @@
 import { aiRuntimeAuthorized } from "../../../config/aiEnvironment";
 import { approvedCandidatePaths } from "../candidateApplication/canonicalMapping";
+import {
+  computeScopeGuidance,
+  type ScopeRuleCategory,
+  type ScopeRuleSeverity,
+} from "./scopeRules";
 
 export class GuidanceError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 422) { super(message); }
@@ -27,7 +32,7 @@ export type GuidanceFinding = {
   evidence: GuidanceEvidence[];
   explanation: string;
   suggestedNextStep: string;
-  confidence: "high";
+  confidence: "high" | "medium" | "low";
   provenance: {
     source: "current_proposal";
     ruleId: string;
@@ -35,6 +40,9 @@ export type GuidanceFinding = {
   };
   proposalVersion: number;
   analysisVersion: string;
+  scopeCategory?: ScopeRuleCategory;
+  scopeSeverity?: ScopeRuleSeverity;
+  question?: string;
 };
 export type SectionCompleteness = { section: string; label: string; filled: number; total: number; score: number };
 export type ProposalAnalysisSummary = {
@@ -202,21 +210,6 @@ export const computeGuidance = (
   if ((format.includes("hybrid") || format.includes("virtual")) && !filled(v("/content/hybridVirtual/streamingPlatform")))
     flag({ code: "STREAMING_PLATFORM_MISSING", severity: "warning", category: "production", message: "The event is hybrid or virtual but no streaming platform is specified.", paths: ["/content/hybridVirtual/streamingPlatform"] });
 
-  if (isYes(v("/content/videoRecordingStep/videoRecordingRequired")) && (asCount(v("/content/videoRecordingStep/numberOfCameras")) ?? 0) === 0)
-    flag({ code: "CAMERA_COUNT_MISSING", severity: "warning", category: "production", message: "Video recording is required but no camera count is specified.", paths: ["/content/videoRecordingStep/numberOfCameras"] });
-  if (
-    isYes(v("/content/videoRecordingStep/videoRecordingRequired")) &&
-    (asCount(v("/content/videoRecordingStep/cameraOperators")) ?? 0) === 0
-  )
-    flag({ code: "CAMERA_OPERATOR_MISSING", severity: "warning", category: "production", message: "Video recording is required but no camera operator count is specified.", paths: ["/content/videoRecordingStep/cameraOperators"], suggestedNextStep: "Confirm the operator plan for each camera position and show period." });
-  if (
-    isYes(v("/content/videoRecordingStep/videoRecordingRequired")) &&
-    !filled(v("/content/videoRecordingStep/recordingMedia")) &&
-    !filled(v("/content/videoRecordingStep/rawFootageTurnover")) &&
-    !filled(v("/content/videoRecordingStep/editedDeliverable/needed"))
-  )
-    flag({ code: "RECORDING_DELIVERY_MISSING", severity: "warning", category: "production", message: "Recording is requested but storage, handoff, and edited-deliverable requirements are not defined.", paths: ["/content/videoRecordingStep/recordingMedia", "/content/videoRecordingStep/rawFootageTurnover", "/content/videoRecordingStep/editedDeliverable/needed"], suggestedNextStep: "Specify recording media, raw-footage handoff, edited deliverables, and turnaround expectations." });
-
   if (isYes(v("/content/venueSchedule/isUnionVenue")) && !filled(v("/content/venueSchedule/unionJurisdictionOther")) && !(Array.isArray((proposal as { venueSchedule?: { unionJurisdictions?: unknown[] } }).venueSchedule?.unionJurisdictions) && (proposal as { venueSchedule: { unionJurisdictions: unknown[] } }).venueSchedule.unionJurisdictions.length))
     flag({ code: "UNION_JURISDICTIONS_MISSING", severity: "warning", category: "risk", message: "This is a union venue but no jurisdictions are listed. Union labor rules materially change cost.", paths: ["/content/venueSchedule/isUnionVenue"] });
 
@@ -244,6 +237,44 @@ export const computeGuidance = (
   const missingContacts = contactPaths.filter((path) => !filled(v(path)));
   if (missingContacts.length)
     flag({ code: "CONTACT_DETAILS_INCOMPLETE", severity: "warning", category: "completeness", message: "Primary contact information is incomplete.", paths: missingContacts, suggestedNextStep: "Complete the primary contact name, email, and phone before submitting the proposal." });
+
+  const visualSeverity = (
+    severity: ScopeRuleSeverity,
+  ): GuidanceFinding["severity"] =>
+    severity === "blocking"
+      ? "blocking"
+      : severity === "high_confidence_gap" ||
+          severity === "review_recommended"
+        ? "warning"
+        : "info";
+  for (const scopeFinding of computeScopeGuidance(proposal)) {
+    findings.push({
+      id: scopeFinding.id,
+      code: scopeFinding.ruleId,
+      severity: visualSeverity(scopeFinding.severity),
+      category:
+        scopeFinding.category === "possible_duplication" ? "risk" : "production",
+      message: scopeFinding.explanation,
+      paths: scopeFinding.paths,
+      affectedSection:
+        scopeFinding.paths.map(sectionForPath).find(Boolean) ?? null,
+      affectedFields: scopeFinding.paths.map(fieldForPath),
+      evidence: scopeFinding.evidence,
+      explanation: scopeFinding.explanation,
+      suggestedNextStep: scopeFinding.suggestedNextAction,
+      confidence: scopeFinding.confidence,
+      provenance: {
+        source: "current_proposal",
+        ruleId: scopeFinding.ruleId,
+        ruleVersion: scopeFinding.ruleVersion,
+      },
+      proposalVersion,
+      analysisVersion: PROPOSAL_ANALYSIS_VERSION,
+      scopeCategory: scopeFinding.category,
+      scopeSeverity: scopeFinding.severity,
+      ...(scopeFinding.question ? { question: scopeFinding.question } : {}),
+    });
+  }
 
   for (const item of completeness)
     if (item.score < 0.25 && item.total >= 5)
