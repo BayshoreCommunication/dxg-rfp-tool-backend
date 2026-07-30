@@ -39,7 +39,13 @@ export class CicdStack extends cdk.Stack {
         assumedBy: new iam.WebIdentityPrincipal(provider.openIdConnectProviderArn, {
           StringEquals: {
             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-            "token.actions.githubusercontent.com:sub": `repo:${GITHUB_REPOSITORY}:ref:refs/heads/${config.deployBranch}`,
+            // A job bound to a GitHub environment presents an
+            // environment-form sub claim instead of the branch-ref form;
+            // accept exactly this environment's and this branch's claims.
+            "token.actions.githubusercontent.com:sub": [
+              `repo:${GITHUB_REPOSITORY}:ref:refs/heads/${config.deployBranch}`,
+              `repo:${GITHUB_REPOSITORY}:environment:${config.envName}`,
+            ],
           },
         }),
         maxSessionDuration: cdk.Duration.hours(2),
