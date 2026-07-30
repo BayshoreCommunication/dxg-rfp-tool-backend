@@ -74,6 +74,15 @@ export class CicdStack extends cdk.Stack {
           conditions: { ArnEquals: { "ecs:cluster": `arn:aws:ecs:${this.region}:${this.account}:cluster/rfpilot-${config.envName}` } },
         }),
       );
+      // Task-definition actions do not support the ecs:cluster condition or
+      // resource-level scoping; the workflow re-registers the migrate task
+      // definition with each release's image before running it.
+      role.addToPolicy(
+        new iam.PolicyStatement({
+          actions: ["ecs:DescribeTaskDefinition", "ecs:RegisterTaskDefinition"],
+          resources: ["*"],
+        }),
+      );
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ["iam:PassRole"],
