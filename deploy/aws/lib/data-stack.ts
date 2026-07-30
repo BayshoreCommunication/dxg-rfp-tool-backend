@@ -80,7 +80,7 @@ export class DataStack extends cdk.Stack {
 
     const parameterGroup = new rds.ParameterGroup(this, "PgParams", {
       engine,
-      description: "RFPilot PostgreSQL 16 — TLS required",
+      description: "RFPilot PostgreSQL 16 - TLS required",
       parameters: { "rds.force_ssl": "1" },
     });
 
@@ -203,5 +203,10 @@ export class DataStack extends cdk.Stack {
       value: this.database.instanceEndpoint.socketAddress,
       description: "Compose into POSTGRES_URL / POSTGRES_MIGRATION_URL",
     });
+    // Consumed by scripts/compose-app-secrets.sh so an operator can fill the
+    // composed connection strings without ever seeing or typing the values.
+    new cdk.CfnOutput(this, "DatabaseSecretArn", { value: this.database.secret!.secretArn });
+    new cdk.CfnOutput(this, "RedisAuthSecretArn", { value: this.redisAuthSecret.secretArn });
+    new cdk.CfnOutput(this, "AppSecretArn", { value: this.appSecret.secretArn });
   }
 }
