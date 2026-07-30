@@ -155,3 +155,26 @@ test("thread delete and restore routes retain authentication and permission", ()
     /assistant\/threads\/:threadId\/restore[\s\S]*?authenticate[\s\S]*?authorizeAction\("assistant:use"\)[\s\S]*?restoreAssistantThread/,
   );
 });
+
+test("archive schedules 30-day cleanup while delete is immediate and hold-aware", () => {
+  const source = fs.readFileSync(
+    path.join(
+      root,
+      "src/modules/platformAssistant/postgresAssistantRepository.ts",
+    ),
+    "utf8",
+  );
+  for (const expected of [
+    "ASSISTANT_ARCHIVE_RETENTION_DAYS = 30",
+    "purge_after=now()+($3::text||' days')::interval",
+    'action: "assistant.thread.archive"',
+    "deleteThreadPermanently(input)",
+    "DELETE FROM rfpilot.assistant_feedback",
+    "DELETE FROM rfpilot.assistant_messages",
+    "DELETE FROM rfpilot.assistant_threads",
+    'action: "assistant.thread.delete.permanent"',
+    "ASSISTANT_THREAD_LEGAL_HOLD",
+  ]) {
+    assert.ok(source.includes(expected), expected);
+  }
+});

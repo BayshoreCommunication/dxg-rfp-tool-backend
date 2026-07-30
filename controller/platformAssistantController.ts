@@ -263,8 +263,8 @@ export const createPlatformAssistantController = (dependencies?: {
 
     async deleteThread(req: AuthRequest, res: Response) {
       try {
-        res.status(202).json({
-          data: await application.requestThreadDeletion(
+        res.json({
+          data: await application.deleteThreadPermanently(
             context(req),
             req.params.threadId,
           ),

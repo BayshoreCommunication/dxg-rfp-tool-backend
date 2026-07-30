@@ -134,6 +134,11 @@ export type GenerateAssistantGuidanceResult = {
   knowledge: AssistantKnowledgeStatus;
 };
 
+export type DeleteAssistantThreadResult = {
+  id: string;
+  deleted: true;
+};
+
 export interface PlatformAssistantRepository {
   createThread(
     input: PlatformAssistantContext & {
@@ -164,11 +169,11 @@ export interface PlatformAssistantRepository {
     },
   ): Promise<AssistantThread>;
 
-  requestThreadDeletion(
+  deleteThreadPermanently(
     input: PlatformAssistantContext & {
       threadId: string;
     },
-  ): Promise<AssistantThread>;
+  ): Promise<DeleteAssistantThreadResult>;
 
   restoreThread(
     input: PlatformAssistantContext & {

@@ -250,65 +250,47 @@ test("deterministic guidance persists a grounded response and replays idempotent
   assert.equal(detail.messages.at(-1)?.id, generated.assistantMessage.id);
 });
 
-test("archived threads remain readable but reject new messages", async () => {
+test("archived threads are recoverable and scheduled for deletion in 30 days", async () => {
   const archived = await platformAssistantApplication.archiveThread(context(), threadId);
   assert.equal(archived.status, "archived");
+  assert.ok(archived.deletedAt);
+  assert.ok(archived.purgeAfter);
+  assert.equal(archived.recoverable, true);
+  const archiveWindow =
+    new Date(archived.purgeAfter!).getTime() -
+    new Date(archived.deletedAt!).getTime();
+  assert.equal(archiveWindow, 30 * 24 * 60 * 60 * 1_000);
 
-  const detail = await platformAssistantApplication.getThread(context(), {
-    threadId,
-  });
-  assert.equal(detail.thread.status, "archived");
-
-  await assert.rejects(
-    platformAssistantApplication.appendUserMessage(context(), {
-      threadId,
-      body: { content: "This should not be accepted" },
-      idempotencyKey: crypto.randomUUID(),
-    }),
-    (error: unknown) =>
-      (error as { code?: string }).code === "ASSISTANT_THREAD_ARCHIVED",
-  );
-});
-
-test("owner can request recoverable deletion and restore within the grace window", async () => {
-  const created = await platformAssistantApplication.createThread(
-    context(),
-    { title: "Recoverable conversation" },
-    `assistant-retention:${crypto.randomUUID()}`,
-  );
-  const deleted = await platformAssistantApplication.requestThreadDeletion(
-    context(),
-    created.thread.id,
-  );
-  assert.ok(deleted.deletedAt);
-  assert.ok(deleted.purgeAfter);
-  assert.equal(deleted.recoverable, true);
-
-  const available = await platformAssistantApplication.listThreads(
-    context(),
-    { limit: 100 },
-  );
-  assert.equal(
-    available.some((thread) => thread.id === created.thread.id),
-    false,
-  );
-  const recentlyDeleted = await platformAssistantApplication.listThreads(
-    context(),
-    { limit: 100, deletionState: "deleted" },
-  );
-  assert.equal(
-    recentlyDeleted.some((thread) => thread.id === created.thread.id),
-    true,
-  );
   await assert.rejects(
     platformAssistantApplication.getThread(context(), {
-      threadId: created.thread.id,
+      threadId,
     }),
     (error: unknown) =>
       (error as { code?: string }).code === "ASSISTANT_THREAD_NOT_FOUND",
   );
+
+  const archivedThreads = await platformAssistantApplication.listThreads(
+    context(),
+    { limit: 100, deletionState: "deleted" },
+  );
+  assert.ok(archivedThreads.some((thread) => thread.id === threadId));
+
+  const restored = await platformAssistantApplication.restoreThread(
+    context(),
+    threadId,
+  );
+  assert.equal(restored.status, "active");
+  assert.equal(restored.deletedAt, null);
+});
+
+test("owner can permanently delete a conversation immediately", async () => {
+  const created = await platformAssistantApplication.createThread(
+    context(),
+    { title: "Permanent deletion" },
+    `assistant-delete:${crypto.randomUUID()}`,
+  );
   await assert.rejects(
-    platformAssistantApplication.requestThreadDeletion(
+    platformAssistantApplication.deleteThreadPermanently(
       context(sameOrganizationActor),
       created.thread.id,
     ),
@@ -316,12 +298,25 @@ test("owner can request recoverable deletion and restore within the grace window
       (error as { code?: string }).code === "ASSISTANT_THREAD_NOT_FOUND",
   );
 
-  const restored = await platformAssistantApplication.restoreThread(
+  const deleted = await platformAssistantApplication.deleteThreadPermanently(
     context(),
     created.thread.id,
   );
-  assert.equal(restored.status, "active");
-  assert.equal(restored.deletedAt, null);
-  assert.equal(restored.purgeAfter, null);
-  assert.equal(restored.recoverable, false);
+  assert.deepEqual(deleted, { id: created.thread.id, deleted: true });
+
+  const available = await platformAssistantApplication.listThreads(
+    context(),
+    { limit: 100 },
+  );
+  const archived = await platformAssistantApplication.listThreads(
+    context(),
+    { limit: 100, deletionState: "deleted" },
+  );
+  assert.equal(available.some((thread) => thread.id === created.thread.id), false);
+  assert.equal(archived.some((thread) => thread.id === created.thread.id), false);
+  await assert.rejects(
+    platformAssistantApplication.restoreThread(context(), created.thread.id),
+    (error: unknown) =>
+      (error as { code?: string }).code === "ASSISTANT_THREAD_NOT_FOUND",
+  );
 });

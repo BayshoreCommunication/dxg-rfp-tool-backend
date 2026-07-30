@@ -112,6 +112,8 @@ type AnalyticsMessageRow = Pick<
   | "citations"
 >;
 
+const ASSISTANT_ARCHIVE_RETENTION_DAYS = 30;
+
 const toIso = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 
@@ -360,19 +362,6 @@ const ownedThread = async (
   return result.rows[0];
 };
 
-const deletionGraceDays = async (
-  client: PoolClient,
-  organizationId: string,
-): Promise<number> => {
-  const result = await client.query<{ deletion_grace_days: number }>(
-    `SELECT deletion_grace_days
-     FROM rfpilot.assistant_retention_policies
-     WHERE organization_id=$1 AND status='approved'`,
-    [organizationId],
-  );
-  return Number(result.rows[0]?.deletion_grace_days ?? 30);
-};
-
 const assertThreadActive = (thread: ThreadRow): void => {
   if (thread.status !== "active") {
     throw new PlatformAssistantError(
@@ -611,38 +600,12 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
   archiveThread(input) {
     return withPostgresTransaction(async (client) => {
       const organizationId = await resolveTenant(client, input);
-      const thread = await ownedThread(client, { ...input, forUpdate: true });
-      if (thread.status === "archived") return mapThread(thread);
-      const updated = await client.query<ThreadRow>(
-        `UPDATE rfpilot.assistant_threads
-         SET status='archived',updated_at=now()
-         WHERE id=$1 AND owner_external_user_id=$2
-         RETURNING id,title,status,message_count,idempotency_key,last_message_at,
-                   deleted_at,purge_after,created_at,updated_at`,
-        [thread.id, input.actorUserMongoId],
-      );
-      await audit(client, {
-        organizationId,
-        actorUserMongoId: input.actorUserMongoId,
-        action: "assistant.thread.archive",
-        targetType: "assistant_thread",
-        targetId: thread.id,
-        correlationId: input.correlationId,
-      });
-      return mapThread(updated.rows[0]);
-    });
-  },
-
-  requestThreadDeletion(input) {
-    return withPostgresTransaction(async (client) => {
-      const organizationId = await resolveTenant(client, input);
       const thread = await ownedThread(client, {
         ...input,
         forUpdate: true,
         includeDeleted: true,
       });
       if (thread.deleted_at) return mapThread(thread);
-      const graceDays = await deletionGraceDays(client, organizationId);
       const updated = await client.query<ThreadRow>(
         `UPDATE rfpilot.assistant_threads
          SET status='archived',
@@ -652,7 +615,11 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
          WHERE id=$1 AND owner_external_user_id=$2 AND deleted_at IS NULL
          RETURNING id,title,status,message_count,idempotency_key,last_message_at,
                    deleted_at,purge_after,created_at,updated_at`,
-        [thread.id, input.actorUserMongoId, graceDays],
+        [
+          thread.id,
+          input.actorUserMongoId,
+          ASSISTANT_ARCHIVE_RETENTION_DAYS,
+        ],
       );
       await client.query(
         `INSERT INTO rfpilot.assistant_deletion_requests(
@@ -673,13 +640,84 @@ export const postgresAssistantRepository: PlatformAssistantRepository = {
       await audit(client, {
         organizationId,
         actorUserMongoId: input.actorUserMongoId,
-        action: "assistant.thread.delete.request",
+        action: "assistant.thread.archive",
         targetType: "assistant_thread",
         targetId: thread.id,
         correlationId: input.correlationId,
-        metadata: { graceDays },
+        metadata: {
+          retentionDays: ASSISTANT_ARCHIVE_RETENTION_DAYS,
+        },
       });
       return mapThread(updated.rows[0]);
+    });
+  },
+
+  deleteThreadPermanently(input) {
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await resolveTenant(client, input);
+      const thread = await ownedThread(client, {
+        ...input,
+        forUpdate: true,
+        includeDeleted: true,
+      });
+
+      const hold = await client.query<{ blocked: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1
+           FROM rfpilot.assistant_legal_holds
+           WHERE organization_id=$1
+             AND status='active'
+             AND (
+               (resource_type='organization' AND resource_id=$1::text) OR
+               (resource_type='assistant_thread' AND resource_id=$2::text)
+             )
+         ) AS blocked`,
+        [organizationId, thread.id],
+      );
+      if (hold.rows[0]?.blocked) {
+        throw new PlatformAssistantError(
+          "ASSISTANT_THREAD_LEGAL_HOLD",
+          "This conversation cannot be permanently deleted while a legal hold is active.",
+          409,
+        );
+      }
+
+      await client.query(
+        `DELETE FROM rfpilot.assistant_feedback
+         WHERE organization_id=$1 AND thread_id=$2`,
+        [organizationId, thread.id],
+      );
+      await client.query(
+        `DELETE FROM rfpilot.assistant_messages
+         WHERE organization_id=$1 AND thread_id=$2`,
+        [organizationId, thread.id],
+      );
+      await client.query(
+        `DELETE FROM rfpilot.assistant_threads
+         WHERE organization_id=$1
+           AND id=$2
+           AND owner_external_user_id=$3`,
+        [organizationId, thread.id, input.actorUserMongoId],
+      );
+      await client.query(
+        `UPDATE rfpilot.assistant_deletion_requests
+         SET status='purged',purged_at=now(),updated_at=now()
+         WHERE organization_id=$1 AND thread_id=$2 AND status='pending'`,
+        [organizationId, thread.id],
+      );
+      await audit(client, {
+        organizationId,
+        actorUserMongoId: input.actorUserMongoId,
+        action: "assistant.thread.delete.permanent",
+        targetType: "assistant_thread",
+        targetId: thread.id,
+        correlationId: input.correlationId,
+        metadata: {
+          immediate: true,
+          archivedBeforeDelete: thread.deleted_at !== null,
+        },
+      });
+      return { id: thread.id, deleted: true };
     });
   },
 
