@@ -9,7 +9,7 @@ uploads
 docs
 tests
 tests-integration
-deploy/observability
+deploy
 *.log
 .DS_Store
 patch_controller.ps1
