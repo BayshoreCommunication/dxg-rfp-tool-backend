@@ -195,6 +195,15 @@ export class DataStack extends cdk.Stack {
       value: assetsCdn.distributionDomainName,
       description: "Set ASSET_STORAGE_PUBLIC_URL_BASE to https://<this domain>",
     });
+
+    // The wildcard-scoped KMS condition for CloudFront OAC is a known,
+    // deliberate first-deploy tradeoff; scoping it down to the real
+    // distribution ARN is a documented post-first-deploy hardening step in
+    // the README. Acknowledged so --strict synth stays warning-clean.
+    cdk.Annotations.of(this).acknowledgeWarning(
+      "@aws-cdk/aws-cloudfront-origins:wildcardKeyPolicyForOac",
+      "Post-first-deploy hardening step documented in deploy/aws/README.md",
+    );
     new cdk.CfnOutput(this, "RedisPrimaryEndpoint", {
       value: `${this.redis.attrPrimaryEndPointAddress}:${this.redis.attrPrimaryEndPointPort}`,
       description: "Compose into REDIS_URL as rediss://:<auth-token>@<endpoint>",
