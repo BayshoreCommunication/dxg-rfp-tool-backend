@@ -35,10 +35,15 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 # tini reaps zombies and forwards SIGTERM, which the worker and dispatcher rely
-# on for their graceful-shutdown handlers.
+# on for their graceful-shutdown handlers. The upgrade picks up Debian
+# security fixes newer than the base image. npm and corepack are removed from
+# the runtime: nothing here runs them (plain `node dist/...`), and their
+# bundled internals routinely carry scanner findings.
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends tini \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /opt/yarn*
 
 COPY --from=deps  --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist        ./dist

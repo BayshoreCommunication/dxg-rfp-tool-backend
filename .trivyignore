@@ -1,0 +1,6 @@
+# brace-expansion 1.x (exceljs -> archiver -> glob@7 -> minimatch@3) has no
+# in-major fix for this DoS; the only "fixed" release is the 5.x line, which
+# minimatch@3 cannot use. The vulnerable code path expands brace patterns,
+# and on this dependency chain patterns are library-internal constants, never
+# user input. Re-evaluate when exceljs/archiver move off glob@7.
+CVE-2026-14257
