@@ -80,7 +80,7 @@ jobs:
           docker build -t "${{ steps.ecr.outputs.registry }}/rfpilot-backend:sha-${GITHUB_SHA}" .
 
       - name: Vulnerability scan (fails on fixable HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.ecr.outputs.registry }}/rfpilot-backend:sha-${{ github.sha }}
           format: table
