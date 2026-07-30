@@ -16,6 +16,7 @@ import {
   signOutAll,
   listSessions,
   revokeSession,
+  signOutSession,
 } from "../controller/authController";
 import { authenticate } from "../middleware/auth";
 import { emailAndIpIdentity, securityRateLimit } from "../middleware/securityRateLimit";
@@ -36,9 +37,13 @@ router.post("/register", signUp);
 /* ─── Sign in ─── */
 router.post("/login", authAttemptLimit, signInWithCredentials);
 router.post("/google", authAttemptLimit, signInWithGoogle);
-router.post("/admin/signup", signUpAdmin);
+// Rate-limited like every other credential endpoint: the route is gated by
+// ADMIN_SIGNUP_SECRET, and an unlimited endpoint would let that secret be
+// brute-forced offline-fast.
+router.post("/admin/signup", authAttemptLimit, signUpAdmin);
 router.post("/admin/signin", authAttemptLimit, signInAdmin);
 router.post("/refresh", refreshLimit, refreshSession);
+router.post("/logout-session", refreshLimit, signOutSession);
 
 /* ─── Forgot password flow ─── */
 // Step 1: Send reset OTP

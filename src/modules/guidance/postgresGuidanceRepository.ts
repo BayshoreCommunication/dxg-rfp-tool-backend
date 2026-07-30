@@ -3,7 +3,11 @@ import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
 import Proposal from "../../../modal/proposalsModel";
-import { computeGuidance, GuidanceError } from "./domain";
+import {
+  computeGuidance,
+  GuidanceError,
+  PROPOSAL_ANALYSIS_VERSION,
+} from "./domain";
 
 type Ctx = { organizationMongoId: string; actorUserMongoId: string; correlationId: string };
 
@@ -26,10 +30,15 @@ const proposalRef = async (c: PoolClient, id: string, actor: string) => {
   return r.rows[0].id;
 };
 
-const present = (row: any) => ({
+const present = (row: any, currentProposalVersion = Number(row.proposal_version)) => ({
   id: row.id,
   proposalVersion: row.proposal_version,
+  currentProposalVersion,
+  stale: Number(row.proposal_version) !== currentProposalVersion,
+  analysisVersion: row.engine_version,
   engineVersion: row.engine_version,
+  summary: row.summary ?? {},
+  roomSchedule: row.room_schedule_analysis ?? {},
   overallCompleteness: Number(row.overall_completeness),
   completeness: row.completeness,
   findings: row.findings,
@@ -45,17 +54,20 @@ export const guidanceRepository = {
     const proposal = await Proposal.findOne({ _id: ctx.proposalMongoId, userId: ctx.actorUserMongoId })
       .lean<any>();
     if (!proposal) throw new GuidanceError("PROPOSAL_NOT_FOUND", "Proposal was not found.", 404);
-    const result = computeGuidance(proposal);
+    const proposalVersion = Number(proposal.version || 1);
+    const result = computeGuidance(proposal, { proposalVersion });
     const blockingCount = result.findings.filter((f) => f.severity === "blocking").length;
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, ctx.organizationMongoId);
       const p = await proposalRef(c, ctx.proposalMongoId, ctx.actorUserMongoId);
       const row = await c.query<any>(
-        `INSERT INTO rfpilot.guidance_reports(id,organization_id,proposal_reference_id,actor_external_user_id,proposal_version,overall_completeness,completeness,findings,finding_count,blocking_count,correlation_id)
-         VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11) RETURNING *`,
+        `INSERT INTO rfpilot.guidance_reports(id,organization_id,proposal_reference_id,actor_external_user_id,proposal_version,engine_version,summary,room_schedule_analysis,overall_completeness,completeness,findings,finding_count,blocking_count,correlation_id)
+         VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10::jsonb,$11::jsonb,$12,$13,$14) RETURNING *`,
         [
-          uuidv7(), org, p, ctx.actorUserMongoId, Number(proposal.version || 1),
-          result.overall, JSON.stringify(result.completeness), JSON.stringify(result.findings),
+          uuidv7(), org, p, ctx.actorUserMongoId, proposalVersion,
+          PROPOSAL_ANALYSIS_VERSION, JSON.stringify(result.summary),
+          JSON.stringify(result.roomSchedule), result.overall,
+          JSON.stringify(result.completeness), JSON.stringify(result.findings),
           result.findings.length, blockingCount, ctx.correlationId,
         ],
       );
@@ -63,10 +75,18 @@ export const guidanceRepository = {
         "INSERT INTO rfpilot.audit_events(id,organization_id,actor_external_user_id,action,target_type,target_id,decision,correlation_id,metadata) VALUES($1,$2,$3,'guidance_report_generated','proposal',$4,'allowed',$5,$6::jsonb)",
         [uuidv7(), org, ctx.actorUserMongoId, p, ctx.correlationId, JSON.stringify({ count: result.findings.length, outcome: blockingCount ? "blocking" : "clear" })],
       );
-      return present(row.rows[0]);
+      return present(row.rows[0], proposalVersion);
     });
   },
   async latest(ctx: Ctx & { proposalMongoId: string }) {
+    const proposal = await Proposal.findOne({
+      _id: ctx.proposalMongoId,
+      userId: ctx.actorUserMongoId,
+    })
+      .select("version")
+      .lean<{ version?: number }>();
+    if (!proposal) throw new GuidanceError("PROPOSAL_NOT_FOUND", "Proposal was not found.", 404);
+    const currentProposalVersion = Number(proposal.version || 1);
     return withPostgresTransaction(async (c) => {
       await tenant(c, ctx.organizationMongoId);
       const p = await proposalRef(c, ctx.proposalMongoId, ctx.actorUserMongoId);
@@ -75,7 +95,7 @@ export const guidanceRepository = {
         [p],
       );
       if (!row.rows[0]) throw new GuidanceError("GUIDANCE_NOT_FOUND", "No guidance report exists for this proposal yet.", 404);
-      return present(row.rows[0]);
+      return present(row.rows[0], currentProposalVersion);
     });
   },
 };

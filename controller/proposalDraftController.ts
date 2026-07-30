@@ -10,6 +10,7 @@ import {
   ProposalDraftError,
 } from "../src/modules/proposalDraft/domain";
 import { proposalDraftRepository } from "../src/modules/proposalDraft/postgresProposalDraftRepository";
+import { proposalExportEnabled, renderProposalExport } from "../src/modules/proposalDraft/exportDocument";
 const context = (req: AuthRequest) => {
     if (!proposalDraftEnabled())
       throw new ProposalDraftError(
@@ -119,6 +120,45 @@ export const latestProposalDraft = async (req: AuthRequest, res: Response) => {
         proposalMongoId: proposalId(req.params.proposalId),
       }),
     });
+  } catch (e) {
+    handle(res, e);
+  }
+};
+
+/**
+ * Download the reviewed draft as a standalone RFP document.
+ *
+ * The draft is the document, not a source to merge back into the proposal: the
+ * proposal holds structured questionnaire answers, and only three of the eleven
+ * draft sections have a corresponding field there. This is also the only way to
+ * get an RFP out of the authenticated app — a planner previously had to publish,
+ * open the public share link, and use the browser print dialog.
+ *
+ * A read, not a publication. It renders what a human already accepted; it
+ * changes nothing and sends nothing to anyone.
+ */
+export const exportProposalDraft = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!proposalExportEnabled())
+      throw new ProposalDraftError(
+        "PROPOSAL_EXPORT_DISABLED",
+        "Proposal export is not enabled in this environment.",
+        503,
+      );
+    const c = context(req);
+    const proposalMongoId = proposalId(req.params.proposalId);
+    const { draft, eventName } = await proposalDraftRepository.readForExport({ ...c, proposalMongoId });
+
+    const html = renderProposalExport({
+      eventName,
+      sections: draft.sections,
+      gaps: draft.gaps,
+      generatedAt: new Date(),
+    });
+    const filename = `${(eventName || "proposal").replace(/[^A-Za-z0-9 _-]/g, "").trim().replace(/\s+/g, "-").toLowerCase() || "proposal"}-rfp.html`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(html);
   } catch (e) {
     handle(res, e);
   }

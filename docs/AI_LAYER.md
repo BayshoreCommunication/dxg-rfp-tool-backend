@@ -1,6 +1,6 @@
 # AI Layer
 
-> Purpose: current governed AI capabilities and invariants. Last updated: 2026-07-22. Owner: AI engineering.
+> Purpose: current governed AI capabilities and invariants. Last updated: 2026-07-27. Owner: AI engineering.
 
 ## Current status
 
@@ -15,8 +15,10 @@ The M1–M6 audit roadmap is implemented behind deny-by-default flags. The pinne
 | Draft generation | Proposal fields plus eligible knowledge | Cited sections with scoped regeneration and review state. |
 | Knowledge retrieval | Approved active fragments | Tenant-scoped lexical/vector results from a release registry. |
 | Guidance | Canonical proposal facts | Deterministic completeness and rule findings. |
+| Room recommendations | Confirmed room/event facts plus approved knowledge fixtures | Deterministic, classified, review-gated suggestions; explicit selective application to a tiny allowlisted room-field set with version and room-identity checks. See [architecture/ROOM_RECOMMENDATIONS.md](architecture/ROOM_RECOMMENDATIONS.md). |
 | Investment guidance | Approved pricing corpus and factors | Deterministic estimate or explicit refusal; never invent a number. |
 | Vendor analysis | Clean vendor response sources | Cited findings and escalation flags; comparison/export remain gaps. |
+| Platform Assistant | Personal chat history, versioned platform facts, eligible approved operating guidance | Read-only, cited platform/workflow guidance streamed through product SSE; cannot mutate or send product data. |
 
 ## Pricing model
 
@@ -31,10 +33,23 @@ The proprietary baseline v3 workbook contains 433 items, 22 regional factors, 13
 - Auto-apply only validated, high-confidence, single candidates into empty draft fields; use optimistic version checks.
 - Require human action for conflicts and publication.
 - Record provider attempts before calls to close duplicate-charge windows.
+- Build structured-output schemas only from keywords strict mode accepts. A
+  rejected keyword fails the whole request, and because every call site softens
+  provider errors into a fallback, the feature silently stops using the model
+  instead of erroring. `uniqueItems` disabled live conversation replies
+  entirely; `tests/live-ai-schema-keywords.test.js` guards the list.
+- Present stored values in the form the reader expects before they become
+  evidence. Schedule fields are UTC instants, so the drafting model printed the
+  UTC clock face and labelled it with the event's zone until draft evidence
+  carried the venue reading.
+- Keep Platform Assistant history private to its owning user, including from
+  other users in the same organization.
+- Require an explicit organization cohort for production Platform Assistant
+  access; the global feature flag is not a cohort mechanism.
 
 ## Open gaps
 
-Typed chat extraction, array/room extraction, weighted completeness, invalid-operation UI, vendor attempt-ledger coverage, bid comparison, report export, and a written OpenAI-versus-Anthropic comparison remain open. See [ROADMAP.md](ROADMAP.md).
+Array/room extraction, weighted completeness, invalid-operation UI, vendor attempt-ledger coverage, bid comparison, report export, and a written OpenAI-versus-Anthropic comparison remain open. Typed chat extraction shipped behind `CONVERSATION_EXTRACTION_ENABLED` (2026-07-29). Room recommendations partially offset the room gap with a review-first deterministic capability (crew application, production knowledge retrieval, and any AI enrichment stage remain deferred). See [ROADMAP.md](ROADMAP.md).
 
 ## Detailed references
 

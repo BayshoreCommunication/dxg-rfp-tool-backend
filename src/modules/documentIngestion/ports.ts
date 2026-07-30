@@ -5,6 +5,13 @@ export type CreateSourceInput = {
   originalFilename: string; safeFilename: string; mimeType: AllowedDocumentMime;
   expectedSizeBytes: number; objectKey: string; retentionUntil: Date | null; idempotencyKey: string; correlationId: string;
   confidentiality: "non_confidential"|"confidential";
+  // Where the source came from. Only 'conversation' sources are created without
+  // a deliberate "this is a source" action by the planner, so the UI must label
+  // them honestly and the scan handler uses this to decide whether to chain
+  // extraction. segmentMessageId is the conversation message that closed the
+  // segment; it is UNIQUE, so a replay reuses the source rather than minting one.
+  origin?: "upload"|"notes"|"conversation";
+  segmentMessageId?: string|null;
 };
 
 export interface DocumentRepository {

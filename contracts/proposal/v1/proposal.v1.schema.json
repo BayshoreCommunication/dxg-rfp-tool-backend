@@ -201,10 +201,28 @@
         "rehearsalAt": { "$ref": "#/$defs/dateTime" },
         "showStartAt": { "$ref": "#/$defs/dateTime" },
         "showEndAt": { "$ref": "#/$defs/dateTime" },
+        "scheduleEntries": {
+          "type": "array",
+          "maxItems": 500,
+          "items": { "$ref": "#/$defs/roomScheduleEntry" }
+        },
         "audio": { "$ref": "#/$defs/audioRequirements" },
         "video": { "$ref": "#/$defs/videoRequirements" },
         "lighting": { "$ref": "#/$defs/lightingRequirements" },
         "production": { "$ref": "#/$defs/roomProduction" }
+      }
+    },
+    "roomScheduleEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function"],
+      "properties": {
+        "function": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "setup": { "type": "string", "maxLength": 100 },
+        "scheduleDate": { "$ref": "#/$defs/date" },
+        "estimatedAttendees": { "$ref": "#/$defs/nonNegativeInteger" },
+        "showStartAt": { "$ref": "#/$defs/dateTime" },
+        "showEndAt": { "$ref": "#/$defs/dateTime" }
       }
     },
     "audioRequirements": {

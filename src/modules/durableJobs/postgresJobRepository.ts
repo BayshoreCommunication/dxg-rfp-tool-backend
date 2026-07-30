@@ -1,10 +1,11 @@
 import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
-import { DurableJobError, type DurableJob, type QueueMessage } from "./domain";
+import { DurableJobError, attemptBudget, type DurableJob, type QueueMessage } from "./domain";
 import type { JobRepository } from "./jobRepository";
 type Row = {
   id: string;
+  organization_id: string;
   job_type: string;
   status: DurableJob["status"];
   input_reference: string | null;
@@ -604,7 +605,13 @@ export const postgresJobRepository: JobRepository = {
       const organizationId = await tenant(c, input.message.organizationMongoId);
       const row = await getRow(c, input.message.jobId, true);
       if (row.status !== "running") return map(row);
-      const exhausted = input.attempt >= input.maxAttempts;
+      // row.max_attempts was written at creation and then ignored here in
+      // favour of the worker's global JOB_MAX_ATTEMPTS, so a 2-attempt job
+      // retried 5 times — and for vendor analysis every extra attempt is a
+      // billed provider call. BullMQ may still deliver further attempts;
+      // claim() rejects them once the row is dead_letter, so no additional
+      // provider call is made.
+      const exhausted = input.attempt >= attemptBudget(row.max_attempts, input.maxAttempts);
       const status = input.retryable
         ? exhausted
           ? "dead_letter"
@@ -659,6 +666,61 @@ export const postgresJobRepository: JobRepository = {
         "UPDATE rfpilot.outbox_events SET status=CASE WHEN attempt_count>=5 THEN 'dead_letter' ELSE 'failed' END,last_error_code=$2,available_at=now()+interval '5 seconds',locked_at=null,locked_by=null WHERE id=$1",
         [id, code],
       );
+    });
+  },
+  /* Reclaim jobs whose worker died mid-execution.
+     claim() sets lease_expires_at and heartbeat() extends it, but nothing ever
+     read the column: a worker that was killed left its job 'running' forever.
+     reconcile() only republishes queued/retry_scheduled, and BullMQ's stalled
+     re-delivery is rejected by the heartbeat lease check, so the row was
+     unreachable by every recovery path and invisible to operators.
+     An expired lease returns the job to retry_scheduled, or dead-letters it
+     when its per-type attempt budget is spent — the same terminal rule fail()
+     applies, so a stuck job cannot outlive its retry allowance. */
+  reapExpiredLeases(limit: number) {
+    return withPostgresTransaction(async (c) => {
+      const stale = await c.query<Row>(
+        `SELECT * FROM rfpilot.ai_jobs
+           WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at < now()
+           ORDER BY lease_expires_at LIMIT $1 FOR UPDATE SKIP LOCKED`,
+        [limit],
+      );
+      const reaped: Array<{ jobId: string; status: string }> = [];
+      for (const row of stale.rows) {
+        const exhausted = row.attempt_count >= attemptBudget(row.max_attempts, Number(process.env.JOB_MAX_ATTEMPTS || 5));
+        const status = exhausted ? "dead_letter" : "retry_scheduled";
+        await c.query(
+          `UPDATE rfpilot.ai_jobs SET status=$2,error_code='LEASE_EXPIRED',available_at=now(),
+             lease_owner=null,lease_expires_at=null,updated_at=now(),
+             completed_at=CASE WHEN $2='dead_letter' THEN now() ELSE null END
+           WHERE id=$1`,
+          [row.id, status],
+        );
+        if (exhausted)
+          await c.query(
+            `INSERT INTO rfpilot.job_dead_letters(id,organization_id,job_id,reason_code,last_diagnostic_code)
+             VALUES($1,$2,$3,'LEASE_EXPIRED','worker_lost')
+             ON CONFLICT (job_id,operator_status) DO NOTHING`,
+            [uuidv7(), row.organization_id, row.id],
+          );
+        reaped.push({ jobId: row.id, status });
+      }
+      return reaped;
+    });
+  },
+  /* Open dead letters for an operator. The table was written and requeued by
+     id, but nothing listed it, so a dead-lettered job could only be found by
+     someone who already knew its id. */
+  listDeadLetters(limit: number) {
+    return withPostgresTransaction(async (c) => {
+      const r = await c.query(
+        `SELECT d.id,d.job_id,d.reason_code,d.last_diagnostic_code,d.created_at,
+                j.job_type,j.attempt_count,j.max_attempts,j.error_code,j.correlation_id
+           FROM rfpilot.job_dead_letters d JOIN rfpilot.ai_jobs j ON j.id=d.job_id
+          WHERE d.operator_status='open' ORDER BY d.created_at DESC LIMIT $1`,
+        [limit],
+      );
+      return r.rows;
     });
   },
   reconcile(limit) {

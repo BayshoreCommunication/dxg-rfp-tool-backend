@@ -7,6 +7,8 @@ import {
   VendorAnalysisError,
 } from "../src/modules/vendorAnalysis/domain";
 import { vendorAnalysisRepository } from "../src/modules/vendorAnalysis/postgresVendorAnalysisRepository";
+import { renderVendorAnalysisExport, vendorAnalysisExportEnabled } from "../src/modules/vendorAnalysis/exportDocument";
+import { exportFilename } from "../src/modules/shared/exportHtml";
 
 const context = (req: AuthRequest) => {
     if (!vendorAnalysisEnabled())
@@ -145,6 +147,51 @@ export const readVendorAnalysis = async (req: AuthRequest, res: Response) => {
         runId: runId(req.params.runId),
       }),
     });
+  } catch (e) {
+    handle(res, e);
+  }
+};
+
+/**
+ * The shortlisting decision is made in a meeting, from a circulated document,
+ * by people who do not have logins. Without this the verdicts were retyped into
+ * a spreadsheet and the cited passages stopped travelling with the claims.
+ */
+export const exportVendorAnalysis = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!vendorAnalysisExportEnabled())
+      throw new VendorAnalysisError(
+        "VENDOR_ANALYSIS_EXPORT_DISABLED",
+        "Vendor analysis export is not enabled in this environment.",
+        503,
+      );
+    const c = context(req);
+    const analysis = await vendorAnalysisRepository.read({
+      ...c,
+      vendorResponseMongoId: mongoId(
+        req.params.responseId,
+        "VENDOR_RESPONSE_NOT_FOUND",
+        "Vendor response was not found.",
+      ),
+      proposalMongoId: mongoId(
+        req.query.proposalId,
+        "PROPOSAL_ID_REQUIRED",
+        "A valid proposalId is required.",
+        400,
+      ),
+    });
+    const generatedAt = new Date();
+    const html = renderVendorAnalysisExport({
+      findings: analysis.findings,
+      evidence: analysis.evidence,
+      generatedAt,
+    });
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${exportFilename("vendor-response", "review", generatedAt)}"`,
+    );
+    res.send(html);
   } catch (e) {
     handle(res, e);
   }

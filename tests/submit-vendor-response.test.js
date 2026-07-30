@@ -179,6 +179,34 @@ test("infected upload rejects the submission before storage or persistence", asy
   assert.equal(capture.notification, undefined);
 });
 
+test("unscannable upload rejects the submission before storage or persistence", async () => {
+  const capture = {};
+  const deps = dependencies(capture);
+  const cleaned = [];
+  deps.storage.cleanup = async (path) => {
+    cleaned.push(path);
+  };
+  // Scanner unconfigured, down, or errored. This is the only unauthenticated
+  // file intake in the system, so it must fail closed rather than store the
+  // bytes and serve them to the planner later through a presigned URL.
+  deps.malwareScan = async () => "unavailable";
+  const submit = createSubmitVendorResponse(deps);
+
+  const result = await submit({
+    proposalId: "proposal-001",
+    vendorName: "AV Partners",
+    submittedBy: "Avery",
+    email: "vendor@example.com",
+    files: [{ originalname: "quote.pdf", path: "/tmp/clean-quote" }],
+  });
+
+  assert.deepEqual(result, { kind: "scan_unavailable" });
+  assert.deepEqual(cleaned, ["/tmp/clean-quote"]);
+  assert.equal(capture.upload, undefined);
+  assert.equal(capture.create, undefined);
+  assert.equal(capture.notification, undefined);
+});
+
 test("clean scan outcome lets the submission proceed to storage", async () => {
   const capture = {};
   const deps = dependencies(capture);

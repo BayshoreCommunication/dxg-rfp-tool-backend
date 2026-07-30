@@ -1,6 +1,8 @@
 import { createGetOwnedProposal } from "./application/getOwnedProposal";
 import { createListOwnedProposals } from "./application/listOwnedProposals";
 import { createUploadProposalFiles } from "./application/uploadProposalFiles";
+import { createPresignProposalFile } from "./application/proposalFileAccess";
+import { presignSpacesGetUrl, spacesObjectKeyFromUrl } from "../../../utils/uploadToSpaces";
 import {
   createGetProposalByLegacyPublicId,
   createIncrementLegacyPublicProposalViews,
@@ -50,8 +52,16 @@ export const archiveOwnedProposal =
   createArchiveOwnedProposal(mongoProposalWriteRepository);
 export const restoreOwnedProposal =
   createRestoreOwnedProposal(mongoProposalWriteRepository);
-export const permanentlyDeleteOwnedProposal =
-  createPermanentlyDeleteOwnedProposal(mongoProposalWriteRepository);
+// The purge is imported lazily, as the archive sweep does, so the S3 and
+// Postgres clients are not pulled in merely by composing this module.
+export const permanentlyDeleteOwnedProposal = createPermanentlyDeleteOwnedProposal(
+  mongoProposalWriteRepository,
+  async (targets) => {
+    if (!targets.length) return;
+    const { purgeProposalArtifacts } = await import("../dataFoundation/purgeProposalArtifacts");
+    await purgeProposalArtifacts(targets);
+  },
+);
 export const createOwnedProposal = createCreateOwnedProposal(mutationDependencies);
 export const updateOwnedProposal = createUpdateOwnedProposal(mutationDependencies);
 export const copyOwnedProposal = createCopyOwnedProposal(mutationDependencies);
@@ -70,6 +80,10 @@ export const incrementOwnedProposalViews = createIncrementOwnedProposalViews({
   proposals: mongoProposalWriteRepository,
   settings: mongoProposalSettingsRepository,
   notifications: proposalNotificationAdapter,
+});
+export const presignOwnedProposalFile = createPresignProposalFile({
+  objectKeyFromUrl: spacesObjectKeyFromUrl,
+  presign: presignSpacesGetUrl,
 });
 export const uploadOwnedProposalFiles = createUploadProposalFiles({
   storage: spacesProposalFileStorage,

@@ -325,3 +325,68 @@ canonical paths plus ~12 rule-based schedule/production/budget/risk checks
 step 4 derives from the latest report: available → in_progress (blocking
 findings) → complete. Endpoints: `POST /api/v1/proposals/:id/guidance-reports`
 and `GET .../guidance-reports/latest`, owner-scoped and audited.
+
+
+## 2026-07-27 addendum — one definition of "complete"
+
+The five steps used to decide their own status, and those rules disagreed with
+each other and with the phase shown above the stepper. In the same view a
+planner could see:
+
+- **Step 2 "Review the Draft" complete** the moment a draft existed, before
+  anyone had read a word of it, while the assistant said "Your first draft is
+  ready to review".
+- **Step 3 "Answer Key Questions" complete** while questions were still open —
+  it measured `gapCount` (a property of the *draft*) rather than questions — and
+  gated behind a draft, even though questions come from the conversation and
+  precede one.
+- **Step 5 "Publish" available** during intake, and never complete, because its
+  status was the literal string `"available"`.
+- **Step 1** never complete for a planner who typed everything into the
+  assistant and uploaded no file, because it required `readySourceCount > 0`.
+- A **sixth** count in the dashboard: `KeyQuestionsPanel` reported its own open
+  question count up into `ProposalWorkflowShell`, which patched step 3's summary
+  with it.
+
+### What it is now
+
+`PHASE_ORDER` in `src/modules/proposalWorkflow/domain.ts` is the single spine:
+
+```
+intake → minimum_context → drafting → improving → reviewing → ready → published
+```
+
+`deriveWorkflowState` picks exactly one phase. `readiness` projects the five
+steps out of it: each step declares the phase that **completes** it and the
+phases it is the **active work** of, and nothing else can mark it complete.
+
+| Step | Complete at | Active during |
+| --- | --- | --- |
+| 1 Provide Information | `minimum_context` | `intake` |
+| 2 Review the Draft | `ready` | `drafting`, `improving`, `reviewing` |
+| 3 Answer Key Questions | `minimum_context` | `intake` |
+| 4 See Guidance | `reviewing` | `improving` |
+| 5 Publish | `published` | `ready` |
+
+`improving` deliberately ranks below `reviewing`: a blocking guidance finding is
+a harder stop than an unreviewed section.
+
+A step may still hold *itself* back — step 4 is `gated` without
+`GUIDANCE_ENABLED` and stays `available` until someone actually runs the
+readiness check — but a step-local condition can never advance a step beyond
+what the phase supports. `tests/proposal-workflow.test.js` asserts that property
+across all 72 combinations of the facts that move the phase.
+
+`published` is fed by the Mongo proposal's `status` (anything other than
+`unsubmitted`), read in `postgresProposalWorkflowRepository` because whether the
+RFP has gone out lives with the proposal, not in the AI domain. Before this the
+phase type carried a `published` variant nothing ever returned.
+
+### Wording
+
+"Complete" now means one thing: how far through the workflow a proposal is. The
+assistant's completion card measures something different — how much of the
+questionnaire is filled in — and says so ("Your proposal details are 68% filled
+in"), because two questions sharing one word read as contradicting answers.
+That percentage is weighted toward the fields a vendor cannot quote without;
+see `src/modules/guidance/domain.ts`.

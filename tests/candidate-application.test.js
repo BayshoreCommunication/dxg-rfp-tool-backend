@@ -126,3 +126,68 @@ test("enum fields accept the prose an extraction actually returns", () => {
   // Ambiguous or unrelated prose must still be rejected rather than guessed.
   assert.throws(() => normalizeCandidate("/content/venueSchedule/venueConfirmedStatus", "maybe next year"), /invalid/i);
 });
+
+const { AUTO_APPLY_MIN_CONFIDENCE } = require("../src/modules/candidateApplication/domain");
+
+test("automatic application is confidence-gated on the server, not just in the browser", () => {
+  // The dashboard implemented the whole auto-apply policy: confidence >= 0.8,
+  // empty target, one candidate per path. Empty-target is enforced by the
+  // overwrite guard and one-per-path by CONFLICTING_APPLICATION_SELECTION, but
+  // confidence was checked nowhere on the server — so any caller could
+  // auto-apply a 0.05-confidence candidate while AI_LAYER.md described the
+  // threshold as a guarantee.
+  assert.equal(AUTO_APPLY_MIN_CONFIDENCE, 0.8);
+
+  const fs = require("node:fs"), path = require("node:path");
+  const read = (rel) => fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+  const repo = read("src/modules/candidateApplication/postgresCandidateApplicationRepository.ts");
+  assert.match(repo, /o\.confidence FROM/, "the selection carries confidence");
+  assert.match(repo, /if \(input\.automatic\)/, "the gate applies only to unattended applications");
+  assert.match(repo, /AUTO_APPLY_CONFIDENCE_TOO_LOW/, "a weak candidate is refused with its own code");
+
+  // A person who reviewed a low-confidence candidate and accepted it is still
+  // allowed through: the threshold governs what the system may do unattended.
+  const gate = repo.slice(repo.indexOf("if (input.automatic)"), repo.indexOf("const appId"));
+  assert.ok(!/decision/.test(gate), "the gate does not second-guess a human decision");
+
+  const domain = read("src/modules/candidateApplication/domain.ts");
+  assert.match(domain, /automatic:value\.automatic===true/, "the flag is parsed, defaulting to attended");
+});
+
+test("successful field application records an append-only content-free audit event", () => {
+  const source = fs.readFileSync(
+    path.join(
+      __dirname,
+      "..",
+      "src",
+      "modules",
+      "candidateApplication",
+      "postgresCandidateApplicationRepository.ts",
+    ),
+    "utf8",
+  );
+  assert.match(source, /candidate_fields_applied/);
+  assert.match(source, /fromProposalVersion/);
+  assert.match(source, /resultingProposalVersion/);
+  assert.match(source, /beforeChecksumRecorded/);
+  assert.match(source, /afterChecksumRecorded/);
+  assert.doesNotMatch(source, /audit_events[\s\S]{0,500}(modified_value|mongoValue)/);
+});
+
+test("application read supplies manual recovery information without an automatic undo", () => {
+  const source = fs.readFileSync(
+    path.join(
+      __dirname,
+      "..",
+      "src",
+      "modules",
+      "candidateApplication",
+      "postgresCandidateApplicationRepository.ts",
+    ),
+    "utf8",
+  );
+  assert.match(source, /mode: "manual_restore"/);
+  assert.match(source, /fromProposalVersion/);
+  assert.match(source, /resultingProposalVersion/);
+  assert.doesNotMatch(source, /automatic_undo|undoCandidateApplication/);
+});

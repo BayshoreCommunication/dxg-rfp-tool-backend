@@ -1,12 +1,14 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import multer from "multer";
-import OpenAI from "openai";
-import { extractProposalDocument } from "../src/modules/extraction/composition";
+import { extractProposalDocument, normalizeScheduleTimes } from "../src/modules/extraction/composition";
+import { MAX_VALUES } from "../src/modules/extraction/application/normalizeScheduleTimes";
+import {
+  assertLegacyExtractionReady,
+  LegacyExtractionError,
+  LEGACY_EXTRACTION_MODEL,
+} from "../src/modules/extraction/domain/policy";
 import { safeLog } from "../src/shared/observability/safeTelemetry";
-
-/* Lazy so environment loading completes before a request creates the client. */
-const getOpenAI = () => new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /* ─── Multer — memory storage (no disk writes) ─── */
 export const extractUpload = multer({
@@ -34,6 +36,10 @@ export const extractProposal = async (
   res: Response
 ): Promise<void> => {
   try {
+    // Deny by default, and stoppable: this path calls a live provider, so it
+    // is gated by AI_ENVIRONMENT, its own flag, and the kill switch before any
+    // file is read.
+    assertLegacyExtractionReady();
     if (!req.file) {
       res.status(400).json({ success: false, message: "No file uploaded." });
       return;
@@ -49,7 +55,7 @@ export const extractProposal = async (
       outcome: result.kind,
       durationMs: Date.now() - startedAt,
       provider: "openai",
-      model: "gpt-4o",
+      model: LEGACY_EXTRACTION_MODEL,
     });
     if (result.kind === "empty_document") {
       res.status(422).json({ success: false, message: result.message });
@@ -74,8 +80,19 @@ export const extractProposal = async (
       },
     });
   } catch (error) {
+    // A governance refusal is a deliberate, safe outcome — surface its code and
+    // status rather than collapsing it into a generic 500.
+    if (error instanceof LegacyExtractionError) {
+      safeLog("info", "legacy_extraction_denied", { outcome: error.code });
+      res.status(error.status).json({
+        success: false,
+        message: error.message,
+        errorCode: error.code,
+      });
+      return;
+    }
     console.error("Extract proposal error:", error);
-    safeLog("error", "legacy_extraction_failed", { provider: "openai", model: "gpt-4o" });
+    safeLog("error", "legacy_extraction_failed", { provider: "openai", model: LEGACY_EXTRACTION_MODEL });
     res.status(500).json({
       success: false,
       message: "Error extracting proposal data from document.",
@@ -83,77 +100,39 @@ export const extractProposal = async (
   }
 };
 
-/* ─── Schedule time normalization ─────────────────────────────────────────
-   Fallback for messy time-of-day values a spreadsheet parser can't confidently
-   read on its own (typos like "11;15 AM", unusual notation, etc.). Only called
-   for the handful of values the client-side regex parser already gave up on —
-   not for every cell — to keep this cheap and fast. */
-const NORMALIZE_TIME_PROMPT = `You are a data-cleaning assistant for messy spreadsheet values.
-
-You will receive a JSON array of raw strings that are each meant to represent a single time of day, taken from an Excel schedule. They may contain typos (e.g. a semicolon instead of a colon), inconsistent spacing, or unusual notation.
-
-For each string, return its time of day in 24-hour "HH:MM" format if you can confidently determine one — correcting obvious typos (e.g. "11;15 AM" -> "11:15", "2.30pm" -> "14:30"). If a value is empty, clearly not a time, or too ambiguous to confidently resolve, return null for that entry.
-
-Return ONLY a JSON object of the form {"results": [...]} — an array of strings or nulls, the same length and in the same order as the input array. No explanation, no markdown fences.`;
-
-const MAX_NORMALIZE_VALUES = 200;
-
-/* ─── POST /api/extract-proposal/normalize-times ─── */
-export const normalizeScheduleTimes = async (
+/* POST /api/extract-proposal/normalize-times
+   The dashboard has called this since the schedule-upload feature shipped and
+   the route never existed, so every call 404'd and the client silently dropped
+   the times it could not parse locally. Governed like the extraction endpoint:
+   it can reach a live provider. */
+export const normalizeTimes = async (
   req: AuthRequest,
   res: Response
 ): Promise<void> => {
   try {
-    const { values } = req.body as { values?: unknown };
-
-    if (!Array.isArray(values) || values.length === 0) {
-      res.status(400).json({ success: false, message: "values must be a non-empty array of strings." });
+    assertLegacyExtractionReady();
+    const values = (req.body as { values?: unknown })?.values;
+    if (!Array.isArray(values)) {
+      res.status(422).json({ success: false, message: "values must be an array of time strings." });
       return;
     }
-    if (values.length > MAX_NORMALIZE_VALUES) {
-      res.status(400).json({ success: false, message: `Too many values in one request (max ${MAX_NORMALIZE_VALUES}).` });
+    if (values.length > MAX_VALUES) {
+      res.status(422).json({ success: false, message: "Send at most " + MAX_VALUES + " values." });
       return;
     }
-    const inputs = values.map((value) => (typeof value === "string" ? value.slice(0, 100) : ""));
-
-    const completion = await getOpenAI().chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: NORMALIZE_TIME_PROMPT },
-        { role: "user", content: JSON.stringify(inputs) },
-      ],
+    const results = await normalizeScheduleTimes(values);
+    safeLog("info", "normalize_times_completed", {
+      outcome: "success",
+      provider: "openai",
+      model: LEGACY_EXTRACTION_MODEL,
     });
-
-    const rawContent = completion.choices[0]?.message?.content ?? "{}";
-    let results: unknown[] = [];
-    try {
-      const cleaned = rawContent
-        .replace(/^```json\s*/i, "")
-        .replace(/^```\s*/i, "")
-        .replace(/```\s*$/i, "")
-        .trim();
-      const parsed = cleaned ? JSON.parse(cleaned) : {};
-      if (Array.isArray(parsed.results)) results = parsed.results;
-    } catch {
-      results = [];
-    }
-
-    const normalized: (string | null)[] = inputs.map((_, index) => {
-      const value = results[index];
-      return typeof value === "string" && /^\d{1,2}:\d{2}$/.test(value.trim())
-        ? value.trim()
-        : null;
-    });
-
-    res.status(200).json({ success: true, data: { results: normalized } });
+    res.status(200).json({ success: true, data: { results } });
   } catch (error) {
-    console.error("Normalize schedule times error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error normalizing schedule time values.",
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
+    if (error instanceof LegacyExtractionError) {
+      res.status(error.status).json({ success: false, message: error.message, errorCode: error.code });
+      return;
+    }
+    safeLog("error", "normalize_times_failed", { outcome: "failure" });
+    res.status(500).json({ success: false, message: "Times could not be normalized." });
   }
 };

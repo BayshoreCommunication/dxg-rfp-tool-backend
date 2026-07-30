@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-07-22 · **Branch:** `ai-agent` (all three repos) · **Status:** audit roadmap M1–M6 complete, DXG pricing engine imported, conversational workspace shipped.
+**Last updated:** 2026-07-29 · **Branch:** `ai-agent` (all three repos) · **Status:** audit roadmap M1–M6 complete, DXG pricing engine imported, conversational workspace shipped, and the read-only Platform AI Assistant integrated behind deny-by-default release gates.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -61,10 +61,24 @@ authorizes the runtime; unset falls back to the historical `NODE_ENV==="test"`
 behaviour. On top of that: `CONVERSATIONS_ENABLED`, `PROPOSAL_CONTEXT_ENABLED`,
 `PROPOSAL_DRAFT_ENABLED`, `CANDIDATE_APPLICATION_ENABLED`,
 `PROPOSAL_WORKFLOW_ENABLED`, `KNOWLEDGE_*`, `GUIDANCE_ENABLED`,
-`INVESTMENT_GUIDANCE_ENABLED`, `PRICING_CORPUS_ENABLED`,
-`VENDOR_ANALYSIS_ENABLED`, `LIVE_AI_*` (+ kill switches). Dashboard mirrors:
-`NEXT_PUBLIC_CONVERSATIONS_ENABLED`, `NEXT_PUBLIC_PROPOSAL_WORKFLOW_ENABLED`,
-`NEXT_PUBLIC_VENDOR_ANALYSIS_ENABLED`; admin: `NEXT_PUBLIC_PRICING_ENABLED`.
+`INVESTMENT_GUIDANCE_ENABLED`, `HISTORICAL_INSIGHTS_ENABLED`, `PRICING_CORPUS_ENABLED`,
+`VENDOR_ANALYSIS_ENABLED`, `CONVERSATION_EXTRACTION_ENABLED`,
+`ROOM_RECOMMENDATIONS_ENABLED`, `LIVE_AI_*` (+ kill switches). Dashboard
+mirrors: `NEXT_PUBLIC_CONVERSATIONS_ENABLED`,
+`NEXT_PUBLIC_PROPOSAL_WORKFLOW_ENABLED`, `NEXT_PUBLIC_VENDOR_ANALYSIS_ENABLED`,
+`NEXT_PUBLIC_CONVERSATION_EXTRACTION_ENABLED`,
+`NEXT_PUBLIC_ROOM_RECOMMENDATIONS_ENABLED`,
+`NEXT_PUBLIC_AI_ASSISTANT_ENABLED`; admin: `NEXT_PUBLIC_PRICING_ENABLED`.
+
+**`.env.local` overrides `.env`** (`config/env.ts` loads it second with
+`override: true`). Reading only `.env` will tell you live AI is off when it is
+on — that misread shaped a whole review cycle.
+
+The Platform Assistant additionally requires `AI_ASSISTANT_ENABLED=true` and
+an organization allowed by `AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS`; production
+fails closed when that cohort is absent or invalid. New messages additionally
+require `AI_ASSISTANT_KILL_SWITCH=false`. Its runtime model remains the
+approved baseline unless `AI_ASSISTANT_MODEL` is explicitly promoted.
 
 Model is pinned to the dated snapshot `gpt-5.4-mini-2026-03-17`.
 
@@ -127,6 +141,63 @@ across 10 categories, 22 regional factors, 13 modifiers, 13 confidence rules.
   **$54,060 against his $54,366 — 0.56%**. That is the strongest acceptance
   evidence the project has; lead with it.
 
+### Room specification recommendations (added 2026-07-27; auto-apply same day)
+
+Conversation messages may carry a bounded `actions` array. Migration 032 adds
+the persisted allowlist for downloading the room schedule template and opening
+Room Specifications; room-schedule intent has a deterministic fallback so the
+guidance remains available when the live model is disabled. Proactive guidance
+appears once after the initial guided questions are answered or skipped, not in
+the opening assistant turn. An explicit room-schedule request still receives
+the actions immediately, and the persisted action guard prevents duplication.
+
+When live chat is unavailable, the deterministic first turn welcomes the
+planner and points to the guided intake; later turns acknowledge conversation
+context. These fallbacks do not claim that chat text was saved or applied to
+proposal fields.
+
+The guided intake includes Event Type among its first eight questions and uses
+the same closed choice list as the advanced proposal editor.
+
+Location intake asks city before state. A validated US city answer can fill an
+empty state and the editor-compatible time-zone label in the same guarded
+Mongo update. Explicit `City, ST` or `City, State` answers are supported;
+ambiguous or unknown bare city names are not guessed and leave the state
+follow-up open. Existing state or time-zone values are not overwritten.
+
+**Policy note for DXG:** originally built review-first; changed the same day
+by product decision to **apply automatically into empty room fields** (the
+planner adjusts values in the form; filled fields are never overwritten and
+are reported as skipped), including `recommended_assumption` values below the
+0.8 automatic-confidence bar. As of 2026-07-29 this is the platform's **only**
+unattended application path: extracted field candidates now require explicit
+review, so this no longer extends a shared boundary — it is the single
+exception to one, which is what DXG needs told. Engine is `room-rules.v3`; v3 evaluates every function in a
+physical room, sizes shared AV guidance from peak function attendance, and
+validates each function schedule independently. Migration 031 added
+automatic/skipped columns. The paragraph below otherwise stands, with crew
+roles now applied as append-only `$addToSet` writes and manual review/apply
+endpoints retained.
+
+Originally: a review-first, deterministic room recommendation capability behind
+`ROOM_RECOMMENDATIONS_ENABLED` / `NEXT_PUBLIC_ROOM_RECOMMENDATIONS_ENABLED`
+(both default off). Confirmed room/event facts plus approved synthetic
+knowledge fixtures produce a strictly validated `room-recommendation.v1`
+payload (migration 030) in which every value is classified
+(`deterministic_derivation` / `recommended_assumption` / questions for
+`unknown`), everything is review-gated, and explicit application is limited to
+a three-field wireless-microphone allowlist with proposal-version CAS **and a
+per-room identity guard** (ordinary wizard saves do not bump the proposal
+version, so apply re-checks each room's `roomFunction` label). Reviewer
+decisions persist with the schema's first enumerated reason-code vocabulary as
+governed evaluation data. Crew suggestions mirror the wizard's auto-suggest
+and are review-only. Extraction is unchanged — `rooms[]` remains excluded from
+the scalar candidate whitelist. Details:
+`docs/architecture/ROOM_RECOMMENDATIONS.md`. Deferred: crew/array application,
+production knowledge adapter, workflow-facts integration, integration-suite
+coverage for the new tables, and any AI enrichment stage (fine-tuning
+explicitly out of scope until enough producer-reviewed outcomes exist).
+
 ### The conversational workspace
 
 Lives at **`/proposals/{id}/assistant`** (one surface, one implementation).
@@ -134,11 +205,30 @@ Lives at **`/proposals/{id}/assistant`** (one surface, one implementation).
 a proposal exists. The editor keeps its stepper and review panels and links to
 the assistant.
 
-Flow: type or attach → sources scan → extraction auto-runs → safe candidates
-auto-apply (empty field, confidence ≥ 0.8, single candidate for that path) →
-guided key questions with typed controls (date picker, choice pills, number) →
-progress card with real completeness → generate cited draft → readiness and
-investment guidance.
+Flow: type or attach → sources scan → extraction auto-runs → cited candidates
+remain read-only and link to explicit per-field review → guided key questions
+with typed controls (date picker, choice pills, number) → progress card with
+real completeness → generate cited draft → readiness and investment guidance.
+
+### The Platform AI Assistant
+
+The dashboard sidebar now exposes a compact helper popup for onboarding,
+navigation, proposal workflow, and event-planning guidance. It is a separate
+bounded module from proposal conversations and is read-only.
+
+PostgreSQL owns personal threads/messages with organization RLS plus explicit
+owner predicates. Approved `operating_guidance` is accessed behind an
+Assistant-owned knowledge port, with versioned platform facts as a safe
+fallback. OpenAI streaming stays behind a provider port and emits only
+versioned product SSE through a same-origin dashboard BFF. Attempts are
+recorded before provider calls; user and organization rate/concurrency limits
+are enforced through Redis with a bounded fallback.
+
+The baseline/candidate evaluation and live staging comparison are complete.
+The runtime baseline remains `gpt-5.4-mini-2026-03-17`; promoting the evaluated
+candidate still requires an explicit Product Owner decision. Production
+internal/cohort rollout also remains blocked until an organization-scoped
+entitlement or deployment allowlist exists.
 
 ---
 
@@ -147,13 +237,10 @@ investment guidance.
 - **MongoDB stays authoritative for proposal content**; PostgreSQL owns the AI
   domain (runs, evidence, reviews, knowledge, pricing, audit, outbox); Redis
   carries references only, never content.
-- **Human control boundary moved deliberately.** Originally every extracted
-  field required explicit approval. Now AI writes into *empty* draft fields
-  automatically; conflicts, filled fields and low-confidence values still need
-  review, and submission/publication remain manual. Per-file "non-confidential"
-  consent was also removed from the workspace (org-wide flags and kill switches
-  still apply). **This is a policy change from the signed pilot design and DXG
-  should be told explicitly.**
+- **Human control boundary is explicit.** Every extracted field requires
+  individual review followed by a current-versus-proposed confirmation.
+  Empty fields are not treated as implicit consent. Submission and publication
+  remain manual.
 - **Never fabricate a number.** Investment guidance refuses categories the
   corpus cannot support, with a concrete ask. All 433 imported records are
   `calibration_tier = 'baseline'`, so every estimate says it rests on national
@@ -175,18 +262,25 @@ investment guidance.
    in-house subtotal (the engine assumes yes, matching his 1.40 × 1.22
    scenario)? Can the questionnaire gain **projector lumens** and an
    **in-house-vs-outside-AV** flag (worth ~20 confidence points on every
-   estimate)? And confirmation of the auto-apply policy change above.
+   estimate)? And confirmation that room recommendations may keep filling empty
+   room fields unattended, now that extracted candidates no longer do.
 
 **Product gaps**
-- **Typed conversation is not extracted.** Facts a planner types in chat are
-  stored as messages only; only files feed extraction. The guided questions
-  partially compensate. This is the biggest remaining gap against "type
-  requirements conversationally".
+- ~~**Typed conversation is not extracted.**~~ **Closed 2026-07-29.** The
+  segmentation pipeline existed but its gate was never switched on;
+  `CONVERSATION_EXTRACTION_ENABLED=true` (with the dashboard mirror
+  `NEXT_PUBLIC_CONVERSATION_EXTRACTION_ENABLED`) now routes typed chat through
+  the same cited-extraction and review path as an upload. While the gate is
+  closed the "Use what I've told you" task renders disabled with the reason
+  rather than failing on click.
 - Stepper and assistant can disagree — the stepper counts gaps from extraction
   runs, questions now also come from empty fields.
 - Completeness scores against all ~120 canonical fields, so it reads harshly
   (~9% for a real proposal). Weighting toward RFP-relevant fields would help.
-- Rooms/arrays are not extracted (only scalar fields are mapped).
+- Rooms/arrays are not extracted (only scalar fields are mapped). The room
+  recommendation capability (2026-07-27) covers part of this gap with
+  deterministic, review-gated suggestions, but extraction itself still skips
+  `roomByRoom`.
 - Invalid extracted candidates are reported by the API (`invalidOperations`)
   but not rendered anywhere.
 - Report envelope: confidence/assumptions/scenarios ride inside the
@@ -196,10 +290,11 @@ investment guidance.
   and exportable client-ready reports are unbuilt.
 
 **Testing**
-- Unit suites are strong (backend 320, dashboard 267) and there is a real
+- Unit suites are strong (backend 440, dashboard 332) and there is a real
   integration suite, but there are still no browser E2E tests, no load tests,
-  and no production smoke tests. Several bugs this cycle were found only by
-  driving the real UI — keep doing that.
+  and no production smoke tests. This remains the highest-value testing gap:
+  every one of the three worst defects in §8 was invisible to unit tests and
+  surfaced only by driving the real UI.
 
 ---
 
@@ -218,8 +313,31 @@ surviving into the 112-field world, each hidden behind a generic error:
   conversation-only proposal was asked nothing (migration 025).
 - Completion state lived in session-local React state and vanished on refresh.
 
+From the 2026-07-29 UI review, the same class again — plus a second class:
+**a value the code reads that the UI never writes**, and **a failure that is
+caught and softened until it becomes invisible**.
+
+- `contactRequired` read `this.isDraft`, but `findOneAndUpdate` binds validators
+  to the query, not the document, so every assisted draft save failed with an
+  opaque "Validation failed".
+- `ROOM_AUDIO_QA_001` required `audienceQa.audienceQa === "Yes"`, a field the
+  Room Specifications form never writes — the mic recommendations were
+  unreachable in the app while every fixture set the flag by hand. Worse, save
+  normalisation *cleared* `audienceQaMethod` whenever that flag was not "Yes",
+  so the planner's Q&A selection was discarded on every save.
+- `uniqueItems` in the conversation reply schema 400'd every live call; the
+  provider error was caught and replaced with the canned acknowledgement, so
+  the assistant appeared to work and simply never used the model.
+- Sidebar completion was `activeStep > step.id`, so opening the last page marked
+  every earlier step done regardless of content.
+- Expiry queried `isActive: true`, which defaults to true, so unsubmitted drafts
+  were swept into the published-proposal lifecycle.
+
 When something "doesn't work", check for a limit or gate written when the
-feature was smaller, and prefer per-item resilience over all-or-nothing.
+feature was smaller, and prefer per-item resilience over all-or-nothing. When
+something "works" but produces nothing, check whether a fallback is hiding a
+hard failure, and whether the field a rule reads is one the UI actually writes.
+Fixtures shaped by hand will not catch that — shape them the way the form saves.
 
 ---
 
@@ -227,8 +345,55 @@ feature was smaller, and prefer per-item resilience over all-or-nothing.
 
 1. Draft the provider comparison and close the recall gap (prompt tuning,
    `gpt-5.4` full tier, or benchmark Claude through the existing port).
-2. Extract from typed conversation, not just files.
+2. Add browser E2E coverage for the assistant → wizard → draft journey. Every
+   defect in §8 was invisible to the unit suites.
 3. Real-asset acceptance run with the SOW test RFP and vendor responses,
    reviewed by the founder — the contractual acceptance test.
 4. Add the two questionnaire fields; promote the report envelope to columns.
 5. Merge `ai-agent` to the default branch and stand up staging per the runbook.
+
+---
+
+## 8. End-to-end UI review (2026-07-29)
+
+A full pass over the AI proposal-creation journey in a browser, against a real
+draft. Everything below is fixed and verified in the running app; the durable
+rules are registered in `DECISIONS.md`.
+
+**Three defects that made features look built but inert**
+
+| What | Why it mattered |
+|---|---|
+| `uniqueItems` in the conversation reply schema | Strict structured output rejects the keyword, so every live reply 400'd and fell back to canned text. The assistant had never once used the model — this alone explained most of what read as "the AI ignores what you type". |
+| Contact validator bound to the query, not the document | Every assisted draft save failed with "Validation failed"; combined with no autosave, a planner could lose a fully specified proposal. |
+| Q&A method cleared on save | The planner's Q&A selection was wiped on every save, which also made the wireless-mic recommendations unreachable. |
+
+**Correctness**
+- Schedule times anchored to the venue zone, end to end (storage, pickers,
+  draft evidence). A 9:15 AM Chicago keynote uploaded from UTC+6 previously
+  reached vendors as "3:00 AM UTC".
+- Evaluation weightings withheld until confirmed (see `DECISIONS.md`).
+- Expiry no longer closes unsubmitted drafts as `rejected`.
+
+**Intake and recovery**
+- Attendance is now in the opening question set; it had ranked below venue
+  state (auto-filled from the city answer) and fell outside the eight-question
+  cap, so it was never asked.
+- Draft edits autosave, with an unsaved-changes warning on unload.
+- A blocked room step names the room and missing fields, then opens and scrolls
+  to it, instead of returning silently.
+- Skipping a question leaves a note with a link to the page that owns the field.
+- Readiness and investment reports are restored on load rather than re-run.
+- Sidebar checkmarks reflect real per-step completion.
+- `asksForRoomScheduleHelp` matches "room schedule" on its own.
+
+**Deliberately not changed**
+- **Auto-titling a proposal from the first message.** The backend treats
+  "Untitled proposal" as empty, which is what keeps "What is this event called?"
+  in the question set; filling it from free text would suppress that question
+  and lock in a guess.
+- **Batching the assistant's server-action requests.** A dev-mode pattern not
+  confirmed to affect production builds.
+- **Backfilling `evaluationMatrixConfirmed` on existing proposals.** Product
+  decision (2026-07-29): old data is being deleted, so only new proposals matter.
+  Every pre-existing proposal therefore reads as unconfirmed.

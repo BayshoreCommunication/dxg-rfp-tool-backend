@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
-import { CandidateApplicationError, type ReviewDecision } from "./domain";
+import { AUTO_APPLY_MIN_CONFIDENCE, CandidateApplicationError, type ReviewDecision } from "./domain";
 import { normalizeCandidate } from "./canonicalMapping";
 import { mongoProposalCandidateMutation } from "./mongoProposalCandidateMutation";
 
@@ -191,6 +191,7 @@ export const candidateApplicationRepository = {
     expectedProposalVersion: number;
     operationIds: string[];
     overwriteConfirmedOperationIds: string[];
+    automatic?: boolean;
     idempotencyKey: string;
     correlationId: string;
   }) {
@@ -220,7 +221,7 @@ export const candidateApplicationRepository = {
           409,
         );
       const selected = await c.query<any>(
-        `SELECT d.id decision_id,d.decision,d.modified_value,o.id operation_id,o.path,o.value FROM rfpilot.candidate_review_decisions d JOIN rfpilot.proposal_context_operations o ON o.id=d.operation_id WHERE d.review_set_id=$1 AND o.id=ANY($2::uuid[])`,
+        `SELECT d.id decision_id,d.decision,d.modified_value,o.id operation_id,o.path,o.value,o.confidence FROM rfpilot.candidate_review_decisions d JOIN rfpilot.proposal_context_operations o ON o.id=d.operation_id WHERE d.review_set_id=$1 AND o.id=ANY($2::uuid[])`,
         [review.rows[0].id, input.operationIds],
       );
       if (
@@ -242,6 +243,21 @@ export const candidateApplicationRepository = {
           "Select only one candidate for each proposal field.",
           409,
         );
+      /* An automatic application must clear the confidence bar the product
+         claims. A human who reviewed a low-confidence candidate and accepted it
+         deliberately is still allowed through — the threshold governs what the
+         system may apply unattended, not what a person may decide. */
+      if (input.automatic) {
+        const weak = selected.rows.find(
+          (x: any) => Number(x.confidence) < AUTO_APPLY_MIN_CONFIDENCE,
+        );
+        if (weak)
+          throw new CandidateApplicationError(
+            "AUTO_APPLY_CONFIDENCE_TOO_LOW",
+            "Automatic application requires high-confidence candidates; review this one instead.",
+            422,
+          );
+      }
       const appId = uuidv7(),
         jobId = uuidv7();
       await c.query(
@@ -453,7 +469,24 @@ export const candidateApplicationRepository = {
     afterChecksum: string | null;
   }) {
     return withPostgresTransaction(async (c) => {
-      await tenant(c, input.organizationMongoId);
+      const organizationId = await tenant(c, input.organizationMongoId);
+      const application = await c.query<{
+        proposal_reference_id: string;
+        actor_external_user_id: string;
+        expected_proposal_version: number;
+        selected_count: number;
+        correlation_id: string;
+        status: string;
+      }>(
+        "SELECT proposal_reference_id,actor_external_user_id,expected_proposal_version,selected_count,correlation_id,status FROM rfpilot.candidate_applications WHERE id=$1 FOR UPDATE",
+        [input.applicationId],
+      );
+      if (!application.rows[0])
+        throw new CandidateApplicationError(
+          "APPLICATION_NOT_FOUND",
+          "Application was not found.",
+          404,
+        );
       await c.query(
         "UPDATE rfpilot.candidate_applications SET status='applied',resulting_proposal_version=$2,before_checksum=coalesce($3,before_checksum),after_checksum=coalesce($4,after_checksum),completed_at=now(),updated_at=now() WHERE id=$1",
         [
@@ -463,6 +496,29 @@ export const candidateApplicationRepository = {
           input.afterChecksum,
         ],
       );
+      if (application.rows[0].status !== "applied")
+        await c.query(
+          `INSERT INTO rfpilot.audit_events(
+             id,organization_id,actor_external_user_id,action,target_type,target_id,
+             decision,correlation_id,metadata
+           ) VALUES($1,$2,$3,'candidate_fields_applied','candidate_application',$4,'allowed',$5,$6::jsonb)`,
+          [
+            uuidv7(),
+            organizationId,
+            application.rows[0].actor_external_user_id,
+            input.applicationId,
+            application.rows[0].correlation_id,
+            JSON.stringify({
+              proposalReferenceId: application.rows[0].proposal_reference_id,
+              fromProposalVersion:
+                application.rows[0].expected_proposal_version,
+              resultingProposalVersion: input.version,
+              selectedCount: application.rows[0].selected_count,
+              beforeChecksumRecorded: input.beforeChecksum !== null,
+              afterChecksumRecorded: input.afterChecksum !== null,
+            }),
+          ],
+        );
     });
   },
   markConflict(input: {
@@ -505,7 +561,22 @@ export const candidateApplicationRepository = {
         "SELECT canonical_path,outcome,safe_error_code FROM rfpilot.candidate_application_items WHERE application_id=$1 ORDER BY ordinal",
         [input.applicationId],
       );
-      return { ...a.rows[0], items: items.rows };
+      return {
+        ...a.rows[0],
+        items: items.rows,
+        recovery: {
+          mode: "manual_restore",
+          fromProposalVersion: Number(a.rows[0].expected_proposal_version),
+          resultingProposalVersion:
+            a.rows[0].resulting_proposal_version === null
+              ? null
+              : Number(a.rows[0].resulting_proposal_version),
+          message:
+            a.rows[0].status === "applied"
+              ? "Restore prior values through the proposal editor or contact an administrator with this application ID."
+              : "No field recovery is needed because this application did not complete.",
+        },
+      };
     });
   },
 };

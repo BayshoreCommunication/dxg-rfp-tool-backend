@@ -17,6 +17,10 @@ const createDependencies = (overrides = {}) => ({
     }),
     archiveOwnedById: async () => true,
     restoreOwnedById: async () => true,
+    findOwnedArchivedPurgeTargetById: async ({ proposalId }) => ({
+      proposalMongoId: proposalId,
+      organizationMongoId: "org-001",
+    }),
     permanentlyDeleteOwnedArchivedById: async () => true,
   },
   settings: {
@@ -154,17 +158,22 @@ test("archive, restore, and permanent delete preserve owner context", async () =
       calls.push({ action: "restore", input });
       return true;
     },
+    findOwnedArchivedPurgeTargetById: async (input) => {
+      calls.push({ action: "find-purge-target", input });
+      return { proposalMongoId: input.proposalId, organizationMongoId: "org-001" };
+    },
     permanentlyDeleteOwnedArchivedById: async (input) => {
       calls.push({ action: "delete", input });
       return true;
     },
   };
+  const noopPurge = async () => {};
   const input = { proposalId: "proposal-001", ownerUserId: "user-001" };
 
   assert.equal((await createArchiveOwnedProposal(proposals)(input)).kind, "archived");
   assert.equal((await createRestoreOwnedProposal(proposals)(input)).kind, "restored");
   assert.equal(
-    (await createPermanentlyDeleteOwnedProposal(proposals)(input)).kind,
+    (await createPermanentlyDeleteOwnedProposal(proposals, noopPurge)(input)).kind,
     "deleted",
   );
   assert.deepEqual(
@@ -176,8 +185,77 @@ test("archive, restore, and permanent delete preserve owner context", async () =
     [
       { action: "archive", ...input },
       { action: "restore", ...input },
+      { action: "find-purge-target", ...input },
       { action: "delete", ...input },
     ],
   );
   assert.ok(calls[0].input.archivedAt instanceof Date);
+});
+
+test("permanent delete purges cross-store artifacts before removing the proposal", async () => {
+  // purgeProposalArtifacts used to be reachable only from the 30-day archive
+  // sweep, so deleting through the product left private S3 objects and
+  // Postgres rows with nothing left pointing at them.
+  const order = [];
+  const proposals = {
+    findOwnedArchivedPurgeTargetById: async () => ({
+      proposalMongoId: "proposal-001",
+      organizationMongoId: "org-001",
+    }),
+    permanentlyDeleteOwnedArchivedById: async () => {
+      order.push("delete");
+      return true;
+    },
+  };
+  const purged = [];
+  const purge = async (targets) => {
+    order.push("purge");
+    purged.push(...targets);
+  };
+
+  const result = await createPermanentlyDeleteOwnedProposal(proposals, purge)({
+    proposalId: "proposal-001",
+    ownerUserId: "user-001",
+  });
+
+  assert.equal(result.kind, "deleted");
+  // Order matters: a failed purge must leave the record identifiable to retry.
+  assert.deepEqual(order, ["purge", "delete"]);
+  assert.deepEqual(purged, [{ proposalMongoId: "proposal-001", organizationMongoId: "org-001" }]);
+});
+
+test("a proposal that is not archived is neither purged nor deleted", async () => {
+  let touched = false;
+  const proposals = {
+    findOwnedArchivedPurgeTargetById: async () => null,
+    permanentlyDeleteOwnedArchivedById: async () => {
+      touched = true;
+      return true;
+    },
+  };
+  const result = await createPermanentlyDeleteOwnedProposal(proposals, async () => {
+    touched = true;
+  })({ proposalId: "proposal-001", ownerUserId: "user-001" });
+
+  assert.equal(result.kind, "not_found");
+  assert.equal(touched, false);
+});
+
+test("a proposal with no organization is still deleted, with nothing to purge", async () => {
+  // The tenant GUC cannot be resolved without an organization, so the purge is
+  // skipped rather than failing the delete — matching the archive sweep.
+  const purgeCalls = [];
+  const proposals = {
+    findOwnedArchivedPurgeTargetById: async () => ({
+      proposalMongoId: "proposal-001",
+      organizationMongoId: "",
+    }),
+    permanentlyDeleteOwnedArchivedById: async () => true,
+  };
+  const result = await createPermanentlyDeleteOwnedProposal(proposals, async (targets) => {
+    purgeCalls.push(targets);
+  })({ proposalId: "proposal-001", ownerUserId: "user-001" });
+
+  assert.equal(result.kind, "deleted");
+  assert.deepEqual(purgeCalls, [[]]);
 });

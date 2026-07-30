@@ -15,5 +15,7 @@ export interface JobRepository {
  claimOutbox(limit:number,dispatcherId:string):Promise<Array<{eventId:string;message:QueueMessage}>>;
  markOutboxPublished(eventId:string):Promise<void>;
  markOutboxFailed(eventId:string,code:string):Promise<void>;
+ reapExpiredLeases(limit:number):Promise<Array<{jobId:string;status:string}>>;
+ listDeadLetters(limit:number):Promise<Array<Record<string,unknown>>>;
  reconcile(limit:number):Promise<QueueMessage[]>;
 }

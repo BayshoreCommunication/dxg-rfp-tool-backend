@@ -153,7 +153,16 @@ export const proposalDraftRepository = {
       userId: input.actorUserMongoId,
       organizationId: input.organizationMongoId,
     })
-      .select("version status isDraft isArchived event venueSchedule")
+      // Every RFP-content section. This previously read "… event venueSchedule",
+      // so a "full proposal draft" was built from 2 of the 12 content sections
+      // and could not describe production scope, rooms, venue technical needs,
+      // budget, or procurement dates at all — while still being asked for a
+      // production_scope section it had no evidence for. contact and
+      // additionalContacts stay excluded: they are personal data the draft
+      // prose never needs, and the provider payload stays minimized.
+      .select(
+        "version status isDraft isArchived event venueSchedule roomByRoom production hybridVirtual contentCreative videoRecordingStep venue uploads budget",
+      )
       .lean<any>();
     const version = Number(proposal?.version || 1);
     if (
@@ -335,6 +344,21 @@ export const proposalDraftRepository = {
         proposalMutation: false,
       };
     });
+  },
+  /* The export needs the event name for its title and filename. Kept here
+     rather than in the controller: controllers must not import persistence
+     models (enforced by tests/repository-baseline.test.js), and this module
+     already owns the Proposal reader. */
+  async readForExport(input: { organizationMongoId: string; actorUserMongoId: string; correlationId: string; proposalMongoId: string }) {
+    const draft = await this.read(input);
+    const proposal = await Proposal.findOne({
+      _id: input.proposalMongoId,
+      userId: input.actorUserMongoId,
+      organizationId: input.organizationMongoId,
+    })
+      .select("event.eventName")
+      .lean<{ event?: { eventName?: string } }>();
+    return { draft, eventName: proposal?.event?.eventName ?? null };
   },
   decideSection(input: {
     organizationMongoId: string;

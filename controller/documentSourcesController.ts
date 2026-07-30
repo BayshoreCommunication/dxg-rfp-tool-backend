@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import type { AuthRequest } from "../middleware/auth";
 import { documentIngestion, documentIngestionEnabled } from "../src/modules/documentIngestion/composition";
 import { DocumentIngestionError } from "../src/modules/documentIngestion/domain";
+import { createTextSource } from "../src/modules/documentIngestion/textSource";
 import { getOwnedProposal } from "../src/modules/proposals/composition";
 
 const context = (req: AuthRequest) => {
@@ -28,21 +29,16 @@ const ownsProposal = async (proposalId:string, _organizationId:string, userId:st
 export const createProposalNotes = async(req:AuthRequest,res:Response)=>{try{
   const ctx=context(req); await ownsProposal(req.params.id,ctx.organizationMongoId,ctx.userMongoId);
   const body=req.body as Record<string,unknown>;
-  const text=typeof body.text==="string"?body.text.replace(/\r\n/g,"\n").trim():"";
-  if(!text||text.length>200_000)throw new DocumentIngestionError("INVALID_NOTES","Notes must be between 1 and 200000 characters.",422);
-  if(text.includes("\u0000"))throw new DocumentIngestionError("INVALID_NOTES","Notes contain unsupported characters.",422);
   const title=typeof body.title==="string"&&body.title.trim()?body.title.trim().slice(0,80):"Pasted notes";
-  const filename=`${title.replace(/[^A-Za-z0-9 _-]/g,"").trim().replace(/\s+/g,"-").toLowerCase()||"pasted-notes"}.txt`;
-  const bytes=Buffer.from(text,"utf8");
-  const idempotencyKey=String(req.headers["idempotency-key"]||"");
-  const session=await documentIngestion.createUpload({...ctx,proposalMongoId:req.params.id,filename,mimeType:"text/plain",sizeBytes:bytes.length,classification:String(body.classification||"confidential"),idempotencyKey});
-  if(session.created){
-    const put=await fetch(session.uploadUrl,{method:"PUT",headers:{"content-type":"text/plain"},body:bytes});
-    if(!put.ok)throw new DocumentIngestionError("STORAGE_UNAVAILABLE","Notes could not be stored. Please try again.",503);
-  }
-  const source=await documentIngestion.complete({...ctx,sourceId:session.source.id});
+  // Shares one implementation of the private-source boundary with
+  // conversational extraction, which drives the same path from the server.
+  const {source,created}=await createTextSource({
+    ...ctx, proposalMongoId:req.params.id, text:body.text, title, origin:"notes",
+    classification:String(body.classification||"confidential"),
+    idempotencyKey:String(req.headers["idempotency-key"]||""),
+  });
   const {objectKey:_privateKey,...safeSource}=source as Record<string,unknown>;
-  res.status(session.created?201:200).json({data:{source:safeSource,created:session.created}});
+  res.status(created?201:200).json({data:{source:safeSource,created}});
 }catch(error){handle(res,error);}};
 
 export const createDocumentUploadSession = async(req:AuthRequest,res:Response)=>{try{

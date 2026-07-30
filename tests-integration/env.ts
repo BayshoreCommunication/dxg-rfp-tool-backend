@@ -19,7 +19,10 @@ if (process.env.INTEGRATION !== "1") {
 
 export const TEST_POSTGRES_URL = "postgres://postgres:rfpilot_test@localhost:55432/rfpilot_test";
 export const TEST_APP_ROLE_URL = "postgres://rfpilot_app:rfpilot_test@localhost:55432/rfpilot_test";
-export const TEST_REDIS_URL = "redis://localhost:56379";
+// Keep the documented default, but allow a caller to select another isolated
+// loopback port when a developer already has a test Redis bound to 56379.
+export const TEST_REDIS_URL =
+  process.env.INTEGRATION_REDIS_URL ?? "redis://localhost:56379";
 export const TEST_MONGODB_URL = "mongodb://localhost:57017/rfpilot_test";
 export const TEST_MONGODB_DB_NAME = "rfpilot_test";
 
@@ -48,6 +51,9 @@ const overrides: Record<string, string> = {
   PROPOSAL_DRAFT_ENABLED: "true",
   PROPOSAL_DRAFT_PROVIDER: "mock",
   CONVERSATIONS_ENABLED: "true",
+  AI_ASSISTANT_ENABLED: "true",
+  AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS: "*",
+  AI_ASSISTANT_KILL_SWITCH: "false",
   PRICING_CORPUS_ENABLED: "true",
 
   // Never call live providers from this suite.

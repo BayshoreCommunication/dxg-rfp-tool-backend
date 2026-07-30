@@ -23,6 +23,8 @@ RFPilot is an event-AV RFP platform. The dashboard serves planners, the admin ap
 | Current status, commitments, known bugs | [PROJECT_STATE.md](PROJECT_STATE.md) |
 | System and repository boundaries | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | AI pipeline, governance, pricing | [AI_LAYER.md](AI_LAYER.md) |
+| Platform Assistant architecture | [architecture/PLATFORM_ASSISTANT.md](architecture/PLATFORM_ASSISTANT.md) |
+| Platform Assistant rollout and rollback | [runbooks/PLATFORM_ASSISTANT_ROLLOUT.md](runbooks/PLATFORM_ASSISTANT_ROLLOUT.md) |
 | Client scope and acceptance obligations | [CLIENT_SCOPE.md](CLIENT_SCOPE.md) |
 | Remaining work | [ROADMAP.md](ROADMAP.md) |
 | Accepted architectural decisions | [DECISIONS.md](DECISIONS.md) |

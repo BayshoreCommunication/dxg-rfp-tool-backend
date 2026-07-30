@@ -9,7 +9,7 @@ export const createDocumentIngestion = (deps: { repository: DocumentRepository; 
   const uploadTtlSeconds = deps.uploadTtlSeconds ?? 900;
   const now = deps.now ?? (() => new Date());
   return {
-    async createUpload(input: { organizationMongoId: string; userMongoId: string; proposalMongoId: string; filename: string; mimeType: string; sizeBytes: number; classification?: string; idempotencyKey: string; correlationId: string }) {
+    async createUpload(input: { organizationMongoId: string; userMongoId: string; proposalMongoId: string; filename: string; mimeType: string; sizeBytes: number; classification?: string; origin?: "upload"|"notes"|"conversation"; segmentMessageId?: string|null; idempotencyKey: string; correlationId: string }) {
       const valid = validateUpload(input.filename, input.mimeType, input.sizeBytes, maxBytes);
       if (!input.idempotencyKey) throw new DocumentIngestionError("IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required.", 400);
       const confidentiality=input.classification==="non_confidential"?"non_confidential":"confidential";

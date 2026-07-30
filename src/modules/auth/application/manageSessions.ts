@@ -8,8 +8,7 @@ import type {
 } from "../domain/ports/sessionPorts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const absoluteMs = 30 * DAY_MS;
-const idleMs = 7 * DAY_MS;
+const DEFAULT_REFRESH_TOKEN_TTL_MS = 30 * DAY_MS;
 
 export const hashOpaqueToken = (token: string): string =>
   crypto.createHash("sha256").update(token, "utf8").digest("hex");
@@ -25,6 +24,7 @@ type Dependencies = {
   now?: () => Date;
   opaqueToken?: () => string;
   id?: () => string;
+  refreshTokenTtlMs?: number;
 };
 
 const deadline = (base: Date, ms: number) => new Date(base.getTime() + ms);
@@ -33,6 +33,8 @@ export const createSessionManager = (dependencies: Dependencies) => {
   const now = dependencies.now ?? (() => new Date());
   const opaqueToken = dependencies.opaqueToken ?? generateOpaqueToken;
   const id = dependencies.id ?? crypto.randomUUID;
+  const refreshTokenTtlMs =
+    dependencies.refreshTokenTtlMs ?? DEFAULT_REFRESH_TOKEN_TTL_MS;
 
   const begin = async (input: {
     account: SessionAccount;
@@ -45,8 +47,8 @@ export const createSessionManager = (dependencies: Dependencies) => {
     const sessionId = id();
     const familyId = id();
     const tokenId = id();
-    const expiresAt = deadline(issuedAt, absoluteMs);
-    const idleExpiresAt = deadline(issuedAt, idleMs);
+    const expiresAt = deadline(issuedAt, refreshTokenTtlMs);
+    const idleExpiresAt = deadline(issuedAt, refreshTokenTtlMs);
     await dependencies.sessions.create({
       organizationId: input.account.organizationId,
       userId: input.account.userId,
@@ -120,7 +122,12 @@ export const createSessionManager = (dependencies: Dependencies) => {
     }
     const refreshToken = opaqueToken();
     const tokenId = id();
-    const idleExpiresAt = new Date(Math.min(deadline(issuedAt, idleMs).getTime(), stored.expiresAt.getTime()));
+    const idleExpiresAt = new Date(
+      Math.min(
+        deadline(issuedAt, refreshTokenTtlMs).getTime(),
+        stored.expiresAt.getTime(),
+      ),
+    );
     await dependencies.sessions.create({
       organizationId: stored.organizationId,
       userId: stored.userId,
@@ -180,6 +187,38 @@ export const createSessionManager = (dependencies: Dependencies) => {
     return revoked;
   };
 
+  const revokePresented = async (input: {
+    refreshToken: string;
+    correlationId: string;
+    reason?: string;
+  }) => {
+    const stored = await dependencies.sessions.findByTokenHash(
+      hashOpaqueToken(input.refreshToken),
+    );
+    if (!stored) return { kind: "not_found" as const, revoked: 0 };
+
+    const reason = input.reason ?? "user_logout";
+    const revoked = await dependencies.sessions.revokeSession({
+      userId: stored.userId,
+      sessionId: stored.sessionId,
+      reason,
+      now: now(),
+    });
+    if (revoked > 0) {
+      await dependencies.audit.append({
+        organizationId: stored.organizationId,
+        actorUserId: stored.userId,
+        action: "auth.session.revoked",
+        targetType: "refresh_session",
+        targetId: stored.sessionId,
+        decision: "revoked",
+        reason,
+        correlationId: input.correlationId,
+      });
+    }
+    return { kind: "revoked" as const, revoked };
+  };
+
   const revokeAll = async (input: {
     userId: string;
     organizationId: string;
@@ -209,5 +248,12 @@ export const createSessionManager = (dependencies: Dependencies) => {
   const listActive = (input: { userId: string; organizationId: string }) =>
     dependencies.sessions.listActive({ ...input, now: now() });
 
-  return { begin, rotate, revokeSession, revokeAll, listActive };
+  return {
+    begin,
+    rotate,
+    revokeSession,
+    revokePresented,
+    revokeAll,
+    listActive,
+  };
 };

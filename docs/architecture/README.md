@@ -46,6 +46,20 @@ Client approval pack: [Slice 3B live-AI pilot approval](../approval-packs/SLICE_
 
 Content-free operational telemetry: [Observability](./OBSERVABILITY.md).
 
+Review-first room specification recommendations: [Room recommendations](./ROOM_RECOMMENDATIONS.md).
+
+Read-only platform guidance and personal Assistant history:
+[Platform AI Assistant](./PLATFORM_ASSISTANT.md).
+
+Deterministic proposal equipment and dependency review:
+[Scope guidance](./SCOPE_GUIDANCE.md).
+
+Room-level gaps, schedule conflicts, and conditional resource reuse:
+[Room and schedule analysis](./ROOM_SCHEDULE_ANALYSIS.md).
+
+Controlled enablement and recovery:
+[Platform Assistant rollout](../runbooks/PLATFORM_ASSISTANT_ROLLOUT.md).
+
 ## Target modular-monolith boundaries
 
 | Boundary | Responsibility |

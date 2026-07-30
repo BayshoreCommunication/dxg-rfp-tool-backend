@@ -30,12 +30,16 @@ import knowledgeRetrievalRoutes from "./routes/knowledgeRetrievalRoute";
 import proposalContextRoutes from "./routes/proposalContextRoute";
 import conversationsRoutes from "./routes/conversationsRoute";
 import guidanceRoutes from "./routes/guidanceRoute";
+import roomRecommendationRoutes from "./routes/roomRecommendationRoute";
 import pricingRoutes from "./routes/pricingRoute";
 import investmentRoutes from "./routes/investmentRoute";
 import vendorAnalysisRoutes from "./routes/vendorAnalysisRoute";
 import candidateApplicationRoutes from "./routes/candidateApplicationRoute";
 import proposalDraftRoutes from "./routes/proposalDraftRoute";
 import proposalWorkflowRoutes from "./routes/proposalWorkflowRoute";
+import platformAssistantRoutes from "./routes/platformAssistantRoute";
+import historicalInsightsRoutes from "./routes/historicalInsightsRoute";
+import governedAssetRoutes from "./routes/governedAssetRoute";
 import { startCronJobs } from "./utils/cronJobs";
 import { initializeNotificationWebSocketServer } from "./utils/notificationService";
 import { getUploadsDir } from "./utils/paths";
@@ -50,6 +54,12 @@ console.log(
 
 const app: Application = express();
 const PORT = process.env.PORT || 8000;
+
+// Production terminates TLS at nginx and proxies from loopback, so without this
+// every request reports req.ip === "127.0.0.1" and each IP-keyed rate limiter
+// collapses into one global bucket shared by all callers. One hop only —
+// trusting more would let a client forge X-Forwarded-For and evade limits.
+app.set("trust proxy", 1);
 
 // Middleware
 app.use(helmet());
@@ -179,12 +189,16 @@ app.use("/api/v1", knowledgeRetrievalRoutes);
 app.use("/api/v1", proposalContextRoutes);
 app.use("/api/v1", conversationsRoutes);
 app.use("/api/v1", guidanceRoutes);
+app.use("/api/v1", roomRecommendationRoutes);
 app.use("/api/v1", pricingRoutes);
 app.use("/api/v1", investmentRoutes);
 app.use("/api/v1", vendorAnalysisRoutes);
 app.use("/api/v1", candidateApplicationRoutes);
 app.use("/api/v1", proposalDraftRoutes);
 app.use("/api/v1", proposalWorkflowRoutes);
+app.use("/api/v1", platformAssistantRoutes);
+app.use("/api/v1", historicalInsightsRoutes);
+app.use("/api/v1", governedAssetRoutes);
 
 // Email campaign routes
 app.use("/api/emails", emailRoutes);

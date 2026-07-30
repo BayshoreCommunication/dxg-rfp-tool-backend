@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { generateInvestmentGuidance, latestInvestmentGuidance } from "../controller/investmentController";
+import { exportInvestmentGuidance, generateInvestmentGuidance, latestInvestmentGuidance } from "../controller/investmentController";
 import { authenticate, authorizeAction } from "../middleware/auth";
 import { securityRateLimit } from "../middleware/securityRateLimit";
 
@@ -8,5 +8,6 @@ const limit = securityRateLimit({ name: "investment-guidance", limit: 30, window
 
 router.post("/proposals/:proposalId/investment-guidance-reports", authenticate, authorizeAction("proposal:write"), limit, generateInvestmentGuidance);
 router.get("/proposals/:proposalId/investment-guidance-reports/latest", authenticate, authorizeAction("proposal:read"), latestInvestmentGuidance);
+router.get("/proposals/:proposalId/investment-guidance-reports/export", authenticate, authorizeAction("proposal:read"), limit, exportInvestmentGuidance);
 
 export default router;

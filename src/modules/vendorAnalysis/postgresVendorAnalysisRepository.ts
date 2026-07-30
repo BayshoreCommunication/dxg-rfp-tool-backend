@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import nodeCrypto from "node:crypto";
 import type {PoolClient} from "pg";
 import {v7 as uuidv7} from "uuid";
 import {withPostgresTransaction} from "../../../config/postgres";
@@ -117,10 +118,10 @@ export const vendorAnalysisRepository={
    throw new VendorAnalysisError("PROPOSAL_NOT_FOUND","Proposal was not found.",404);
   }
   const requirements=buildRequirements(proposal);
-  const vendorEvidence:Array<{id:string;text:string}>=[];
+  const vendorEvidence:Array<{id:string;text:string;origin:string;locator:unknown}>=[];
   let skippedDocuments=0;
   const message=String(response.message||"").trim();
-  if(message)vendorEvidence.push({id:`vendor-fragment-${vendorEvidence.length}`,text:message.slice(0,8000)});
+  if(message)vendorEvidence.push({id:`vendor-fragment-${vendorEvidence.length}`,text:message.slice(0,8000),origin:"message",locator:{kind:"message"}});
   for(const document of Array.isArray(response.documents)?response.documents:[]){
    if(vendorEvidence.length>=MAX_EVIDENCE)break;
    const url=String(document?.url||"");
@@ -138,7 +139,7 @@ export const vendorAnalysisRepository={
     const parsed=await deterministicParser.parse(bytes,mimeType);
     for(const fragment of parsed.fragments){
      if(vendorEvidence.length>=MAX_EVIDENCE)break;
-     vendorEvidence.push({id:`vendor-fragment-${vendorEvidence.length}`,text:fragment.content.slice(0,8000)});
+     vendorEvidence.push({id:`vendor-fragment-${vendorEvidence.length}`,text:fragment.content.slice(0,8000),origin:objectKey,locator:fragment.coordinates??{}});
     }
    }catch{
     skippedDocuments+=1;
@@ -149,11 +150,27 @@ export const vendorAnalysisRepository={
    await this.fail({organizationMongoId:input.organizationMongoId,runId:input.runId,code:"VENDOR_EVIDENCE_EMPTY",status:"failed"});
    throw new VendorAnalysisError("VENDOR_EVIDENCE_EMPTY","The vendor response contains no analyzable evidence.",422);
   }
-  const live=await liveVendorResponseAnalysis(requirements,vendorEvidence);
+  const live=await liveVendorResponseAnalysis(requirements,vendorEvidence,{runType:"vendor_response_analyze",runId:meta.id,organizationId:meta.organization_id});
   const findings=live.findings.slice(0,MAX_FINDINGS);
   const escalationCount=findings.filter(finding=>finding.needsHumanReview).length;
   await withPostgresTransaction(async(c)=>{
    const org=await tenant(c,input.organizationMongoId);
+   const citedIds=new Set(findings.flatMap(f=>f.citations.filter(Boolean)));
+   const citedEvidence=vendorEvidence.filter(e=>citedIds.has(e.id)).slice(0,200);
+   for(let i=0;i<citedEvidence.length;i++){
+    const item=citedEvidence[i];
+    await c.query(
+     "INSERT INTO rfpilot.vendor_analysis_evidence(id,organization_id,run_id,fragment_id,origin,locator,excerpt,content_checksum,ordinal) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9) ON CONFLICT (run_id,fragment_id) DO NOTHING",
+     [
+      uuidv7(),org,input.runId,item.id,item.origin.slice(0,500),JSON.stringify(item.locator??{}),
+      // A short excerpt, not the fragment: enough for a reviewer to see what
+      // was cited without copying the vendor's documents into Postgres.
+      item.text.slice(0,1000)||" ",
+      nodeCrypto.createHash("sha256").update(item.text).digest("hex"),
+      Math.min(i,199),
+     ],
+    );
+   }
    for(let i=0;i<findings.length;i++){
     const finding=findings[i];
     await c.query(
@@ -222,8 +239,22 @@ export const vendorAnalysisRepository={
     "SELECT ordinal,kind,requirement_path,requirement_label,verdict,message,confidence,needs_human_review,citations FROM rfpilot.vendor_analysis_findings WHERE run_id=$1 ORDER BY ordinal",
     [run.rows[0].id],
    );
+   // Returned alongside the findings so a citation id resolves to the words
+   // that produced it. Without this the ids are meaningless to a reader and the
+   // UI can only show the claim, never its basis.
+   const evidence=await c.query<any>(
+    "SELECT fragment_id,origin,locator,excerpt,content_checksum FROM rfpilot.vendor_analysis_evidence WHERE run_id=$1 ORDER BY ordinal",
+    [run.rows[0].id],
+   );
    const r=run.rows[0];
    return{
+    evidence:evidence.rows.map((row:any)=>({
+     fragmentId:row.fragment_id,
+     origin:row.origin,
+     locator:row.locator,
+     excerpt:row.excerpt,
+     checksum:row.content_checksum,
+    })),
     run:{
      runId:r.id,
      jobId:r.job_id,

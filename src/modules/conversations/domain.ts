@@ -1,4 +1,5 @@
 import { aiRuntimeAuthorized } from "../../../config/aiEnvironment";
+import { approvedCandidatePaths } from "../candidateApplication/canonicalMapping";
 
 export class ConversationError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 422) { super(message); }
@@ -8,6 +9,38 @@ export const conversationsEnabled = () => aiRuntimeAuthorized() && process.env.C
 
 export const MESSAGE_INTENTS = ["chat", "extract_requirements", "generate_draft"] as const;
 export type MessageIntent = (typeof MESSAGE_INTENTS)[number];
+
+export const ASSISTANT_ACTION_IDS = [
+  "download_room_schedule_template",
+  "open_room_specifications",
+] as const;
+export type AssistantActionId = (typeof ASSISTANT_ACTION_IDS)[number];
+export const ROOM_SCHEDULE_ASSISTANT_ACTIONS: readonly AssistantActionId[] = Object.freeze([
+  "download_room_schedule_template",
+  "open_room_specifications",
+]);
+export const ROOM_SCHEDULE_GUIDANCE_MESSAGE =
+  "Now that the key event details are covered, you can add room specifications. If you have a room schedule, download the sample sheet, add one row per function, and upload it in Room Specifications. Functions with the same Room Name will share AV specifications.";
+
+export const parseAssistantActions = (value: unknown): AssistantActionId[] => {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value)]
+    .filter((item): item is AssistantActionId =>
+      typeof item === "string" && ASSISTANT_ACTION_IDS.includes(item as AssistantActionId))
+    .slice(0, 2);
+};
+
+export const asksForRoomScheduleHelp = (message: string): boolean => {
+  const normalized = message.trim().toLowerCase();
+  // Naming the feature is enough on its own: planners ask for help with "the
+  // room schedule" far more often than they mention a spreadsheet, and the old
+  // room-word AND sheet-word pairing sent those turns to the generic fallback.
+  if (/\broom (schedule|schedules|by room|grid|matrix)\b/.test(normalized)) return true;
+  if (/\b(schedule|function) (template|sheet|spreadsheet|upload|import)\b/.test(normalized)) return true;
+  const roomContext = /\b(room|rooms|function|functions|schedule)\b/.test(normalized);
+  const sheetContext = /\b(excel|xlsx|spreadsheet|sheet|template|upload|download|import)\b/.test(normalized);
+  return roomContext && sheetContext;
+};
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -87,6 +120,34 @@ const STREAMING_PLATFORMS = Object.freeze([
   "Vendor Recommendation Needed",
   "Other",
 ]);
+const VENUE_TYPES = Object.freeze([
+  "Convention Center",
+  "Hotel Ballroom",
+  "Resort / Conference Center",
+  "Theater / Performing Arts Venue",
+  "Arena / Stadium",
+  "Corporate Campus / HQ",
+  "Outdoor Venue / Tent",
+  "Broadcast Studio",
+  "Restaurant / Private Event Space",
+  "Cruise Ship",
+  "Other",
+]);
+const EVENT_TYPES = Object.freeze([
+  "Corporate Conference",
+  "User / Customer Summit",
+  "Sales Kickoff (SKO)",
+  "Annual Meeting / Shareholder Event",
+  "Product Launch",
+  "Awards Show / Gala",
+  "Trade Show / Exhibition",
+  "Internal Town Hall",
+  "Training / Certification Event",
+  "Association / Member Conference",
+  "Industry Symposium",
+  "Hybrid Broadcast / Studio Production",
+  "Other",
+]);
 export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Object.freeze([
   // Asked first: the proposal is created with a placeholder title, and every
   // downstream surface (breadcrumb, draft, exports) reads better once it is real.
@@ -94,16 +155,29 @@ export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Obje
   { path: "/content/event/startDate", prompt: "When does the event start? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
   { path: "/content/event/endDate", prompt: "When does the event end? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
   { path: "/content/event/eventFormat", prompt: "Is the event in-person, hybrid, or virtual?", impact: "scope", answerType: "choice", options: Object.freeze(["In-Person", "Hybrid", "Virtual"]) },
+  { path: "/content/event/eventType/eventType", prompt: "What type of event are you planning?", impact: "scope", answerType: "choice", options: EVENT_TYPES },
+  { path: "/content/venueSchedule/venueName", prompt: "Which venue will host the event? Enter the venue name, or use Skip if it is still undecided.", impact: "cost", answerType: "text" },
+  { path: "/content/venueSchedule/venueCity", prompt: "Which city will host the event? Add the state for ambiguous city names (for example, Portland, OR).", impact: "cost", answerType: "text" },
+  // Attendance drives room sizing, crew and nearly every line a vendor quotes,
+  // so it belongs in the opening set. It used to sit below venue state — which
+  // the city answer fills in automatically — and fell outside the cap, leaving
+  // the readiness check and the investment estimate to guess at head count.
   { path: "/content/event/attendees", prompt: "How many in-person attendees are expected?", impact: "cost", answerType: "number" },
+  { path: "/content/venueSchedule/venueState", prompt: "Which state or region will host the event?", impact: "cost", answerType: "text" },
+  { path: "/content/venueSchedule/venueType", prompt: "What type of venue will host the event?", impact: "cost", answerType: "choice", options: VENUE_TYPES },
   { path: "/content/venueSchedule/numberOfEventRooms", prompt: "How many event rooms are required?", impact: "cost", answerType: "number" },
-  { path: "/content/venueSchedule/venueCity", prompt: "Which city will host the event?", impact: "cost", answerType: "text" },
+  // Asked only after a real venue is selected.
+  { path: "/content/venueSchedule/venueConfirmedStatus", prompt: "What is the venue status?", impact: "cost", answerType: "choice", options: Object.freeze(["Contract signed", "Verbally confirmed", "Preferred", "Not selected"]) },
   { path: "/content/venueSchedule/isUnionVenue", prompt: "Is the venue a union venue? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
   { path: "/content/venue/inHouseAvRequired", prompt: "Must the venue's in-house AV provider be used? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
+  { path: "/content/venue/riggingRequired", prompt: "Will this venue require rigging? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
+  { path: "/content/venue/powerDropsRequired", prompt: "Will dedicated power drops be required? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
+  { path: "/content/venueSchedule/loadInDate", prompt: "When can production load in? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
+  { path: "/content/venueSchedule/loadInTime", prompt: "What time can production load in? (HH:MM)", impact: "schedule", answerType: "text" },
+  { path: "/content/venue/venueAccessRequirements", prompt: "Are there loading dock, freight elevator, security, parking, or access restrictions?", impact: "production", answerType: "text" },
   { path: "/content/budget/proposalSubmissionDueDate", prompt: "When is the proposal due? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
   { path: "/content/hybridVirtual/streamingPlatform", prompt: "Which streaming platform will the event use?", impact: "production", answerType: "choice", options: STREAMING_PLATFORMS },
   { path: "/content/videoRecordingStep/videoRecordingRequired", prompt: "Do you need video recording? (yes / no / not sure)", impact: "production", answerType: "choice", options: YES_NO },
-  { path: "/content/venue/riggingRequired", prompt: "Does the venue require rigging? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
-  { path: "/content/venue/powerDropsRequired", prompt: "Are power drops required? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
 ]);
 
 export const importantFieldQuestionByPath = (path: string): ImportantFieldQuestion | null =>
@@ -116,7 +190,26 @@ export const CATCH_ALL_PATH_THRESHOLD = 8;
 export const isCatchAllIssue = (code: string, paths: string[]): boolean =>
   paths.length > CATCH_ALL_PATH_THRESHOLD || /missing[_-]?(supported[_-]?)?fields/i.test(code);
 
-export const MAX_OPEN_FIELD_QUESTIONS = 10;
+// A beginner can produce a useful first draft after the eight highest-impact
+// facts. Remaining fields become prioritized improvements after the draft
+// instead of an apparently endless intake interview.
+export const MAX_OPEN_FIELD_QUESTIONS = 8;
+export const MAX_ADAPTIVE_VENUE_QUESTIONS = 19;
+export const ADAPTIVE_VENUE_FIELD_PATHS = Object.freeze(
+  IMPORTANT_FIELD_QUESTIONS
+    .slice(MAX_OPEN_FIELD_QUESTIONS, MAX_ADAPTIVE_VENUE_QUESTIONS)
+    .map((field) => field.path),
+);
+
+export const isSelectedVenueName = (value: unknown): boolean => {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 && !["not selected", "tbd", "undecided", "unknown", "n/a"].includes(normalized);
+};
+
+export const venueNeedsOperationalFollowUp = (name: unknown, confirmationStatus: unknown): boolean =>
+  isSelectedVenueName(name) &&
+  !(typeof confirmationStatus === "string" && ["not_selected", "not selected"].includes(confirmationStatus.trim().toLowerCase()));
 
 // Deterministic per-field issue code so the (proposal, run, issue_code) unique
 // key deduplicates exploded questions. Clamped to the 100-char column limit.
@@ -136,9 +229,18 @@ export const questionAnswerType = (paths: string[]): { answerType: ImportantFiel
 };
 
 // The canonical path an answer should be written to — only when the question
-// targets exactly one whitelisted field, so free-form answers stay chat-only.
+// targets exactly one applicable field, so free-form answers stay chat-only.
+//
+// This used to require membership of IMPORTANT_FIELD_QUESTIONS, the 14-question
+// list the assistant asks proactively. That list was doing double duty as both
+// "questions we ask" and "answers we are willing to write", and only the first
+// is correct: a CROSS_SOURCE_CONFLICT question can name any of the ~114
+// whitelisted paths, so for roughly a hundred of them the planner answered and
+// nothing was written — the conflict stayed unresolved forever. The write guard
+// is normalizeCandidate, which rejects an invalid value with a 422 before the
+// question resolves; membership of the proactive list is not a safety property.
 export const answerTargetPath = (paths: string[]): string | null =>
-  paths.length === 1 && importantFieldQuestionByPath(paths[0]) ? paths[0] : null;
+  paths.length === 1 && approvedCandidatePaths.includes(paths[0]) ? paths[0] : null;
 
 // Plain-language prompts for machine issue codes shown as clarification cards.
 const QUESTION_PROMPTS: Record<string, string> = {

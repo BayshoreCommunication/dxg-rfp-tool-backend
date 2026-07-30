@@ -1,6 +1,12 @@
 const test = require("node:test"),
   assert = require("node:assert/strict");
-const { computeGuidance, guidanceEnabled } = require("../src/modules/guidance/domain");
+const fs = require("node:fs");
+const path = require("node:path");
+const {
+  computeGuidance,
+  guidanceEnabled,
+  PROPOSAL_ANALYSIS_VERSION,
+} = require("../src/modules/guidance/domain");
 
 const withEnv = (overrides, fn) => {
   const saved = {};
@@ -23,13 +29,70 @@ test("empty proposals score low and sparse sections are reported", () => {
 
 test("schedule conflicts produce blocking findings with field paths", () => {
   const result = computeGuidance({
+    version: 7,
     event: { startDate: "2026-09-10", endDate: "2026-09-08" },
     venueSchedule: { loadInDate: "2026-09-12", showStartDate: "2026-09-09" },
   });
   const reversed = result.findings.find((f) => f.code === "EVENT_DATES_REVERSED");
   assert.equal(reversed.severity, "blocking");
   assert.deepEqual(reversed.paths, ["/content/event/startDate", "/content/event/endDate"]);
+  assert.equal(reversed.id, `${PROPOSAL_ANALYSIS_VERSION}:event_dates_reversed:/content/event/startDate|/content/event/endDate`);
+  assert.equal(reversed.proposalVersion, 7);
+  assert.equal(reversed.analysisVersion, PROPOSAL_ANALYSIS_VERSION);
+  assert.equal(reversed.provenance.source, "current_proposal");
+  assert.equal(reversed.provenance.ruleId, "EVENT_DATES_REVERSED");
+  assert.ok(reversed.evidence.every((item) => item.state === "conflicting"));
+  assert.match(reversed.suggestedNextStep, /date range/i);
   assert.ok(result.findings.some((f) => f.code === "LOAD_IN_AFTER_SHOW" && f.severity === "blocking"));
+});
+
+test("analysis returns a concise non-contact proposal summary", () => {
+  const result = computeGuidance({
+    version: 3,
+    event: {
+      eventName: "Leadership Summit",
+      eventFormat: "Hybrid",
+      attendees: "1500",
+      startDate: "2026-10-01",
+      endDate: "2026-10-03",
+    },
+    venueSchedule: { numberOfEventRooms: "6" },
+    contact: { contactEmail: "private@example.com" },
+  });
+  assert.deepEqual(result.summary, {
+    eventName: "Leadership Summit",
+    eventFormat: "Hybrid",
+    dateRange: "2026-10-01 to 2026-10-03",
+    attendeeCount: 1500,
+    roomCount: 6,
+  });
+  assert.equal(JSON.stringify(result.summary).includes("private@example.com"), false);
+});
+
+test("objective missing and conditional information becomes deterministic questions", () => {
+  const result = computeGuidance({
+    event: { eventName: "Summit", eventFormat: "Hybrid" },
+    venueSchedule: { numberOfEventRooms: "1" },
+    videoRecordingStep: { videoRecordingRequired: "YES" },
+  });
+  const codes = new Set(result.findings.map((finding) => finding.code));
+  for (const expected of [
+    "ATTENDEE_COUNT_MISSING",
+    "STREAMING_PLATFORM_MISSING",
+    "CAMERA_COUNT_MISSING",
+    "RECORDING_DELIVERY_MISSING",
+    "CONTACT_DETAILS_INCOMPLETE",
+  ]) {
+    assert.equal(codes.has(expected), true, expected);
+  }
+  assert.ok(
+    result.findings.every(
+      (finding) =>
+        finding.confidence === "high" &&
+        finding.explanation &&
+        finding.suggestedNextStep,
+    ),
+  );
 });
 
 test("production and risk rules fire on realistic inconsistencies", () => {
@@ -54,4 +117,75 @@ test("a consistent proposal produces no blocking findings", () => {
   });
   assert.equal(result.findings.filter((f) => f.severity === "blocking").length, 0);
   assert.ok(result.overall > 0);
+});
+
+test("completeness weights the fields a vendor cannot quote without", () => {
+  // Every one of the 114 whitelisted paths counted equally, so answering
+  // optional questions about sponsor overlays scored the same as naming the
+  // event. A planner could see a healthy percentage on a proposal no vendor
+  // could price.
+  const essentialsOnly = {
+    event: { eventName: "Gala", eventFormat: "in_person", startDate: "2026-09-01", endDate: "2026-09-02", attendees: "500" },
+    venueSchedule: { venueName: "Hall", venueCity: "Tampa", venueState: "FL", numberOfEventRooms: "3", loadInDate: "2026-08-31", showStartDate: "2026-09-01", showEndDate: "2026-09-02" },
+    venue: { inHouseAvRequired: "yes" },
+    videoRecordingStep: { videoRecordingRequired: "yes" },
+    budget: { estimatedAvBudget: "100000", proposalSubmissionDueDate: "2026-08-01" },
+  };
+  const trimmingsOnly = {
+    hybridVirtual: { sponsorOverlays: "yes", virtualNetworking: "yes", virtualBackgroundDesign: "yes", liveVirtualQa: "yes", onDemandRecording: "yes", closedCaptions: { closedCaptions: "yes", captionType: "live" }, streamingPlatform: "zoom", streamOwnership: "client", dedicatedVirtualProducer: "yes", virtualOnlyBreakouts: "no", platformIntegrationWithAv: "yes", virtualAttendeeEstimate: "200" },
+    contentCreative: { contentServicesNeeded: "yes", presentationTemplateDesign: "yes", speakerSlideCollection: "yes", motionGraphicsOpenerVideo: "yes", lowerThirdsNameSupers: "yes", eventLogoBrandStandards: "yes", sizzleRecapVideo: "yes", sponsorRecognitionContent: "yes", socialMediaContentCapture: "yes", virtualBackgroundDesign: "yes", creativeDirectionNotes: "notes" },
+  };
+
+  const withEssentials = computeGuidance(essentialsOnly);
+  const withTrimmings = computeGuidance(trimmingsOnly);
+
+  // 16 essentials vs 23 optional answers: unweighted, the second proposal wins.
+  assert.ok(
+    withEssentials.overall > withTrimmings.overall,
+    `a quotable proposal must outscore an unquotable one (${withEssentials.overall} vs ${withTrimmings.overall})`,
+  );
+  assert.ok(!withEssentials.findings.some((f) => f.code === "ESSENTIALS_MISSING"));
+
+  // The percentage says how far along; this says what to do next.
+  const missing = withTrimmings.findings.find((f) => f.code === "ESSENTIALS_MISSING");
+  assert.equal(missing.severity, "warning");
+  assert.equal(missing.paths.length, 16);
+  assert.ok(missing.paths.includes("/content/event/eventName"));
+  assert.match(missing.message, /16 fields vendors need in order to quote are still empty\./);
+});
+
+test("every essential path is one the proposal can actually hold", () => {
+  // A typo in the weight table would silently weight nothing, and the missing-
+  // essentials finding would point at a path the dashboard cannot open.
+  const { approvedCandidatePaths } = require("../src/modules/candidateApplication/canonicalMapping");
+  const approved = new Set(approvedCandidatePaths);
+  const source = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "..", "src/modules/guidance/domain.ts"), "utf8",
+  );
+  const table = source.slice(source.indexOf("const ESSENTIAL_PATHS"), source.indexOf("const SECTION_LABELS"));
+  const paths = [...table.matchAll(/"(\/content\/[^"]+)"/g)].map((m) => m[1]);
+  assert.equal(paths.length, 16, "the table is the one being checked");
+  for (const path of paths) assert.ok(approved.has(path), `essential path is on the whitelist: ${path}`);
+});
+
+test("proposal analysis persistence adds summary, versioning, and stale detection", () => {
+  const root = path.resolve(__dirname, "..");
+  const up = fs.readFileSync(
+    path.join(root, "migrations/postgres/035_proposal_analysis_summary.up.sql"),
+    "utf8",
+  );
+  const repository = fs.readFileSync(
+    path.join(root, "src/modules/guidance/postgresGuidanceRepository.ts"),
+    "utf8",
+  );
+  const route = fs.readFileSync(
+    path.join(root, "routes/guidanceRoute.ts"),
+    "utf8",
+  );
+  assert.ok(up.includes("ADD COLUMN summary jsonb"));
+  assert.ok(up.includes("proposal-analysis.v2"));
+  assert.ok(repository.includes("currentProposalVersion"));
+  assert.ok(repository.includes("stale:"));
+  assert.ok(repository.includes("userId: ctx.actorUserMongoId"));
+  assert.ok(route.includes('authorizeAction("proposal:read")'));
 });

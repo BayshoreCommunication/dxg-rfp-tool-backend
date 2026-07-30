@@ -73,17 +73,19 @@ export const createSubmitVendorResponse = (dependencies: {
       : null;
   const folder = dependencies.folderName.replace(/^\/+|\/+$/g, "") || "rfp-tool";
 
-  // Inline malware scan (when configured) BEFORE anything reaches storage.
-  // A positive detection rejects the whole submission; scanner absence or
-  // outage fails open inside the scan adapter.
+  // Inline malware scan BEFORE anything reaches storage. Both a positive
+  // detection and an unperformable scan reject the whole submission — this is
+  // the only unauthenticated file intake in the system, so it fails closed.
   if (dependencies.malwareScan) {
     for (const file of input.files) {
       const outcome = await dependencies.malwareScan(file.path);
-      if (outcome === "infected") {
+      if (outcome === "infected" || outcome === "unavailable") {
         await Promise.all(
           input.files.map((pending) => dependencies.storage.cleanup(pending.path)),
         );
-        return { kind: "infected" as const, fileName: file.originalname };
+        return outcome === "infected"
+          ? { kind: "infected" as const, fileName: file.originalname }
+          : { kind: "scan_unavailable" as const };
       }
     }
   }

@@ -1,9 +1,5 @@
 import { Router } from "express";
-import {
-  extractProposal,
-  extractUpload,
-  normalizeScheduleTimes,
-} from "../controller/extractController";
+import { extractProposal, extractUpload, normalizeTimes } from "../controller/extractController";
 import { authenticate, authorizeAction } from "../middleware/auth";
 import { securityRateLimit } from "../middleware/securityRateLimit";
 
@@ -20,7 +16,12 @@ router.post(
   extractProposal,
 );
 
-/* POST /api/extract-proposal/normalize-times — clean up messy time-of-day strings via AI */
-router.post("/normalize-times", authenticate, normalizeScheduleTimes);
+router.post(
+  "/normalize-times",
+  authenticate,
+  authorizeAction("proposal:write"),
+  securityRateLimit({ name: "normalize-times", limit: 60, windowMs: 15 * 60_000 }),
+  normalizeTimes,
+);
 
 export default router;

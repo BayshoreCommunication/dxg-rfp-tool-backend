@@ -35,7 +35,9 @@ export const mongoProposalWriteRepository: ProposalWriteRepository = {
     return Proposal.findOneAndUpdate(
       { _id: proposalId, userId: ownerUserId, ...tenantFilter() },
       { $set: updates },
-      { new: true, ...(runValidators ? { runValidators: true } : {}) },
+      // context:"query" binds conditional validators to the query so they can
+      // read the pending update; without it they see no lifecycle fields at all.
+      { new: true, ...(runValidators ? { runValidators: true, context: "query" as const } : {}) },
     )
       .select(DETAIL_PROPOSAL_SELECT)
       .lean();
@@ -67,6 +69,22 @@ export const mongoProposalWriteRepository: ProposalWriteRepository = {
       { new: true },
     ).select("_id");
     return proposal !== null;
+  },
+
+  async findOwnedArchivedPurgeTargetById({ proposalId, ownerUserId }) {
+    const proposal = await Proposal.findOne({
+      _id: proposalId,
+      userId: ownerUserId,
+      isArchived: true,
+      ...tenantFilter(),
+    })
+      .select("_id organizationId")
+      .lean<{ _id: unknown; organizationId?: unknown } | null>();
+    if (!proposal) return null;
+    return {
+      proposalMongoId: String(proposal._id),
+      organizationMongoId: proposal.organizationId ? String(proposal.organizationId) : "",
+    };
   },
 
   async permanentlyDeleteOwnedArchivedById({ proposalId, ownerUserId }) {

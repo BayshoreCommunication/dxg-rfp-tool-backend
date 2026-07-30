@@ -1,4 +1,5 @@
 import type { ProposalFileStoragePort } from "../domain/ports/proposalFileStoragePort";
+import { PROPOSAL_FILE_PRIVATE_SEGMENT } from "./proposalFileAccess";
 
 export type ProposalUploadFile = {
   fieldname: string;
@@ -27,7 +28,9 @@ export const createUploadProposalFiles = (dependencies: {
   for (const [index, file] of input.files.entries()) {
     const objectKey = [
       dependencies.folderName,
-      "proposals",
+      // The private segment marks the object as one that must be presigned to
+      // read, and the owner id that follows is what authorizes that presign.
+      PROPOSAL_FILE_PRIVATE_SEGMENT,
       input.ownerUserId,
       `${now()}-${index}-${safeObjectName(file.originalname)}`,
     ].join("/");
