@@ -52,15 +52,18 @@ test("live AI pilot remains bounded, cited, durable, and read-only", () => {
   assert.equal(context.includes("Proposal.update"), false);
   assert.equal(draft.includes("Proposal.update"), false);
 });
-test("live provider secret remains server-only", () => {
-  const dashboard = fs.readFileSync(
-      path.join(root, "../dxg-rfp-tool-dashboard/app/actions/proposalDraft.ts"),
-      "utf8",
-    ),
-    admin = fs.readFileSync(
-      path.join(root, "../dxg-rfp-tool-admin/app/actions/liveAiPilot.ts"),
-      "utf8",
-    );
+test("live provider secret remains server-only", (t) => {
+  // Cross-repository guard, only enforceable in the multi-repo workspace.
+  // CI checks out this repository alone, so skip (never fail) when the
+  // sibling repositories are absent.
+  const dashboardPath = path.join(root, "../dxg-rfp-tool-dashboard/app/actions/proposalDraft.ts");
+  const adminPath = path.join(root, "../dxg-rfp-tool-admin/app/actions/liveAiPilot.ts");
+  if (!fs.existsSync(dashboardPath) || !fs.existsSync(adminPath)) {
+    t.skip("sibling dashboard/admin repositories are not checked out");
+    return;
+  }
+  const dashboard = fs.readFileSync(dashboardPath, "utf8"),
+    admin = fs.readFileSync(adminPath, "utf8");
   assert.equal(dashboard.includes("OPENAI_API_KEY"), false);
   assert.equal(admin.includes("OPENAI_API_KEY"), false);
 });
