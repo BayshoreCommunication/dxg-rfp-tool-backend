@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.github
+.env
+.env.local
+.env.production
+uploads
+docs
+tests
+tests-integration
+deploy/observability
+*.log
+.DS_Store
+patch_controller.ps1

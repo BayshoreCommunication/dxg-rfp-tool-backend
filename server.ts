@@ -7,7 +7,7 @@ import http from "http";
 import mongoose from "mongoose";
 import morgan from "morgan";
 import connectDB from "./config/db";
-import { checkPostgres, postgresEnabled } from "./config/postgres";
+import { checkPostgres, closePostgres, postgresEnabled } from "./config/postgres";
 import authRoutes from "./routes/authRoute";
 import adminRoutes from "./routes/adminRoute";
 import adminUserRoutes from "./routes/adminUserRoute";
@@ -242,12 +242,61 @@ if (require.main === module) {
     try {
       // Connect to database first
       await connectDB();
-      
-      // Initialize background workers
-      startCronJobs();
+
+      // The cron jobs mutate and purge proposals with no cross-replica
+      // locking, and two of them run immediately at startup. When the API
+      // runs as more than one instance, exactly one may keep crons on;
+      // the rest must set CRON_ENABLED=false. Default preserves the
+      // single-instance behavior.
+      if (process.env.CRON_ENABLED !== "false") {
+        startCronJobs();
+      } else {
+        console.log("⏭  Cron jobs disabled on this instance (CRON_ENABLED=false)");
+      }
 
       const server = http.createServer(app);
       initializeNotificationWebSocketServer(server);
+
+      // A load balancer reuses idle keep-alive connections; Node's 5s default
+      // closes them first, which surfaces as intermittent 502s at the LB.
+      // Keep-alive must outlive the LB idle timeout (60s), and headersTimeout
+      // must exceed keepAliveTimeout.
+      server.keepAliveTimeout = 65_000;
+      server.headersTimeout = 66_000;
+
+      // Drain on SIGTERM/SIGINT: stop accepting connections, let in-flight
+      // requests finish, then force-close whatever remains (long-lived SSE
+      // and WebSocket connections never end on their own) inside the
+      // orchestrator's stop grace period.
+      let shuttingDown = false;
+      const shutdown = (signal: string): void => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        console.log(`${signal} received — draining connections before exit`);
+        setTimeout(() => {
+          server.closeAllConnections();
+        }, 20_000).unref();
+        setTimeout(() => {
+          console.error("Shutdown grace period elapsed — exiting");
+          process.exit(0);
+        }, 25_000).unref();
+        server.close(() => {
+          void (async () => {
+            try {
+              await closePostgres();
+              if (mongoose.connection.readyState !== 0) {
+                await mongoose.disconnect();
+              }
+            } catch (error) {
+              console.error("Shutdown cleanup error:", error);
+            } finally {
+              process.exit(0);
+            }
+          })();
+        });
+      };
+      process.on("SIGTERM", () => shutdown("SIGTERM"));
+      process.on("SIGINT", () => shutdown("SIGINT"));
 
       // Start listening after database connection
       server.listen(PORT, () => {

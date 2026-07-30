@@ -6,8 +6,11 @@
   "scripts": {
     "dev": "nodemon",
     "dev:proposal-context": "nodemon --exec 'env NODE_ENV=test ts-node' server.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('fs').cpSync('migrations','dist/migrations',{recursive:true})\"",
     "start": "node dist/server.js",
+    "start:worker": "node dist/scripts/startDurableWorker.js",
+    "start:dispatcher": "node dist/scripts/startDurableDispatcher.js",
+    "migrate:postgres:prod": "node dist/scripts/migratePostgres.js",
     "lint": "eslint src contracts config/postgres.ts controller/platformAssistantController.ts controller/historicalInsightsController.ts routes/platformAssistantRoute.ts routes/historicalInsightsRoute.ts scripts/migrateProposalV1.ts scripts/migrateDxgOrganization.ts scripts/migrateOrganizationMemberships.ts scripts/migratePostgres.ts scripts/backfillPostgresProposalReferences.ts scripts/cleanupAssistantRetention.ts scripts/checkAssistantReleaseReadiness.ts scripts/verifyAuthRefreshE2E.ts scripts/verifyDocumentIngestionE2E.ts scripts/verifyDurableJobsE2E.ts scripts/verifyKnowledgeIngestionE2E.ts scripts/verifyKnowledgeReviewE2E.ts scripts/verifyKnowledgeRetrievalE2E.ts scripts/verifyProposalContextE2E.ts scripts/verifyRetentionSweepE2E.ts scripts/platformAssistantEval.ts scripts/startDurableWorker.ts scripts/startDurableDispatcher.ts scripts/startAiGatewayWorker.ts --max-warnings=0",
     "type-check": "tsc --noEmit",
     "test": "node --test --require ts-node/register tests/*.test.js",

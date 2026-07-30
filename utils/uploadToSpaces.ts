@@ -6,9 +6,11 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 type SpacesConfig = {
   bucket: string;
   region: string;
-  key: string;
-  secret: string;
   folder: string;
+  endpoint?: string;
+  credentials?: { accessKeyId: string; secretAccessKey: string };
+  publicUrlBase: string;
+  applyPublicAcl: boolean;
 };
 
 const contentTypes: Record<string, string> = {
@@ -38,18 +40,55 @@ const contentTypes: Record<string, string> = {
   ".webm": "video/webm",
 };
 
+/* Legacy app-asset storage (logos, avatars, proposal support documents,
+   vendor-response documents). ASSET_STORAGE_* is the provider-neutral
+   interface with DO_SPACES_* as its fallback, mirroring how the governed
+   DOCUMENT_STORAGE_* interface works:
+
+   - ASSET_STORAGE_BUCKET set, no endpoint → native AWS S3. Credentials may be
+     omitted entirely to use the SDK default provider chain (ECS task role).
+     No public-read ACL is applied unless explicitly re-enabled, because S3
+     Block Public Access rejects ACL'd puts; set ASSET_STORAGE_PUBLIC_URL_BASE
+     to the CDN/distribution that fronts public assets.
+   - Only DO_SPACES_* set → DigitalOcean Spaces, byte-for-byte the historical
+     behavior: derived endpoint, static keys required, public-read ACL on
+     public assets, canonical Spaces URL returned. */
 const getSpacesConfig = (): SpacesConfig => {
-  const bucket = process.env.DO_SPACES_BUCKET || "";
-  const region = process.env.DO_SPACES_REGION || "";
-  const key = process.env.DO_SPACES_KEY || "";
-  const secret = process.env.DO_SPACES_SECRET || "";
+  const explicitBucket = process.env.ASSET_STORAGE_BUCKET;
+  const bucket = explicitBucket || process.env.DO_SPACES_BUCKET || "";
+  const region = process.env.ASSET_STORAGE_REGION || process.env.DO_SPACES_REGION || "";
+  const key = process.env.ASSET_STORAGE_KEY || process.env.DO_SPACES_KEY || "";
+  const secret = process.env.ASSET_STORAGE_SECRET || process.env.DO_SPACES_SECRET || "";
   const folder = process.env.DO_FOLDER_NAME || "";
 
-  if (!bucket || !region || !key || !secret) {
-    throw new Error("Missing DigitalOcean Spaces configuration in environment");
+  const endpoint =
+    process.env.ASSET_STORAGE_ENDPOINT ||
+    (!explicitBucket && region ? `https://${region}.digitaloceanspaces.com` : undefined);
+
+  const partialCredentials = Boolean(key) !== Boolean(secret);
+  if (!bucket || !region || partialCredentials || (!(key && secret) && !explicitBucket)) {
+    throw new Error("Missing object storage configuration in environment");
   }
 
-  return { bucket, region, key, secret, folder };
+  const publicUrlBase =
+    process.env.ASSET_STORAGE_PUBLIC_URL_BASE?.replace(/\/+$/, "") ||
+    (explicitBucket
+      ? `https://${bucket}.s3.${region}.amazonaws.com`
+      : `https://${bucket}.${region}.digitaloceanspaces.com`);
+
+  const applyPublicAcl = explicitBucket
+    ? process.env.ASSET_STORAGE_PUBLIC_ACL === "true"
+    : true;
+
+  return {
+    bucket,
+    region,
+    folder,
+    endpoint,
+    credentials: key && secret ? { accessKeyId: key, secretAccessKey: secret } : undefined,
+    publicUrlBase,
+    applyPublicAcl,
+  };
 };
 
 const getContentType = (filePath: string): string => {
@@ -58,16 +97,13 @@ const getContentType = (filePath: string): string => {
 };
 
 const createSpacesClient = () => {
-  const { bucket, region, key, secret } = getSpacesConfig();
+  const config = getSpacesConfig();
   const client = new S3Client({
-    region,
-    endpoint: `https://${region}.digitaloceanspaces.com`,
-    credentials: {
-      accessKeyId: key,
-      secretAccessKey: secret,
-    },
+    region: config.region,
+    ...(config.endpoint ? { endpoint: config.endpoint } : {}),
+    ...(config.credentials ? { credentials: config.credentials } : {}),
   });
-  return { bucket, region, client };
+  return { ...config, client };
 };
 
 const putObjectFromFile = async (
@@ -75,7 +111,7 @@ const putObjectFromFile = async (
   objectKey: string,
   acl?: "public-read"
 ): Promise<string> => {
-  const { bucket, region, client } = createSpacesClient();
+  const { bucket, client, publicUrlBase, applyPublicAcl } = createSpacesClient();
 
   const fileBuffer = await fs.promises.readFile(filePath);
   const contentType = getContentType(filePath);
@@ -85,7 +121,7 @@ const putObjectFromFile = async (
       Bucket: bucket,
       Key: objectKey,
       Body: fileBuffer,
-      ...(acl ? { ACL: acl } : {}),
+      ...(acl && applyPublicAcl ? { ACL: acl } : {}),
       ContentType: contentType,
     })
   );
@@ -97,7 +133,7 @@ const putObjectFromFile = async (
     // Ignore cleanup errors
   }
 
-  return `https://${bucket}.${region}.digitaloceanspaces.com/${objectKey}`;
+  return `${publicUrlBase}/${objectKey}`;
 };
 
 // Public web assets (avatars, logos, email assets). Object is world-readable.

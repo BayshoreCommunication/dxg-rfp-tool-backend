@@ -643,10 +643,16 @@ export const postgresJobRepository: JobRepository = {
       return map(updated.rows[0]);
     });
   },
+  /* A dispatcher killed between claiming and marking leaves a row
+     'publishing' with a stale locked_at, and no recovery path looked at that
+     state — the row was stranded forever. A publish attempt takes
+     milliseconds, so any 'publishing' row locked more than 60 seconds ago is
+     dead and is reclaimed here; re-publishing one that did reach Redis before
+     the crash is safe because publish() dedupes on the BullMQ jobId. */
   claimOutbox(limit, dispatcherId) {
     return withPostgresTransaction(async (c) => {
       const r = await c.query<{ id: string; payload: QueueMessage }>(
-        `WITH claimed AS (SELECT id FROM rfpilot.outbox_events WHERE event_type='job.queued' AND status IN ('pending','failed') AND available_at<=now() ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT $1) UPDATE rfpilot.outbox_events o SET status='publishing',locked_at=now(),locked_by=$2,attempt_count=attempt_count+1 FROM claimed WHERE o.id=claimed.id RETURNING o.id,o.payload`,
+        `WITH claimed AS (SELECT id FROM rfpilot.outbox_events WHERE event_type='job.queued' AND ((status IN ('pending','failed') AND available_at<=now()) OR (status='publishing' AND locked_at<now()-interval '60 seconds')) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT $1) UPDATE rfpilot.outbox_events o SET status='publishing',locked_at=now(),locked_by=$2,attempt_count=attempt_count+1 FROM claimed WHERE o.id=claimed.id RETURNING o.id,o.payload`,
         [limit, dispatcherId],
       );
       return r.rows.map((x) => ({ eventId: x.id, message: x.payload }));

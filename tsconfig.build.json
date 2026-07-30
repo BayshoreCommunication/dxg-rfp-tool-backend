@@ -1,0 +1,19 @@
+{
+  // Production build. Unlike tsconfig.json (which excludes scripts/ wholesale),
+  // this compiles the three long-lived entrypoints the runtime needs — the
+  // durable worker, the outbox dispatcher and the Postgres migrator — so the
+  // production image can run everything as plain JS and ship without ts-node.
+  //
+  // The two scripts excluded below are developer one-offs that do not type-check
+  // (createSuperUser imports a non-existent ../modal/user; testImageUpload needs
+  // the unlisted form-data package). They are not part of the deployed surface.
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "dist",
+    "tests",
+    "tests-integration",
+    "scripts/createSuperUser.ts",
+    "scripts/testImageUpload.ts"
+  ]
+}
