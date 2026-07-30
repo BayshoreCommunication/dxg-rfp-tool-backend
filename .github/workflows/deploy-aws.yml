@@ -15,6 +15,9 @@ on:
     branches:
       - main
       - production
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   # Manual re-run against the branch it is dispatched from (main -> staging,
   # production -> production) — e.g. after filling secrets or fixing infra.
   workflow_dispatch:

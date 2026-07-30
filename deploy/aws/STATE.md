@@ -1,0 +1,111 @@
+# AWS deployment — current state and handoff
+
+> Status as of 2026-07-30. Owner: Travis (Bayshore). This file is the
+> single place to read before continuing AWS work in a new session.
+> Operating docs: [README.md](README.md) (bootstrap/deploy/rollback runbook).
+> No secrets in this file — all secret values live in AWS Secrets Manager.
+
+## What is live
+
+**Staging is deployed, healthy, and continuously delivered.**
+
+| Fact | Value |
+|---|---|
+| AWS account | `295229565954` (IAM user `aidev`, local CLI profile `rfpilot`) |
+| Region | `us-east-2` |
+| Staging API | `http://Rfpilo-Alb16-0eZHo0YAZQnj-2062746735.us-east-2.elb.amazonaws.com` (HTTP until a domain/cert exists) |
+| Health | `GET /health` → 200 OK; Mongo connected, Postgres migrated to `043`, Redis queue ready |
+| ECS cluster | `rfpilot-staging` — services `api`(1), `worker`(1), `dispatcher`(1), `clamav`(1) |
+| Assets CDN | `d3bje2jgtaou7s.cloudfront.net` (fronts `rfpilot-staging-assets-*` bucket) |
+| NAT egress IP | `18.223.236.137` (allowlisted in Atlas Network Access) |
+| MongoDB | New Atlas account/cluster (connection string in the app secret) |
+| ECR | `295229565954.dkr.ecr.us-east-2.amazonaws.com/rfpilot-backend`, immutable `sha-<commit>` tags |
+| Secrets | `rfpilot/staging/app` (all keys filled), `rfpilot/staging/redis-auth` (rotated, alphanumeric) |
+
+**CI/CD**: push to `main` → `.github/workflows/deploy-aws.yml` runs quality
+gates → image build → Trivy scan (currently ZERO findings) → ECR push →
+one-off Postgres migration task (new image, before services roll) → CDK
+deploy of App+Observability → smoke checks. Auth is GitHub OIDC only
+(branch/environment-locked roles, no stored AWS keys). Last fully green run:
+`30538326454`, deployed image `sha-290b1f8...`. Doc-only pushes do not
+deploy (`paths-ignore`).
+
+**Stacks deployed**: `Rfpilot-Cicd`, `Rfpilot-staging-Network`,
+`Rfpilot-staging-Data`, `Rfpilot-staging-App`,
+`Rfpilot-staging-Observability`. Production stacks exist in code but are
+NOT deployed.
+
+## Branch model
+
+- `ai-agent` — development (local dev unchanged: `npm run dev*` etc.)
+- `main` — deploys **staging** on push
+- `production` — deploys **production** on push; currently at `f66f60a`
+  (pre-AWS), promotion = fast-forward to `main` when ready
+- DigitalOcean deploy retired to manual `workflow_dispatch`
+  ("Deploy to DigitalOcean (legacy)"); DO assets under `deploy/` untouched.
+  The old droplet is still running and serves the current production domain.
+
+## Platform posture (do not change casually)
+
+- **Every AI flag is OFF** (`AI_ENVIRONMENT` unset = platform-wide
+  deny-by-default). Enabling AI is a separate release per
+  `docs/runbooks/PRODUCTION.md`, never part of an infra deploy.
+- **API runs exactly 1 task** (stop-then-start deploys, ~30–60s window):
+  its cron jobs are unlocked-destructive and WebSocket fan-out is
+  process-local. Before scaling: set `CRON_ENABLED=false` on extra
+  replicas and add Redis pub/sub notification fan-out.
+- ClamAV fail-closed is intended behavior (vendor uploads 503 / sources
+  `scan_failed` when the scanner is down).
+- Redis is transport-only (no snapshots on purpose; outbox reconciles).
+
+## Next steps, in order
+
+1. **DNS + HTTPS** (blocked on: where `dxg-agency.com` DNS is hosted, and
+   the desired hostnames). Then: ACM cert in us-east-2 (DNS validation),
+   redeploy App with `-c certificateArn=... -c apiDomain=... -c
+   frontendUrl=... -c adminUrl=...`, CNAME the hostname to the ALB.
+2. **Email decision**: SES (recommended — the app already speaks SMTP, so
+   it's domain verification + sandbox exit + SMTP credentials into the app
+   secret) vs keeping Resend (`RESEND_API_KEY` key in the secret).
+3. **Frontends**: dashboard/admin need their API base URL pointed at the
+   staging ALB (or the future staging domain) to exercise the app
+   end-to-end; a real user pass through a proposal flow is the remaining
+   acceptance check.
+4. **Production promotion** (when staging has been exercised):
+   `git checkout production && git merge --ff-only main && git push` after
+   first deploying `Rfpilot-production-Network/Data`, running
+   `scripts/compose-app-secrets.sh production`, filling external keys in
+   `rfpilot/production/app`, allowlisting the production NAT EIP in Atlas
+   (ideally switch to PrivateLink, M10+), and setting the GitHub
+   `production` environment (protection rules recommended). Prod sizing
+   (Multi-AZ RDS, Redis replica, deletion protection) is already in
+   `lib/config.ts`.
+5. **DO → S3 data migration** (separate task): copy existing Spaces objects
+   into the assets bucket and deal with absolute Spaces URLs persisted in
+   Mongo documents; then set `ASSET_STORAGE_PUBLIC_URL_BASE` to the CDN and
+   decommission the droplet + DO assets.
+
+## Deferred/known items
+
+- Queue-backlog + outbox-age CloudWatch metrics probe (scheduled task) —
+  worker/dispatcher have no health port; today's signal is RunningTaskCount
+  alarms + PG heartbeat queries (see README "Operational notes").
+- ioredis error logs can include AUTH command args — redact (the exposed
+  token from the first deploy was rotated and is dead).
+- Scope the assets-bucket KMS key policy to the real CloudFront
+  distribution ARN (acknowledged `wildcardKeyPolicyForOac`).
+- Post-launch: alarms have no email subscription yet — redeploy
+  Observability with `-c alertEmail=...`.
+- `.env.example` documents the new `ASSET_STORAGE_*`, `CRON_ENABLED`, and
+  RDS `NODE_EXTRA_CA_CERTS` conventions.
+
+## Gotchas already learned (don't rediscover)
+
+RDS API rejects non-ASCII in descriptions · new accounts on the Free plan
+block RDS features (upgrade first) · RETAIN'd buckets orphan on stack
+rollback and collide on retry (empty + delete, then redeploy) · first ECS
+cluster in an account can race service-linked-role creation (retry) ·
+GitHub environment-bound jobs present `environment:`-form OIDC sub claims ·
+`ecs:*TaskDefinition` actions can't be cluster-scoped · trivy-action tags
+are v-prefixed · the dispatcher and Redis-URL-encoding bugs are fixed in
+code (commits `ae5a769`, `74edc90`).
