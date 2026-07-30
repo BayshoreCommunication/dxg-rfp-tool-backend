@@ -1,0 +1,23 @@
+{
+  "name": "rfpilot-aws-infra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AWS CDK infrastructure for the RFPilot backend (ECS Fargate, RDS, ElastiCache, S3, ClamAV)",
+  "scripts": {
+    "synth": "cdk synth --strict",
+    "synth:nag": "cdk synth --strict -c nag=true",
+    "diff": "cdk diff",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.220.0",
+    "cdk-nag": "^2.37.0",
+    "constructs": "^10.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "aws-cdk": "^2.1100.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.3.3"
+  }
+}

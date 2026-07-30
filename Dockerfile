@@ -48,6 +48,11 @@ COPY            --chown=node:node package.json       ./
 # files survive a container rebuild.
 RUN mkdir -p /app/uploads/temp /app/uploads/portfolio && chown -R node:node /app/uploads
 
+# Amazon RDS certificate bundle so POSTGRES_SSL=true can verify the server
+# certificate (set NODE_EXTRA_CA_CERTS=/app/rds-global-bundle.pem). Harmless
+# for non-RDS deployments.
+ADD --chown=node:node https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /app/rds-global-bundle.pem
+
 USER node
 EXPOSE 8000
 
