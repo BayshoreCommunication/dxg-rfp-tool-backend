@@ -1,9 +1,11 @@
-name: Deploy to Production
+name: Deploy to DigitalOcean (legacy)
 
+# Retired as an automatic trigger: production deployment is moving to AWS,
+# with the `production` branch as its source of truth. This workflow is kept
+# for manual use against the DigitalOcean droplet during the migration
+# window and can be removed once cutover completes.
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
