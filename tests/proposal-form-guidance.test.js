@@ -91,6 +91,27 @@ test("exact, natural-language, and unknown field guidance degrade safely", () =>
   );
 });
 
+test("field-help prompts from the proposal UI resolve across intake sections", () => {
+  const examples = [
+    ["Event Name", /Event Overview: Event Name/],
+    ["Venue Name", /Venue & Schedule: Venue Name/],
+    ["Streaming Platform", /Hybrid & Virtual: Streaming Platform/],
+    ["Camera Count", /Camera Count/],
+    ["Primary Contact Email", /Contact & Submit: Email/],
+    ["Virtual Attendee Estimate", /Hybrid & Virtual: Virtual Attendee Count/],
+  ];
+
+  for (const [visibleLabel, expectedTitle] of examples) {
+    const evidence = proposalFormGuidanceEvidenceForQuery(
+      `What should I enter for the "${visibleLabel}" field? Explain it simply and give me one short example.`,
+      3,
+    );
+    assert.ok(evidence.length > 0, `${visibleLabel} should return guidance`);
+    assert.match(evidence[0].title, expectedTitle);
+    assert.equal(evidence[0].href, "/proposals/add-new-proposal");
+  }
+});
+
 test("conditional field guidance retains machine-readable dependencies", () => {
   const streaming = proposalFormGuidanceForField(
     "/content/hybridVirtual/streamingPlatform",
