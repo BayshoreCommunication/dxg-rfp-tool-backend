@@ -120,9 +120,9 @@ export class DataStack extends cdk.Stack {
       secretName: `rfpilot/${config.envName}/redis-auth`,
       description: "ElastiCache Redis AUTH token",
       generateSecretString: {
-        // ElastiCache AUTH tokens forbid @ " / and non-printables.
-        excludeCharacters: "@\"/\\ '`;",
-        excludePunctuation: false,
+        // Alphanumeric only: the token rides inside REDIS_URL, and a token
+        // that needs no percent-encoding cannot be mis-decoded by any client.
+        excludePunctuation: true,
         passwordLength: 64,
       },
     });
