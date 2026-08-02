@@ -63,6 +63,17 @@ export class DataStack extends cdk.Stack {
     this.documentsBucket = new s3.Bucket(this, "DocumentsBucket", {
       ...bucketDefaults,
       bucketName: `rfpilot-${config.envName}-documents-${this.account}`,
+      // The knowledge-import flow PUTs directly from the admin browser via
+      // presigned URLs, which needs CORS (the proposal-source flow uploads
+      // server-side and does not). Applied out-of-band on staging
+      // 2026-08-02; add the real admin/dashboard origins before a
+      // production Data deploy.
+      cors: [{
+        allowedOrigins: ["http://localhost:3001", "http://localhost:3000"],
+        allowedMethods: [s3.HttpMethods.PUT],
+        allowedHeaders: ["*"],
+        maxAge: 300,
+      }],
     });
 
     // Legacy/app asset storage (ASSET_STORAGE_*): logos, avatars, proposal
