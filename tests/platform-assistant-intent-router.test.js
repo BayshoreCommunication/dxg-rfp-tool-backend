@@ -15,6 +15,7 @@ test("deterministic router recognizes the initial intent taxonomy", () => {
   const cases = [
     ["Hello!", "greeting_or_thanks"],
     ["Where can I find Settings?", "platform_navigation"],
+    ["wher is seting page?", "platform_navigation"],
     ["How do I create a new proposal?", "proposal_creation"],
     ["Review the proposal workflow.", "proposal_review"],
     ["What should I check before sending a proposal?", "pre_send_checklist"],

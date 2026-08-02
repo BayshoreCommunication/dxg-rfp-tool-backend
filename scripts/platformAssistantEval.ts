@@ -161,7 +161,7 @@ const historyMessages = (
     outputTokens: null,
     safeErrorCode: null,
     intent: message.intent ?? null,
-    intentVersion: message.intent ? "assistant-intent-router.v1" : null,
+    intentVersion: message.intent ? "assistant-intent-router.v2" : null,
     intentSource: message.intent ? "deterministic" : null,
     intentConfidence: message.intent ? "high" : null,
     responseKind: null,

@@ -107,7 +107,7 @@ const withEnabledAssistant = async (work) => {
 };
 
 test("platform map is versioned, bounded, and contains internal routes only", () => {
-  assert.equal(PLATFORM_KNOWLEDGE_VERSION, "rfpilot-platform-map.v5");
+  assert.equal(PLATFORM_KNOWLEDGE_VERSION, "rfpilot-platform-map.v6");
   assert.ok(PLATFORM_FACTS.length >= 8);
   assert.equal(new Set(PLATFORM_FACTS.map((fact) => fact.id)).size, PLATFORM_FACTS.length);
   for (const fact of PLATFORM_FACTS) {
@@ -140,6 +140,18 @@ test("platform map is versioned, bounded, and contains internal routes only", ()
   );
   assert.ok(
     guided.some((fact) => fact.id === "platform:proposal:venue-room-fields"),
+  );
+});
+
+test("common settings typos still select the approved Settings route", () => {
+  const selected = platformFactsForQuery("wher is seting page?", 3);
+
+  assert.ok(
+    selected.some((item) => item.id === "platform:navigation:settings"),
+  );
+  assert.equal(
+    selected.find((item) => item.id === "platform:navigation:settings")?.href,
+    "/settings",
   );
 });
 
@@ -806,7 +818,7 @@ test("deterministic provider reports exact authorized proposal portfolio counts"
     proposalEvidence: [evidence],
     intent: {
       intent: "proposal_specific_request",
-      version: "assistant-intent-router.v1",
+      version: "assistant-intent-router.v2",
       source: "deterministic",
       confidence: "high",
     },
@@ -851,7 +863,7 @@ test("deterministic provider answers a requested proposal status count concisely
     ],
     intent: {
       intent: "proposal_specific_request",
-      version: "assistant-intent-router.v1",
+      version: "assistant-intent-router.v2",
       source: "deterministic",
       confidence: "high",
     },
@@ -894,7 +906,7 @@ test("deterministic provider answers every requested proposal status count", asy
     ],
     intent: {
       intent: "proposal_specific_request",
-      version: "assistant-intent-router.v1",
+      version: "assistant-intent-router.v2",
       source: "deterministic",
       confidence: "high",
     },
@@ -946,7 +958,7 @@ test("deterministic formatting keeps authorized proposal-count grounding", async
     ],
     intent: {
       intent: "proposal_specific_request",
-      version: "assistant-intent-router.v1",
+      version: "assistant-intent-router.v2",
       source: "follow_up",
       confidence: "medium",
     },

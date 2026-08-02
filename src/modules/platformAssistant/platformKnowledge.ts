@@ -4,8 +4,9 @@ import {
   proposalFormGuidanceEvidenceForQuery,
 } from "./proposalFormGuidance";
 import type { AssistantUiContext } from "./domain";
+import { normalizeCommonAssistantTypos } from "./queryNormalization";
 
-export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v5";
+export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v6";
 
 type PlatformFact = Omit<AssistantPromptEvidence, "sourceType" | "trust" | "releaseId"> & {
   keywords: readonly string[];
@@ -371,8 +372,8 @@ export const platformFactsForQuery = (
   query: string,
   limit = 12,
 ): AssistantPromptEvidence[] => {
-  const normalized = query.toLowerCase();
-  const terms = new Set(normalizedTerms(query));
+  const normalized = normalizeCommonAssistantTypos(query.toLowerCase());
+  const terms = new Set(normalizedTerms(normalized));
   const scored = PLATFORM_FACTS.map((fact, index) => {
     const score = fact.keywords.reduce((total, keyword) => {
       const phrase = keyword.toLowerCase();
