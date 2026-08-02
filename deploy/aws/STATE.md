@@ -1,6 +1,6 @@
 # AWS deployment — current state and handoff
 
-> Status as of 2026-07-30. Owner: Travis (Bayshore). This file is the
+> Status as of 2026-08-02. Owner: Travis (Bayshore). This file is the
 > single place to read before continuing AWS work in a new session.
 > Operating docs: [README.md](README.md) (bootstrap/deploy/rollback runbook).
 > No secrets in this file — all secret values live in AWS Secrets Manager.
@@ -13,7 +13,8 @@
 |---|---|
 | AWS account | `295229565954` (IAM user `aidev`, local CLI profile `rfpilot`) |
 | Region | `us-east-2` |
-| Staging API | `http://Rfpilo-Alb16-0eZHo0YAZQnj-2062746735.us-east-2.elb.amazonaws.com` (HTTP until a domain/cert exists) |
+| Staging API | `https://api-staging.dxg-agency.com` (HTTPS, 80→443 redirect; CNAME in Namecheap → ALB `Rfpilo-Alb16-0eZHo0YAZQnj-2062746735.us-east-2.elb.amazonaws.com`) |
+| TLS cert | ACM wildcard `*.dxg-agency.com` + apex, us-east-2, `.../f6976da6-0174-40b4-86bc-9525267a8b08` (DNS-validated; validation CNAME lives in Namecheap — do not delete it, ACM renews through it) |
 | Health | `GET /health` → 200 OK; Mongo connected, Postgres migrated to `043`, Redis queue ready |
 | ECS cluster | `rfpilot-staging` — services `api`(1), `worker`(1), `dispatcher`(1), `clamav`(1) |
 | Assets CDN | `d3bje2jgtaou7s.cloudfront.net` (fronts `rfpilot-staging-assets-*` bucket) |
@@ -26,9 +27,11 @@
 gates → image build → Trivy scan (currently ZERO findings) → ECR push →
 one-off Postgres migration task (new image, before services roll) → CDK
 deploy of App+Observability → smoke checks. Auth is GitHub OIDC only
-(branch/environment-locked roles, no stored AWS keys). Last fully green run:
-`30538326454`, deployed image `sha-290b1f8...`. Doc-only pushes do not
-deploy (`paths-ignore`).
+(branch/environment-locked roles, no stored AWS keys). Domain/cert/URL CDK
+contexts flow from environment-scoped GitHub variables (`CERTIFICATE_ARN`,
+`API_DOMAIN` set on `staging`; `FRONTEND_URL`/`ADMIN_URL` reserved, empty =
+unset). Last fully green run: `30733670506`, deployed image `sha-f846726...`.
+Doc-only pushes do not deploy (`paths-ignore`).
 
 **Stacks deployed**: `Rfpilot-Cicd`, `Rfpilot-staging-Network`,
 `Rfpilot-staging-Data`, `Rfpilot-staging-App`,
@@ -60,16 +63,14 @@ NOT deployed.
 
 ## Next steps, in order
 
-1. **DNS + HTTPS** — in progress 2026-08-02. `dxg-agency.com` DNS is on
-   **Namecheap**. Wildcard ACM cert (`*.dxg-agency.com` + apex) requested in
-   us-east-2: `arn:aws:acm:us-east-2:295229565954:certificate/f6976da6-0174-40b4-86bc-9525267a8b08`.
-   Staging API hostname: `api-staging.dxg-agency.com`. The deploy workflow
-   now passes `certificateArn`/`apiDomain`/`frontendUrl`/`adminUrl` from
-   environment-scoped GitHub variables (`CERTIFICATE_ARN` and `API_DOMAIN`
-   are set on the `staging` environment; empty = HTTP bootstrap mode).
-   Remaining: Namecheap validation CNAME + `api-staging` CNAME to the ALB
-   (records provided to Travis), then push to `main` once the cert is
-   ISSUED — CI deploys the HTTPS listener + 80→443 redirect.
+1. ~~**DNS + HTTPS**~~ — **DONE 2026-08-02.** `dxg-agency.com` DNS is on
+   Namecheap. Staging API is `https://api-staging.dxg-agency.com` (verified:
+   valid cert, 200 health, 301 redirect on port 80). The wildcard cert also
+   covers future production/app/admin hostnames — reuse its ARN. For a new
+   hostname: add the CNAME in Namecheap, set the env's GitHub variables,
+   deploy. Gotcha fixed in `f846726`: the port-80 listener must keep the
+   `Http` construct id when switching to the redirect (create-before-delete
+   collides on the port otherwise).
 2. **Email decision**: SES (recommended — the app already speaks SMTP, so
    it's domain verification + sandbox exit + SMTP credentials into the app
    secret) vs keeping Resend (`RESEND_API_KEY` key in the secret).
