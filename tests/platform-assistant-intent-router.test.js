@@ -21,7 +21,16 @@ test("deterministic router recognizes the initial intent taxonomy", () => {
     ["Plan an event for 500 attendees.", "event_planning"],
     ["Two rooms overlap at 2 PM.", "event_planning"],
     ["What should I enter in this field?", "form_field_help"],
+    [
+      'Show every "Tone / Brand Direction" option and the selection limit.',
+      "form_field_help",
+    ],
+    ["What should I put here?", "form_field_help"],
     ["Summarize my current proposal.", "proposal_specific_request"],
+    [
+      'Tell me the status and details for "Launchpad 2027".',
+      "proposal_specific_request",
+    ],
     ["Review the equipment scope for missing microphones.", "equipment_scope_review"],
     ["Estimate the budget total.", "budget_estimation"],
     ["Compare this with last year's proposal.", "historical_reference_request"],
@@ -72,6 +81,14 @@ test("rendered field context constrains help when no canonical key exists", () =
   assert.equal(result.intent, "form_field_help");
   assert.equal(result.source, "ui_context");
   assert.equal(result.confidence, "high");
+});
+
+test("video recording requirement options route to field help", () => {
+  const result = classification(
+    "What options are available for the video recording requirement field?",
+  );
+
+  assert.equal(result.intent, "form_field_help");
 });
 
 test("multi-turn shorthand retains the previous completed assistant intent", () => {

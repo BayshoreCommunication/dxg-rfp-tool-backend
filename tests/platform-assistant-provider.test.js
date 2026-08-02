@@ -30,6 +30,9 @@ const {
 const {
   createPlatformAssistantApplication,
 } = require("../src/modules/platformAssistant/application");
+const {
+  proposalFormGuidanceEvidenceForQuery,
+} = require("../src/modules/platformAssistant/proposalFormGuidance");
 
 const root = path.resolve(__dirname, "..");
 const fixtures = JSON.parse(
@@ -166,6 +169,44 @@ test("current rendered form metadata becomes bounded field evidence", () => {
   assert.match(field.content, /Zoom; Teams; Vendor Recommendation Needed/);
   assert.match(field.content, /maximum 1/);
   assert.doesNotMatch(field.content, /private|current value/i);
+});
+
+test("an explicitly named current field outranks stale field history", () => {
+  const current = message({
+    id: "current-investment-field",
+    ordinal: 7,
+    content: 'Explain every available option for "Investment Flexibility".',
+  });
+  const selected = platformFactsForConversation(
+    current.content,
+    [
+      message({
+        id: "older-event-name",
+        ordinal: 1,
+        content: 'What should I enter for the "Event Name" field?',
+      }),
+      message({
+        id: "older-event-format",
+        ordinal: 3,
+        content: 'Show every option for the "Event Format" field.',
+      }),
+      message({
+        id: "older-tone",
+        ordinal: 5,
+        content: 'Show every option for "Tone / Brand Direction".',
+      }),
+      current,
+    ],
+    current.id,
+  );
+
+  assert.equal(selected[0].title, "Investment & Evaluation: Investment Flexibility");
+  assert.match(selected[0].content, /Fixed, Flexible, Value-Engineering Welcome, Not Sure/);
+  assert.ok(
+    !selected.some((item) =>
+      item.title.includes("Tone / Brand Direction"),
+    ),
+  );
 });
 
 test("deterministic field help uses current rendered choices without guessing", async () => {
@@ -390,7 +431,7 @@ test("prompt builder bounds history and labels retrieved guidance as untrusted",
     operatingGuidance: guidance,
   });
 
-  assert.equal(prompt.schemaVersion, "platform-assistant-prompt.v5");
+  assert.equal(prompt.schemaVersion, "platform-assistant-prompt.v6");
   assert.equal(prompt.intent.intent, "event_planning");
   assert.equal(prompt.uiContext, null);
   assert.ok(prompt.history.length <= 30);
@@ -429,12 +470,30 @@ test("prompt builder bounds history and labels retrieved guidance as untrusted",
   );
   assert.ok(
     prompt.instructions.some((item) =>
+      item.includes("exactly one concise sentence") &&
+      item.includes("do not re-expand"),
+    ),
+  );
+  assert.ok(
+    prompt.instructions.some((item) =>
       item.includes("user-operated steps"),
     ),
   );
   assert.ok(
     prompt.instructions.some((item) =>
       item.includes("links, pages, or routes mentioned earlier"),
+    ),
+  );
+  assert.ok(
+    prompt.instructions.some((item) =>
+      item.includes("no form-field evidence is supplied") &&
+      item.includes("instead of guessing from an earlier topic"),
+    ),
+  );
+  assert.ok(
+    prompt.instructions.some((item) =>
+      item.includes("multiple named statuses") &&
+      item.includes("every requested status"),
     ),
   );
   assert.ok(
@@ -541,6 +600,41 @@ test("provider response validation enforces citations and safe internal links", 
         error.code === "ASSISTANT_RESPONSE_INVALID",
     );
   }
+});
+
+test("validation permits a cited field's exact plain URL example but not an external link", () => {
+  const fieldEvidence = proposalFormGuidanceEvidenceForQuery(
+    "What should I enter for the Event Website field?",
+    1,
+  );
+  const citationId = fieldEvidence[0]?.id;
+  assert.ok(citationId);
+
+  const validated = validateAssistantProviderResponse(
+    {
+      kind: "answer",
+      content:
+        "Enter the event's official URL, for example https://example.com/summit2026.",
+      citationIds: [citationId],
+    },
+    fieldEvidence,
+  );
+  assert.match(validated.content, /https:\/\/example\.com\/summit2026/);
+
+  assert.throws(
+    () =>
+      validateAssistantProviderResponse(
+        {
+          kind: "answer",
+          content: "Open [the example](https://example.com/summit2026).",
+          citationIds: [citationId],
+        },
+        fieldEvidence,
+      ),
+    (error) =>
+      error instanceof PlatformAssistantError &&
+      error.code === "ASSISTANT_RESPONSE_INVALID",
+  );
 });
 
 test("proposal-specific handoff requires selection and never guesses private context", () => {
@@ -771,6 +865,101 @@ test("deterministic provider answers a requested proposal status count concisely
   assert.equal(response.kind, "answer");
   assert.match(response.content, /\*\*48 draft proposals\*\*/);
   assert.doesNotMatch(response.content, /current proposal list/i);
+  assert.deepEqual(response.citationIds, ["proposal-portfolio:counts"]);
+});
+
+test("deterministic provider answers every requested proposal status count", async () => {
+  const provider = new DeterministicAssistantProvider();
+  const prompt = buildAssistantPromptInput({
+    userMessage: message({
+      id: "multi-status-count-user",
+      content: "How many archived proposals and saved copies do I have?",
+    }),
+    history: [],
+    platformFacts: [],
+    operatingGuidance: [],
+    proposalEvidence: [
+      {
+        id: "proposal-portfolio:counts",
+        sourceType: "proposal_portfolio",
+        trust: "authorized_private_data",
+        title: "Your proposal counts",
+        content: JSON.stringify({
+          totalCreated: 83,
+          archived: 14,
+          savedCopies: 1,
+        }),
+        href: "/proposals",
+      },
+    ],
+    intent: {
+      intent: "proposal_specific_request",
+      version: "assistant-intent-router.v1",
+      source: "deterministic",
+      confidence: "high",
+    },
+  });
+
+  const response = validateAssistantProviderResponse(
+    await provider.generate(prompt),
+    prompt.evidence,
+  );
+
+  assert.equal(response.kind, "answer");
+  assert.match(response.content, /\*\*14 archived proposals\*\*/);
+  assert.match(response.content, /\*\*1 saved copy\*\*/);
+  assert.deepEqual(response.citationIds, ["proposal-portfolio:counts"]);
+});
+
+test("deterministic formatting keeps authorized proposal-count grounding", async () => {
+  const provider = new DeterministicAssistantProvider();
+  const prompt = buildAssistantPromptInput({
+    userMessage: message({
+      id: "count-format-user",
+      ordinal: 3,
+      content: "Make that answer one short sentence.",
+    }),
+    history: [
+      message({
+        id: "count-question-user",
+        ordinal: 1,
+        content: "How many proposals do I have?",
+      }),
+      message({
+        id: "count-answer-assistant",
+        ordinal: 2,
+        role: "assistant",
+        content: "You have created 83 proposals in total.",
+      }),
+    ],
+    platformFacts: [],
+    operatingGuidance: [],
+    proposalEvidence: [
+      {
+        id: "proposal-portfolio:counts",
+        sourceType: "proposal_portfolio",
+        trust: "authorized_private_data",
+        title: "Your proposal counts",
+        content: JSON.stringify({ totalCreated: 83 }),
+        href: "/proposals",
+      },
+    ],
+    intent: {
+      intent: "proposal_specific_request",
+      version: "assistant-intent-router.v1",
+      source: "follow_up",
+      confidence: "medium",
+    },
+  });
+
+  const response = validateAssistantProviderResponse(
+    await provider.generate(prompt),
+    prompt.evidence,
+  );
+
+  assert.equal(response.kind, "answer");
+  assert.equal(response.content, "You have created 83 proposals in total.");
+  assert.equal(response.content.match(/[.!?]/g)?.length, 1);
   assert.deepEqual(response.citationIds, ["proposal-portfolio:counts"]);
 });
 

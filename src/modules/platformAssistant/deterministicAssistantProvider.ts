@@ -36,7 +36,12 @@ const isActionRequest = (query: string): boolean =>
     /\b(?:do it|do that|on my behalf|for me)\b/i.test(query));
 
 const isFormattingFollowUp = (query: string): boolean =>
-  /\b(?:shorten|shorter|concise|brief|reformat|bullets?)\b/i.test(query);
+  /\b(?:shorten|shorter|concise|brief|reformat|bullets?|make (?:that|it))\b/i.test(
+    query,
+  );
+
+const requestsOneShortSentence = (query: string): boolean =>
+  /\b(?:one|1)\s+short\s+sentence\b/i.test(query);
 
 const previousAssistantContent = (
   input: AssistantPromptInput,
@@ -67,11 +72,22 @@ const shortenedPreviousAnswer = (content: string): string => {
     : content.slice(0, 600);
 };
 
+const firstPreviousSentence = (content: string): string =>
+  content
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .find(Boolean)
+    ?.slice(0, 240) ?? content.slice(0, 240);
+
 const relevantPlatformCitationIds = (
   input: AssistantPromptInput,
 ): string[] =>
   input.evidence
-    .filter((item) => item.sourceType === "platform_fact")
+    .filter((item) =>
+      ["platform_fact", "proposal_portfolio", "selected_proposal"].includes(
+        item.sourceType,
+      ),
+    )
     .slice(0, 4)
     .map((item) => item.id);
 
@@ -216,19 +232,28 @@ const proposalPortfolioAnswer = (
       plural: "saved copies",
     },
   ] as const;
-  const requestedStatus = statusCounts.find((item) =>
+  const requestedStatuses = statusCounts.filter((item) =>
     item.pattern.test(query),
   );
-  if (requestedStatus) {
-    const count = countValue(snapshot.value, requestedStatus.key);
-    if (count !== null) {
-      const label =
-        count === 1
-          ? requestedStatus.singular
-          : requestedStatus.plural;
+  if (requestedStatuses.length > 0) {
+    const requestedCounts = requestedStatuses
+      .map((status) => ({ status, count: countValue(snapshot.value, status.key) }))
+      .filter(
+        (item): item is { status: (typeof statusCounts)[number]; count: number } =>
+          item.count !== null,
+      );
+    if (requestedCounts.length === requestedStatuses.length) {
+      const values = requestedCounts.map(({ status, count }) => {
+        const label = count === 1 ? status.singular : status.plural;
+        return `**${count} ${label}**`;
+      });
+      const summary =
+        values.length === 1
+          ? values[0]
+          : `${values.slice(0, -1).join(", ")} and ${values.at(-1)}`;
       return result(
         "answer",
-        `You currently have **${count} ${label}**. [Open Proposals](/proposals) to view them.`,
+        `You currently have ${summary}. [Open Proposals](/proposals) to view them.`,
         [snapshot.evidence.id],
       );
     }
@@ -363,7 +388,9 @@ export class DeterministicAssistantProvider implements AssistantResponseProvider
       if (previous && citationIds.length) {
         return result(
           "answer",
-          shortenedPreviousAnswer(previous),
+          requestsOneShortSentence(query)
+            ? firstPreviousSentence(previous)
+            : shortenedPreviousAnswer(previous),
           citationIds,
         );
       }

@@ -30,7 +30,7 @@ test("proposal field guidance covers the canonical form contract", () => {
 });
 
 test("proposal field registry has complete stable metadata", () => {
-  assert.equal(PROPOSAL_FORM_GUIDANCE_VERSION, "proposal-form-guidance.v2");
+  assert.equal(PROPOSAL_FORM_GUIDANCE_VERSION, "proposal-form-guidance.v3");
   assert.equal(PROPOSAL_FORM_SECTIONS.length, 10);
   assert.equal(
     new Set(PROPOSAL_FORM_SECTIONS.map((section) => section.id)).size,
@@ -104,6 +104,35 @@ test("Event Overview UI metadata produces exact effective field guidance", () =>
   assert.match(evidence?.content ?? "", /Choose up to 5 available options/i);
   assert.match(evidence?.content ?? "", /Energy: High-Energy, Polished & Refined/i);
   assert.match(evidence?.content ?? "", /Color Direction: Dark \/ Cinematic/i);
+
+  const website = proposalFormGuidanceForField("/content/event/website");
+  assert.equal(website?.label, "Event Website");
+  assert.equal(website?.requirement, "optional");
+  assert.equal(website?.fieldType, "url");
+  assert.match(website?.goodExample ?? "", /^https:\/\//);
+
+  const recording = proposalFormGuidanceForField(
+    "/content/videoRecording/required",
+  );
+  assert.equal(recording?.label, "Video Recording Required");
+  assert.equal(recording?.requirement, "required");
+  assert.deepEqual(
+    recording?.allowedOptions.map((option) => option.label),
+    [
+      "Yes — Record sessions during the event",
+      "No — No recording needed",
+    ],
+  );
+
+  const investmentFlexibility = proposalFormGuidanceForField(
+    "/content/budgetPreferences/flexibility",
+  );
+  assert.equal(investmentFlexibility?.label, "Investment Flexibility");
+  assert.equal(investmentFlexibility?.requirement, "optional");
+  assert.deepEqual(
+    investmentFlexibility?.allowedOptions.map((option) => option.label),
+    ["Fixed", "Flexible", "Value-Engineering Welcome", "Not Sure"],
+  );
 });
 
 test("schema field inventory digest detects unreviewed additions, removals, and renames", () => {
@@ -137,6 +166,16 @@ test("exact, natural-language, and unknown field guidance degrade safely", () =>
     proposalFormGuidanceEvidenceForField("/content/unknown"),
     undefined,
   );
+});
+
+test("video recording requirement wording ranks the exact control first", () => {
+  const evidence = proposalFormGuidanceEvidenceForQuery(
+    "What options are available for the video recording requirement field?",
+  );
+
+  assert.match(evidence[0]?.title ?? "", /Video Recording Required/);
+  assert.match(evidence[0]?.content ?? "", /Yes — Record sessions/);
+  assert.match(evidence[0]?.content ?? "", /No — No recording needed/);
 });
 
 test("field-help prompts from the proposal UI resolve across intake sections", () => {

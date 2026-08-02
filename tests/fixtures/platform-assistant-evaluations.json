@@ -7,7 +7,7 @@
   },
   "baseline": {
     "datasetRevision": "2026-07-29.1",
-    "promptVersion": "platform-assistant-prompt.v5",
+    "promptVersion": "platform-assistant-prompt.v6",
     "knowledgeVersion": "rfpilot-platform-map.v5",
     "intentVersion": "assistant-intent-router.v1",
     "rulesVersion": "proposal-analysis-rules.v1"

@@ -435,8 +435,26 @@ export const platformFactsForConversation = (
       })()
     : availablePriorUserMessages;
 
-  return platformFactsForQuery(
+  const currentFieldGuidance = proposalFormGuidanceEvidenceForQuery(
+    query,
+    Math.min(3, limit),
+  );
+  const selected = platformFactsForQuery(
     [query, ...priorUserMessages].join("\n"),
     limit,
   );
+  if (currentFieldGuidance.length === 0) return selected;
+
+  const currentIds = new Set(currentFieldGuidance.map((item) => item.id));
+  return [
+    ...currentFieldGuidance,
+    ...selected.filter(
+      (item) => !item.id.startsWith("form-field:") || currentIds.has(item.id),
+    ),
+  ]
+    .filter(
+      (item, index, items) =>
+        items.findIndex((candidate) => candidate.id === item.id) === index,
+    )
+    .slice(0, Math.max(1, limit));
 };
