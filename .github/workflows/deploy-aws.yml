@@ -148,7 +148,14 @@ jobs:
           # Domain/cert/URL contexts come from environment-scoped GitHub
           # variables (empty = HTTP bootstrap mode, see app-stack.ts), so a
           # plain code push can never strip HTTPS from a configured env.
+          #
+          # --exclusively: NEVER implicitly deploy dependency stacks. The
+          # Data stack owns the app secret via secretObjectValue; deploying
+          # it resets every operator-filled value to REPLACE_ME (this bit us
+          # on 2026-08-02). Data/Network changes are deliberate manual
+          # deploys per the README runbook.
           npx cdk deploy "Rfpilot-${ENV_NAME}-App" "Rfpilot-${ENV_NAME}-Observability" \
+            --exclusively \
             --require-approval never \
             -c imageTag="sha-${GITHUB_SHA}" \
             -c env="${ENV_NAME}" \
