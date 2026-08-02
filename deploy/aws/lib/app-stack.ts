@@ -97,6 +97,7 @@ export class AppStack extends cdk.Stack {
     const sharedEnvironment: Record<string, string> = {
       NODE_ENV: "production",
       PORT: "8000",
+      ...config.aiEnvironment,
       POSTGRES_FOUNDATION_ENABLED: "true",
       POSTGRES_SSL: "true",
       NODE_EXTRA_CA_CERTS: "/app/rds-global-bundle.pem",

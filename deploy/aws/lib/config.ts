@@ -33,6 +33,10 @@ export interface EnvironmentConfig {
   /** ALB idle timeout. The assistant SSE stream can be silent for up to
    *  120s before its first token; WebSocket clients get no server pings. */
   readonly albIdleTimeoutSeconds: number;
+  /** Governed AI surface (deny-by-default). Empty = every AI flag absent,
+   *  the platform's safe state. Populating this IS the AI release for the
+   *  env (docs/runbooks/PRODUCTION.md). */
+  readonly aiEnvironment: Record<string, string>;
 }
 
 export interface TaskSize {
@@ -63,6 +67,19 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
       workerMaxCount: 2,
     },
     albIdleTimeoutSeconds: 180,
+    // Staging AI release 2026-08-02: assisted proposal workspace
+    // (conversations + extraction + drafts, live OpenAI). Model pin per
+    // PRODUCTION.md - changing it requires the gold evaluation.
+    aiEnvironment: {
+      AI_ENVIRONMENT: "staging",
+      CONVERSATIONS_ENABLED: "true",
+      PROPOSAL_CONTEXT_ENABLED: "true",
+      PROPOSAL_DRAFT_ENABLED: "true",
+      LIVE_AI_PILOT_ENABLED: "true",
+      LIVE_AI_PROVIDER: "openai",
+      LIVE_AI_MODEL: "gpt-5.4-mini-2026-03-17",
+      LIVE_AI_KILL_SWITCH: "false",
+    },
   },
   production: {
     envName: "production",
@@ -85,6 +102,7 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
       workerMaxCount: 4,
     },
     albIdleTimeoutSeconds: 180,
+    aiEnvironment: {},
   },
 };
 
