@@ -67,18 +67,47 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
       workerMaxCount: 2,
     },
     albIdleTimeoutSeconds: 180,
-    // Staging AI release 2026-08-02: assisted proposal workspace
-    // (conversations + extraction + drafts, live OpenAI). Model pin per
-    // PRODUCTION.md - changing it requires the gold evaluation.
+    // Staging AI release 2026-08-02 (rev 2): full parity with local dev -
+    // every AI surface on. Deterministic/mock providers for extraction and
+    // knowledge embeddings (as in local dev); live OpenAI for conversation
+    // replies (failures degrade to deterministic acknowledgments).
+    // Retention purge stays off. Model pin per PRODUCTION.md.
     aiEnvironment: {
       AI_ENVIRONMENT: "staging",
       CONVERSATIONS_ENABLED: "true",
       PROPOSAL_CONTEXT_ENABLED: "true",
+      PROPOSAL_CONTEXT_PROVIDER: "mock",
+      PROPOSAL_CONTEXT_MODEL: "deterministic-v1",
       PROPOSAL_DRAFT_ENABLED: "true",
+      PROPOSAL_WORKFLOW_ENABLED: "true",
+      CANDIDATE_APPLICATION_ENABLED: "true",
+      AI_ASSISTANT_ENABLED: "true",
+      AI_ASSISTANT_ALLOWED_ORGANIZATION_IDS: "*",
+      AI_ASSISTANT_KILL_SWITCH: "false",
+      AI_GATEWAY_ENABLED: "true",
+      GUIDANCE_ENABLED: "true",
+      INVESTMENT_GUIDANCE_ENABLED: "true",
+      PRICING_CORPUS_ENABLED: "true",
+      VENDOR_ANALYSIS_ENABLED: "true",
+      KNOWLEDGE_INGESTION_ENABLED: "true",
+      KNOWLEDGE_RETRIEVAL_ENABLED: "true",
+      KNOWLEDGE_REVIEW_ENABLED: "true",
+      KNOWLEDGE_IN_DRAFT_ENABLED: "true",
+      KNOWLEDGE_INDEPENDENT_APPROVAL_REQUIRED: "false",
+      KNOWLEDGE_EMBEDDING_PROVIDER: "mock",
+      KNOWLEDGE_EMBEDDING_MODEL: "deterministic-v1",
+      KNOWLEDGE_RETRIEVAL_MODE: "hybrid",
+      KNOWLEDGE_RETRIEVAL_MAX_RESULTS: "20",
+      KNOWLEDGE_RETRIEVAL_QUERY_TIMEOUT_MS: "500",
       LIVE_AI_PILOT_ENABLED: "true",
       LIVE_AI_PROVIDER: "openai",
       LIVE_AI_MODEL: "gpt-5.4-mini-2026-03-17",
       LIVE_AI_KILL_SWITCH: "false",
+      LIVE_AI_INPUT_TOKEN_LIMIT: "32000",
+      LIVE_AI_OUTPUT_TOKEN_LIMIT: "4000",
+      LIVE_AI_NON_CONFIDENTIAL_ENABLED: "false",
+      LIVE_AI_SYNTHETIC_ENABLED: "false",
+      LIVE_AI_PROPOSAL_SOURCE_ENABLED: "false",
     },
   },
   production: {

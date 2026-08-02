@@ -257,6 +257,34 @@ export class AppStack extends cdk.Stack {
       circuitBreaker: { enable: true, rollback: true },
     });
 
+    /* ── AI gateway worker ───────────────────────────────────────────── */
+    // The platform assistant's job pipeline runs as its own process (see
+    // scripts/startAiGatewayWorker.ts). Only materializes when the env's
+    // AI release (config.aiEnvironment) enables the gateway — production's
+    // empty map means no service, matching deny-by-default.
+    if (config.aiEnvironment.AI_GATEWAY_ENABLED === "true") {
+      const aiGatewayTaskDef = makeTaskDefinition("AiGateway", config.ecs.dispatcher);
+      aiGatewayTaskDef.addContainer("ai-gateway", {
+        image: appImage,
+        command: ["node", "dist/scripts/startAiGatewayWorker.js"],
+        environment: sharedEnvironment,
+        secrets: sharedSecrets,
+        logging: ecs.LogDrivers.awsLogs({ logGroup: logGroup("AiGateway"), streamPrefix: "ai-gateway" }),
+        stopTimeout: cdk.Duration.seconds(30),
+      });
+      new ecs.FargateService(this, "AiGatewayService", {
+        cluster: this.cluster,
+        serviceName: "ai-gateway",
+        taskDefinition: aiGatewayTaskDef,
+        desiredCount: 1,
+        securityGroups: [network.dispatcherSg],
+        vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+        minHealthyPercent: 100,
+        maxHealthyPercent: 200,
+        circuitBreaker: { enable: true, rollback: true },
+      });
+    }
+
     /* ── ClamAV ──────────────────────────────────────────────────────── */
     const clamavTaskDef = makeTaskDefinition("Clamav", config.ecs.clamav);
     clamavTaskDef.addContainer("clamav", {
