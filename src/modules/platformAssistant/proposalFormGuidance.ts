@@ -2,7 +2,7 @@ import proposalSchema from "../../../contracts/proposal/v1/proposal.v1.schema.js
 import proposalFormUi from "../../../contracts/proposal/v1/proposal-form-ui.v1.json";
 import type { AssistantPromptEvidence } from "./domain";
 
-export const PROPOSAL_FORM_GUIDANCE_VERSION = "proposal-form-guidance.v2";
+export const PROPOSAL_FORM_GUIDANCE_VERSION = "proposal-form-guidance.v3";
 export const PROPOSAL_FORM_SCHEMA_VERSION = "proposal.v1";
 export const PROPOSAL_FORM_GUIDANCE_OWNER = "Product Operations";
 export const PROPOSAL_FORM_GUIDANCE_REVIEW_DATE = "2026-10-29";
@@ -653,11 +653,12 @@ const normalizedTerms = (value: string): readonly string[] =>
     .replace(/[^\p{L}\p{N}\s-]/gu, " ")
     .split(/\s+/)
     .filter((term) => term.length > 1)
-    .map((term) =>
-      term.length > 4 && term.endsWith("s") && !term.endsWith("ss")
+    .map((term) => {
+      if (/^requir(?:e|ed|ement|ements)$/.test(term)) return "require";
+      return term.length > 4 && term.endsWith("s") && !term.endsWith("ss")
         ? term.slice(0, -1)
-        : term,
-    );
+        : term;
+    });
 
 const evidenceForField = (
   field: ProposalFormFieldGuidance,

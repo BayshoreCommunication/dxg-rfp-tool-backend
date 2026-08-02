@@ -2,6 +2,7 @@ import type {
   AssistantMessage,
   AssistantUiContext,
 } from "./domain";
+import { PROPOSAL_FORM_FIELD_GUIDANCE } from "./proposalFormGuidance";
 
 export const ASSISTANT_INTENT_VERSION = "assistant-intent-router.v1";
 
@@ -80,6 +81,13 @@ export const classifyAssistantIntent = (input: {
 }): AssistantIntentClassification => {
   const query = normalize(input.query);
   const uiContext = input.uiContext;
+  const namesKnownProposalField =
+    /\b(?:field|enter|input|fill|blank|required|optional|example|options?|choices?|maximum|select|choose|what should)\b/i.test(
+      query,
+    ) &&
+    PROPOSAL_FORM_FIELD_GUIDANCE.some((field) =>
+      query.includes(field.label.toLocaleLowerCase("en-US")),
+    );
 
   if (exactConversational.test(query)) {
     return result("greeting_or_thanks", "deterministic", "high");
@@ -93,9 +101,25 @@ export const classifyAssistantIntent = (input: {
     return result("action_request", "deterministic", "high");
   }
   if (
+    /["“][^"”]{3,240}["”]/u.test(query) &&
+    /\b(?:status|details?|owner|deadline|missing|readiness|summari[sz]e|compare)\b/i.test(
+      query,
+    )
+  ) {
+    return result("proposal_specific_request", "deterministic", "high");
+  }
+  if (
+    /\b(?:create|start|new|make)\b.*\bproposal\b|\bproposal\b.*\b(?:form|intake|steps?)\b/i.test(
+      query,
+    )
+  ) {
+    return result("proposal_creation", "deterministic", "high");
+  }
+  if (
     uiContext?.fieldKeyStatus === "valid" ||
     Boolean(uiContext?.fieldControl) ||
-    /\b(?:this|the|a)\s+field\b|\bwhat (?:belongs|should i enter)\b|\bcan i leave\b.*\bblank\b|\bfield (?:required|example|help)\b/i.test(
+    namesKnownProposalField ||
+    /\b(?:this|the|a)\s+field\b|\bwhat (?:belongs|should i (?:enter|put))\b|\bcan i leave\b.*\bblank\b|\bfield (?:required|example|help)\b|\b(?:options?|choices?|available|required|requirement)\b.{0,80}\bfield\b/i.test(
       query,
     )
   ) {
@@ -140,13 +164,6 @@ export const classifyAssistantIntent = (input: {
     /\b(?:review|check|improve)\b.*\bproposal\b|\bproposal review\b/i.test(query)
   ) {
     return result("proposal_review", "deterministic", "high");
-  }
-  if (
-    /\b(?:create|start|new|make)\b.*\bproposal\b|\bproposal\b.*\b(?:form|intake|steps?)\b/i.test(
-      query,
-    )
-  ) {
-    return result("proposal_creation", "deterministic", "high");
   }
   if (
     /\b(?:where|navigate|find|open|go to|page|settings|dashboard|vendor responses|email area)\b/i.test(

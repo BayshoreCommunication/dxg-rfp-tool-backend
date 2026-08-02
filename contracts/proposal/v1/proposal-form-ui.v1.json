@@ -198,6 +198,30 @@
       "controlType": "long_text",
       "helperText": "Add useful procurement milestones or timing notes; exact submission and selection dates are collected later in Investment & Evaluation.",
       "example": "Vendor questions close October 1; shortlisted presentations take place October 15."
+    },
+    "/content/videoRecording/required": {
+      "label": "Video Recording Required",
+      "requirement": "required",
+      "controlType": "radio",
+      "helperText": "Choose whether any sessions must be recorded. Selecting Yes opens the camera, recording-format, and deliverable fields; selecting No omits the recording scope from the RFP.",
+      "example": "Yes — Record sessions during the event",
+      "options": [
+        { "value": "true", "label": "Yes — Record sessions during the event" },
+        { "value": "false", "label": "No — No recording needed" }
+      ]
+    },
+    "/content/budgetPreferences/flexibility": {
+      "label": "Investment Flexibility",
+      "requirement": "optional",
+      "controlType": "select",
+      "helperText": "Choose how firm the investment range is so vendors know whether to hold scope, offer alternatives, or propose cost-saving value engineering.",
+      "example": "Value-Engineering Welcome",
+      "options": [
+        { "value": "Fixed", "label": "Fixed" },
+        { "value": "Flexible", "label": "Flexible" },
+        { "value": "Value-Engineering Welcome", "label": "Value-Engineering Welcome" },
+        { "value": "Not Sure", "label": "Not Sure" }
+      ]
     }
   }
 }

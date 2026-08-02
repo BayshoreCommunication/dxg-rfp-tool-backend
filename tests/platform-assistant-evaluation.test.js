@@ -64,7 +64,7 @@ test("assistant evaluation fixtures cover at least 50 cases and every risk tag",
   );
   const coverage = new Set(parsed.fixtures.flatMap((fixture) => fixture.coverage));
   assert.deepEqual([...coverage].sort(), [...ASSISTANT_EVALUATION_COVERAGE].sort());
-  assert.equal(parsed.baseline.promptVersion, "platform-assistant-prompt.v5");
+  assert.equal(parsed.baseline.promptVersion, "platform-assistant-prompt.v6");
   assert.ok(
     parsed.fixtures.some(
       (fixture) =>

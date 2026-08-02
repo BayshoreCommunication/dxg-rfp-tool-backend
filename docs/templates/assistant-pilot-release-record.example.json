@@ -8,7 +8,7 @@
   "application": {
     "backendCommit": "",
     "dashboardCommit": "",
-    "promptVersion": "platform-assistant-prompt.v5",
+    "promptVersion": "platform-assistant-prompt.v6",
     "migrationsAppliedThrough": "036"
   },
   "model": {
