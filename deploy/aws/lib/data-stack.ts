@@ -154,6 +154,13 @@ export class DataStack extends cdk.Stack {
     // Application secrets. Values are placeholders — the operator fills real
     // values via console/CLI at bootstrap; nothing secret exists in git or in
     // CloudFormation parameters. Keys mirror the backend's env contract.
+    //
+    // WARNING: secretObjectValue is the secret's CloudFormation-managed
+    // value. Any change to this map, deployed against an env whose secret
+    // has already been filled, RESETS EVERY KEY to these placeholders
+    // (recover from the AWSPREVIOUS version immediately). Never redeploy
+    // this stack to a live env after editing this map without re-running
+    // compose-app-secrets.sh and re-filling external keys.
     this.appSecret = new secretsmanager.Secret(this, "AppSecret", {
       secretName: `rfpilot/${config.envName}/app`,
       description: "RFPilot backend application secrets (operator-managed values)",
@@ -173,6 +180,8 @@ export class DataStack extends cdk.Stack {
         SMTP_HOST: cdk.SecretValue.unsafePlainText("REPLACE_ME"),
         SMTP_PORT: cdk.SecretValue.unsafePlainText("587"),
         SMTP_MAIL: cdk.SecretValue.unsafePlainText("REPLACE_ME"),
+        // SES SMTP credentials (IAM-derived): username is the access key id.
+        SMTP_USER: cdk.SecretValue.unsafePlainText("REPLACE_ME"),
         SMTP_PASSWORD: cdk.SecretValue.unsafePlainText("REPLACE_ME"),
       },
     });

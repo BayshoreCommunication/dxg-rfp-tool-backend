@@ -132,6 +132,7 @@ export class AppStack extends cdk.Stack {
       SMTP_HOST: secret("SMTP_HOST"),
       SMTP_PORT: secret("SMTP_PORT"),
       SMTP_MAIL: secret("SMTP_MAIL"),
+      SMTP_USER: secret("SMTP_USER"),
       SMTP_PASSWORD: secret("SMTP_PASSWORD"),
     };
 

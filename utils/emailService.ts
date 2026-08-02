@@ -30,7 +30,7 @@ const getResendClient = (): Resend | null => {
 };
 
 // ---------------------------------------------------------------------------
-// Nodemailer SMTP (fallback for local dev — blocked by DigitalOcean)
+// Nodemailer SMTP (production path on AWS via SES; also local dev)
 // ---------------------------------------------------------------------------
 
 let transporter: nodemailer.Transporter | null = null;
@@ -40,10 +40,13 @@ const initializeTransporter = async (): Promise<void> => {
   const SMTP_HOST = normalizeEnv(process.env.SMTP_HOST);
   const SMTP_PORT = normalizeEnv(process.env.SMTP_PORT);
   const SMTP_MAIL = normalizeEnv(process.env.SMTP_MAIL);
+  // SES SMTP authenticates with IAM-derived credentials, not the mail
+  // address — SMTP_USER carries them; plain providers omit it.
+  const SMTP_USER = normalizeEnv(process.env.SMTP_USER) || normalizeEnv(process.env.SMTP_MAIL);
   const SMTP_PASSWORD = normalizeEnv(process.env.SMTP_PASSWORD);
 
   if (SMTP_HOST && SMTP_PORT && SMTP_MAIL && SMTP_PASSWORD) {
-    console.log("Setting up SMTP transporter (local dev fallback)");
+    console.log("Setting up SMTP transporter");
     const requestedPort = parseInt(SMTP_PORT, 10);
     // Force port 587 STARTTLS + IPv4 to avoid DO SMTP blocks
     const usePort = requestedPort === 465 ? 587 : requestedPort;
@@ -55,7 +58,7 @@ const initializeTransporter = async (): Promise<void> => {
       family: 4,
       socketTimeout: 30000,
       connectionTimeout: 30000,
-      auth: { user: SMTP_MAIL, pass: SMTP_PASSWORD },
+      auth: { user: SMTP_USER, pass: SMTP_PASSWORD },
     } as any);
   } else {
     console.log("No SMTP credentials found, creating Ethereal test account");
