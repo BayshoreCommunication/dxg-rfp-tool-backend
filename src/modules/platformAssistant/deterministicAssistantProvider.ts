@@ -4,6 +4,7 @@ import type {
   AssistantProviderResponse,
 } from "./domain";
 import type { AssistantResponseProvider } from "./ports";
+import { normalizeCommonAssistantTypos } from "./queryNormalization";
 
 const injectionPattern =
   /\b(ignore (?:all |the )?(?:previous|system|developer)|system prompt|developer message|jailbreak|override instructions)\b/i;
@@ -331,7 +332,7 @@ export class DeterministicAssistantProvider implements AssistantResponseProvider
 
   async generate(input: AssistantPromptInput): Promise<AssistantProviderResponse> {
     const query = input.userMessage.trim();
-    const normalized = query.toLowerCase();
+    const normalized = normalizeCommonAssistantTypos(query.toLowerCase());
 
     if (isActionRequest(query)) {
       if (/\b(?:book|reserve)\b.*\b(?:venue|room|hotel|travel)\b/i.test(normalized)) {

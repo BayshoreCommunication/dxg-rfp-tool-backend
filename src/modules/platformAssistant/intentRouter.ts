@@ -3,8 +3,9 @@ import type {
   AssistantUiContext,
 } from "./domain";
 import { PROPOSAL_FORM_FIELD_GUIDANCE } from "./proposalFormGuidance";
+import { normalizeCommonAssistantTypos } from "./queryNormalization";
 
-export const ASSISTANT_INTENT_VERSION = "assistant-intent-router.v1";
+export const ASSISTANT_INTENT_VERSION = "assistant-intent-router.v2";
 
 export const ASSISTANT_INTENTS = [
   "greeting_or_thanks",
@@ -38,11 +39,13 @@ export type AssistantIntentClassification = {
 };
 
 const normalize = (value: string): string =>
-  value
-    .normalize("NFKC")
-    .trim()
-    .toLocaleLowerCase("en-US")
-    .replace(/\s+/g, " ");
+  normalizeCommonAssistantTypos(
+    value
+      .normalize("NFKC")
+      .trim()
+      .toLocaleLowerCase("en-US")
+      .replace(/\s+/g, " "),
+  );
 
 const exactConversational = /^(?:hi|hello|hey|good (?:morning|afternoon|evening)|thanks|thank you|appreciate it)[!,.?]*$/i;
 const followUpPattern =
