@@ -83,10 +83,17 @@ NOT deployed.
    stacks; a data-stack edit from CI reset the filled app secret to
    placeholders (restored via `update-secret-version-stage`). CI now
    deploys with `--exclusively`; never remove that flag.
-3. **Frontends**: dashboard/admin need their API base URL pointed at the
-   staging ALB (or the future staging domain) to exercise the app
-   end-to-end; a real user pass through a proposal flow is the remaining
-   acceptance check.
+3. ~~**Frontends**~~ — **ACCEPTANCE PASS DONE 2026-08-02** (dashboard run
+   locally with `.env.local` → staging `BACKEND_URL` + staging
+   `BFF_SHARED_SECRET`): signup → SES OTP → register (needed one-time Mongo
+   seed: `node dist/scripts/migrateDxgOrganization.js --apply` as a one-off
+   ECS task using the **api** task definition — the migrate taskdef has no
+   MONGODB_URL) → dashboard → proposal intake (auto-save) → file upload to
+   S3 assets bucket via task-role creds → submit/publish → email campaign
+   sent via SES (1 SENT, tracking live) → public RFP page renders. AI
+   gates verified OFF (assisted workspace + five-step workflow correctly
+   refuse). Admin app not yet exercised. Test account:
+   dxgrfptool@gmail.com (staging).
 4. **Production promotion** (when staging has been exercised):
    `git checkout production && git merge --ff-only main && git push` after
    first deploying `Rfpilot-production-Network/Data`, running
