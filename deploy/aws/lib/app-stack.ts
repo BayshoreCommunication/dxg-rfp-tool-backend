@@ -352,7 +352,10 @@ export class AppStack extends cdk.Stack {
         sslPolicy: elbv2.SslPolicy.RECOMMENDED_TLS,
         defaultTargetGroups: [targetGroup],
       });
-      this.alb.addListener("HttpRedirect", {
+      // Same construct id as the bootstrap listener below: port 80 is
+      // occupied, so this must be an in-place default-action update, not a
+      // create-before-delete replacement (listener creates collide on port).
+      this.alb.addListener("Http", {
         port: 80,
         defaultAction: elbv2.ListenerAction.redirect({ protocol: "HTTPS", port: "443", permanent: true }),
       });
