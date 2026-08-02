@@ -60,10 +60,16 @@ NOT deployed.
 
 ## Next steps, in order
 
-1. **DNS + HTTPS** (blocked on: where `dxg-agency.com` DNS is hosted, and
-   the desired hostnames). Then: ACM cert in us-east-2 (DNS validation),
-   redeploy App with `-c certificateArn=... -c apiDomain=... -c
-   frontendUrl=... -c adminUrl=...`, CNAME the hostname to the ALB.
+1. **DNS + HTTPS** — in progress 2026-08-02. `dxg-agency.com` DNS is on
+   **Namecheap**. Wildcard ACM cert (`*.dxg-agency.com` + apex) requested in
+   us-east-2: `arn:aws:acm:us-east-2:295229565954:certificate/f6976da6-0174-40b4-86bc-9525267a8b08`.
+   Staging API hostname: `api-staging.dxg-agency.com`. The deploy workflow
+   now passes `certificateArn`/`apiDomain`/`frontendUrl`/`adminUrl` from
+   environment-scoped GitHub variables (`CERTIFICATE_ARN` and `API_DOMAIN`
+   are set on the `staging` environment; empty = HTTP bootstrap mode).
+   Remaining: Namecheap validation CNAME + `api-staging` CNAME to the ALB
+   (records provided to Travis), then push to `main` once the cert is
+   ISSUED — CI deploys the HTTPS listener + 80→443 redirect.
 2. **Email decision**: SES (recommended — the app already speaks SMTP, so
    it's domain verification + sandbox exit + SMTP credentials into the app
    secret) vs keeping Resend (`RESEND_API_KEY` key in the secret).

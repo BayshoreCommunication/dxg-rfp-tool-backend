@@ -145,10 +145,17 @@ jobs:
         working-directory: deploy/aws
         run: |
           npm ci
+          # Domain/cert/URL contexts come from environment-scoped GitHub
+          # variables (empty = HTTP bootstrap mode, see app-stack.ts), so a
+          # plain code push can never strip HTTPS from a configured env.
           npx cdk deploy "Rfpilot-${ENV_NAME}-App" "Rfpilot-${ENV_NAME}-Observability" \
             --require-approval never \
             -c imageTag="sha-${GITHUB_SHA}" \
-            -c env="${ENV_NAME}"
+            -c env="${ENV_NAME}" \
+            -c certificateArn="${{ vars.CERTIFICATE_ARN }}" \
+            -c apiDomain="${{ vars.API_DOMAIN }}" \
+            -c frontendUrl="${{ vars.FRONTEND_URL }}" \
+            -c adminUrl="${{ vars.ADMIN_URL }}"
 
       - name: Smoke checks
         run: |
