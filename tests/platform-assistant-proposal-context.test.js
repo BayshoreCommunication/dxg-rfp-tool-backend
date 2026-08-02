@@ -74,6 +74,27 @@ test("prefers the longest exact proposal title contained in the message", async 
   assert.equal(result.proposalName, "Momentum 2027 Sales Kickoff");
 });
 
+test("does not collapse two unrelated explicitly named proposals to one", async () => {
+  const source = createAssistantProposalContextSource(async () => [
+    proposal("Launchpad 2027"),
+    proposal("Momentum 2027 Sales Kickoff"),
+  ]);
+
+  const result = await source.resolve({
+    ...context,
+    query:
+      "Compare Launchpad 2027 with Momentum 2027 Sales Kickoff without guessing",
+    recentUserMessages: [],
+  });
+
+  assert.equal(result.state, "ambiguous");
+  assert.deepEqual(result.proposalNames, [
+    "Launchpad 2027",
+    "Momentum 2027 Sales Kickoff",
+  ]);
+  assert.equal(result.evidence.length, 0);
+});
+
 test("does not guess when duplicate owned proposals have the same title", async () => {
   const source = createAssistantProposalContextSource(async () => [
     proposal("Annual Summit"),
