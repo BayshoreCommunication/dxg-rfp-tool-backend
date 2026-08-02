@@ -113,10 +113,25 @@ const matchingCandidates = (
     return name.length >= 3 && normalizedMessage.includes(` ${name} `);
   });
   if (matches.length < 2) return matches;
-  const longestName = Math.max(
-    ...matches.map((proposal) => normalize(proposalName(proposal)).length),
+
+  const mostSpecificMatches = matches.filter((candidate) => {
+    const candidateName = normalize(proposalName(candidate));
+    return !matches.some((other) => {
+      const otherName = normalize(proposalName(other));
+      return otherName !== candidateName && otherName.includes(candidateName);
+    });
+  });
+  const distinctSpecificNames = new Set(
+    mostSpecificMatches.map((proposal) => normalize(proposalName(proposal))),
   );
-  const longestMatches = matches.filter(
+  if (distinctSpecificNames.size > 1) return mostSpecificMatches;
+
+  const longestName = Math.max(
+    ...mostSpecificMatches.map(
+      (proposal) => normalize(proposalName(proposal)).length,
+    ),
+  );
+  const longestMatches = mostSpecificMatches.filter(
     (proposal) => normalize(proposalName(proposal)).length === longestName,
   );
   const distinctNames = new Set(
