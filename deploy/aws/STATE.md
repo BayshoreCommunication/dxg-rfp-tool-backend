@@ -50,9 +50,20 @@ NOT deployed.
 
 ## Platform posture (do not change casually)
 
-- **Every AI flag is OFF** (`AI_ENVIRONMENT` unset = platform-wide
-  deny-by-default). Enabling AI is a separate release per
+- **AI on staging is ON as of 2026-08-02** (operator-approved release):
+  `config.aiEnvironment` in `deploy/aws/lib/config.ts` carries the full
+  local-dev-parity flag set (workspace, workflow, assistant, knowledge
+  with deterministic embeddings, live OpenAI replies), and a conditional
+  `ai-gateway` Fargate service runs the assistant's job worker.
+  **Production's `aiEnvironment` is `{}` — every AI flag absent,
+  deny-by-default** — and enabling it there is a separate release per
   `docs/runbooks/PRODUCTION.md`, never part of an infra deploy.
+  NOTE: a fresh environment ALSO needs the Postgres data foundation
+  seeded or all AI endpoints 503 `ORGANIZATION_NOT_READY`: run
+  `node dist/scripts/backfillPostgresProposalReferences.js --apply
+  --organization-id=<mongo org id>` as a one-off ECS task using the
+  **api** task definition (the migrate taskdef lacks MONGODB_URL).
+  Staging org: `6a6ef9d1a85e65f5a53ca10c` (slug `dxg`).
 - **API runs exactly 1 task** (stop-then-start deploys, ~30–60s window):
   its cron jobs are unlocked-destructive and WebSocket fan-out is
   process-local. Before scaling: set `CRON_ENABLED=false` on extra
