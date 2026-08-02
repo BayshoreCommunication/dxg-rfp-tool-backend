@@ -71,9 +71,18 @@ NOT deployed.
    deploy. Gotcha fixed in `f846726`: the port-80 listener must keep the
    `Http` construct id when switching to the redirect (create-before-delete
    collides on the port otherwise).
-2. **Email decision**: SES (recommended — the app already speaks SMTP, so
-   it's domain verification + sandbox exit + SMTP credentials into the app
-   secret) vs keeping Resend (`RESEND_API_KEY` key in the secret).
+2. ~~**Email decision**~~ — **DONE 2026-08-02: SES.** Domain identity
+   `dxg-agency.com` verified (DKIM CNAMEs in Namecheap), sending works
+   end-to-end (`/api/auth/send-otp` → SES → inbox). SMTP creds are an
+   IAM user `rfpilot-staging-ses-smtp` (ses:Send* only); `SMTP_USER` is the
+   new env key carrying the IAM SMTP username (emailService falls back to
+   SMTP_MAIL without it). **Sandbox exit requested 2026-08-02, pending AWS
+   review** — until approved, SES only delivers to verified identities
+   (currently `dxgrfptool@gmail.com`, the project service address).
+   INCIDENT LEARNED: `cdk deploy` implicitly deploys changed dependency
+   stacks; a data-stack edit from CI reset the filled app secret to
+   placeholders (restored via `update-secret-version-stage`). CI now
+   deploys with `--exclusively`; never remove that flag.
 3. **Frontends**: dashboard/admin need their API base URL pointed at the
    staging ALB (or the future staging domain) to exercise the app
    end-to-end; a real user pass through a proposal flow is the remaining
