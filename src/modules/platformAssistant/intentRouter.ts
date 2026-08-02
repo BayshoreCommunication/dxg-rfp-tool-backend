@@ -94,6 +94,7 @@ export const classifyAssistantIntent = (input: {
   }
   if (
     uiContext?.fieldKeyStatus === "valid" ||
+    Boolean(uiContext?.fieldControl) ||
     /\b(?:this|the|a)\s+field\b|\bwhat (?:belongs|should i enter)\b|\bcan i leave\b.*\bblank\b|\bfield (?:required|example|help)\b/i.test(
       query,
     )

@@ -12,6 +12,7 @@ const {
   PLATFORM_FACTS,
   PLATFORM_KNOWLEDGE_VERSION,
   platformFactsForConversation,
+  platformFactsForUiContext,
   platformFactsForQuery,
 } = require("../src/modules/platformAssistant/platformKnowledge");
 const {
@@ -137,6 +138,71 @@ test("platform map is versioned, bounded, and contains internal routes only", ()
   assert.ok(
     guided.some((fact) => fact.id === "platform:proposal:venue-room-fields"),
   );
+});
+
+test("current rendered form metadata becomes bounded field evidence", () => {
+  const evidence = platformFactsForUiContext({
+    schemaVersion: "assistant-ui-context.v1",
+    routeCategory: "proposal_creation",
+    workflow: "proposal_intake",
+    fieldKeyStatus: "not_provided",
+    fieldControl: {
+      label: "Streaming Platform",
+      helperText: "Choose the platform delivering the virtual experience.",
+      requirement: "conditional",
+      controlType: "select",
+      options: ["Zoom", "Teams", "Vendor Recommendation Needed"],
+      maximumSelections: 1,
+      placeholder: "Select platform...",
+    },
+  });
+  const field = evidence.find(
+    (item) => item.id === "form-field:current-rendered-control",
+  );
+  assert.ok(field);
+  assert.equal(field.sourceType, "operating_guidance");
+  assert.equal(field.trust, "untrusted_retrieved_content");
+  assert.match(field.content, /current form marks this field conditional/i);
+  assert.match(field.content, /Zoom; Teams; Vendor Recommendation Needed/);
+  assert.match(field.content, /maximum 1/);
+  assert.doesNotMatch(field.content, /private|current value/i);
+});
+
+test("deterministic field help uses current rendered choices without guessing", async () => {
+  const provider = new DeterministicAssistantProvider();
+  const uiContext = {
+    schemaVersion: "assistant-ui-context.v1",
+    routeCategory: "proposal_creation",
+    workflow: "proposal_intake",
+    fieldKeyStatus: "not_provided",
+    fieldControl: {
+      label: "Streaming Platform",
+      helperText: "Choose the platform delivering the virtual experience.",
+      controlType: "select",
+      options: ["Zoom", "Teams", "Vendor Recommendation Needed"],
+      maximumSelections: 1,
+    },
+  };
+  const prompt = buildAssistantPromptInput({
+    userMessage: message({
+      id: "rendered-field-user",
+      content: 'What should I enter for the "Streaming Platform" field?',
+    }),
+    history: [],
+    platformFacts: platformFactsForUiContext(uiContext),
+    operatingGuidance: [],
+    uiContext,
+  });
+  const response = validateAssistantProviderResponse(
+    await provider.generate(prompt),
+    prompt.evidence,
+  );
+  assert.equal(response.kind, "answer");
+  assert.match(response.content, /Streaming Platform/);
+  assert.match(response.content, /Zoom; Teams; Vendor Recommendation Needed/);
+  assert.deepEqual(response.citationIds, [
+    "form-field:current-rendered-control",
+  ]);
 });
 
 test("platform fact selection carries prior user topics into follow-up and summary turns", () => {

@@ -55,6 +55,25 @@ test("valid field context deterministically constrains a short field question", 
   });
 });
 
+test("rendered field context constrains help when no canonical key exists", () => {
+  const result = classification("Example?", {
+    schemaVersion: "assistant-ui-context.v1",
+    routeCategory: "proposal_creation",
+    workflow: "proposal_intake",
+    fieldKeyStatus: "not_provided",
+    fieldControl: {
+      label: "Streaming Platform",
+      helperText: "Choose the platform used for remote attendees.",
+      controlType: "select",
+      options: ["Zoom", "Teams", "Vendor Recommendation Needed"],
+      maximumSelections: 1,
+    },
+  });
+  assert.equal(result.intent, "form_field_help");
+  assert.equal(result.source, "ui_context");
+  assert.equal(result.confidence, "high");
+});
+
 test("multi-turn shorthand retains the previous completed assistant intent", () => {
   const result = classification("Now make that shorter.", null, [
     {
