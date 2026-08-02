@@ -105,9 +105,9 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
       LIVE_AI_KILL_SWITCH: "false",
       LIVE_AI_INPUT_TOKEN_LIMIT: "32000",
       LIVE_AI_OUTPUT_TOKEN_LIMIT: "4000",
-      LIVE_AI_NON_CONFIDENTIAL_ENABLED: "false",
-      LIVE_AI_SYNTHETIC_ENABLED: "false",
-      LIVE_AI_PROPOSAL_SOURCE_ENABLED: "false",
+      LIVE_AI_NON_CONFIDENTIAL_ENABLED: "true",
+      LIVE_AI_SYNTHETIC_ENABLED: "true",
+      LIVE_AI_PROPOSAL_SOURCE_ENABLED: "true",
     },
   },
   production: {
