@@ -35,6 +35,10 @@ export interface EnvironmentConfig {
   readonly albIdleTimeoutSeconds: number;
   /** MongoDB database name inside the env's Atlas cluster (MONGODB_DB_NAME). */
   readonly mongoDbName: string;
+  /** Public base URL for app assets (ASSET_STORAGE_PUBLIC_URL_BASE) — the
+   *  CloudFront domain in front of the assets bucket. Without it the app
+   *  builds direct S3 URLs, which Block Public Access rejects. */
+  readonly assetPublicUrlBase: string;
   /** Governed AI surface (deny-by-default). Empty = every AI flag absent,
    *  the platform's safe state. Populating this IS the AI release for the
    *  env (docs/runbooks/PRODUCTION.md). */
@@ -70,6 +74,7 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
     },
     albIdleTimeoutSeconds: 180,
     mongoDbName: "dxg_rfp_tool_staging",
+    assetPublicUrlBase: "https://d3bje2jgtaou7s.cloudfront.net",
     // Staging AI release 2026-08-02 (rev 2): full parity with local dev -
     // every AI surface on. Deterministic/mock providers for extraction and
     // knowledge embeddings (as in local dev); live OpenAI for conversation
@@ -135,6 +140,7 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
     },
     albIdleTimeoutSeconds: 180,
     mongoDbName: "dxg_rfp_tool_prod",
+    assetPublicUrlBase: "https://d1hn23mh1h53mx.cloudfront.net",
     aiEnvironment: {},
   },
 };

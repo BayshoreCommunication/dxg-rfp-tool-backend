@@ -98,6 +98,7 @@ export class AppStack extends cdk.Stack {
       NODE_ENV: "production",
       PORT: "8000",
       MONGODB_DB_NAME: config.mongoDbName,
+      ASSET_STORAGE_PUBLIC_URL_BASE: config.assetPublicUrlBase,
       ...config.aiEnvironment,
       POSTGRES_FOUNDATION_ENABLED: "true",
       POSTGRES_SSL: "true",
