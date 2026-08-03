@@ -80,7 +80,7 @@ AWS_PROFILE=rfpilot aws ecs describe-services --region us-east-2 \
 CI cannot bootstrap an environment: its migrate step needs the `migrate`
 task definition, which the App stack creates. The first App deploy is
 manual — full procedure in
-[`deploy/aws/README.md` → One-time bootstrap](../../deploy/aws/README.md),
+[`deploy/aws/README.md` → One-time bootstrap](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/README.md),
 including the cert/domain contexts and the follow-up Network redeploy for
 the 443 listener rule. After that one manual deploy, CI owns the cadence.
 

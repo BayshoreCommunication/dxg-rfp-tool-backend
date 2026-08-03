@@ -1,0 +1,97 @@
+site_name: RFPilot Backend Docs
+site_description: Architecture, operations, and AI-layer documentation for the RFPilot backend.
+repo_url: https://github.com/BayshoreCommunication/dxg-rfp-tool-backend
+repo_name: dxg-rfp-tool-backend
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+
+# Links that point outside docs/ (source files, deploy/aws/*) cannot resolve
+# on the rendered site; they remain valid on GitHub. Keep these as warnings,
+# not errors.
+validation:
+  links:
+    not_found: warn
+    absolute_links: warn
+    unrecognized_links: warn
+
+nav:
+  - Home: README.md
+  - Operations:
+      - Portal: operations/README.md
+      - Architecture: operations/architecture.md
+      - AWS Infrastructure: operations/aws-infrastructure.md
+      - Environments: operations/environments.md
+      - Deployment: operations/deployment.md
+      - CI/CD: operations/cicd.md
+      - Services: operations/services.md
+      - Monitoring: operations/monitoring.md
+      - Troubleshooting: operations/troubleshooting.md
+      - Rollback: operations/rollback.md
+      - Database Migrations: operations/database-migrations.md
+      - Secrets & Configuration: operations/secrets.md
+      - Developer Access: operations/developer-access.md
+      - Incident Response: operations/incident-response.md
+  - Project:
+      - Project State: PROJECT_STATE.md
+      - Architecture: ARCHITECTURE.md
+      - AI Layer: AI_LAYER.md
+      - API: API.md
+      - Database: DATABASE.md
+      - Development: DEVELOPMENT.md
+      - Troubleshooting (app): TROUBLESHOOTING.md
+      - Decisions: DECISIONS.md
+      - Roadmap: ROADMAP.md
+      - Client Scope: CLIENT_SCOPE.md
+  - Runbooks:
+      - Production: runbooks/PRODUCTION.md
+      - Durable Jobs: runbooks/DURABLE_JOBS.md
+      - AI Gateway: runbooks/AI_GATEWAY.md
+      - Knowledge Retrieval: runbooks/KNOWLEDGE_RETRIEVAL.md
+      - Platform Assistant Environment: runbooks/PLATFORM_ASSISTANT_ENVIRONMENT.md
+      - Platform Assistant Rollout: runbooks/PLATFORM_ASSISTANT_ROLLOUT.md
+      - Assistant Pilot Release: runbooks/AI_ASSISTANT_PILOT_RELEASE.md
+      - Assistant Retention: runbooks/AI_ASSISTANT_RETENTION.md
+      - API & Dependencies: runbooks/API_AND_DEPENDENCIES.md
+      - Proposal Context Test: runbooks/PROPOSAL_CONTEXT_TEST.md

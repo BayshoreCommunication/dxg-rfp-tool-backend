@@ -5,7 +5,7 @@
 
 ## Pipelines
 
-### Deploy to AWS — [`.github/workflows/deploy-aws.yml`](../../.github/workflows/deploy-aws.yml)
+### Deploy to AWS — [`.github/workflows/deploy-aws.yml`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/.github/workflows/deploy-aws.yml)
 
 - **Trigger:** push to `main` or `production` (doc-only paths ignored), or
   manual `workflow_dispatch` against either branch.
@@ -31,7 +31,7 @@
    rationale in `bin/rfpilot.ts`).
 2. **Docker build** of the single multi-entrypoint image.
 3. **Trivy scan** — fails on **fixable HIGH/CRITICAL** findings
-   (`ignore-unfixed: true`, exceptions in [`.trivyignore`](../../.trivyignore)).
+   (`ignore-unfixed: true`, exceptions in [`.trivyignore`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/.trivyignore)).
 4. **Push immutable image** `sha-<full-git-sha>` to ECR. Promotion-aware:
    if the tag already exists (staging built the same commit), it is reused;
    a lost race against a concurrent same-sha push is also tolerated. The
@@ -68,7 +68,7 @@
 ### Deploy to DigitalOcean (legacy) — manual `workflow_dispatch` only;
 retired. The droplet it targeted is being decommissioned. Do not use.
 
-## When a deployment fails, look here — in this order
+## When a deployment fails, look here in this order
 
 1. `gh run view <run-id> --log-failed` (or the Actions UI) — which step?
 2. **Quality gates**: reproduce locally with `npm run ci`; infra synth

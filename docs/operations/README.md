@@ -43,11 +43,26 @@ database per environment). Everything is **CDK TypeScript**
 entry points: `https://api.dxg-agency.com` (production) and
 `https://api-staging.dxg-agency.com` (staging).
 
+## Browsing these docs as a website
+
+A MkDocs (Material) site is configured over the whole `docs/` tree — sidebar
+navigation, full-text search, and rendered Mermaid diagrams:
+
+```bash
+pip3 install -r requirements-docs.txt   # once
+python3 -m mkdocs serve -a 127.0.0.1:8001
+# open http://127.0.0.1:8001
+```
+
+`python3 -m mkdocs build` produces a static `site/` folder (gitignored) you
+can host anywhere. Reading the Markdown directly on GitHub works equally
+well — all links resolve in both renderers.
+
 ## Companion documents elsewhere in the repo
 
-- [`deploy/aws/README.md`](../../deploy/aws/README.md) — the CDK operator
+- [`deploy/aws/README.md`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/README.md) — the CDK operator
   runbook (bootstrap, secret rotation, backups, cost levers).
-- [`deploy/aws/STATE.md`](../../deploy/aws/STATE.md) — the running handoff
+- [`deploy/aws/STATE.md`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/STATE.md) — the running handoff
   log: what is live, decisions made, and gotchas learned (read before any
   infra work).
 - [`docs/runbooks/`](../runbooks/) — AI-feature runbooks (assistant rollout,

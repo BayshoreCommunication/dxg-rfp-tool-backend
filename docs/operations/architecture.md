@@ -81,7 +81,7 @@ flowchart TD
 
 ## Network layout (per environment)
 
-Defined in [`deploy/aws/lib/network-stack.ts`](../../deploy/aws/lib/network-stack.ts):
+Defined in [`deploy/aws/lib/network-stack.ts`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/lib/network-stack.ts):
 
 - VPC (staging `10.40.0.0/16`, production `10.41.0.0/16`), 2 AZs
   (us-east-2a/b), pinned for deterministic synth.

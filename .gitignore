@@ -46,3 +46,4 @@ uploads/portfolio/logos/*
 !uploads/portfolio/logos/.gitkeep
 uploads/portfolio/favicons/*
 !uploads/portfolio/favicons/.gitkeep
+site/

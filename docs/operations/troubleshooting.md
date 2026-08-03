@@ -56,7 +56,7 @@ api task** — there is no nginx or other reverse proxy.
 4. If it's a dependency error (Mongo/Postgres/Redis/OpenAI/SES), jump to
    that section below. AI endpoints returning 503 with codes like
    `ORGANIZATION_NOT_READY` mean the Postgres data foundation is missing
-   rows — run the backfill ([Environments](environments.md#bootstrapping--re-seeding-an-environments-data)).
+   rows — run the backfill ([Environments](environments.md#bootstrapping-and-re-seeding-environment-data)).
 5. Reproduce on staging (`https://api-staging.dxg-agency.com` — same code
    if `main` == `production`), fix, ship via the normal pipeline.
 
@@ -126,7 +126,7 @@ then retry the scans; do not bypass scanning.
 
 ## Deployment failed
 
-Work through [CI/CD → when a deployment fails](cicd.md#when-a-deployment-fails-look-here--in-this-order),
+Work through [CI/CD → when a deployment fails](cicd.md#when-a-deployment-fails-look-here-in-this-order),
 then [Rollback](rollback.md) if the bad version reached users.
 
 ## Background jobs stuck

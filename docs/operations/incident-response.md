@@ -57,7 +57,7 @@ Production incident reported
 - Don't scale the API service to "help it" — 1 task is a hard invariant
   (crons + in-process fan-out).
 - Don't redeploy the Data stack — see the secret-wipe footgun in
-  [Secrets](secrets.md#-the-secret-wipe-footgun).
+  [Secrets](secrets.md#the-secret-wipe-footgun-critical).
 - Don't bypass ClamAV fail-closed behavior.
 - Don't hand-edit task definitions in the console — every change flows
   through CDK, or it will be silently reverted on the next deploy.

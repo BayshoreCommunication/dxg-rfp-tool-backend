@@ -2,10 +2,10 @@
 
 ## Postgres (the migrated database)
 
-- **Tool:** in-repo runner [`scripts/migratePostgres.ts`](../../scripts/migratePostgres.ts)
+- **Tool:** in-repo runner [`scripts/migratePostgres.ts`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/scripts/migratePostgres.ts)
   (compiled to `dist/scripts/migratePostgres.js`). Commands: `up`,
   `rollback` (exactly one step), `help`.
-- **Migration files:** [`migrations/postgres/`](../../migrations/postgres/) —
+- **Migration files:** [`migrations/postgres/`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/tree/main/migrations/postgres/) —
   numbered `NNN_name.up.sql` / `.down.sql` pairs (the `.down.sql` powers the
   one-step rollback), copied into `dist` at build time so the runner
   resolves them via `__dirname` inside the container. Current head: `043`

@@ -25,7 +25,7 @@
 | Alarms | `rfpilot-staging-*` | `rfpilot-production-*` |
 | GitHub environment (vars) | `staging` | `production` |
 | Deploy role (OIDC) | `rfpilot-staging-github-deploy`, only from `main` | `rfpilot-production-github-deploy`, only from `production` |
-| CDK config block | `ENVIRONMENTS.staging` in [`lib/config.ts`](../../deploy/aws/lib/config.ts) | `ENVIRONMENTS.production` |
+| CDK config block | `ENVIRONMENTS.staging` in [`lib/config.ts`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/lib/config.ts) | `ENVIRONMENTS.production` |
 
 Both environments currently run the same AI flag set (live OpenAI replies,
 mock/deterministic providers for extraction and knowledge embeddings,
@@ -66,14 +66,14 @@ Staging is the place to break things. Safe there:
 - Don't "clean up" Namecheap DNS records: the ACM validation CNAME and DKIM
   records are permanent infrastructure.
 
-## Bootstrapping / re-seeding an environment's data
+## Bootstrapping and re-seeding environment data
 
 A fresh (or wiped) environment needs, in order — all as one-off ECS tasks
 using the **api** task definition (the `migrate` task definition has only
 Postgres secrets, no `MONGODB_URL`):
 
 1. Postgres migrations — normally CI's migrate step; manual equivalent in
-   [`deploy/aws/README.md`](../../deploy/aws/README.md).
+   [`deploy/aws/README.md`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/README.md).
 2. Default organization seed:
    `node dist/scripts/migrateDxgOrganization.js --apply`
 3. Postgres data-foundation backfill:

@@ -64,7 +64,7 @@ Land the revert forward instead —
   `["node","dist/scripts/migratePostgres.js","rollback"]`. Anything worse:
   restore the pre-deploy RDS snapshot (new instance), update
   `POSTGRES_URL`/`POSTGRES_MIGRATION_URL` in `rfpilot/$ENV/app`, force new
-  deployments. Details in [`deploy/aws/README.md`](../../deploy/aws/README.md).
+  deployments. Details in [`deploy/aws/README.md`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/README.md).
 
 ## 4. Verify
 

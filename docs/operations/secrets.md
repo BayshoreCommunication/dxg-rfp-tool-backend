@@ -39,16 +39,16 @@ therefore requires a restart:
 Non-secret configuration (feature flags, AI release, DB name, CDN base,
 ClamAV host, etc.) is **code**: `sharedEnvironment` +
 `config.aiEnvironment` in
-[`deploy/aws/lib/app-stack.ts`](../../deploy/aws/lib/app-stack.ts) /
-[`config.ts`](../../deploy/aws/lib/config.ts). Domain/cert values flow from
+[`deploy/aws/lib/app-stack.ts`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/lib/app-stack.ts) /
+[`config.ts`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/lib/config.ts). Domain/cert values flow from
 **environment-scoped GitHub variables** (`CERTIFICATE_ARN`, `API_DOMAIN`,
 optional `FRONTEND_URL`/`ADMIN_URL`) into CDK context at deploy time.
-Local-dev variables are documented in [`.env.example`](../../.env.example).
+Local-dev variables are documented in [`.env.example`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/.env.example).
 
 ## Filling / rotating
 
 - **Bootstrap & derivables:** run
-  [`deploy/aws/scripts/compose-app-secrets.sh <env>`](../../deploy/aws/scripts/compose-app-secrets.sh)
+  [`deploy/aws/scripts/compose-app-secrets.sh <env>`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/scripts/compose-app-secrets.sh)
   — generates the six random signing secrets (when still `REPLACE_ME`) and
   composes the three database URLs from stack outputs, displaying nothing.
   It then lists which external keys remain for the operator to fill.
@@ -66,7 +66,7 @@ Local-dev variables are documented in [`.env.example`](../../.env.example).
   signing secret across environments would make staging tokens valid in
   production.
 
-## ⚠️ The secret-wipe footgun
+## The secret-wipe footgun (critical)
 
 The Data stack defines the secret's initial value via `secretObjectValue`
 (all `REPLACE_ME`). **Any change to that map, deployed against a live

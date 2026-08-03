@@ -2,8 +2,8 @@
 
 > Account `295229565954`, region `us-east-2` for everything. Local CLI
 > profile: `rfpilot`. All infrastructure is CDK TypeScript in
-> [`deploy/aws/`](../../deploy/aws/) — five stacks per the table in
-> [`deploy/aws/README.md`](../../deploy/aws/README.md). Verified 2026-08-03.
+> [`deploy/aws/`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/tree/main/deploy/aws/) — five stacks per the table in
+> [`deploy/aws/README.md`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/README.md). Verified 2026-08-03.
 
 | AWS Service | Purpose | Environments | Important resources | How to access | Monitoring |
 |---|---|---|---|---|---|
