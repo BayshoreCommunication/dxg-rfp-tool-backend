@@ -100,8 +100,13 @@ jobs:
           if aws ecr describe-images --repository-name rfpilot-backend \
                --image-ids imageTag="sha-${GITHUB_SHA}" > /dev/null 2>&1; then
             echo "Image sha-${GITHUB_SHA} already in ECR — reusing it."
-          else
-            docker push "${{ steps.ecr.outputs.registry }}/rfpilot-backend:sha-${GITHUB_SHA}"
+          elif ! docker push "${{ steps.ecr.outputs.registry }}/rfpilot-backend:sha-${GITHUB_SHA}"; then
+            # A same-sha run on the other branch can push between our check
+            # and our push (main and production move together on promotion).
+            # If the tag exists now, that is the same content — reuse it.
+            aws ecr describe-images --repository-name rfpilot-backend \
+              --image-ids imageTag="sha-${GITHUB_SHA}" > /dev/null
+            echo "Concurrent run pushed sha-${GITHUB_SHA} first — reusing it."
           fi
 
       - name: Read stack outputs
