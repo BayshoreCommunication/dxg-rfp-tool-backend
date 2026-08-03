@@ -64,6 +64,13 @@ NOT deployed.
   --organization-id=<mongo org id>` as a one-off ECS task using the
   **api** task definition (the migrate taskdef lacks MONGODB_URL).
   Staging org: `6a6ef9d1a85e65f5a53ca10c` (slug `dxg`).
+  All AI surfaces VERIFIED on staging 2026-08-02: workspace conversation +
+  live extraction/draft (real OpenAI, pinned model), candidate
+  review/apply, five-step workflow, platform assistant, knowledge
+  pipeline end-to-end (upload → scan → parse → review → approved
+  release). Knowledge browser uploads need documents-bucket CORS
+  (applied out-of-band + codified in data-stack.ts; add real admin
+  origins before prod). Admin account exists (dxgrfptool+admin@gmail.com).
 - **API runs exactly 1 task** (stop-then-start deploys, ~30–60s window):
   its cron jobs are unlocked-destructive and WebSocket fan-out is
   process-local. Before scaling: set `CRON_ENABLED=false` on extra
