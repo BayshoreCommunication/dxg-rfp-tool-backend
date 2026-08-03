@@ -51,8 +51,15 @@ export class CicdStack extends cdk.Stack {
         maxSessionDuration: cdk.Duration.hours(2),
       });
 
-      // Image publishing.
+      // Image publishing. DescribeImages backs the workflow's reuse-on-
+      // promotion check (grantPullPush does not include it).
       this.repository.grantPullPush(role);
+      role.addToPolicy(
+        new iam.PolicyStatement({
+          actions: ["ecr:DescribeImages"],
+          resources: [this.repository.repositoryArn],
+        }),
+      );
       role.addToPolicy(
         new iam.PolicyStatement({ actions: ["ecr:GetAuthorizationToken"], resources: ["*"] }),
       );
