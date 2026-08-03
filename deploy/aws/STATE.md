@@ -137,10 +137,16 @@ with the cert context or port 443 stays closed (bit us on prod).
    `production` environment (protection rules recommended). Prod sizing
    (Multi-AZ RDS, Redis replica, deletion protection) is already in
    `lib/config.ts`.
-5. **DO → S3 data migration** (separate task): copy existing Spaces objects
-   into the assets bucket and deal with absolute Spaces URLs persisted in
-   Mongo documents; then set `ASSET_STORAGE_PUBLIC_URL_BASE` to the CDN and
-   decommission the droplet + DO assets.
+5. ~~**DO → S3 data migration**~~ — **NOT NEEDED (decision 2026-08-03):
+   production starts FRESH.** Travis chose not to carry over the old user
+   data or DO Spaces objects. Production's `dxg_rfp_tool_prod` database is
+   seeded and empty of legacy data by design. `ASSET_STORAGE_PUBLIC_URL_BASE`
+   is wired per env (CloudFront domains); `scripts/migrateAssetUrls.ts`
+   exists as tooling but is unused. Cutover is now ONLY: (a) SES
+   production-access approval (pending AWS review — the hard gate), then
+   (b) Namecheap CNAME `api` → the prod ALB. Keep the droplet + old Atlas
+   cluster untouched for a grace period as a data archive before
+   decommissioning.
 
 ## Deferred/known items
 
