@@ -2,6 +2,9 @@
 
 > For cross-repository architecture, current AI status, client commitments, and
 > the documentation map, start with [docs/README.md](docs/README.md).
+>
+> **Deploying, operating, or debugging the AWS environments?** Start with the
+> [Backend Operations Documentation](docs/operations/README.md).
 
 Express + TypeScript + MongoDB API for the DXG RFP platform. This service handles authentication, admin/user profile management, proposal CRUD, AI-assisted proposal extraction, email campaign tracking, settings, and dashboard summaries.
 
