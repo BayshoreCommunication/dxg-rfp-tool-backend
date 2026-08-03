@@ -33,10 +33,26 @@ contexts flow from environment-scoped GitHub variables (`CERTIFICATE_ARN`,
 unset). Last fully green run: `30733670506`, deployed image `sha-f846726...`.
 Doc-only pushes do not deploy (`paths-ignore`).
 
-**Stacks deployed**: `Rfpilot-Cicd`, `Rfpilot-staging-Network`,
-`Rfpilot-staging-Data`, `Rfpilot-staging-App`,
-`Rfpilot-staging-Observability`. Production stacks exist in code but are
-NOT deployed.
+**Stacks deployed**: `Rfpilot-Cicd` + all four stacks in BOTH envs.
+**PRODUCTION IS LIVE ON AWS as of 2026-08-03** (verified: HTTPS health
+200 w/ Mongo `dxg_rfp_tool_prod` + PG 043 + queue; 301 redirect;
+wildcard cert; SES OTP email sent end-to-end; org seeded
+`6a703ea649ac55f3c2327b6e` + PG backfill done; zero AI flags, no
+ai-gateway service — deny-by-default posture). Prod ALB:
+`Rfpilo-Alb16-pj5OOUBQqRrt-519967115.us-east-2.elb.amazonaws.com`;
+prod NAT EIP `13.58.171.171` (Atlas-allowlisted). Prod Mongo = SAME
+Atlas cluster as staging, different database (per-env `MONGODB_DB_NAME`:
+`dxg_rfp_tool_staging` / `dxg_rfp_tool_prod`); consider M10+/separate
+cluster before real load. **NOT yet cut over**: `api.dxg-agency.com`
+DNS still points at the DO droplet (68.183.227.9) serving current
+production — the Namecheap CNAME flip to the prod ALB is the cutover
+moment, gated on the DO→S3/Mongo data migration.
+Bootstrap lessons now fixed in code: promotion reuses the immutable
+image (+ race tolerance + `ecr:DescribeImages` on deploy roles); FIRST
+App deploy of a new env must be manual (CI's migrate step needs the
+App stack's task definition); listener SG rules land in the NETWORK
+stack template at synth time — after enabling HTTPS, redeploy Network
+with the cert context or port 443 stays closed (bit us on prod).
 
 ## Branch model
 
