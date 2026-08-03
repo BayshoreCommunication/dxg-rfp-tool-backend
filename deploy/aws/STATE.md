@@ -65,6 +65,18 @@ App stack's task definition); listener SG rules land in the NETWORK
 stack template at synth time — after enabling HTTPS, redeploy Network
 with the cert context or port 443 stays closed (bit us on prod).
 
+## Production AI release (2026-08-03)
+
+Production runs the FULL AI surface at staging parity (Travis-approved):
+workspace, workflow, assistant + ai-gateway service, guidance, knowledge
+(deterministic embeddings), live OpenAI (pinned model). Verified in the
+production browser pass: live contextual replies, 8-question intake,
+platform assistant with sources. NOTE the Postgres foundation backfill
+had to be re-run after the first attempt silently produced no rows
+(likely ran pre-migration); always READ the task's JSON report, exit 0
+alone is not proof. Deny-by-default now applies to NO environment —
+re-establish it deliberately if the posture should return.
+
 ## Branch model
 
 - `ai-agent` — development (local dev unchanged: `npm run dev*` etc.)
