@@ -34,6 +34,13 @@ unset). Last fully green run: `30733670506`, deployed image `sha-f846726...`.
 Doc-only pushes do not deploy (`paths-ignore`).
 
 **Stacks deployed**: `Rfpilot-Cicd` + all four stacks in BOTH envs.
+**CUTOVER DONE 2026-08-03: `api.dxg-agency.com` now points at the AWS
+prod ALB** (verified on the real domain: valid TLS, health 200, 301
+redirect, SES OTP delivered). Fresh start — the droplet + old Atlas
+remain as an untouched archive; decommission after a grace period.
+⚠️ SES is STILL IN SANDBOX (production access pending AWS review):
+only verified addresses receive email. Until approved, real-user
+signups won't get their OTPs — chase the AWS support case.
 **PRODUCTION IS LIVE ON AWS as of 2026-08-03** (verified: HTTPS health
 200 w/ Mongo `dxg_rfp_tool_prod` + PG 043 + queue; 301 redirect;
 wildcard cert; SES OTP email sent end-to-end; org seeded
