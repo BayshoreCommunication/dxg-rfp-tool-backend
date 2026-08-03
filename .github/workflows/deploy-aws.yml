@@ -94,7 +94,15 @@ jobs:
 
       - name: Push immutable image
         run: |
-          docker push "${{ steps.ecr.outputs.registry }}/rfpilot-backend:sha-${GITHUB_SHA}"
+          # Promotion runs deploy a commit whose image an earlier branch's
+          # run already pushed; the tag is immutable, so reuse it rather
+          # than failing on the overwrite (same sha = same content).
+          if aws ecr describe-images --repository-name rfpilot-backend \
+               --image-ids imageTag="sha-${GITHUB_SHA}" > /dev/null 2>&1; then
+            echo "Image sha-${GITHUB_SHA} already in ECR — reusing it."
+          else
+            docker push "${{ steps.ecr.outputs.registry }}/rfpilot-backend:sha-${GITHUB_SHA}"
+          fi
 
       - name: Read stack outputs
         id: outputs
