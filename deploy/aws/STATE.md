@@ -40,7 +40,11 @@ redirect, SES OTP delivered). Fresh start — the droplet + old Atlas
 remain as an untouched archive; decommission after a grace period.
 ⚠️ SES is STILL IN SANDBOX (production access pending AWS review):
 only verified addresses receive email. Until approved, real-user
-signups won't get their OTPs — chase the AWS support case.
+signups won't get their OTPs. ON HOLD by decision 2026-08-03:
+**dxg-agency.com is NOT the final product domain** — the real domain
+is not yet purchased. When it is: verify it in SES (+DKIM), reply to
+the open AWS case referencing the real domain, and sweep the domain
+through ACM/DNS/GitHub `API_DOMAIN`/frontend constants/`SMTP_MAIL`.
 **PRODUCTION IS LIVE ON AWS as of 2026-08-03** (verified: HTTPS health
 200 w/ Mongo `dxg_rfp_tool_prod` + PG 043 + queue; 301 redirect;
 wildcard cert; SES OTP email sent end-to-end; org seeded
