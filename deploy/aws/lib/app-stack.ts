@@ -97,6 +97,7 @@ export class AppStack extends cdk.Stack {
     const sharedEnvironment: Record<string, string> = {
       NODE_ENV: "production",
       PORT: "8000",
+      MONGODB_DB_NAME: config.mongoDbName,
       ...config.aiEnvironment,
       POSTGRES_FOUNDATION_ENABLED: "true",
       POSTGRES_SSL: "true",

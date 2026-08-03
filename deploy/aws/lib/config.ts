@@ -33,6 +33,8 @@ export interface EnvironmentConfig {
   /** ALB idle timeout. The assistant SSE stream can be silent for up to
    *  120s before its first token; WebSocket clients get no server pings. */
   readonly albIdleTimeoutSeconds: number;
+  /** MongoDB database name inside the env's Atlas cluster (MONGODB_DB_NAME). */
+  readonly mongoDbName: string;
   /** Governed AI surface (deny-by-default). Empty = every AI flag absent,
    *  the platform's safe state. Populating this IS the AI release for the
    *  env (docs/runbooks/PRODUCTION.md). */
@@ -67,6 +69,7 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
       workerMaxCount: 2,
     },
     albIdleTimeoutSeconds: 180,
+    mongoDbName: "dxg_rfp_tool_staging",
     // Staging AI release 2026-08-02 (rev 2): full parity with local dev -
     // every AI surface on. Deterministic/mock providers for extraction and
     // knowledge embeddings (as in local dev); live OpenAI for conversation
@@ -131,6 +134,7 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
       workerMaxCount: 4,
     },
     albIdleTimeoutSeconds: 180,
+    mongoDbName: "dxg_rfp_tool_prod",
     aiEnvironment: {},
   },
 };
