@@ -122,49 +122,16 @@ export const uploadProposalDocs = uploadDocument.fields([
   { name: "avQuoteFiles", maxCount: 10 },
 ]);
 
-// Vendor response uploads — restricted document/image types only.
-// These files arrive on an unauthenticated public endpoint, so both the
-// MIME type and the file extension must be on the allowlist.
-const VENDOR_ALLOWED_MIMES = new Set([
-  "application/pdf",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "text/csv",
-  "application/csv",
-  "text/plain",
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-]);
-
-const VENDOR_ALLOWED_EXTENSIONS = new Set([
-  ".pdf",
-  ".doc",
-  ".docx",
-  ".xlsx",
-  ".csv",
-  ".txt",
-  ".png",
-  ".jpg",
-  ".jpeg",
-]);
-
-const vendorDocumentFilter = (
+// Vendor responses intentionally accept every file format. Safety is enforced
+// independently through count/size limits, malware scanning, and private
+// object storage; a filename extension or browser-supplied MIME type is not a
+// reliable security boundary.
+export const vendorDocumentFilter = (
   _req: Request,
-  file: any,
+  _file: any,
   cb: FileFilterCallback,
 ) => {
-  const ext = path.extname(file.originalname || "").toLowerCase();
-  if (VENDOR_ALLOWED_MIMES.has(file.mimetype) && VENDOR_ALLOWED_EXTENSIONS.has(ext)) {
-    cb(null, true);
-  } else {
-    cb(
-      new Error(
-        "Unsupported file type. Allowed: PDF, DOC, DOCX, XLSX, CSV, TXT, PNG, JPG.",
-      ),
-    );
-  }
+  cb(null, true);
 };
 
 const uploadVendorDocsMulter = multer({

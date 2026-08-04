@@ -103,7 +103,7 @@ const PROJECTIONS:readonly StepProjection[]=[
     gated:()=>process.env.GUIDANCE_ENABLED!=="true",
     withheld:f=>f.guidanceCount===0,
     summary:(f,status)=>status==="gated"?"Investment guidance requires separate approval"
-      :f.guidanceCount===0?"Run the readiness check for completeness and risk findings"
+      :f.guidanceCount===0?"Readiness & risks"
       :f.guidanceBlockingCount>0?`${f.guidanceBlockingCount} blocking finding(s) need attention`
       :"Readiness check complete",
   },
