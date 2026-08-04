@@ -15,6 +15,12 @@ const vendorDocumentSchema = new Schema(
 
 const vendorResponseSchema = new Schema(
   {
+    organizationId: {
+      type: Schema.Types.ObjectId,
+      ref: "Organization",
+      required: [true, "Organization id is required"],
+      index: true,
+    },
     proposalId: {
       type: Schema.Types.ObjectId,
       ref: "Proposal",

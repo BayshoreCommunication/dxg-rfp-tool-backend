@@ -1,9 +1,16 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const VendorResponse = require("../modal/vendorResponseModel").default;
 const {
   createCheckVendorResponse,
   createSubmitVendorResponse,
 } = require("../src/modules/vendorResponses/application/submitVendorResponse");
+
+test("vendor responses persist the tenant organization field", () => {
+  const organizationPath = VendorResponse.schema.path("organizationId");
+  assert.ok(organizationPath);
+  assert.equal(organizationPath.options.required[0], true);
+});
 
 const dependencies = (capture = {}) => ({
   folderName: "/DXG/",

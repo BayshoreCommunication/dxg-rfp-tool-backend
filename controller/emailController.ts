@@ -92,16 +92,16 @@ const buildProposalEmailHtml = (params: {
     <a href="${params.trackingClickUrl}" style="display:inline-block;background:#06b6d4;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700;">
       View Proposal
     </a>
-    <p style="margin:16px 0 0;color:#64748b;font-size:12px;">
-      If the button does not work, copy this link:
-      <a href="${params.proposalUrl}" style="color:#0284c7;text-decoration:underline;">${params.proposalUrl}</a>
-    </p>
     <div style="margin:24px 0 0;padding-top:20px;border-top:1px solid #e2e8f0;">
       <p style="margin:0 0 10px;color:#334155;font-size:13px;font-weight:600;">Ready to respond to this proposal?</p>
       <a href="${params.vendorResponseTrackingClickUrl}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700;">
         Submit Your Proposal
       </a>
     </div>
+    <p style="margin:16px 0 0;color:#64748b;font-size:12px;">
+      If the button does not work, copy this link:
+      <a href="${params.proposalUrl}" style="color:#0284c7;text-decoration:underline;">${params.proposalUrl}</a>
+    </p>
     <img src="${params.trackingOpenUrl}" alt="" width="1" height="1" style="display:block;opacity:0;" />
   </div>
 `;
