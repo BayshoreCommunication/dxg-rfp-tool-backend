@@ -14,6 +14,7 @@ const contracts = [
   ["proposal-extraction-patch.v1.schema.json", "proposal-extraction-patch-v1.ts"],
   ["proposal-public.v1.schema.json", "proposal-public-v1.ts"],
 ];
+const metadataContracts = ["proposal-form-ui.v1.json"];
 
 const compileOptions = {
   bannerComment:
@@ -55,6 +56,12 @@ for (const [schemaName, outputName] of contracts) {
   } else {
     await writeFile(outputPath, generated, "utf8");
   }
+}
+for (const contractName of metadataContracts) {
+  const contractContent = await readFile(path.join(schemaDir, contractName));
+  schemaHashes[contractName] = createHash("sha256")
+    .update(contractContent)
+    .digest("hex");
 }
 
 const manifest = `${JSON.stringify({

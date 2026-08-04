@@ -1,7 +1,8 @@
 import proposalSchema from "../../../contracts/proposal/v1/proposal.v1.schema.json";
+import proposalFormUi from "../../../contracts/proposal/v1/proposal-form-ui.v1.json";
 import type { AssistantPromptEvidence } from "./domain";
 
-export const PROPOSAL_FORM_GUIDANCE_VERSION = "proposal-form-guidance.v1";
+export const PROPOSAL_FORM_GUIDANCE_VERSION = "proposal-form-guidance.v3";
 export const PROPOSAL_FORM_SCHEMA_VERSION = "proposal.v1";
 export const PROPOSAL_FORM_GUIDANCE_OWNER = "Product Operations";
 export const PROPOSAL_FORM_GUIDANCE_REVIEW_DATE = "2026-10-29";
@@ -18,6 +19,7 @@ export type ProposalFormFieldType =
   | "url"
   | "yes_no"
   | "select"
+  | "radio"
   | "multi_select"
   | "money"
   | "measurement";
@@ -26,6 +28,16 @@ export type ProposalFormCondition = {
   fieldKey: string;
   operator: "equals" | "one_of" | "present";
   value?: string | readonly string[];
+};
+
+export type ProposalFormOption = {
+  value: string;
+  label: string;
+};
+
+export type ProposalFormOptionGroup = {
+  label: string;
+  options: readonly ProposalFormOption[];
 };
 
 export type ProposalFormSection = {
@@ -64,12 +76,33 @@ export type ProposalFormFieldGuidance = {
   goodExample: string;
   commonMistakes: readonly string[];
   followUpQuestions: readonly string[];
+  allowedOptions: readonly ProposalFormOption[];
+  optionGroups: readonly ProposalFormOptionGroup[];
+  minimumSelections?: number;
+  maximumSelections?: number;
   approvedSourceIds: readonly string[];
   applicationSchemaVersion: typeof PROPOSAL_FORM_SCHEMA_VERSION;
   guidanceVersion: typeof PROPOSAL_FORM_GUIDANCE_VERSION;
   owner: typeof PROPOSAL_FORM_GUIDANCE_OWNER;
   reviewDate: typeof PROPOSAL_FORM_GUIDANCE_REVIEW_DATE;
 };
+
+type ProposalFormUiField = {
+  label: string;
+  requirement: ProposalFormRequirement;
+  controlType: ProposalFormFieldType;
+  helperText: string;
+  example: string;
+  minimumSelections?: number;
+  maximumSelections?: number;
+  options?: readonly ProposalFormOption[];
+  optionGroups?: readonly ProposalFormOptionGroup[];
+};
+
+const proposalFormUiFields = proposalFormUi.fields as Record<
+  string,
+  ProposalFormUiField
+>;
 
 type JsonSchema = {
   $ref?: string;
@@ -504,19 +537,52 @@ const defaultExample = (
   return `A concise, confirmed ${label.toLocaleLowerCase("en-US")} value.`;
 };
 
+const flattenedUiOptions = (
+  field: ProposalFormUiField | undefined,
+): readonly ProposalFormOption[] =>
+  Object.freeze([
+    ...(field?.options ?? []),
+    ...(field?.optionGroups ?? []).flatMap((group) => group.options),
+  ]);
+
+const selectionInstruction = (
+  field: ProposalFormUiField | undefined,
+): string | null => {
+  const optionCount = flattenedUiOptions(field).length;
+  if (!field || optionCount === 0) return null;
+  if (field.controlType !== "multi_select") {
+    return "Choose the one available option that best matches the confirmed event details.";
+  }
+  if (field.minimumSelections && field.maximumSelections) {
+    return `Choose between ${field.minimumSelections} and ${field.maximumSelections} available options.`;
+  }
+  if (field.maximumSelections) {
+    return `Choose up to ${field.maximumSelections} available options.`;
+  }
+  return "Choose only the available options that apply.";
+};
+
 const buildFieldGuidance = (leaf: SchemaLeaf): ProposalFormFieldGuidance | null => {
   if (UI_EXCLUSIONS.has(leaf.canonicalPath)) return null;
   const section = sectionForPath(leaf.canonicalPath);
   if (!section) return null;
-  const label = labelForPath(leaf.canonicalPath);
-  const fieldType = typeForSchema(leaf.schema, leaf.canonicalPath);
+  const uiField = proposalFormUiFields[leaf.canonicalPath];
+  const label = uiField?.label ?? labelForPath(leaf.canonicalPath);
+  const fieldType = uiField?.controlType ?? typeForSchema(leaf.schema, leaf.canonicalPath);
   const visibilityConditions = conditionalRulesForPath(leaf.canonicalPath, section);
   const requirement: ProposalFormRequirement = visibilityConditions.length
     ? "conditional"
-    : leaf.required
-      ? "required"
-      : "optional";
+    : uiField?.requirement ?? (leaf.required ? "required" : "optional");
   const dependencies = visibilityConditions.map((condition) => condition.fieldKey);
+  const allowedOptions = flattenedUiOptions(uiField);
+  const optionGroups = Object.freeze(uiField?.optionGroups ?? []);
+  const choose = selectionInstruction(uiField);
+  const requirementGuidance =
+    requirement === "required"
+      ? `The current guided form marks ${label.toLocaleLowerCase("en-US")} as required.`
+      : requirement === "conditional"
+        ? "Complete this only when the related selection makes it applicable."
+        : "This field is optional; leave it blank instead of guessing.";
   return Object.freeze({
     fieldKey: leaf.canonicalPath,
     canonicalPath: leaf.canonicalPath,
@@ -528,16 +594,14 @@ const buildFieldGuidance = (leaf: SchemaLeaf): ProposalFormFieldGuidance | null 
     visibilityConditions: Object.freeze(visibilityConditions),
     dependencies: Object.freeze([...new Set(dependencies)]),
     purpose:
+      uiField?.helperText ??
       PURPOSE_OVERRIDES[leaf.canonicalPath] ??
       `Provides the ${label.toLocaleLowerCase("en-US")} detail used in the ${section.label} section.`,
-    entryGuidance:
-      requirement === "required"
-        ? `Enter the confirmed ${label.toLocaleLowerCase("en-US")}; this field is required for the current form contract.`
-        : requirement === "conditional"
-          ? `Complete this only when the related selection makes it applicable. Use a confirmed value or mark the requirement for follow-up.`
-          : `Enter this when it is known and relevant. Leave it blank instead of guessing.`,
+    entryGuidance: [requirementGuidance, choose].filter(Boolean).join(" "),
     goodExample:
-      EXAMPLE_OVERRIDES[leaf.canonicalPath] ?? defaultExample(label, fieldType),
+      uiField?.example ??
+      EXAMPLE_OVERRIDES[leaf.canonicalPath] ??
+      defaultExample(label, fieldType),
     commonMistakes: Object.freeze([
       "Entering an assumption as though it were confirmed.",
       "Using vague wording when a date, quantity, owner, or requirement is available.",
@@ -546,6 +610,14 @@ const buildFieldGuidance = (leaf: SchemaLeaf): ProposalFormFieldGuidance | null 
       `Who can confirm the ${label.toLocaleLowerCase("en-US")}?`,
       `Does this apply to every room or only part of the event?`,
     ]),
+    allowedOptions,
+    optionGroups,
+    ...(uiField?.minimumSelections !== undefined
+      ? { minimumSelections: uiField.minimumSelections }
+      : {}),
+    ...(uiField?.maximumSelections !== undefined
+      ? { maximumSelections: uiField.maximumSelections }
+      : {}),
     approvedSourceIds: Object.freeze([
       "contract:proposal.v1",
       `ui:${section.component}`,
@@ -580,26 +652,45 @@ const normalizedTerms = (value: string): readonly string[] =>
     .toLocaleLowerCase("en-US")
     .replace(/[^\p{L}\p{N}\s-]/gu, " ")
     .split(/\s+/)
-    .filter((term) => term.length > 1);
+    .filter((term) => term.length > 1)
+    .map((term) => {
+      if (/^requir(?:e|ed|ement|ements)$/.test(term)) return "require";
+      return term.length > 4 && term.endsWith("s") && !term.endsWith("ss")
+        ? term.slice(0, -1)
+        : term;
+    });
 
 const evidenceForField = (
   field: ProposalFormFieldGuidance,
-): AssistantPromptEvidence => ({
-  id: `form-field:${field.sectionId}:${field.fieldKey}`,
-  title: `${field.sectionLabel}: ${field.label}`,
-  content: [
-    `${field.label} is ${field.requirement}.`,
-    field.purpose,
-    field.entryGuidance,
-    `Example: ${field.goodExample}`,
-    `Common mistakes: ${field.commonMistakes.join(" ")}`,
-    `Useful follow-up: ${field.followUpQuestions[0]}`,
-  ].join(" "),
-  href: "/proposals/add-new-proposal",
-  sourceType: "platform_fact",
-  trust: "trusted_platform_fact",
-  releaseId: PROPOSAL_FORM_GUIDANCE_VERSION,
-});
+): AssistantPromptEvidence => {
+  const groupedOptions = field.optionGroups.map(
+    (group) =>
+      `${group.label}: ${group.options.map((option) => option.label).join(", ")}`,
+  );
+  const ungroupedOptions =
+    field.optionGroups.length === 0 && field.allowedOptions.length > 0
+      ? [`Available options: ${field.allowedOptions.map((option) => option.label).join(", ")}`]
+      : [];
+  return {
+    id: `form-field:${field.sectionId}:${field.fieldKey}`,
+    title: `${field.sectionLabel}: ${field.label}`,
+    content: [
+      `${field.label} is ${field.requirement} in the current guided form.`,
+      field.purpose,
+      field.entryGuidance,
+      ...(groupedOptions.length > 0
+        ? [`Available option groups — ${groupedOptions.join("; ")}.`]
+        : ungroupedOptions.map((options) => `${options}.`)),
+      `Example: ${field.goodExample}`,
+      `Common mistakes: ${field.commonMistakes.join(" ")}`,
+      `Useful follow-up: ${field.followUpQuestions[0]}`,
+    ].join(" "),
+    href: "/proposals/add-new-proposal",
+    sourceType: "platform_fact",
+    trust: "trusted_platform_fact",
+    releaseId: PROPOSAL_FORM_GUIDANCE_VERSION,
+  };
+};
 
 export const proposalFormGuidanceEvidenceForField = (
   fieldKey: string,
@@ -630,9 +721,10 @@ export const proposalFormGuidanceEvidenceForQuery = (
       field.purpose,
     ].join(" ");
     const fieldTerms = normalizedTerms(searchable);
-    const exactLabel = normalized.includes(
-      field.label.toLocaleLowerCase("en-US"),
-    );
+    const labelTerms = normalizedTerms(field.label);
+    const exactLabel =
+      normalized.includes(field.label.toLocaleLowerCase("en-US")) ||
+      (labelTerms.length > 0 && labelTerms.every((term) => terms.has(term)));
     const score =
       (exactLabel ? 20 : 0) +
       fieldTerms.filter((term) => terms.has(term)).length;

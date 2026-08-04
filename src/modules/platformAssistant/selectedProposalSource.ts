@@ -78,7 +78,11 @@ const normalize = (value: string): string =>
     .replace(/\s+/g, " ");
 
 const proposalCountQuestion = (value: string): boolean => {
-  const normalized = normalize(value);
+  const normalized = normalize(value)
+    .replace(/\bmanny\b/gu, "many")
+    .replace(/\bpropos(?:el|le)s?\b/gu, (match) =>
+      match.endsWith("s") ? "proposals" : "proposal",
+    );
   return (
     /\b(?:how many|number of|count of|total(?: number of)?)\b.{0,48}\bproposals?\b/u.test(
       normalized,
@@ -87,6 +91,11 @@ const proposalCountQuestion = (value: string): boolean => {
     /\bproposal count\b/u.test(normalized)
   );
 };
+
+const proposalCountFormattingFollowUp = (value: string): boolean =>
+  /^(?:and |also |then |now )?(?:make (?:that|it)|shorten|shorter|summari[sz]e|concise|one short sentence)\b/i.test(
+    normalize(value),
+  );
 
 const proposalName = (proposal: ProposalCandidate): string => {
   const value = proposal.event?.eventName;
@@ -104,10 +113,25 @@ const matchingCandidates = (
     return name.length >= 3 && normalizedMessage.includes(` ${name} `);
   });
   if (matches.length < 2) return matches;
-  const longestName = Math.max(
-    ...matches.map((proposal) => normalize(proposalName(proposal)).length),
+
+  const mostSpecificMatches = matches.filter((candidate) => {
+    const candidateName = normalize(proposalName(candidate));
+    return !matches.some((other) => {
+      const otherName = normalize(proposalName(other));
+      return otherName !== candidateName && otherName.includes(candidateName);
+    });
+  });
+  const distinctSpecificNames = new Set(
+    mostSpecificMatches.map((proposal) => normalize(proposalName(proposal))),
   );
-  const longestMatches = matches.filter(
+  if (distinctSpecificNames.size > 1) return mostSpecificMatches;
+
+  const longestName = Math.max(
+    ...mostSpecificMatches.map(
+      (proposal) => normalize(proposalName(proposal)).length,
+    ),
+  );
+  const longestMatches = mostSpecificMatches.filter(
     (proposal) => normalize(proposalName(proposal)).length === longestName,
   );
   const distinctNames = new Set(
@@ -268,7 +292,13 @@ export const createAssistantProposalContextSource = (
       : input;
   return {
     async resolve(input): Promise<AssistantProposalContextResolution> {
-      if (proposalCountQuestion(input.query)) {
+      const countQuestion = proposalCountQuestion(input.query)
+        ? input.query
+        : proposalCountFormattingFollowUp(input.query) &&
+            proposalCountQuestion(input.recentUserMessages.at(-1) ?? "")
+          ? input.recentUserMessages.at(-1)
+          : undefined;
+      if (countQuestion) {
         const counts = dependencies.countOwnedProposals
           ? await dependencies.countOwnedProposals(input)
           : countsFromCandidates(

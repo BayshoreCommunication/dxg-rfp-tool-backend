@@ -95,6 +95,12 @@ test("delivery content contains encoded tracking URLs and escaped message", asyn
   assert.match(delivery.html, /https:\/\/api\.example\.com\/api\/emails\/open\/tracking-1/);
   assert.match(delivery.html, /vendor-click\/tracking-1\?redirect=/);
   assert.match(delivery.text, /https:\/\/app\.example\.com\/proposal-view\/dxg-summit-/);
+  assert.match(delivery.html, /Submit Your Proposal<\/a>/);
+  assert.match(delivery.text, /Give feedback: https:\/\/app\.example\.com\/vendor-response\/dxg-summit-/);
+  assert.ok(
+    delivery.html.indexOf("Submit Your Proposal") <
+      delivery.html.indexOf("If the button does not work"),
+  );
 });
 
 test("partial delivery persists every outcome and reports failures", async () => {

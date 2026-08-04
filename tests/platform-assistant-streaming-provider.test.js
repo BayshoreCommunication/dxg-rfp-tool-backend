@@ -14,8 +14,8 @@ const context = {
 };
 
 const prompt = {
-  schemaVersion: "platform-assistant-prompt.v5",
-  platformKnowledgeVersion: "rfpilot-platform-map.v5",
+  schemaVersion: "platform-assistant-prompt.v6",
+  platformKnowledgeVersion: "rfpilot-platform-map.v6",
   userMessage: "Where are proposals?",
   history: [],
   evidence: [
@@ -31,7 +31,7 @@ const prompt = {
   uiContext: null,
   intent: {
     intent: "platform_navigation",
-    version: "assistant-intent-router.v1",
+    version: "assistant-intent-router.v2",
     source: "deterministic",
     confidence: "high",
   },

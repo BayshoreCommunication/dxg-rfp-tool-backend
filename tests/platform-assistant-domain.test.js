@@ -245,6 +245,14 @@ test("assistant UI context is bounded, allowlisted, and safe for stale field key
       fieldKey: "/content/event/sacredConstraints",
       eventFormat: "hybrid",
       roomIdentifier: "room:2",
+      fieldControl: {
+        label: "Tone / Brand Direction",
+        helperText: "Select up to 5 tags.",
+        requirement: "optional",
+        controlType: "multi_select",
+        options: ["Polished & Refined", "Tech-Forward"],
+        maximumSelections: 5,
+      },
       ignoredPrivateForm: { client: "must not pass through" },
     }),
     {
@@ -256,6 +264,14 @@ test("assistant UI context is bounded, allowlisted, and safe for stale field key
       fieldKeyStatus: "valid",
       eventFormat: "hybrid",
       roomIdentifier: "room:2",
+      fieldControl: {
+        label: "Tone / Brand Direction",
+        helperText: "Select up to 5 tags.",
+        requirement: "optional",
+        controlType: "multi_select",
+        options: ["Polished & Refined", "Tech-Forward"],
+        maximumSelections: 5,
+      },
     },
   );
   assert.deepEqual(
@@ -284,6 +300,19 @@ test("assistant UI context is bounded, allowlisted, and safe for stale field key
         schemaVersion: "assistant-ui-context.v1",
         routeCategory: "proposal_creation",
         roomIdentifier: "private room name with spaces",
+      }),
+    (error) => error.code === "INVALID_ASSISTANT_UI_CONTEXT",
+  );
+  assert.throws(
+    () =>
+      parseAssistantUiContext({
+        schemaVersion: "assistant-ui-context.v1",
+        routeCategory: "proposal_creation",
+        fieldControl: {
+          label: "Event Type",
+          helperText: "Choose one.",
+          options: Array.from({ length: 31 }, (_, index) => `Option ${index}`),
+        },
       }),
     (error) => error.code === "INVALID_ASSISTANT_UI_CONTEXT",
   );

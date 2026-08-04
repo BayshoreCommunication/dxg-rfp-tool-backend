@@ -129,12 +129,12 @@ export const createPlatformAssistantApplication = (
     });
   },
 
-  requestThreadDeletion(
+  deleteThreadPermanently(
     context: PlatformAssistantContext,
     threadId: unknown,
   ) {
     assertPlatformAssistantOrganizationEnabled(context.organizationMongoId);
-    return repository.requestThreadDeletion({
+    return repository.deleteThreadPermanently({
       ...context,
       threadId: parseAssistantThreadId(threadId),
     });

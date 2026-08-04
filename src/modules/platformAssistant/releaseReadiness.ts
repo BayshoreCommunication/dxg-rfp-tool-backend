@@ -241,7 +241,7 @@ export const evaluateAssistantReleaseReadiness = (
     "application_release",
     sha(record.application.backendCommit) &&
       sha(record.application.dashboardCommit) &&
-      record.application.promptVersion === "platform-assistant-prompt.v5",
+      record.application.promptVersion === "platform-assistant-prompt.v6",
     "Backend/dashboard commits and the deployed prompt version must be exact.",
   );
   check(

@@ -1,0 +1,227 @@
+{
+  "schemaVersion": "proposal-form-ui.v1",
+  "fields": {
+    "/content/event/name": {
+      "label": "Event Name",
+      "requirement": "required",
+      "controlType": "text",
+      "helperText": "Enter the full official event name exactly as it should appear on the RFP cover and running headers.",
+      "example": "Apex Dynamics Global Summit 2026"
+    },
+    "/content/event/edition": {
+      "label": "Edition / Year",
+      "requirement": "optional",
+      "controlType": "text",
+      "helperText": "Add the edition, anniversary, or year when it distinguishes this event from other editions.",
+      "example": "12th Annual — 2026"
+    },
+    "/content/event/type": {
+      "label": "Event Type",
+      "requirement": "required",
+      "controlType": "select",
+      "helperText": "Choose the category that best describes the event so vendors can understand its expected scope and tone.",
+      "example": "Corporate Conference",
+      "options": [
+        { "value": "Corporate Conference", "label": "Corporate Conference" },
+        { "value": "User / Customer Summit", "label": "User / Customer Summit" },
+        { "value": "Sales Kickoff (SKO)", "label": "Sales Kickoff (SKO)" },
+        { "value": "Annual Meeting / Shareholder Event", "label": "Annual Meeting / Shareholder Event" },
+        { "value": "Product Launch", "label": "Product Launch" },
+        { "value": "Awards Show / Gala", "label": "Awards Show / Gala" },
+        { "value": "Trade Show / Exhibition", "label": "Trade Show / Exhibition" },
+        { "value": "Internal Town Hall", "label": "Internal Town Hall" },
+        { "value": "Training / Certification Event", "label": "Training / Certification Event" },
+        { "value": "Association / Member Conference", "label": "Association / Member Conference" },
+        { "value": "Industry Symposium", "label": "Industry Symposium" },
+        { "value": "Hybrid Broadcast / Studio Production", "label": "Hybrid Broadcast / Studio Production" },
+        { "value": "Other", "label": "Other" }
+      ]
+    },
+    "/content/event/theme": {
+      "label": "Event Theme / Tagline",
+      "requirement": "optional",
+      "controlType": "text",
+      "helperText": "Enter the official theme, tagline, or campaign line when one has been approved.",
+      "example": "Built for What’s Next"
+    },
+    "/content/event/website": {
+      "label": "Event Website",
+      "requirement": "optional",
+      "controlType": "url",
+      "helperText": "Add the full public event website URL when vendors can use it for confirmed event or brand context.",
+      "example": "https://example.com/summit2026"
+    },
+    "/content/event/format": {
+      "label": "Event Format",
+      "requirement": "required",
+      "controlType": "radio",
+      "helperText": "Choose how attendees will participate. Hybrid and Virtual selections unlock additional streaming and platform fields.",
+      "example": "Hybrid (In-Person + Virtual)",
+      "options": [
+        { "value": "In-Person", "label": "In-Person Only" },
+        { "value": "Hybrid", "label": "Hybrid (In-Person + Virtual)" },
+        { "value": "Virtual", "label": "Virtual Only" }
+      ]
+    },
+    "/content/event/primaryAudiences/*": {
+      "label": "Primary Audience",
+      "requirement": "required",
+      "controlType": "multi_select",
+      "helperText": "Select the main audience groups so vendors can plan the right production tone, accessibility, and experience.",
+      "example": "C-Suite Executives and Customers / End Users",
+      "minimumSelections": 1,
+      "maximumSelections": 4,
+      "options": [
+        { "value": "C-Suite Executives", "label": "C-Suite Executives" },
+        { "value": "Senior Leadership / VPs", "label": "Senior Leadership / VPs" },
+        { "value": "Sales Team / Field Reps", "label": "Sales Team / Field Reps" },
+        { "value": "Customers / End Users", "label": "Customers / End Users" },
+        { "value": "Prospects / Leads", "label": "Prospects / Leads" },
+        { "value": "Partners / Channel / Resellers", "label": "Partners / Channel / Resellers" },
+        { "value": "Employees (All-Hands)", "label": "Employees (All-Hands)" },
+        { "value": "Investors / Shareholders", "label": "Investors / Shareholders" },
+        { "value": "Press / Media / Analysts", "label": "Press / Media / Analysts" },
+        { "value": "Industry Professionals", "label": "Industry Professionals" },
+        { "value": "Developers / Technical", "label": "Developers / Technical" },
+        { "value": "Members (Association)", "label": "Members (Association)" },
+        { "value": "Students / Academic", "label": "Students / Academic" },
+        { "value": "General Public", "label": "General Public" }
+      ]
+    },
+    "/content/event/startDate": {
+      "label": "Start Date",
+      "requirement": "required",
+      "controlType": "date",
+      "helperText": "Enter the confirmed first day of the event using the date picker.",
+      "example": "October 15, 2026"
+    },
+    "/content/event/endDate": {
+      "label": "End Date",
+      "requirement": "required",
+      "controlType": "date",
+      "helperText": "Enter the confirmed final day of the event; it must not be earlier than the start date.",
+      "example": "October 17, 2026"
+    },
+    "/content/event/attendeeCount": {
+      "label": "Total Attendance",
+      "requirement": "required",
+      "controlType": "number",
+      "helperText": "Enter the expected total in-person attendance because it drives room sizing, equipment, labor, and pricing.",
+      "example": "1500"
+    },
+    "/content/event/objectives": {
+      "label": "Event Objectives",
+      "requirement": "optional",
+      "controlType": "long_text",
+      "helperText": "Describe in two to four sentences what success looks like and the outcomes this event should produce. Leaving it blank reduces the quality of the generated narrative.",
+      "example": "Launch the partner program and schedule 30 qualified customer meetings."
+    },
+    "/content/event/toneDirections/*": {
+      "label": "Tone / Brand Direction",
+      "requirement": "optional",
+      "controlType": "multi_select",
+      "helperText": "Choose tags that describe the desired energy, visual style, mood, and color direction so vendors understand the creative brief.",
+      "example": "High-Energy, Tech-Forward, Inspirational, and Brand-Forward",
+      "maximumSelections": 5,
+      "optionGroups": [
+        {
+          "label": "Energy",
+          "options": [
+            { "value": "High-Energy", "label": "High-Energy" },
+            { "value": "Polished & Refined", "label": "Polished & Refined" },
+            { "value": "Intimate", "label": "Intimate" },
+            { "value": "Celebratory", "label": "Celebratory" }
+          ]
+        },
+        {
+          "label": "Style",
+          "options": [
+            { "value": "Bold & Cinematic", "label": "Bold & Cinematic" },
+            { "value": "Editorial & Minimal", "label": "Editorial & Minimal" },
+            { "value": "Tech-Forward", "label": "Tech-Forward" },
+            { "value": "Classic Corporate", "label": "Classic Corporate" },
+            { "value": "Premium Luxury", "label": "Premium Luxury" }
+          ]
+        },
+        {
+          "label": "Mood",
+          "options": [
+            { "value": "Inspirational", "label": "Inspirational" },
+            { "value": "Authoritative", "label": "Authoritative" },
+            { "value": "Conversational", "label": "Conversational" },
+            { "value": "Innovative", "label": "Innovative" },
+            { "value": "Heritage / Legacy", "label": "Heritage / Legacy" }
+          ]
+        },
+        {
+          "label": "Color Direction",
+          "options": [
+            { "value": "Dark / Cinematic", "label": "Dark / Cinematic" },
+            { "value": "Light / Bright", "label": "Light / Bright" },
+            { "value": "Brand-Forward", "label": "Brand-Forward" },
+            { "value": "Neutral / Editorial", "label": "Neutral / Editorial" }
+          ]
+        }
+      ]
+    },
+    "/content/event/sacredConstraints": {
+      "label": "Sacred Constraints",
+      "requirement": "optional",
+      "controlType": "long_text",
+      "helperText": "Record any non-negotiable timing, brand, speaker, venue, or production requirement that vendors must protect.",
+      "example": "The CEO keynote must start at 9:00 AM and run exactly 22 minutes."
+    },
+    "/content/event/organizationBackground": {
+      "label": "About the Organization",
+      "requirement": "optional",
+      "controlType": "long_text",
+      "helperText": "Give vendors a short description of the organization, its audience, and any context that affects the event experience.",
+      "example": "A global software company serving enterprise operations teams in 30 countries."
+    },
+    "/content/event/statementOfWork": {
+      "label": "Statement of Work",
+      "requirement": "optional",
+      "controlType": "long_text",
+      "helperText": "Summarize the services and deliverables vendors are expected to provide; detailed room requirements can be added in later sections.",
+      "example": "Provide show production, audio, lighting, LED, playback, recording, and onsite technical labor."
+    },
+    "/content/event/eventProfile": {
+      "label": "Event Profile",
+      "requirement": "optional",
+      "controlType": "long_text",
+      "helperText": "Describe the event’s scale, program shape, attendee experience, and any history that helps vendors understand the opportunity.",
+      "example": "A three-day annual customer conference with one general session and six breakout rooms."
+    },
+    "/content/event/rfpTimelineNotes": {
+      "label": "RFP Timeline",
+      "requirement": "optional",
+      "controlType": "long_text",
+      "helperText": "Add useful procurement milestones or timing notes; exact submission and selection dates are collected later in Investment & Evaluation.",
+      "example": "Vendor questions close October 1; shortlisted presentations take place October 15."
+    },
+    "/content/videoRecording/required": {
+      "label": "Video Recording Required",
+      "requirement": "required",
+      "controlType": "radio",
+      "helperText": "Choose whether any sessions must be recorded. Selecting Yes opens the camera, recording-format, and deliverable fields; selecting No omits the recording scope from the RFP.",
+      "example": "Yes — Record sessions during the event",
+      "options": [
+        { "value": "true", "label": "Yes — Record sessions during the event" },
+        { "value": "false", "label": "No — No recording needed" }
+      ]
+    },
+    "/content/budgetPreferences/flexibility": {
+      "label": "Investment Flexibility",
+      "requirement": "optional",
+      "controlType": "select",
+      "helperText": "Choose how firm the investment range is so vendors know whether to hold scope, offer alternatives, or propose cost-saving value engineering.",
+      "example": "Value-Engineering Welcome",
+      "options": [
+        { "value": "Fixed", "label": "Fixed" },
+        { "value": "Flexible", "label": "Flexible" },
+        { "value": "Value-Engineering Welcome", "label": "Value-Engineering Welcome" },
+        { "value": "Not Sure", "label": "Not Sure" }
+      ]
+    }
+  }
+}

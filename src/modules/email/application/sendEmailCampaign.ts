@@ -46,6 +46,7 @@ const emailHtml = (input: {
   clickUrl: string;
   reference: string;
   vendorClickUrl: string;
+  vendorUrl: string;
 }) => `
   <div style="font-family:Inter,Arial,sans-serif;max-width:620px;margin:0 auto;padding:24px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
     <p style="margin:0 0 8px;color:#0f172a;font-size:14px;">You have received a proposal from DXG.</p>
@@ -54,8 +55,9 @@ const emailHtml = (input: {
     <div style="margin:0 0 20px;color:#334155;font-size:14px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(input.message)}</div>
     <div style="margin:0 0 18px;padding:14px;border-radius:10px;background:#ffffff;border:1px solid #dbeafe;"><p style="margin:0 0 4px;color:#0f172a;font-size:13px;font-weight:700;">Proposal Preview</p><p style="margin:0;color:#475569;font-size:12px;">${escapeHtml(input.title)}</p></div>
     <a href="${input.clickUrl}" style="display:inline-block;background:#06b6d4;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700;">View Proposal</a>
-    <p style="margin:16px 0 0;color:#64748b;font-size:12px;">If the button does not work, copy this link: <a href="${input.proposalUrl}" style="color:#0284c7;text-decoration:underline;">${input.proposalUrl}</a></p>
     <div style="margin:24px 0 0;padding-top:20px;border-top:1px solid #e2e8f0;"><p style="margin:0 0 10px;color:#334155;font-size:13px;font-weight:600;">Ready to respond to this proposal?</p><a href="${input.vendorClickUrl}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700;">Submit Your Proposal</a></div>
+    <p style="margin:16px 0 0;color:#64748b;font-size:12px;">If the button does not work, copy this link: <a href="${input.proposalUrl}" style="color:#0284c7;text-decoration:underline;">${input.proposalUrl}</a></p>
+    <p style="margin:8px 0 0;color:#64748b;font-size:12px;">To send feedback, copy this link: <a href="${input.vendorUrl}" style="color:#0284c7;text-decoration:underline;">${input.vendorUrl}</a></p>
     <img src="${input.openUrl}" alt="" width="1" height="1" style="display:block;opacity:0;" />
   </div>
 `;
@@ -135,8 +137,9 @@ export const createSendOwnedEmailCampaign = (dependencies: {
           clickUrl,
           reference,
           vendorClickUrl,
+          vendorUrl,
         }),
-        text: `${message}\n\nView proposal: ${proposalUrl}`,
+        text: `${message}\n\nView proposal: ${proposalUrl}\n\nGive feedback: ${vendorUrl}`,
       });
       recipient.status = "sent";
       recipient.sentAt = (dependencies.now ?? (() => new Date()))();

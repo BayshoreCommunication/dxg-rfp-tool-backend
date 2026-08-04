@@ -21,6 +21,16 @@ const MIME_BY_EXTENSION:Record<string,string>={
  csv:"text/csv",
 };
 
+// Migration histories can temporarily be out of step during a rolling deploy.
+// Evidence is supplementary; findings and run status must remain readable when
+// the optional evidence table has not reached a database yet.
+const vendorAnalysisEvidenceAvailable=async(c:PoolClient)=>{
+ const result=await c.query<{table_name:string|null}>(
+  "SELECT to_regclass('rfpilot.vendor_analysis_evidence')::text AS table_name",
+ );
+ return Boolean(result.rows[0]?.table_name);
+};
+
 const tenant=async(c:PoolClient,x:string)=>{
   await c.query("SELECT set_config('app.organization_mongo_id',$1,true)",[x]);
   const r=await c.query<{id:string}>(
@@ -157,7 +167,8 @@ export const vendorAnalysisRepository={
    const org=await tenant(c,input.organizationMongoId);
    const citedIds=new Set(findings.flatMap(f=>f.citations.filter(Boolean)));
    const citedEvidence=vendorEvidence.filter(e=>citedIds.has(e.id)).slice(0,200);
-   for(let i=0;i<citedEvidence.length;i++){
+   const canPersistEvidence=await vendorAnalysisEvidenceAvailable(c);
+   for(let i=0;canPersistEvidence&&i<citedEvidence.length;i++){
     const item=citedEvidence[i];
     await c.query(
      "INSERT INTO rfpilot.vendor_analysis_evidence(id,organization_id,run_id,fragment_id,origin,locator,excerpt,content_checksum,ordinal) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9) ON CONFLICT (run_id,fragment_id) DO NOTHING",
@@ -242,10 +253,12 @@ export const vendorAnalysisRepository={
    // Returned alongside the findings so a citation id resolves to the words
    // that produced it. Without this the ids are meaningless to a reader and the
    // UI can only show the claim, never its basis.
-   const evidence=await c.query<any>(
-    "SELECT fragment_id,origin,locator,excerpt,content_checksum FROM rfpilot.vendor_analysis_evidence WHERE run_id=$1 ORDER BY ordinal",
-    [run.rows[0].id],
-   );
+   const evidence=await vendorAnalysisEvidenceAvailable(c)
+    ?await c.query<any>(
+      "SELECT fragment_id,origin,locator,excerpt,content_checksum FROM rfpilot.vendor_analysis_evidence WHERE run_id=$1 ORDER BY ordinal",
+      [run.rows[0].id],
+     )
+    :{rows:[]};
    const r=run.rows[0];
    return{
     evidence:evidence.rows.map((row:any)=>({

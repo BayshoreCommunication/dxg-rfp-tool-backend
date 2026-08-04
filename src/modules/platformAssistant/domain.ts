@@ -22,6 +22,11 @@ export const ASSISTANT_EVIDENCE_ITEM_MAX_CHARACTERS = 3_000;
 export const ASSISTANT_RESPONSE_MAX_CHARACTERS = 12_000;
 export const ASSISTANT_RESPONSE_MAX_CITATIONS = 12;
 export const ASSISTANT_UI_CONTEXT_ROOM_IDENTIFIER_MAX_LENGTH = 64;
+export const ASSISTANT_UI_CONTEXT_FIELD_LABEL_MAX_LENGTH = 120;
+export const ASSISTANT_UI_CONTEXT_FIELD_HELP_MAX_LENGTH = 600;
+export const ASSISTANT_UI_CONTEXT_FIELD_PLACEHOLDER_MAX_LENGTH = 160;
+export const ASSISTANT_UI_CONTEXT_FIELD_OPTION_MAX_LENGTH = 100;
+export const ASSISTANT_UI_CONTEXT_FIELD_OPTIONS_MAX_ITEMS = 30;
 
 export const ASSISTANT_THREAD_STATUSES = ["active", "archived"] as const;
 export const ASSISTANT_MESSAGE_ROLES = ["user", "assistant", "system_event"] as const;
@@ -95,11 +100,44 @@ export const ASSISTANT_EVENT_FORMATS = [
   "hybrid",
   "virtual",
 ] as const;
+export const ASSISTANT_FIELD_CONTROL_TYPES = [
+  "text",
+  "long_text",
+  "number",
+  "date",
+  "email",
+  "phone",
+  "select",
+  "radio",
+  "multi_select",
+  "option_buttons",
+  "file",
+] as const;
+export const ASSISTANT_FIELD_REQUIREMENTS = [
+  "required",
+  "optional",
+  "conditional",
+] as const;
 
 export type AssistantRouteCategory = (typeof ASSISTANT_ROUTE_CATEGORIES)[number];
 export type AssistantWorkflow = (typeof ASSISTANT_WORKFLOWS)[number];
 export type AssistantFormSectionId = (typeof ASSISTANT_FORM_SECTION_IDS)[number];
 export type AssistantEventFormat = (typeof ASSISTANT_EVENT_FORMATS)[number];
+export type AssistantFieldControlType =
+  (typeof ASSISTANT_FIELD_CONTROL_TYPES)[number];
+export type AssistantFieldRequirement =
+  (typeof ASSISTANT_FIELD_REQUIREMENTS)[number];
+
+export type AssistantFieldControlContext = {
+  label: string;
+  helperText: string;
+  requirement?: AssistantFieldRequirement;
+  controlType?: AssistantFieldControlType;
+  options?: string[];
+  minimumSelections?: number;
+  maximumSelections?: number;
+  placeholder?: string;
+};
 
 export type AssistantUiContext = {
   schemaVersion: "assistant-ui-context.v1";
@@ -110,6 +148,7 @@ export type AssistantUiContext = {
   fieldKeyStatus: "not_provided" | "valid" | "unknown";
   eventFormat?: AssistantEventFormat;
   roomIdentifier?: string;
+  fieldControl?: AssistantFieldControlContext;
 };
 
 export type AssistantCitation = {
@@ -203,7 +242,7 @@ export type AssistantPromptMessage = {
 };
 
 export type AssistantPromptInput = {
-  schemaVersion: "platform-assistant-prompt.v5";
+  schemaVersion: "platform-assistant-prompt.v6";
   platformKnowledgeVersion: string;
   userMessage: string;
   history: AssistantPromptMessage[];
@@ -439,6 +478,90 @@ const oneOf = <T extends string>(
   allowed: readonly T[],
 ): value is T => typeof value === "string" && allowed.includes(value as T);
 
+const parseAssistantFieldControl = (
+  value: unknown,
+): AssistantFieldControlContext | null => {
+  if (!isRecord(value) || Array.isArray(value)) return null;
+  const label = typeof value.label === "string" ? value.label.trim() : "";
+  const helperText =
+    typeof value.helperText === "string" ? value.helperText.trim() : "";
+  if (
+    !label ||
+    label.length > ASSISTANT_UI_CONTEXT_FIELD_LABEL_MAX_LENGTH ||
+    !helperText ||
+    helperText.length > ASSISTANT_UI_CONTEXT_FIELD_HELP_MAX_LENGTH
+  ) {
+    return null;
+  }
+  const requirement =
+    value.requirement === undefined
+      ? undefined
+      : oneOf(value.requirement, ASSISTANT_FIELD_REQUIREMENTS)
+        ? value.requirement
+        : null;
+  const controlType =
+    value.controlType === undefined
+      ? undefined
+      : oneOf(value.controlType, ASSISTANT_FIELD_CONTROL_TYPES)
+        ? value.controlType
+        : null;
+  const placeholder =
+    value.placeholder === undefined
+      ? undefined
+      : typeof value.placeholder === "string" &&
+          value.placeholder.length <=
+            ASSISTANT_UI_CONTEXT_FIELD_PLACEHOLDER_MAX_LENGTH
+        ? value.placeholder.trim()
+        : null;
+  const options =
+    value.options === undefined
+      ? undefined
+      : Array.isArray(value.options) &&
+          value.options.length <= ASSISTANT_UI_CONTEXT_FIELD_OPTIONS_MAX_ITEMS &&
+          value.options.every(
+            (option) =>
+              typeof option === "string" &&
+              Boolean(option.trim()) &&
+              option.length <= ASSISTANT_UI_CONTEXT_FIELD_OPTION_MAX_LENGTH,
+          )
+        ? [...new Set(value.options.map((option) => option.trim()))]
+        : null;
+  const selectionLimit = (candidate: unknown): number | null | undefined =>
+    candidate === undefined
+      ? undefined
+      : Number.isInteger(candidate) &&
+          Number(candidate) >= 0 &&
+          Number(candidate) <= ASSISTANT_UI_CONTEXT_FIELD_OPTIONS_MAX_ITEMS
+        ? Number(candidate)
+        : null;
+  const minimumSelections = selectionLimit(value.minimumSelections);
+  const maximumSelections = selectionLimit(value.maximumSelections);
+  if (
+    requirement === null ||
+    controlType === null ||
+    placeholder === null ||
+    options === null ||
+    minimumSelections === null ||
+    maximumSelections === null ||
+    maximumSelections === 0 ||
+    (minimumSelections !== undefined &&
+      maximumSelections !== undefined &&
+      minimumSelections > maximumSelections)
+  ) {
+    return null;
+  }
+  return {
+    label,
+    helperText,
+    ...(requirement ? { requirement } : {}),
+    ...(controlType ? { controlType } : {}),
+    ...(options?.length ? { options } : {}),
+    ...(minimumSelections !== undefined ? { minimumSelections } : {}),
+    ...(maximumSelections !== undefined ? { maximumSelections } : {}),
+    ...(placeholder ? { placeholder } : {}),
+  };
+};
+
 export const parseAssistantFeedbackInput = (
   value: unknown,
 ): {
@@ -525,6 +648,17 @@ export const parseAssistantUiContext = (
     );
   }
 
+  const fieldControl =
+    value.fieldControl === undefined
+      ? undefined
+      : parseAssistantFieldControl(value.fieldControl);
+  if (value.fieldControl !== undefined && !fieldControl) {
+    throw new PlatformAssistantError(
+      "INVALID_ASSISTANT_UI_CONTEXT",
+      "The assistant page context is invalid.",
+    );
+  }
+
   const suppliedFieldKey =
     typeof value.fieldKey === "string" ? value.fieldKey.trim() : "";
   let fieldKey: string | undefined;
@@ -547,6 +681,7 @@ export const parseAssistantUiContext = (
     fieldKeyStatus,
     ...(eventFormat ? { eventFormat } : {}),
     ...(roomIdentifier ? { roomIdentifier } : {}),
+    ...(fieldControl ? { fieldControl } : {}),
   };
 };
 

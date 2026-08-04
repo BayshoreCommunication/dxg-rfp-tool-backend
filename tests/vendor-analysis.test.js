@@ -234,6 +234,11 @@ test("cited vendor fragments are persisted, so a finding can be traced to its wo
   assert.match(repo, /const citedIds=new Set\(findings\.flatMap/, "only what was cited is kept");
   assert.match(repo, /item\.text\.slice\(0,1000\)/, "an excerpt, not the whole fragment");
   assert.match(repo, /SELECT fragment_id,origin,locator,excerpt/, "the read path returns it");
+  assert.match(
+    repo,
+    /to_regclass\('rfpilot\.vendor_analysis_evidence'\)/,
+    "rolling deploys keep findings readable before the optional evidence table arrives",
+  );
 
   const migration = read("migrations/postgres/029_vendor_analysis_evidence.up.sql");
   assert.match(migration, /FORCE ROW LEVEL SECURITY/, "tenant isolated like every other evidence table");

@@ -22,7 +22,7 @@ const readyRecord = () => ({
   application: {
     backendCommit: "892d30e",
     dashboardCommit: "ab3573a",
-    promptVersion: "platform-assistant-prompt.v5",
+    promptVersion: "platform-assistant-prompt.v6",
     migrationsAppliedThrough: "036",
   },
   model: {

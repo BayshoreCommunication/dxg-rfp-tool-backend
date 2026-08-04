@@ -74,6 +74,27 @@ test("prefers the longest exact proposal title contained in the message", async 
   assert.equal(result.proposalName, "Momentum 2027 Sales Kickoff");
 });
 
+test("does not collapse two unrelated explicitly named proposals to one", async () => {
+  const source = createAssistantProposalContextSource(async () => [
+    proposal("Launchpad 2027"),
+    proposal("Momentum 2027 Sales Kickoff"),
+  ]);
+
+  const result = await source.resolve({
+    ...context,
+    query:
+      "Compare Launchpad 2027 with Momentum 2027 Sales Kickoff without guessing",
+    recentUserMessages: [],
+  });
+
+  assert.equal(result.state, "ambiguous");
+  assert.deepEqual(result.proposalNames, [
+    "Launchpad 2027",
+    "Momentum 2027 Sales Kickoff",
+  ]);
+  assert.equal(result.evidence.length, 0);
+});
+
 test("does not guess when duplicate owned proposals have the same title", async () => {
   const source = createAssistantProposalContextSource(async () => [
     proposal("Annual Summit"),
@@ -196,6 +217,67 @@ test("returns an exact portfolio count before considering named proposal history
     archived: 14,
     savedCopies: 1,
   });
+});
+
+test("recognizes common proposal-count typing mistakes", async () => {
+  let countReads = 0;
+  const source = createAssistantProposalContextSource({
+    async findOwnedProposals() {
+      throw new Error("count questions must not scan proposal names");
+    },
+    async countOwnedProposals() {
+      countReads += 1;
+      return {
+        totalCreated: 83,
+        all: 68,
+        draft: 48,
+        live: 3,
+        favorite: 0,
+        expired: 17,
+        archive: 14,
+        saved: 1,
+      };
+    },
+  });
+
+  const result = await source.resolve({
+    ...context,
+    query: "how manny proposel do i hav?",
+    recentUserMessages: [],
+  });
+
+  assert.equal(result.state, "portfolio_summary");
+  assert.equal(countReads, 1);
+  assert.equal(JSON.parse(result.evidence[0].content).totalCreated, 83);
+});
+
+test("carries count evidence into an immediate formatting follow-up", async () => {
+  const source = createAssistantProposalContextSource({
+    async findOwnedProposals() {
+      throw new Error("count follow-ups must not scan proposal names");
+    },
+    async countOwnedProposals() {
+      return {
+        totalCreated: 83,
+        all: 68,
+        draft: 48,
+        live: 3,
+        favorite: 0,
+        expired: 17,
+        archive: 14,
+        saved: 1,
+      };
+    },
+  });
+
+  const result = await source.resolve({
+    ...context,
+    query: "Make that answer one short sentence.",
+    recentUserMessages: ["how manny proposel do i hav?"],
+  });
+
+  assert.equal(result.state, "portfolio_summary");
+  assert.equal(JSON.parse(result.evidence[0].content).totalCreated, 83);
 });
 
 test("derives proposal counts from bounded candidates for injected sources", async () => {

@@ -4,8 +4,9 @@ import {
   proposalFormGuidanceEvidenceForQuery,
 } from "./proposalFormGuidance";
 import type { AssistantUiContext } from "./domain";
+import { normalizeCommonAssistantTypos } from "./queryNormalization";
 
-export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v5";
+export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v6";
 
 type PlatformFact = Omit<AssistantPromptEvidence, "sourceType" | "trust" | "releaseId"> & {
   keywords: readonly string[];
@@ -305,6 +306,49 @@ const hrefForRouteCategory: Partial<
   settings: "/settings",
 };
 
+const currentFieldControlEvidence = (
+  uiContext: AssistantUiContext,
+): AssistantPromptEvidence | undefined => {
+  const field = uiContext.fieldControl;
+  if (!field) return undefined;
+  const lines = [
+    `Current rendered field: ${field.label}.`,
+    field.requirement
+      ? `The current form marks this field ${field.requirement}.`
+      : "The current form does not show an explicit required, optional, or conditional marker for this field.",
+    `Current form guidance: ${field.helperText}`,
+    field.controlType
+      ? `Rendered control type: ${field.controlType.replace(/_/g, " ")}.`
+      : undefined,
+    field.options?.length
+      ? `Visible options: ${field.options.join("; ")}.`
+      : undefined,
+    field.minimumSelections !== undefined ||
+    field.maximumSelections !== undefined
+      ? `Selection rule: ${
+          field.minimumSelections !== undefined
+            ? `minimum ${field.minimumSelections}`
+            : "no displayed minimum"
+        }; ${
+          field.maximumSelections !== undefined
+            ? `maximum ${field.maximumSelections}`
+            : "no displayed maximum"
+        }.`
+      : undefined,
+    field.placeholder
+      ? `Displayed placeholder or format hint: ${field.placeholder}.`
+      : undefined,
+  ].filter((line): line is string => Boolean(line));
+  return {
+    id: "form-field:current-rendered-control",
+    sourceType: "operating_guidance",
+    trust: "untrusted_retrieved_content",
+    title: `${field.label} — current form control`,
+    content: lines.join("\n"),
+    href: "/proposals/add-new-proposal",
+  };
+};
+
 export const platformFactsForUiContext = (
   uiContext: AssistantUiContext | null,
 ): AssistantPromptEvidence[] => {
@@ -315,6 +359,8 @@ export const platformFactsForUiContext = (
     const route = platformFactEvidenceForHref(href);
     if (route) evidence.push(route);
   }
+  const currentField = currentFieldControlEvidence(uiContext);
+  if (currentField) evidence.unshift(currentField);
   if (uiContext.fieldKeyStatus === "valid" && uiContext.fieldKey) {
     const field = proposalFormGuidanceEvidenceForField(uiContext.fieldKey);
     if (field) evidence.unshift(field);
@@ -326,8 +372,8 @@ export const platformFactsForQuery = (
   query: string,
   limit = 12,
 ): AssistantPromptEvidence[] => {
-  const normalized = query.toLowerCase();
-  const terms = new Set(normalizedTerms(query));
+  const normalized = normalizeCommonAssistantTypos(query.toLowerCase());
+  const terms = new Set(normalizedTerms(normalized));
   const scored = PLATFORM_FACTS.map((fact, index) => {
     const score = fact.keywords.reduce((total, keyword) => {
       const phrase = keyword.toLowerCase();
@@ -390,8 +436,26 @@ export const platformFactsForConversation = (
       })()
     : availablePriorUserMessages;
 
-  return platformFactsForQuery(
+  const currentFieldGuidance = proposalFormGuidanceEvidenceForQuery(
+    query,
+    Math.min(3, limit),
+  );
+  const selected = platformFactsForQuery(
     [query, ...priorUserMessages].join("\n"),
     limit,
   );
+  if (currentFieldGuidance.length === 0) return selected;
+
+  const currentIds = new Set(currentFieldGuidance.map((item) => item.id));
+  return [
+    ...currentFieldGuidance,
+    ...selected.filter(
+      (item) => !item.id.startsWith("form-field:") || currentIds.has(item.id),
+    ),
+  ]
+    .filter(
+      (item, index, items) =>
+        items.findIndex((candidate) => candidate.id === item.id) === index,
+    )
+    .slice(0, Math.max(1, limit));
 };
