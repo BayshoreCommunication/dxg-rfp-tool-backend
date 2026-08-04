@@ -96,8 +96,8 @@ export type ImportantFieldImpact = "schedule" | "cost" | "production" | "scope";
 // The control the dashboard renders for a question. `options` are submitted
 // verbatim, so every option string MUST be accepted by
 // canonicalMapping.normalizeCandidate for that path (covered by tests).
-export type ImportantFieldAnswerType = "date" | "choice" | "number" | "text";
-export const ANSWER_TYPES: readonly ImportantFieldAnswerType[] = Object.freeze(["date", "choice", "number", "text"]);
+export type ImportantFieldAnswerType = "date" | "time" | "choice" | "number" | "text";
+export const ANSWER_TYPES: readonly ImportantFieldAnswerType[] = Object.freeze(["date", "time", "choice", "number", "text"]);
 export type ImportantFieldQuestion = {
   path: string;
   prompt: string;
@@ -173,7 +173,7 @@ export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Obje
   { path: "/content/venue/riggingRequired", prompt: "Will this venue require rigging? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
   { path: "/content/venue/powerDropsRequired", prompt: "Will dedicated power drops be required? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
   { path: "/content/venueSchedule/loadInDate", prompt: "When can production load in? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
-  { path: "/content/venueSchedule/loadInTime", prompt: "What time can production load in? (HH:MM)", impact: "schedule", answerType: "text" },
+  { path: "/content/venueSchedule/loadInTime", prompt: "What time can production load in? (HH:MM)", impact: "schedule", answerType: "time" },
   { path: "/content/venue/venueAccessRequirements", prompt: "Are there loading dock, freight elevator, security, parking, or access restrictions?", impact: "production", answerType: "text" },
   { path: "/content/budget/proposalSubmissionDueDate", prompt: "When is the proposal due? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
   { path: "/content/hybridVirtual/streamingPlatform", prompt: "Which streaming platform will the event use?", impact: "production", answerType: "choice", options: STREAMING_PLATFORMS },

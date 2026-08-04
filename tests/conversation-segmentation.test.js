@@ -8,6 +8,7 @@ const {
   MIN_SEGMENT_CHARS,
   MAX_TURNS,
   IDLE_MS,
+  RICH_TURN_CHARS,
 } = require("../src/modules/conversations/segmentation");
 
 const withEnv = (overrides, fn) => {
@@ -81,6 +82,21 @@ test("a segment closes on idle, on turn count, or when the planner asks", () =>
 
     const many = Array.from({ length: MAX_TURNS }, (_, i) => turn(`m${i}`, `${REQUIREMENT} ${i}`, 1));
     assert.equal(evaluateSegment({ turns: many, now: NOW }).reason, "turns");
+  }));
+
+test("one detailed brief closes immediately while a short requirement still batches", () =>
+  enabled(() => {
+    const detailed = `${REQUIREMENT} ${"Include staging, lighting, livestreaming, recording, crew, schedule, and budget details. ".repeat(4)}`;
+    assert.ok(detailed.length >= RICH_TURN_CHARS);
+    assert.equal(
+      evaluateSegment({ turns: [turn("m1", detailed)], now: NOW }).reason,
+      "rich_turn",
+    );
+    assert.equal(
+      evaluateSegment({ turns: [turn("m2", REQUIREMENT)], now: NOW }).extract,
+      false,
+      "short requirements remain open for corrections",
+    );
   }));
 
 test("a correction lands in the same segment as what it corrects", () =>

@@ -11,6 +11,7 @@ import { proposalDraftRepository } from "../src/modules/proposalDraft/postgresPr
 import { durableJobDispatcher } from "../src/modules/durableJobs/composition";
 import { appendChatReply } from "../src/modules/conversations/chatReply";
 import { maybeExtractSegment } from "../src/modules/conversations/segmentIntake";
+import { conversationExtractionEnabled } from "../src/modules/conversations/segmentation";
 import { withConversationProposalReference } from "../src/modules/conversations/conversationProposalReference";
 import { safeLog } from "../src/shared/observability/safeTelemetry";
 
@@ -58,17 +59,24 @@ export const getConversation = async (req: AuthRequest, res: Response) => {
   try {
     const ctx = context(req);
     const proposalMongoId = proposalId(req.params.proposalId);
+    const conversation = await withConversationProposalReference(
+      ctx,
+      proposalMongoId,
+      () =>
+        conversationRepository.read({
+          ...ctx,
+          proposalMongoId,
+          limit: Number(req.query.limit) || undefined,
+        }),
+    );
     res.json({
-      data: await withConversationProposalReference(
-        ctx,
-        proposalMongoId,
-        () =>
-          conversationRepository.read({
-            ...ctx,
-            proposalMongoId,
-            limit: Number(req.query.limit) || undefined,
-          }),
-      ),
+      // Runtime-authoritative capability state prevents a dashboard build flag
+      // from offering a control the API will reject. The backend remains the
+      // deny-by-default authority.
+      data: {
+        ...conversation,
+        capabilities: { conversationExtraction: conversationExtractionEnabled() },
+      },
     });
   } catch (error) { handle(res, error); }
 };

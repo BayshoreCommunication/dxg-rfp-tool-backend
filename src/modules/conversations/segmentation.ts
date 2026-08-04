@@ -23,7 +23,6 @@ export const conversationExtractionEnabled = (): boolean =>
 
 export const IDLE_MS = Math.max(5_000, Number(process.env.CONVERSATION_EXTRACT_IDLE_MS) || 45_000);
 export const MAX_TURNS = Math.max(1, Math.min(Number(process.env.CONVERSATION_EXTRACT_MAX_TURNS) || 6, 25));
-
 /**
  * Minimum substance before a segment is worth a provider call, counted with
  * whitespace stripped. Low deliberately: one clear requirement sentence — "We
@@ -33,6 +32,13 @@ export const MAX_TURNS = Math.max(1, Math.min(Number(process.env.CONVERSATION_EX
  * short filler out.
  */
 export const MIN_SEGMENT_CHARS = 40;
+// A single detailed brief is already a complete unit of intent. Closing it
+// immediately gives the planner ChatGPT-style prompt handling, while shorter
+// turns still batch so later corrections stay in the same extraction run.
+export const RICH_TURN_CHARS = Math.max(
+  MIN_SEGMENT_CHARS,
+  Number(process.env.CONVERSATION_EXTRACT_RICH_TURN_CHARS) || 240,
+);
 
 // Words that indicate event requirements rather than conversational filler.
 // Deliberately broad and cheap: this only decides whether a segment is worth
@@ -56,7 +62,7 @@ const REQUIREMENT_HINTS = new RegExp(
 );
 
 export type SegmentTurn = { id: string; content: string; createdAt: Date };
-export type SegmentReason = "idle" | "turns" | "explicit";
+export type SegmentReason = "idle" | "turns" | "explicit" | "rich_turn";
 export type SegmentDecision =
   | { extract: false; reason: "disabled" | "empty" | "insufficient" | "open" }
   | { extract: true; reason: SegmentReason; turns: SegmentTurn[]; text: string; idempotencyKey: string };
@@ -102,6 +108,8 @@ export const evaluateSegment = (input: {
   const idleFor = input.now.getTime() - last.createdAt.getTime();
   const reason: SegmentReason | null = input.explicit
     ? "explicit"
+    : turns.length === 1 && text.length >= RICH_TURN_CHARS
+      ? "rich_turn"
     : turns.length >= MAX_TURNS
       ? "turns"
       : idleFor >= IDLE_MS

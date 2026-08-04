@@ -1,6 +1,6 @@
 # AI Layer
 
-> Purpose: current governed AI capabilities and invariants. Last updated: 2026-07-27. Owner: AI engineering.
+> Purpose: current governed AI capabilities and invariants. Last updated: 2026-08-04. Owner: AI engineering.
 
 ## Current status
 
@@ -11,7 +11,7 @@ The M1–M6 audit roadmap is implemented behind deny-by-default flags. The pinne
 | Capability | Inputs | Output/control boundary |
 |---|---|---|
 | Proposal extraction | Clean eligible files | Cited candidates restricted to 112 canonical scalar paths; invalid/conflicting values do not apply. |
-| Conversation | Messages, pasted notes, attachments | Durable message/SSE workspace; typed-message extraction remains unbuilt. |
+| Conversation | Messages, pasted notes, attachments | Durable message/SSE workspace; closed typed-message segments use the cited extraction/review path behind a deny-by-default runtime gate. |
 | Draft generation | Proposal fields plus eligible knowledge | Cited sections with scoped regeneration and review state. |
 | Knowledge retrieval | Approved active fragments | Tenant-scoped lexical/vector results from a release registry. |
 | Guidance | Canonical proposal facts | Deterministic completeness and rule findings. |
@@ -49,7 +49,7 @@ The proprietary baseline v3 workbook contains 433 items, 22 regional factors, 13
 
 ## Open gaps
 
-Array/room extraction, weighted completeness, invalid-operation UI, vendor attempt-ledger coverage, bid comparison, report export, and a written OpenAI-versus-Anthropic comparison remain open. Typed chat extraction shipped behind `CONVERSATION_EXTRACTION_ENABLED` (2026-07-29). Room recommendations partially offset the room gap with a review-first deterministic capability (crew application, production knowledge retrieval, and any AI enrichment stage remain deferred). See [ROADMAP.md](ROADMAP.md).
+Array/room extraction, weighted completeness, invalid-operation UI, vendor attempt-ledger coverage, bid comparison, report export, and a written OpenAI-versus-Anthropic comparison remain open. Typed chat extraction shipped behind `CONVERSATION_EXTRACTION_ENABLED` (2026-07-29); detailed single-turn briefs close automatically, shorter chat remains explicitly closable, and the API exposes the runtime capability state to the dashboard (2026-08-04). Room recommendations partially offset the room gap with a review-first deterministic capability (crew application, production knowledge retrieval, and any AI enrichment stage remain deferred). See [ROADMAP.md](ROADMAP.md).
 
 ## Detailed references
 

@@ -1,6 +1,6 @@
 # RFPilot Architecture
 
-> Purpose: current system map and source-of-truth boundaries. Last updated: 2026-07-22. Owner: engineering.
+> Purpose: current system map and source-of-truth boundaries. Last updated: 2026-08-04. Owner: engineering.
 
 ## System
 
@@ -35,7 +35,7 @@ The backend is a transitional modular monolith. The API creates authoritative re
 
 1. A planner creates or opens a proposal and enters `/proposals/{id}/assistant`.
 2. Typed messages and attachments enter the conversation. Attachments pass private upload and fail-closed malware scanning.
-3. Eligible files feed cited structured extraction. Typed conversation is stored but is not yet extracted.
+3. Eligible files and closed typed-conversation segments feed the same cited structured extraction. A detailed single-turn brief closes immediately; shorter chat can be closed explicitly with “Use what I’ve told you.”
 4. Valid, high-confidence, single candidates may fill empty draft fields. Conflicts, existing values, low confidence, and invalid values require review.
 5. Guided questions close high-impact gaps. Cited drafting, readiness guidance, and deterministic investment guidance follow.
 6. A human reviews and publishes. The AI never publishes.

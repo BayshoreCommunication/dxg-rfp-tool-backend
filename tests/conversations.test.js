@@ -251,6 +251,7 @@ test("every whitelisted question declares an answer control, and only choices ca
   assert.equal(byPath["/content/hybridVirtual/streamingPlatform"], "choice");
   assert.equal(byPath["/content/venueSchedule/numberOfEventRooms"], "number");
   assert.equal(byPath["/content/venueSchedule/venueCity"], "text");
+  assert.equal(byPath["/content/venueSchedule/loadInTime"], "time");
   // The streaming platform pills must be the same list the wizard step offers.
   const streaming = IMPORTANT_FIELD_QUESTIONS.find((f) => f.path === "/content/hybridVirtual/streamingPlatform");
   assert.deepEqual([...streaming.options], [
@@ -298,6 +299,12 @@ test("the conversation read payload carries the answer control alongside the imp
   // The answer message pairing lets the thread show the question above the answer.
   assert.ok(repository.includes("answeredMessageId: q.answered_message_id ?? null"), "read must expose answeredMessageId");
   assert.ok(/SELECT[^;]*answered_message_id[^;]*FROM rfpilot\.clarification_questions/.test(repository), "the column must be selected");
+});
+
+test("the conversation endpoint exposes runtime chat-extraction capability", () => {
+  const controller = fs.readFileSync(path.join(root, "controller/conversationsController.ts"), "utf8");
+  assert.ok(controller.includes("conversationExtractionEnabled"));
+  assert.ok(controller.includes("capabilities: { conversationExtraction:"));
 });
 
 test("whitelisted answers normalize through the candidate mapping as human data entry", () => {

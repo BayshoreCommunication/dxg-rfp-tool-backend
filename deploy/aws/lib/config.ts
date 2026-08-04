@@ -88,6 +88,7 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
     aiEnvironment: {
       AI_ENVIRONMENT: "staging",
       CONVERSATIONS_ENABLED: "true",
+      CONVERSATION_EXTRACTION_ENABLED: "true",
       PROPOSAL_CONTEXT_ENABLED: "true",
       PROPOSAL_CONTEXT_PROVIDER: "mock",
       PROPOSAL_CONTEXT_MODEL: "deterministic-v1",
@@ -157,6 +158,7 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
     aiEnvironment: {
       AI_ENVIRONMENT: "production",
       CONVERSATIONS_ENABLED: "true",
+      CONVERSATION_EXTRACTION_ENABLED: "true",
       PROPOSAL_CONTEXT_ENABLED: "true",
       PROPOSAL_CONTEXT_PROVIDER: "mock",
       PROPOSAL_CONTEXT_MODEL: "deterministic-v1",

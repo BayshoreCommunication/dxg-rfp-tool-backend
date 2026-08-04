@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-07-29 · **Branch:** `ai-agent` (all three repos) · **Status:** audit roadmap M1–M6 complete, DXG pricing engine imported, conversational workspace shipped, and the read-only Platform AI Assistant integrated behind deny-by-default release gates.
+**Last updated:** 2026-08-04 · **Branch:** `main` (all three repos) · **Status:** audit roadmap M1–M6 complete, DXG pricing engine imported, conversational workspace shipped, and the read-only Platform AI Assistant integrated behind deny-by-default release gates.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -207,7 +207,7 @@ the assistant.
 
 Flow: type or attach → sources scan → extraction auto-runs → cited candidates
 remain read-only and link to explicit per-field review → guided key questions
-with typed controls (date picker, choice pills, number) → progress card with
+with typed controls (date picker, time, choice pills, number) → progress card with
 real completeness → generate cited draft → readiness and investment guidance.
 
 ### The Platform AI Assistant
@@ -268,11 +268,11 @@ entitlement or deployment allowlist exists.
 **Product gaps**
 - ~~**Typed conversation is not extracted.**~~ **Closed 2026-07-29.** The
   segmentation pipeline existed but its gate was never switched on;
-  `CONVERSATION_EXTRACTION_ENABLED=true` (with the dashboard mirror
-  `NEXT_PUBLIC_CONVERSATION_EXTRACTION_ENABLED`) now routes typed chat through
-  the same cited-extraction and review path as an upload. While the gate is
-  closed the "Use what I've told you" task renders disabled with the reason
-  rather than failing on click.
+  `CONVERSATION_EXTRACTION_ENABLED=true` now routes typed chat through the same
+  cited-extraction and review path as an upload. Since 2026-08-04, a detailed
+  single-turn brief closes immediately and the API exposes its runtime gate to
+  the dashboard, so the “Use what I've told you” control cannot disagree with
+  backend availability. Missing capability data fails closed in the dashboard.
 - Stepper and assistant can disagree — the stepper counts gaps from extraction
   runs, questions now also come from empty fields.
 - Completeness scores against all ~120 canonical fields, so it reads harshly
