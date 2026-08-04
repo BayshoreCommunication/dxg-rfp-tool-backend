@@ -65,11 +65,10 @@ export class DataStack extends cdk.Stack {
       bucketName: `rfpilot-${config.envName}-documents-${this.account}`,
       // The knowledge-import flow PUTs directly from the admin browser via
       // presigned URLs, which needs CORS (the proposal-source flow uploads
-      // server-side and does not). Applied out-of-band on staging
-      // 2026-08-02; add the real admin/dashboard origins before a
-      // production Data deploy.
+      // server-side and does not). Deployed admin origins plus the local
+      // dev ports; keep this list in step with wherever the admin app runs.
       cors: [{
-        allowedOrigins: ["http://localhost:3001", "http://localhost:3000"],
+        allowedOrigins: config.browserUploadOrigins,
         allowedMethods: [s3.HttpMethods.PUT],
         allowedHeaders: ["*"],
         maxAge: 300,

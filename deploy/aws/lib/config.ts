@@ -39,6 +39,10 @@ export interface EnvironmentConfig {
    *  CloudFront domain in front of the assets bucket. Without it the app
    *  builds direct S3 URLs, which Block Public Access rejects. */
   readonly assetPublicUrlBase: string;
+  /** Origins allowed to PUT directly to the documents bucket via presigned
+   *  URLs (the admin knowledge-import flow). Everything else uploads
+   *  server-side and needs no CORS entry. */
+  readonly browserUploadOrigins: string[];
   /** Governed AI surface (deny-by-default). Empty = every AI flag absent,
    *  the platform's safe state. Populating this IS the AI release for the
    *  env (docs/runbooks/PRODUCTION.md). */
@@ -75,6 +79,7 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
     albIdleTimeoutSeconds: 180,
     mongoDbName: "dxg_rfp_tool_staging",
     assetPublicUrlBase: "https://d3bje2jgtaou7s.cloudfront.net",
+    browserUploadOrigins: ["http://localhost:3001", "http://localhost:3000"],
     // Staging AI release 2026-08-02 (rev 2): full parity with local dev -
     // every AI surface on. Deterministic/mock providers for extraction and
     // knowledge embeddings (as in local dev); live OpenAI for conversation
@@ -141,6 +146,11 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
     albIdleTimeoutSeconds: 180,
     mongoDbName: "dxg_rfp_tool_prod",
     assetPublicUrlBase: "https://d1hn23mh1h53mx.cloudfront.net",
+    browserUploadOrigins: [
+      "https://admin.av-rfpilot.com",
+      "http://localhost:3001",
+      "http://localhost:3000",
+    ],
     // Production AI release 2026-08-03 (Travis-approved): full parity with
     // staging. Live OpenAI replies; mock providers for extraction and
     // knowledge embeddings; retention purge stays off.
