@@ -77,6 +77,17 @@ had to be re-run after the first attempt silently produced no rows
 alone is not proof. Deny-by-default now applies to NO environment —
 re-establish it deliberately if the posture should return.
 
+## Product domain (2026-08-04)
+
+The real product domain is **av-rfpilot.com** (registered at GoDaddy):
+apex/www → Vercel dashboard, `admin.` reserved for the admin app.
+**The API keeps `api.dxg-agency.com`** by decision — no backend hostname
+change. SES: `av-rfpilot.com` identity verified (DKIM + DMARC in GoDaddy),
+`SMTP_MAIL=noreply@av-rfpilot.com` in both env secrets and verified
+sending. Production `FRONTEND_URL`/`ADMIN_URL` GitHub vars point at the
+new domain. SES production-access case: reply sent 2026-08-04 referencing
+av-rfpilot.com — check `aws sesv2 get-account` for approval.
+
 ## Branch model
 
 - `ai-agent` — development (local dev unchanged: `npm run dev*` etc.)
