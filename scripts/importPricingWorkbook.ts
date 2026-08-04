@@ -1,6 +1,7 @@
 import "../config/env";
 import path from "node:path";
 import ExcelJS from "exceljs";
+import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../config/postgres";
 
@@ -8,6 +9,12 @@ import { withPostgresTransaction } from "../config/postgres";
  * Imports the DXG AV Pricing Engine workbook into the pricing corpus.
  *
  *   npx ts-node scripts/importPricingWorkbook.ts <workbook.xlsx> [--dry-run]
+ *
+ * The source may be a local path or an s3:// URI. Deployed environments keep
+ * PostgreSQL in isolated subnets, so imports there run as a one-off ECS task
+ * (api task definition) against a workbook staged in the documents bucket:
+ *
+ *   node dist/scripts/importPricingWorkbook.js s3://<bucket>/<key>
  *
  * The workbook itself is DXG proprietary data and is deliberately NOT stored in
  * this repository; the operator supplies the path. Re-running is idempotent:
@@ -69,7 +76,22 @@ async function main() {
   if (!file) throw new Error("Usage: importPricingWorkbook.ts <workbook.xlsx> [--dry-run]");
 
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(path.resolve(file));
+  if (file.startsWith("s3://")) {
+    const [, , bucket, ...rest] = file.split("/");
+    const key = rest.join("/");
+    if (!bucket || !key) throw new Error(`Malformed S3 URI: ${file}`);
+    const region = process.env.DOCUMENT_STORAGE_REGION || process.env.AWS_REGION;
+    const body = await new S3Client(region ? { region } : {}).send(
+      new GetObjectCommand({ Bucket: bucket, Key: key }),
+    );
+    if (!body.Body) throw new Error(`Empty object at ${file}`);
+    // exceljs bundles its own Buffer typing, which does not structurally
+    // match @types/node's; the runtime value is a plain Node Buffer.
+    const bytes = Buffer.from(await body.Body.transformToByteArray());
+    await workbook.xlsx.load(bytes as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+  } else {
+    await workbook.xlsx.readFile(path.resolve(file));
+  }
 
   const records: Array<Record<string, unknown>> = [];
   const database = workbook.getWorksheet("Pricing Database");
