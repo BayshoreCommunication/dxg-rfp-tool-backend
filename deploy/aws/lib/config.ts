@@ -82,6 +82,11 @@ const AI_RELEASE: Record<string, string> = {
   AI_GATEWAY_ENABLED: "true",
   GUIDANCE_ENABLED: "true",
   INVESTMENT_GUIDANCE_ENABLED: "true",
+  // Deterministic, review-gated room recommendations (engine room-rules.v3,
+  // synthetic knowledge fixtures compiled into the backend — no data seeding
+  // required). The dashboard has exposed this surface since its release, so a
+  // deployed environment without the flag serves 503s on a visible feature.
+  ROOM_RECOMMENDATIONS_ENABLED: "true",
   PRICING_CORPUS_ENABLED: "true",
   VENDOR_ANALYSIS_ENABLED: "true",
   KNOWLEDGE_INGESTION_ENABLED: "true",
