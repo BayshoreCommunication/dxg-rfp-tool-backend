@@ -61,7 +61,11 @@ jobs:
   deploy:
     name: Build, migrate, deploy (${{ github.ref_name == 'production' && 'production' || 'staging' }})
     needs: validate-account
-    if: needs.validate-account.outputs.ready == 'true'
+    # STAGING_PAUSED=true (repository variable) skips staging deploys so a
+    # deliberately stopped staging environment is not woken up by pushes to
+    # main. Production deploys are unaffected. Delete the variable (or set it
+    # to anything but "true") to resume staging continuous delivery.
+    if: needs.validate-account.outputs.ready == 'true' && (github.ref_name == 'production' || vars.STAGING_PAUSED != 'true')
     runs-on: ubuntu-latest
     environment: ${{ github.ref_name == 'production' && 'production' || 'staging' }}
     timeout-minutes: 45
