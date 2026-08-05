@@ -11,7 +11,7 @@ The M1–M6 audit roadmap is implemented behind deny-by-default flags. The pinne
 | Capability | Inputs | Output/control boundary |
 |---|---|---|
 | Proposal extraction | Clean eligible files | Cited candidates restricted to 112 canonical scalar paths; invalid/conflicting values do not apply. |
-| Conversation | Messages, pasted notes, attachments | Durable message/SSE workspace; closed typed-message segments use the cited extraction/review path behind a deny-by-default runtime gate. |
+| Conversation | Messages, pasted notes, attachments | Durable chat jobs with persisted placeholders and bounded dashboard polling; closed typed-message segments use the cited extraction/review path behind a deny-by-default runtime gate. |
 | Draft generation | Proposal fields plus eligible knowledge | Cited sections with scoped regeneration and review state. |
 | Knowledge retrieval | Approved active fragments | Tenant-scoped lexical/vector results from a release registry. |
 | Guidance | Canonical proposal facts | Deterministic completeness and rule findings. |

@@ -225,6 +225,10 @@ export class AppStack extends cdk.Stack {
       circuitBreaker: { enable: true, rollback: true },
       serviceConnectConfiguration: {},
     });
+    // The API may begin producing newly introduced job types as soon as its
+    // task definition rolls. Stabilize the compatible worker first so an old
+    // consumer can never mis-handle a new message during a deployment.
+    this.apiService.node.addDependency(this.workerService);
     const workerScaling = this.workerService.autoScaleTaskCount({
       minCapacity: 1,
       maxCapacity: config.ecs.workerMaxCount,

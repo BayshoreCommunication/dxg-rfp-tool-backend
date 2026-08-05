@@ -2,6 +2,7 @@
 import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
+import { safeLog } from "../../shared/observability/safeTelemetry";
 import { syncFieldGapQuestions } from "./fieldGapQuestions";
 import {
   ConversationError,
@@ -12,6 +13,7 @@ import {
   questionImpact,
   questionAnswerType,
   questionPrompt,
+  suggestedAnswerFor,
   ROOM_SCHEDULE_ASSISTANT_ACTIONS,
   ROOM_SCHEDULE_GUIDANCE_MESSAGE,
   runStatusMessage,
@@ -76,6 +78,29 @@ const materializeRuns = async (c: PoolClient, conversationId: string) => {
       [message.id, messageStatus, runStatusMessage(message.run_type, status)],
     );
   }
+};
+
+// Chat replies are durable jobs rather than request-scoped work. Normally the
+// worker settles the linked placeholder directly; this read-time repair also
+// covers cancellation, an exhausted lease, or a worker crash after the job
+// became terminal but before the message was updated.
+const materializeChatJobs = async (c: PoolClient, conversationId: string) => {
+  await c.query(
+    `UPDATE rfpilot.conversation_messages m
+        SET status='failed',
+            content='The assistant could not complete this response. Please try again.',
+            actions='[]'::jsonb,
+            updated_at=now()
+       FROM rfpilot.ai_jobs j
+      WHERE m.conversation_id=$1
+        AND m.role='assistant'
+        AND m.status='pending'
+        AND m.run_id IS NULL
+        AND m.job_id=j.id
+        AND j.job_type='conversation_chat'
+        AND j.status IN ('failed','cancelled','dead_letter')`,
+    [conversationId],
+  );
 };
 
 const latestSucceededContextRun = async (c: PoolClient, proposalRefId: string) => {
@@ -167,6 +192,7 @@ export const conversationRepository = {
       const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
       const conversation = await getOrCreateConversation(c, org, proposalRefId, ctx.actorUserMongoId);
       await materializeRuns(c, conversation.id);
+      await materializeChatJobs(c, conversation.id);
       await syncQuestions(c, org, proposalRefId, conversation.id);
       // Key questions must also appear when there are no sources at all, so a
       // proposal started by conversation still gets asked what matters.
@@ -219,6 +245,30 @@ export const conversationRepository = {
           if (!existing.includes(value)) conflictOptions.set(key, [...existing, value]);
         }
       }
+      // Pre-fill open questions with what the latest extraction run already
+      // captured for the same field, so the planner confirms instead of
+      // retyping. Values are only suggested, never written — the per-field
+      // review boundary is the answer confirmation itself. Conflict questions
+      // are excluded: their whole point is that the candidates disagree.
+      const suggestions = new Map<string, unknown>();
+      const openFieldPaths = [...new Set(
+        questions.rows
+          .filter((q) => q.status === "open" && q.issue_code !== "CROSS_SOURCE_CONFLICT" && (q.canonical_paths || []).length === 1)
+          .map((q) => q.canonical_paths[0] as string),
+      )];
+      if (openFieldPaths.length) {
+        const latestRunId = await latestSucceededContextRun(c, proposalRefId);
+        if (latestRunId) {
+          const candidateRows = await c.query<{ path: string; value: unknown }>(
+            `SELECT path,value FROM rfpilot.proposal_context_operations
+              WHERE run_id=$1 AND path=ANY($2::text[]) ORDER BY ordinal`,
+            [latestRunId, openFieldPaths],
+          );
+          // Later operations win: within one run a later ordinal supersedes an
+          // earlier value for the same path.
+          for (const row of candidateRows.rows) suggestions.set(row.path, row.value);
+        }
+      }
       return {
         conversation: { id: conversation.id, title: conversation.title, status: conversation.status, messageCount: conversation.message_count, updatedAt: conversation.updated_at },
         messages: rows.map((row) => messagePayload(row, attachments)),
@@ -241,6 +291,12 @@ export const conversationRepository = {
             // number or free text) plus the exact option strings to submit.
             answerType,
             options: options ? [...options] : [],
+            // Extraction-sourced prefill, already converted to a submittable
+            // answer string (null when there is no faithful representation).
+            suggestedAnswer:
+              q.status === "open" && q.issue_code !== "CROSS_SOURCE_CONFLICT" && paths.length === 1 && suggestions.has(paths[0])
+                ? suggestedAnswerFor(paths, suggestions.get(paths[0]))
+                : null,
             // Pairs an answered question with the answer message it produced so
             // the thread can show what was asked above the answer.
             answeredMessageId: q.answered_message_id ?? null,
@@ -269,7 +325,26 @@ export const conversationRepository = {
         "SELECT * FROM rfpilot.conversation_messages WHERE conversation_id=$1 AND idempotency_key=$2",
         [conversation.id, ctx.idempotencyKey],
       );
-      if (existing.rows[0]) return { created: false, message: messagePayload(existing.rows[0], []) };
+      if (existing.rows[0]) {
+        const assistant = await c.query<{ id: string; job_id: string | null }>(
+          `SELECT m.id,m.job_id
+             FROM rfpilot.conversation_messages m
+             JOIN rfpilot.ai_jobs j ON j.id=m.job_id
+            WHERE m.conversation_id=$1
+              AND j.job_type='conversation_chat'
+              AND j.input_reference=$2
+            LIMIT 1`,
+          [conversation.id, existing.rows[0].id],
+        );
+        return {
+          created: false,
+          message: messagePayload(existing.rows[0], []),
+          assistantMessageId: assistant.rows[0]?.id ?? null,
+          jobId: assistant.rows[0]?.job_id ?? null,
+          conversationId: conversation.id,
+          organizationId: org,
+        };
+      }
       if (ctx.sourceIds.length) {
         const sources = await c.query<{ id: string }>(
           "SELECT id FROM rfpilot.document_sources WHERE id=ANY($1::uuid[]) AND organization_id=$2 AND proposal_reference_id=$3 AND deleted_at IS NULL",
@@ -280,13 +355,13 @@ export const conversationRepository = {
       }
       const count = await c.query<{ n: number }>("SELECT message_count n FROM rfpilot.conversations WHERE id=$1", [conversation.id]);
       let ordinal = Number(count.rows[0]?.n ?? 0);
-      const insertMessage = async (row: { role: string; kind: string; content: string; intent?: string | null; run?: typeof ctx.run; status?: string; idempotencyKey?: string | null }) => {
+      const insertMessage = async (row: { role: string; kind: string; content: string; intent?: string | null; run?: typeof ctx.run; jobId?: string | null; status?: string; idempotencyKey?: string | null }) => {
         ordinal += 1;
         const id = uuidv7();
         await c.query(
           `INSERT INTO rfpilot.conversation_messages(id,organization_id,conversation_id,ordinal,role,kind,content,intent,run_type,run_id,job_id,status,idempotency_key,actor_external_user_id)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-          [id, org, conversation.id, ordinal, row.role, row.kind, row.content, row.intent ?? null, row.run?.runType ?? null, row.run?.runId ?? null, row.run?.jobId ?? null, row.status ?? "complete", row.idempotencyKey ?? null, ctx.actorUserMongoId],
+          [id, org, conversation.id, ordinal, row.role, row.kind, row.content, row.intent ?? null, row.run?.runType ?? null, row.run?.runId ?? null, row.jobId ?? row.run?.jobId ?? null, row.status ?? "complete", row.idempotencyKey ?? null, ctx.actorUserMongoId],
         );
         return id;
       };
@@ -298,12 +373,127 @@ export const conversationRepository = {
           [uuidv7(), org, userMessageId, sourceId],
         );
       let assistantMessageId: string | null = null;
+      let jobId: string | null = null;
       if (ctx.run)
         assistantMessageId = await insertMessage({ role: "assistant", kind: "run_result", content: runStatusMessage(ctx.run.runType, "queued"), run: ctx.run, status: "pending" });
+      else if (ctx.intent === "chat") {
+        // The generation ID exists before any provider call and is linked from
+        // both the placeholder and the outbox event. This transaction is the
+        // source of truth; Redis is only a delivery mechanism.
+        jobId = uuidv7();
+        assistantMessageId = await insertMessage({
+          role: "assistant",
+          kind: "status",
+          content: "The assistant is preparing a response.",
+          jobId,
+          status: "pending",
+        });
+        const jobKey = `conversation_chat:${conversation.id}:${ctx.idempotencyKey}`;
+        await c.query(
+          `INSERT INTO rfpilot.ai_jobs(
+             id,organization_id,proposal_reference_id,job_type,status,
+             idempotency_key,input_reference,input_version,max_attempts,
+             correlation_id,initiator_external_user_id
+           ) VALUES($1,$2,$3,'conversation_chat','queued',$4,$5,'conversation-chat.v1',2,$6,$7)`,
+          [jobId, org, proposalRefId, jobKey, userMessageId, ctx.correlationId, ctx.actorUserMongoId],
+        );
+        const payload = {
+          jobId,
+          organizationMongoId: ctx.organizationMongoId,
+          actorUserMongoId: ctx.actorUserMongoId,
+          jobType: "conversation_chat",
+          inputReference: userMessageId,
+          inputVersion: "conversation-chat.v1",
+          correlationId: ctx.correlationId,
+        };
+        await c.query(
+          `INSERT INTO rfpilot.outbox_events(
+             id,organization_id,aggregate_type,aggregate_id,event_type,
+             idempotency_key,payload
+           ) VALUES($1,$2,'ai_job',$3,'job.queued',$4,$5::jsonb)`,
+          [uuidv7(), org, jobId, `job.queued:${jobId}:1`, JSON.stringify(payload)],
+        );
+      }
       await c.query("UPDATE rfpilot.conversations SET message_count=$2,updated_at=now() WHERE id=$1", [conversation.id, ordinal]);
-      await audit(c, org, ctx.actorUserMongoId, "conversation_message_created", "conversation", conversation.id, ctx.correlationId, { intent: ctx.intent, runType: ctx.run?.runType ?? null });
+      await audit(c, org, ctx.actorUserMongoId, "conversation_message_created", "conversation", conversation.id, ctx.correlationId, { intent: ctx.intent, runType: ctx.run?.runType ?? (ctx.intent === "chat" ? "conversation_chat" : null), jobId });
       const message = await c.query<any>("SELECT * FROM rfpilot.conversation_messages WHERE id=$1", [userMessageId]);
-      return { created: true, message: messagePayload(message.rows[0], []), assistantMessageId, conversationId: conversation.id, organizationId: org };
+      return { created: true, message: messagePayload(message.rows[0], []), assistantMessageId, jobId, conversationId: conversation.id, organizationId: org };
+    });
+  },
+
+  async readChatJob(ctx: Ctx & { jobId: string; userMessageId: string }) {
+    return withPostgresTransaction(async (c) => {
+      const organizationId = await tenant(c, ctx.organizationMongoId);
+      const row = await c.query<{ assistant_message_id: string; status: string; proposal_mongo_id: string }>(
+        `SELECT m.id assistant_message_id,m.status,p.external_mongo_id proposal_mongo_id
+           FROM rfpilot.conversation_messages m
+           JOIN rfpilot.conversations conversation ON conversation.id=m.conversation_id
+           JOIN rfpilot.ai_jobs j ON j.id=m.job_id
+           JOIN rfpilot.proposal_references p ON p.id=j.proposal_reference_id
+          WHERE j.id=$1
+            AND j.job_type='conversation_chat'
+            AND j.input_reference=$2
+            AND conversation.owner_external_user_id=$3
+            AND m.role='assistant'`,
+        [ctx.jobId, ctx.userMessageId, ctx.actorUserMongoId],
+      );
+      if (!row.rows[0]) throw new ConversationError("CHAT_JOB_NOT_FOUND", "Conversation reply job was not found.", 404);
+      return {
+        organizationId,
+        proposalMongoId: row.rows[0].proposal_mongo_id,
+        assistantMessageId: row.rows[0].assistant_message_id,
+        status: row.rows[0].status,
+      };
+    });
+  },
+
+  async completeChatJob(ctx: Ctx & { jobId: string; content: string; actions?: string[] }) {
+    return withPostgresTransaction(async (c) => {
+      await tenant(c, ctx.organizationMongoId);
+      const updated = await c.query<{ id: string }>(
+        `UPDATE rfpilot.conversation_messages m
+            SET status='complete',content=$3,actions=$4::jsonb,updated_at=now()
+           FROM rfpilot.conversations conversation,rfpilot.ai_jobs j
+          WHERE m.job_id=$1
+            AND m.conversation_id=conversation.id
+            AND j.id=m.job_id
+            AND j.job_type='conversation_chat'
+            AND conversation.owner_external_user_id=$2
+            AND m.role='assistant'
+            AND m.status IN ('pending','complete')
+          RETURNING m.id`,
+        [ctx.jobId, ctx.actorUserMongoId, ctx.content.slice(0, 4000), JSON.stringify(ctx.actions ?? [])],
+      );
+      if (!updated.rows[0]) throw new ConversationError("CHAT_JOB_NOT_FOUND", "Conversation reply job was not found.", 404);
+      await c.query(
+        `UPDATE rfpilot.conversations conversation
+            SET updated_at=now()
+           FROM rfpilot.conversation_messages m
+          WHERE m.id=$1 AND conversation.id=m.conversation_id`,
+        [updated.rows[0].id],
+      );
+      return { id: updated.rows[0].id };
+    });
+  },
+
+  async failChatJob(ctx: Ctx & { jobId: string; errorCode: string }) {
+    return withPostgresTransaction(async (c) => {
+      await tenant(c, ctx.organizationMongoId);
+      await c.query(
+        `UPDATE rfpilot.conversation_messages
+            SET status='failed',
+                content='The assistant could not complete this response. Please try again.',
+                actions='[]'::jsonb,
+                updated_at=now()
+          WHERE job_id=$1 AND role='assistant' AND status='pending'`,
+        [ctx.jobId],
+      );
+      safeLog("warn", "conversation_chat_failed", {
+        jobId: ctx.jobId,
+        correlationId: ctx.correlationId,
+        errorCode: ctx.errorCode,
+        outcome: "failed",
+      });
     });
   },
 
@@ -431,6 +621,7 @@ export const conversationRepository = {
       const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
       const conversation = await getOrCreateConversation(c, org, proposalRefId, ctx.actorUserMongoId);
       await materializeRuns(c, conversation.id);
+      await materializeChatJobs(c, conversation.id);
       await syncQuestions(c, org, proposalRefId, conversation.id);
       // Key questions must also appear when there are no sources at all, so a
       // proposal started by conversation still gets asked what matters.

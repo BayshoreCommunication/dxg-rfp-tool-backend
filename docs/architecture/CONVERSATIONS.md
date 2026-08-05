@@ -6,10 +6,11 @@
 ## Design
 
 The chat is a front door over the existing governed run types, not a new AI
-engine. Every assistant turn is backed by a `proposal_context` or
-`proposal_draft` run, so citations, schema validation, human review, version
+engine. Extraction and drafting turns are backed by `proposal_context` or
+`proposal_draft` runs, so citations, schema validation, human review, version
 CAS, and MongoDB authority are inherited rather than reimplemented. Plain chat
-messages and pasted notes are stored as data; no arbitrary-prompt endpoint
+uses a durable `conversation_chat` job with a persisted assistant placeholder;
+messages and pasted notes are stored as data and no arbitrary-prompt endpoint
 exists.
 
 ## Entities (migration 017, all RLS-forced)
@@ -28,9 +29,9 @@ exists.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/v1/proposals/:id/conversation` | Conversation + messages + questions (materializes finished runs on read) |
-| POST | `/api/v1/proposals/:id/conversation/messages` | Idempotent message; intent `chat`/`extract_requirements`/`generate_draft` creates the corresponding governed run |
+| POST | `/api/v1/proposals/:id/conversation/messages` | Idempotent message; `chat` returns `202` with a durable job/placeholder, while extraction/drafting creates the corresponding governed run |
 | PATCH | `/api/v1/proposals/:id/conversation/questions/:qid` | Answer or dismiss a clarification question |
-| GET | `/api/v1/proposals/:id/conversation/events` | SSE status stream (update/reconnect events, 2s server-side poll, 5-min lease) |
+| GET | `/api/v1/proposals/:id/conversation/events` | Legacy backend SSE status stream; the production dashboard uses bounded conversation reads instead of proxying this through Vercel |
 | POST | `/api/v1/proposals/:id/notes` | Pasted notes stored as a private `.txt` source through the standard quarantine/scan boundary |
 
 All routes require authentication + `proposal:read`/`proposal:write` action
@@ -39,10 +40,14 @@ idempotency, so a retried request cannot double-create runs or messages.
 
 ## Recovery model
 
-Assistant messages are `pending` until their run reaches a terminal state;
-`read`/`snapshot` materialize final content write-on-read, so refresh, worker
-restart, or SSE disconnect never lose progress. Clients fall back from SSE to
-backoff polling; both paths converge on the same persisted state.
+The API commits the user message, pending assistant placeholder, `ai_jobs` row,
+and outbox event in one PostgreSQL transaction before any provider call. Redis
+is delivery only. The worker reloads authoritative state, records the provider
+attempt under the pre-existing generation/job ID, retries temporary failures,
+and settles the same placeholder. `read`/`snapshot` also materialize terminal
+run/job failures, so refresh or worker restart never loses progress. The
+production dashboard uses 1s/2s/5s bounded polling while work is pending and a
+10s idle interval; visibility changes trigger an immediate refresh.
 
 ## Boundaries preserved
 

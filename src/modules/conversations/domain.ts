@@ -1,5 +1,5 @@
 import { aiRuntimeAuthorized } from "../../../config/aiEnvironment";
-import { approvedCandidatePaths } from "../candidateApplication/canonicalMapping";
+import { approvedCandidatePaths, normalizeCandidate } from "../candidateApplication/canonicalMapping";
 
 export class ConversationError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 422) { super(message); }
@@ -226,6 +226,64 @@ export const questionAnswerType = (paths: string[]): { answerType: ImportantFiel
   const field = paths.length === 1 ? importantFieldQuestionByPath(paths[0]) : null;
   if (!field) return { answerType: "text" };
   return field.options ? { answerType: field.answerType, options: field.options } : { answerType: field.answerType };
+};
+
+// A pre-filled answer for a question, sourced from an extraction candidate for
+// the same field, converted into a string the question's answer control can
+// submit as-is. Extracted values are never written without the planner's
+// confirmation — this only saves the retyping when the guided flow asks for
+// something the planner's own message already contained.
+//
+// Returns null whenever a faithful, submittable representation cannot be
+// produced (unknown path, value the field normalizer rejects, or a choice
+// value that matches none of the offered options): a wrong or unconfirmable
+// prefill is worse than none, because confirming it would 422.
+export const suggestedAnswerFor = (paths: string[], rawValue: unknown): string | null => {
+  if (paths.length !== 1) return null;
+  const { answerType, options } = questionAnswerType(paths);
+  let normalized: ReturnType<typeof normalizeCandidate>;
+  try {
+    normalized = normalizeCandidate(paths[0], rawValue);
+  } catch {
+    // Number questions get one lenient retry: live extraction sometimes emits
+    // prose like "approximately 300 attendees" for a count field. Seeding the
+    // digits is safe — the planner still confirms (or edits) the value.
+    const digits = answerType === "number" && typeof rawValue === "string" ? /\d{1,9}/.exec(rawValue)?.[0] : null;
+    if (!digits) return null;
+    try {
+      normalized = normalizeCandidate(paths[0], digits);
+    } catch {
+      return null;
+    }
+  }
+  const optionKey = (value: unknown): string => String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+  let candidate: string | null;
+  if (answerType === "choice") {
+    // Choice controls submit an option verbatim, so the suggestion must BE one
+    // of the options. Booleans map through their Yes/No/Not sure labels; enums
+    // match on a punctuation-insensitive key ("in_person" -> "In-Person").
+    const canonical = normalized.canonicalValue;
+    const wanted = typeof canonical === "boolean"
+      ? (canonical ? "yes" : "no")
+      : canonical === null ? "notsure" : optionKey(canonical);
+    candidate =
+      (options ?? []).find((option) => optionKey(option) === wanted) ??
+      (options ?? []).find((option) => optionKey(option) === optionKey(normalized.mongoValue)) ??
+      null;
+  } else if (answerType === "number") {
+    candidate = typeof normalized.mongoValue === "string" ? normalized.mongoValue : String(normalized.canonicalValue);
+  } else {
+    candidate = typeof normalized.canonicalValue === "string" ? normalized.canonicalValue : null;
+  }
+  if (!candidate) return null;
+  // The suggestion must survive the exact validation a typed answer goes
+  // through on PATCH, or confirming it would fail.
+  try {
+    normalizeCandidate(paths[0], candidate);
+  } catch {
+    return null;
+  }
+  return candidate;
 };
 
 // The canonical path an answer should be written to — only when the question

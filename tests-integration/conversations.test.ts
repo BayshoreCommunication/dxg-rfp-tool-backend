@@ -153,7 +153,7 @@ test("answering a question appends a question_answer message and closes it", asy
   );
 });
 
-test("appendExchange with the same idempotency key returns created:false", async () => {
+test("chat append is durable and a replay returns the same job and placeholder", async () => {
   const baseline = await conversationRepository.snapshot(ctx());
   const idempotencyKey = crypto.randomUUID();
   const first = await conversationRepository.appendExchange({
@@ -167,6 +167,8 @@ test("appendExchange with the same idempotency key returns created:false", async
   assert.equal(first.created, true);
   assert.equal(first.message.role, "user");
   assert.equal(first.message.kind, "note");
+  assert.ok(first.jobId, "chat acceptance creates the generation job before returning");
+  assert.ok(first.assistantMessageId, "chat acceptance creates a pending assistant placeholder");
 
   const replay = await conversationRepository.appendExchange({
     ...ctx(),
@@ -178,12 +180,30 @@ test("appendExchange with the same idempotency key returns created:false", async
   });
   assert.equal(replay.created, false);
   assert.equal(replay.message.id, first.message.id);
+  assert.equal(replay.jobId, first.jobId, "an idempotent replay must not create another provider job");
+  assert.equal(replay.assistantMessageId, first.assistantMessageId);
 
-  const snapshot = await conversationRepository.snapshot(ctx());
-  assert.equal(snapshot.messageCount, baseline.messageCount + 1, "duplicate exchange must not add messages");
+  const state = await conversationRepository.read(ctx());
+  assert.equal(state.conversation.messageCount, baseline.messageCount + 2, "one chat turn adds the user turn and one assistant placeholder");
+  const placeholder = state.messages.find((message) => message.id === first.assistantMessageId);
+  assert.equal(placeholder?.role, "assistant");
+  assert.equal(placeholder?.status, "pending");
+  assert.equal(placeholder?.jobId, first.jobId);
   const rows = await postgresPool().query<{ n: string }>(
     "SELECT count(*) n FROM rfpilot.conversation_messages WHERE conversation_id=$1 AND idempotency_key=$2",
     [conversationId, idempotencyKey],
   );
   assert.equal(Number(rows.rows[0].n), 1);
+  const durable = await postgresPool().query<{ job_type: string; status: string; input_reference: string; outbox_count: string }>(
+    `SELECT j.job_type,j.status,j.input_reference,
+            (SELECT count(*) FROM rfpilot.outbox_events e
+              WHERE e.aggregate_id=j.id::text AND e.event_type='job.queued')::text outbox_count
+       FROM rfpilot.ai_jobs j WHERE j.id=$1`,
+    [first.jobId],
+  );
+  assert.equal(durable.rows.length, 1);
+  assert.equal(durable.rows[0].job_type, "conversation_chat");
+  assert.equal(durable.rows[0].status, "queued");
+  assert.equal(durable.rows[0].input_reference, first.message.id);
+  assert.equal(Number(durable.rows[0].outbox_count), 1, "the job is recoverable from exactly one outbox event");
 });

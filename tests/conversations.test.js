@@ -376,6 +376,49 @@ test("SSE endpoint and message route are wired with authentication", () => {
   assert.ok(controller.indexOf("appendExchange") > controller.indexOf("proposalContextRepository.create"), "run creation must precede message append");
 });
 
+test("plain chat replies are accepted into the durable job pipeline", () => {
+  const repository = fs.readFileSync(path.join(root, "src/modules/conversations/postgresConversationRepository.ts"), "utf8");
+  const controller = fs.readFileSync(path.join(root, "controller/conversationsController.ts"), "utf8");
+  const worker = fs.readFileSync(path.join(root, "src/modules/durableJobs/worker.ts"), "utf8");
+  const handler = fs.readFileSync(path.join(root, "src/modules/durableJobs/conversationChatHandler.ts"), "utf8");
+  const jobDomain = fs.readFileSync(path.join(root, "src/modules/durableJobs/domain.ts"), "utf8");
+
+  // The user turn, pending assistant placeholder, job row, and outbox event
+  // share one Postgres transaction. The generation/job ID therefore exists
+  // before a provider can be called, and Redis remains recoverable transport.
+  for (const value of [
+    "'conversation_chat','queued'",
+    "conversation-chat.v1",
+    "INSERT INTO rfpilot.outbox_events",
+    "job.queued",
+    'status: "pending"',
+    "jobId = uuidv7()",
+  ])
+    assert.ok(repository.includes(value), value);
+  assert.ok(repository.indexOf("jobId = uuidv7()") < repository.indexOf("INSERT INTO rfpilot.ai_jobs"));
+
+  // HTTP acceptance is bounded; neither the model nor segment extraction can
+  // keep the request open. Duplicate sends retain the same persisted job.
+  assert.ok(controller.includes('input.intent === "chat" && exchange.created'));
+  assert.ok(controller.includes("durableJobDispatcher.dispatch()"));
+  assert.ok(controller.includes("res.status(status)"));
+  assert.ok(controller.includes("? 202"));
+  assert.ok(controller.includes("void maybeExtractSegment"));
+  assert.ok(!controller.includes("appendChatReply"));
+  assert.ok(repository.includes("assistantMessageId: assistant.rows[0]?.id"));
+  assert.ok(repository.includes("jobId: assistant.rows[0]?.job_id"));
+
+  // The durable worker reloads authoritative state, writes into the existing
+  // placeholder, and materializes a visible failure after retry exhaustion.
+  assert.ok(jobDomain.includes('"conversation_chat"'));
+  for (const value of ["handleConversationChat", '"conversation_chat"', "failChatJob", "UNSUPPORTED_JOB_TYPE"])
+    assert.ok(worker.includes(value), value);
+  for (const value of ["readChatJob", "buildChatReply", "completeChatJob", "message.jobId"])
+    assert.ok(handler.includes(value), value);
+  for (const value of ["materializeChatJobs", "dead_letter", "conversation_chat_failed"])
+    assert.ok(repository.includes(value), value);
+});
+
 test("key questions are generated from empty high-impact fields, with no run required", () => {
   const source = fs.readFileSync(path.join(root, "src/modules/conversations/fieldGapQuestions.ts"), "utf8");
   // A proposal started by conversation alone must still be asked what matters.
@@ -416,4 +459,77 @@ test("source extraction explicitly preserves discrete high-value facts embedded 
     "stated budget tier",
   ])
     assert.ok(operations.includes(field), field);
+});
+
+test("suggested answers convert extraction candidates into submittable answer strings", () => {
+  const { suggestedAnswerFor } = require("../src/modules/conversations/domain");
+  // Typed fields pass their canonical form straight through.
+  assert.equal(suggestedAnswerFor(["/content/event/startDate"], "2026-10-15"), "2026-10-15");
+  assert.equal(suggestedAnswerFor(["/content/event/attendees"], 300), "300");
+  assert.equal(suggestedAnswerFor(["/content/event/attendees"], "300"), "300");
+  assert.equal(suggestedAnswerFor(["/content/event/eventName"], "  DEMO Town Hall  "), "DEMO Town Hall");
+  // Choice questions must suggest one of their own options, mapped from the
+  // candidate's canonical/boolean form ("in_person" -> "In-Person").
+  assert.equal(suggestedAnswerFor(["/content/event/eventFormat"], "in_person"), "In-Person");
+  assert.equal(suggestedAnswerFor(["/content/venueSchedule/isUnionVenue"], true), "Yes");
+  assert.equal(suggestedAnswerFor(["/content/venueSchedule/isUnionVenue"], "no"), "No");
+  assert.equal(suggestedAnswerFor(["/content/venue/riggingRequired"], "not_sure"), "Not sure");
+  assert.equal(
+    suggestedAnswerFor(["/content/hybridVirtual/streamingPlatform"], "vendor recommendation needed"),
+    "Vendor Recommendation Needed",
+  );
+});
+
+test("suggested answers refuse anything the answer flow could not accept", () => {
+  const { suggestedAnswerFor } = require("../src/modules/conversations/domain");
+  // A prefill the confirm step would 422 on is worse than none.
+  assert.equal(suggestedAnswerFor(["/content/event/startDate"], "October 15, 2026"), null);
+  assert.equal(suggestedAnswerFor(["/content/event/attendees"], "around three hundred"), null);
+  // A choice value matching none of the offered pills cannot be submitted.
+  assert.equal(suggestedAnswerFor(["/content/hybridVirtual/streamingPlatform"], "Twitch Prime Special"), null);
+  // Unknown paths, multi-path and empty questions never get suggestions.
+  assert.equal(suggestedAnswerFor(["/content/not/a/path"], "x"), null);
+  assert.equal(suggestedAnswerFor(["/content/event/startDate", "/content/event/endDate"], "2026-10-15"), null);
+  assert.equal(suggestedAnswerFor([], "x"), null);
+});
+
+test("every non-null suggestion round-trips through the candidate normalizer", () => {
+  const { suggestedAnswerFor } = require("../src/modules/conversations/domain");
+  const samples = [
+    [["/content/event/startDate"], "2026-10-15"],
+    [["/content/event/attendees"], 300],
+    [["/content/event/eventFormat"], "hybrid"],
+    [["/content/venueSchedule/isUnionVenue"], false],
+    [["/content/budget/proposalSubmissionDueDate"], "2026-08-20"],
+  ];
+  for (const [paths, raw] of samples) {
+    const suggestion = suggestedAnswerFor(paths, raw);
+    assert.ok(suggestion !== null, `${paths[0]} should produce a suggestion`);
+    assert.ok(normalizeCandidate(paths[0], suggestion), `${paths[0]} suggestion must re-normalize`);
+  }
+});
+
+test("the conversation read payload pre-fills open questions from the latest extraction run", () => {
+  const repository = fs.readFileSync(path.join(root, "src/modules/conversations/postgresConversationRepository.ts"), "utf8");
+  // The suggestion is sourced from the newest succeeded run's operations,
+  // keyed by path (field-gap questions carry no run id), and conflict
+  // questions are excluded because their candidates disagree by definition.
+  for (const value of [
+    "suggestedAnswerFor",
+    "latestSucceededContextRun(c, proposalRefId)",
+    "suggestedAnswer:",
+    'q.issue_code !== "CROSS_SOURCE_CONFLICT"',
+  ])
+    assert.ok(repository.includes(value), value);
+});
+
+test("a prose count from live extraction still seeds the number question", () => {
+  const { suggestedAnswerFor } = require("../src/modules/conversations/domain");
+  // The model sometimes emits "approximately 300 attendees" for a count field;
+  // the digits are seeded and the planner confirms or edits them.
+  assert.equal(suggestedAnswerFor(["/content/event/attendees"], "approximately 300 attendees"), "300");
+  assert.equal(suggestedAnswerFor(["/content/venueSchedule/numberOfEventRooms"], "about 12 rooms"), "12");
+  // No digits, still no guess — and non-number fields never get the retry.
+  assert.equal(suggestedAnswerFor(["/content/event/attendees"], "several hundred"), null);
+  assert.equal(suggestedAnswerFor(["/content/event/startDate"], "week 42 of 2026"), null);
 });

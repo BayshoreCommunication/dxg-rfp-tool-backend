@@ -16,15 +16,18 @@ const ROOM_SCHEDULE_REPLY = "For several room functions, use the room schedule t
 
 type Ctx = { organizationMongoId: string; actorUserMongoId: string; correlationId: string };
 
-// Chat turns get a synchronous assistant reply: live and governed when the
-// pilot is enabled, a deterministic acknowledgment otherwise. Reply failures
-// never fail the user's message.
-export const appendChatReply = async (
+export type ChatReply = { reply: string; actions: AssistantActionId[] };
+
+// Chat jobs build a governed reply in the durable worker: live when the pilot
+// is enabled, a deterministic acknowledgement otherwise. Temporary provider
+// failures are retried by the job system; terminal model/feature failures use
+// the deterministic response without ever rolling back the accepted message.
+export const buildChatReply = async (
   ctx: Ctx,
   proposalMongoId: string,
   organizationId: string | undefined,
-  userMessageId: string,
-): Promise<void> => {
+  generationId: string,
+): Promise<ChatReply> => {
   let reply = FIRST_TURN_REPLY;
   let actions: AssistantActionId[] = [];
   try {
@@ -60,12 +63,29 @@ export const appendChatReply = async (
           status: String(s.status ?? "unknown"),
         })),
         openQuestions: conversation.questions.filter((q: { status: string }) => q.status === "open").map((q: { prompt: string }) => q.prompt),
-      }, organizationId ? { runType: "conversation_chat", runId: userMessageId, organizationId } : undefined);
+      }, organizationId ? { runType: "conversation_chat", runId: generationId, organizationId } : undefined);
       reply = live.reply;
       actions = live.actions;
     }
-  } catch {
+  } catch (error) {
+    // Temporary provider failures belong to the durable worker's retry loop.
+    // Everything else keeps the existing deterministic fallback so a disabled
+    // provider or malformed response does not turn an accepted chat message
+    // into a dead end.
+    if ((error as { retryable?: boolean }).retryable) throw error;
     safeLog("warn", "conversation_reply_fallback", { outcome: "fallback" });
   }
-  await conversationRepository.appendAssistantMessage({ ...ctx, proposalMongoId, content: reply, actions });
+  return { reply, actions };
+};
+
+// Retained for callers that deliberately need an immediate assistant turn.
+// The proposal conversation controller now queues buildChatReply instead.
+export const appendChatReply = async (
+  ctx: Ctx,
+  proposalMongoId: string,
+  organizationId: string | undefined,
+  generationId: string,
+): Promise<void> => {
+  const result = await buildChatReply(ctx, proposalMongoId, organizationId, generationId);
+  await conversationRepository.appendAssistantMessage({ ...ctx, proposalMongoId, content: result.reply, actions: result.actions });
 };

@@ -9,7 +9,6 @@ import { proposalContextRepository } from "../src/modules/proposalContext/postgr
 import { proposalDraftEnabled, parseDraftInput } from "../src/modules/proposalDraft/domain";
 import { proposalDraftRepository } from "../src/modules/proposalDraft/postgresProposalDraftRepository";
 import { durableJobDispatcher } from "../src/modules/durableJobs/composition";
-import { appendChatReply } from "../src/modules/conversations/chatReply";
 import { maybeExtractSegment } from "../src/modules/conversations/segmentIntake";
 import { conversationExtractionEnabled } from "../src/modules/conversations/segmentation";
 import { withConversationProposalReference } from "../src/modules/conversations/conversationProposalReference";
@@ -137,23 +136,20 @@ export const postConversationMessage = async (req: AuthRequest, res: Response) =
           run,
         }),
     );
-    if (run) void durableJobDispatcher.dispatch().catch(() => undefined);
+    if (run || (input.intent === "chat" && exchange.created))
+      void durableJobDispatcher.dispatch().catch(() => undefined);
     if (input.intent === "chat" && exchange.created) {
       // What the planner typed is no longer a dead end: once the accumulated
       // turns close into a segment, they are materialised as a scanned source
       // and the scan chains extraction. Batched rather than per-message so a
       // correction lands in the same run as what it corrects, where the
-      // conflict detector can see them disagree. Never blocks the reply.
-      await maybeExtractSegment({ ...ctx, proposalMongoId });
-      await appendChatReply(
-        ctx,
-        proposalMongoId,
-        (exchange as { organizationId?: string }).organizationId,
-        exchange.message.id,
-      );
+      // conflict detector can see them disagree. It is independent of reply
+      // generation and must not keep the acceptance request open.
+      void maybeExtractSegment({ ...ctx, proposalMongoId }).catch(() => undefined);
     }
     safeLog("info", "conversation_message_created", { outcome: exchange.created ? "created" : "duplicate", operation: input.intent });
-    res.status(exchange.created ? 201 : 200).json({ data: { ...exchange, run } });
+    const status = exchange.created && input.intent === "chat" ? 202 : exchange.created ? 201 : 200;
+    res.status(status).json({ data: { ...exchange, run } });
   } catch (error) { handle(res, error); }
 };
 

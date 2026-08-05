@@ -100,9 +100,10 @@ is committed on `ai-agent`.
   rate limits, fail-closed public grants, private+scanned vendor uploads,
   redacted public proposal payload, password/bcrypt hardening.
 - **M2 — Conversational slice.** Migration 017: conversations, messages,
-  attachments, clarification questions. Idempotent message endpoint, SSE event
-  stream, pasted-notes intake through the same scan boundary, and the first
-  workspace UI.
+  attachments, clarification questions. Idempotent message endpoint, durable
+  `conversation_chat` jobs with persisted placeholders, bounded dashboard
+  polling (the backend SSE route remains for compatibility), pasted-notes
+  intake through the same scan boundary, and the first workspace UI.
 - **M3 — Full-schema application.** The candidate whitelist went from **4 paths
   to 112**, generated against the canonical contract with typed normalizers;
   `extractionPathEnum` feeds the model's structured output so it can only

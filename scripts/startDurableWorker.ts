@@ -9,7 +9,7 @@ import {createSourceSecurityWorker} from "../src/modules/durableJobs/worker";
 
 const main=async()=>{
  if(!durableJobsEnabled())throw new Error("DURABLE_JOBS_ENABLED must be true to start a worker");
- if(process.env.CANDIDATE_APPLICATION_ENABLED==="true"||process.env.PROPOSAL_DRAFT_ENABLED==="true")await connectDB();
+ if(process.env.CANDIDATE_APPLICATION_ENABLED==="true"||process.env.PROPOSAL_DRAFT_ENABLED==="true"||process.env.CONVERSATIONS_ENABLED==="true")await connectDB();
  const worker=createSourceSecurityWorker(durableJobRepository);
  const shutdown=async()=>{await worker.close();await closeQueue();await closePostgres();if(mongoose.connection.readyState!==0)await mongoose.disconnect();process.exit(0);};
  process.on("SIGTERM",()=>{void shutdown();});process.on("SIGINT",()=>{void shutdown();});

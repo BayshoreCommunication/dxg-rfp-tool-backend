@@ -24,8 +24,9 @@ api
 
 worker
  ├── Purpose: BullMQ durable-job consumer — security_scan (ClamAV),
- │            knowledge_parse, knowledge_index_release, proposal_context_extract,
- │            candidate_application, proposal_draft_generate, vendor_response_analyze
+│            knowledge_parse, knowledge_index_release, proposal_context_extract,
+│            candidate_application, proposal_draft_generate,
+│            vendor_response_analyze, conversation_chat
  ├── Command: node dist/scripts/startDurableWorker.js
  ├── Size: 1 vCPU/2GB · autoscales 1→2 (staging) / 1→4 (prod) at 70% CPU
  ├── Shutdown: SIGTERM drains active jobs (120s stop timeout, 90s job leases)

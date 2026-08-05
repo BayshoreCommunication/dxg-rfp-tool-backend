@@ -12,4 +12,4 @@ export const attemptBudget=(rowMaxAttempts:unknown,workerMaxAttempts:number):num
  if(!Number.isFinite(declared)||declared<1)return workerMaxAttempts;
  return Math.min(declared,workerMaxAttempts);
 };
-export type QueueMessage={jobId:string;organizationMongoId:string;actorUserMongoId:string;jobType:"source_security_scan"|"ai_gateway_test"|"knowledge_parse"|"knowledge_index_release"|"proposal_context_extract"|"candidate_application"|"proposal_draft_generate"|"vendor_response_analyze";inputReference:string;inputVersion:string|null;correlationId:string;traceparent?:string};
+export type QueueMessage={jobId:string;organizationMongoId:string;actorUserMongoId:string;jobType:"source_security_scan"|"ai_gateway_test"|"knowledge_parse"|"knowledge_index_release"|"proposal_context_extract"|"candidate_application"|"proposal_draft_generate"|"vendor_response_analyze"|"conversation_chat";inputReference:string;inputVersion:string|null;correlationId:string;traceparent?:string};
