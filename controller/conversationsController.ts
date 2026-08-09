@@ -1,9 +1,17 @@
 import crypto from "node:crypto";
 import type { Response } from "express";
 import type { AuthRequest } from "../middleware/auth";
-import { answerTargetPath, conversationsEnabled, parseMessageInput, parseQuestionUpdate, ConversationError } from "../src/modules/conversations/domain";
+import {
+  answerTargetPaths,
+  conversationsEnabled,
+  isDateTimeQuestionAnswer,
+  parseMessageInput,
+  parseQuestionUpdate,
+  questionAnswerText,
+  ConversationError,
+} from "../src/modules/conversations/domain";
 import { conversationRepository } from "../src/modules/conversations/postgresConversationRepository";
-import { applyAnswerToProposalField, type AppliedAnswerField } from "../src/modules/conversations/answerFieldWriter";
+import { applyAnswersToProposalFields, type AppliedAnswerField } from "../src/modules/conversations/answerFieldWriter";
 import { contextEnabled, sourceContextInput } from "../src/modules/proposalContext/domain";
 import { proposalContextRepository } from "../src/modules/proposalContext/postgresProposalContextRepository";
 import { proposalDraftEnabled, parseDraftInput } from "../src/modules/proposalDraft/domain";
@@ -186,7 +194,7 @@ export const patchConversationQuestion = async (req: AuthRequest, res: Response)
     // Answers to single whitelisted-field questions are also written into the
     // proposal as human data entry. normalizeCandidate rejects invalid values
     // with a friendly 422 BEFORE the question is resolved, so the UI re-asks.
-    let appliedField: AppliedAnswerField | null = null;
+    let appliedFields: AppliedAnswerField[] = [];
     if (update.status === "answered") {
       const question = await withConversationProposalReference(
         ctx,
@@ -198,16 +206,27 @@ export const patchConversationQuestion = async (req: AuthRequest, res: Response)
             questionId: targetQuestionId,
           }),
       );
-      const targetPath = question.status === "open" ? answerTargetPath(question.paths) : null;
-      if (targetPath)
-        appliedField = await applyAnswerToProposalField({
+      const targetPaths = question.status === "open" ? answerTargetPaths(question.paths) : [];
+      if (targetPaths.length > 0) {
+        if (targetPaths.length === 1 && isDateTimeQuestionAnswer(update.answer))
+          throw new ConversationError("INVALID_QUESTION_ANSWER", "This question requires one answer.", 422);
+        if (targetPaths.length > 1 && !isDateTimeQuestionAnswer(update.answer))
+          throw new ConversationError("INVALID_QUESTION_ANSWER", "Both a load-in date and time are required.", 422);
+        const answers = targetPaths.length === 1
+          ? [{ path: targetPaths[0], answer: update.answer as string }]
+          : [
+              { path: targetPaths[0], answer: (update.answer as { date: string; time: string }).date },
+              { path: targetPaths[1], answer: (update.answer as { date: string; time: string }).time },
+            ];
+        appliedFields = (await applyAnswersToProposalFields({
           organizationMongoId: ctx.organizationMongoId,
           actorUserMongoId: ctx.actorUserMongoId,
           proposalMongoId,
-          path: targetPath,
-          answer: update.answer,
-        });
+          answers,
+        })) ?? [];
+      }
     }
+    const appliedField = appliedFields[0] ?? null;
     const result = await withConversationProposalReference(
       ctx,
       proposalMongoId,
@@ -217,15 +236,16 @@ export const patchConversationQuestion = async (req: AuthRequest, res: Response)
           proposalMongoId,
           questionId: targetQuestionId,
           status: update.status,
-          answer: update.answer,
+          answer: questionAnswerText(update.answer),
           appliedPath: appliedField?.path ?? null,
+          appliedPaths: appliedFields.map((field) => field.path),
         }),
     );
     await conversationRepository.appendRoomScheduleSuggestionWhenReady({
       ...ctx,
       proposalMongoId,
     }).catch(() => undefined);
-    res.json({ data: { ...result, appliedField } });
+    res.json({ data: { ...result, appliedField, appliedFields } });
   } catch (error) { handle(res, error); }
 };
 

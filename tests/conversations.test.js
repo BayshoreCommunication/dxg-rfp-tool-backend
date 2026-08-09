@@ -5,6 +5,7 @@ const test = require("node:test"),
 const {
   parseMessageInput,
   parseQuestionUpdate,
+  questionAnswerText,
   questionPrompt,
   runStatusMessage,
   conversationsEnabled,
@@ -18,8 +19,11 @@ const {
   fieldQuestionCode,
   questionImpact,
   questionAnswerType,
+  importantFieldPaths,
   ANSWER_TYPES,
   answerTargetPath,
+  answerTargetPaths,
+  isLoadInAfterShow,
   asksForRoomScheduleHelp,
   parseAssistantActions,
 } = require("../src/modules/conversations/domain");
@@ -74,6 +78,13 @@ test("room schedule help selects only allowlisted assistant actions", () => {
 test("question updates require an answer only when marking answered", () => {
   assert.deepEqual(parseQuestionUpdate({ status: "dismissed" }), { status: "dismissed", answer: "" });
   assert.deepEqual(parseQuestionUpdate({ status: "answered", answer: "300 guests" }), { status: "answered", answer: "300 guests" });
+  assert.deepEqual(parseQuestionUpdate({ status: "answered", answer: { date: "2026-09-01", time: "07:30" } }), {
+    status: "answered",
+    answer: { date: "2026-09-01", time: "07:30" },
+  });
+  assert.equal(questionAnswerText({ date: "2026-09-01", time: "07:30" }), "2026-09-01 at 07:30");
+  assert.throws(() => parseQuestionUpdate({ status: "answered", answer: { date: "2026-09-01" } }), ConversationError);
+  assert.throws(() => parseQuestionUpdate({ status: "answered", answer: { time: "07:30" } }), ConversationError);
   assert.throws(() => parseQuestionUpdate({ status: "answered" }), ConversationError);
   assert.throws(() => parseQuestionUpdate({ status: "open" }), ConversationError);
   assert.throws(() => parseQuestionUpdate({ status: "answered", answer: "x".repeat(4001) }), ConversationError);
@@ -86,13 +97,22 @@ test("question prompts are plain language for known and unknown codes", () => {
   assert.match(fallback, /loadInTime/);
 });
 
+test("combined load-in answers cannot fall after show start", () => {
+  assert.equal(isLoadInAfterShow({ loadInDate: "2026-09-01", loadInTime: "07:30", showDate: "2026-09-02", showTime: "09:00" }), false);
+  assert.equal(isLoadInAfterShow({ loadInDate: "2026-09-02", loadInTime: "07:30", showDate: "2026-09-02", showTime: "09:00" }), false);
+  assert.equal(isLoadInAfterShow({ loadInDate: "2026-09-02", loadInTime: "09:30", showDate: "2026-09-02", showTime: "09:00" }), true);
+  assert.equal(isLoadInAfterShow({ loadInDate: "2026-09-03", loadInTime: "07:30", showDate: "2026-09-02" }), true);
+});
+
 test("important-field whitelist only contains approved candidate paths with plain prompts", () => {
   assert.ok(IMPORTANT_FIELD_QUESTIONS.length >= 8);
   const seen = new Set();
   for (const field of IMPORTANT_FIELD_QUESTIONS) {
-    assert.ok(approvedCandidatePaths.includes(field.path), `${field.path} must be an approved candidate path`);
-    assert.ok(!seen.has(field.path), `${field.path} listed twice`);
-    seen.add(field.path);
+    for (const fieldPath of importantFieldPaths(field)) {
+      assert.ok(approvedCandidatePaths.includes(fieldPath), `${fieldPath} must be an approved candidate path`);
+      assert.ok(!seen.has(fieldPath), `${fieldPath} listed twice`);
+      seen.add(fieldPath);
+    }
     assert.ok(field.prompt.length > 0 && field.prompt.length <= 1000, field.path);
     assert.ok(["schedule", "cost", "production", "scope"].includes(field.impact), field.path);
     assert.ok(fieldQuestionCode(field.path).length <= 100, field.path);
@@ -191,7 +211,7 @@ test("venue follow-up questions activate only for a selected venue", () => {
   assert.equal(venueNeedsOperationalFollowUp("Hyatt Regency Chicago", "NOT_SELECTED"), false);
   const adaptivePaths = IMPORTANT_FIELD_QUESTIONS
     .slice(MAX_OPEN_FIELD_QUESTIONS, MAX_ADAPTIVE_VENUE_QUESTIONS)
-    .map((field) => field.path);
+    .flatMap(importantFieldPaths);
   for (const path of [
     "/content/venueSchedule/venueConfirmedStatus",
     "/content/venueSchedule/isUnionVenue",
@@ -207,6 +227,14 @@ test("venue follow-up questions activate only for a selected venue", () => {
 test("answer targeting and impact tags only apply to single whitelisted-field questions", () => {
   assert.equal(answerTargetPath(["/content/venueSchedule/numberOfEventRooms"]), "/content/venueSchedule/numberOfEventRooms");
   assert.equal(answerTargetPath(["/content/event/startDate", "/content/event/endDate"]), null);
+  assert.deepEqual(answerTargetPaths([
+    "/content/venueSchedule/loadInDate",
+    "/content/venueSchedule/loadInTime",
+  ]), [
+    "/content/venueSchedule/loadInDate",
+    "/content/venueSchedule/loadInTime",
+  ]);
+  assert.deepEqual(answerTargetPaths(["/content/event/startDate", "/content/event/endDate"]), []);
   // Any applicable path is writable, not just the 14 the assistant asks
   // proactively. eventTheme is on the candidate whitelist but not in that list,
   // and used to return null — so a CROSS_SOURCE_CONFLICT naming it could be
@@ -237,7 +265,8 @@ test("every whitelisted question declares an answer control, and only choices ca
     }
   }
   // The mapping the dashboard depends on.
-  const byPath = Object.fromEntries(IMPORTANT_FIELD_QUESTIONS.map((field) => [field.path, field.answerType]));
+  const byPath = Object.fromEntries(IMPORTANT_FIELD_QUESTIONS.flatMap((field) =>
+    importantFieldPaths(field).map((fieldPath) => [fieldPath, field.answerType])));
   assert.equal(byPath["/content/event/startDate"], "date");
   assert.equal(byPath["/content/event/endDate"], "date");
   assert.equal(byPath["/content/budget/proposalSubmissionDueDate"], "date");
@@ -251,7 +280,16 @@ test("every whitelisted question declares an answer control, and only choices ca
   assert.equal(byPath["/content/hybridVirtual/streamingPlatform"], "choice");
   assert.equal(byPath["/content/venueSchedule/numberOfEventRooms"], "number");
   assert.equal(byPath["/content/venueSchedule/venueCity"], "text");
-  assert.equal(byPath["/content/venueSchedule/loadInTime"], "time");
+  assert.equal(byPath["/content/venueSchedule/loadInDate"], "date_time");
+  assert.equal(byPath["/content/venueSchedule/loadInTime"], "date_time");
+  const loadInQuestions = IMPORTANT_FIELD_QUESTIONS.filter((field) =>
+    importantFieldPaths(field).some((fieldPath) => fieldPath.includes("/loadIn")));
+  assert.equal(loadInQuestions.length, 1);
+  assert.equal(loadInQuestions[0].prompt, "What date and time can production load-in?");
+  assert.deepEqual(importantFieldPaths(loadInQuestions[0]), [
+    "/content/venueSchedule/loadInDate",
+    "/content/venueSchedule/loadInTime",
+  ]);
   // The streaming platform pills must be the same list the wizard step offers.
   const streaming = IMPORTANT_FIELD_QUESTIONS.find((f) => f.path === "/content/hybridVirtual/streamingPlatform");
   assert.deepEqual([...streaming.options], [
@@ -286,6 +324,10 @@ test("answer controls are only typed for single whitelisted-field questions", ()
   assert.deepEqual(questionAnswerType(["/content/venueSchedule/numberOfEventRooms"]), { answerType: "number" });
   assert.deepEqual(questionAnswerType(["/content/venueSchedule/isUnionVenue"]), { answerType: "choice", options: ["Yes", "No", "Not sure"] });
   assert.equal(questionAnswerType(["/content/hybridVirtual/streamingPlatform"]).options.length, 9);
+  assert.deepEqual(questionAnswerType([
+    "/content/venueSchedule/loadInDate",
+    "/content/venueSchedule/loadInTime",
+  ]), { answerType: "date_time" });
   // Non-whitelisted, multi-path and empty questions stay free text.
   assert.deepEqual(questionAnswerType(["/content/event/eventName"]), { answerType: "text" });
   assert.deepEqual(questionAnswerType(["/content/event/startDate", "/content/event/endDate"]), { answerType: "text" });
@@ -327,16 +369,18 @@ test("catch-all explosion and answer field writing are wired into repository and
   assert.ok(repository.includes("MAX_OPEN_FIELD_QUESTIONS"), "repository must cap open field questions");
   assert.ok(repository.indexOf("isCatchAllIssue(issue.code") < repository.indexOf("insertQuestion(issue.code"), "explosion must be checked before the generic insert");
   const controller = fs.readFileSync(path.join(root, "controller/conversationsController.ts"), "utf8");
-  assert.ok(controller.includes("applyAnswerToProposalField"), "controller must write single-field answers into the proposal");
-  assert.ok(controller.indexOf("applyAnswerToProposalField") < controller.indexOf("updateQuestion"), "field write must precede resolving the question so invalid values re-ask");
+  assert.ok(controller.includes("applyAnswersToProposalFields"), "controller must write typed answers into the proposal");
+  assert.ok(controller.indexOf("applyAnswersToProposalFields") < controller.indexOf("updateQuestion"), "field writes must precede resolving the question so invalid values re-ask");
   assert.ok(controller.includes("appendRoomScheduleSuggestionWhenReady"), "finishing guided intake must offer the room schedule workflow");
   const writer = fs.readFileSync(path.join(root, "src/modules/conversations/answerFieldWriter.ts"), "utf8");
   for (const guard of ["normalizeCandidate", "status: \"unsubmitted\"", "isDraft: true", "$ifNull: [\"$version\", 1]", "$cond", "$eq"])
     assert.ok(writer.includes(guard), guard);
   for (const locationBehavior of ["resolveVenueLocation", "venueSchedule.venueState", "venueSchedule.timeZone", "...derivedSet"])
     assert.ok(writer.includes(locationBehavior), locationBehavior);
-  for (const recoveryGuard of ["supersededByThisAnswer", "row.canonical_paths.includes(ctx.appliedPath)"])
+  for (const recoveryGuard of ["supersededByThisAnswer", "appliedPaths.every((path) => row.canonical_paths.includes(path))"])
     assert.ok(repository.includes(recoveryGuard), recoveryGuard);
+  for (const compositeGuard of ["applyAnswersToProposalFields", "questionAnswerText", "appliedFields"])
+    assert.ok(controller.includes(compositeGuard), compositeGuard);
   for (const delayedSuggestionGuard of ["questions_open", "already_suggested", "actions @>", "ROOM_SCHEDULE_GUIDANCE_MESSAGE"])
     assert.ok(repository.includes(delayedSuggestionGuard), delayedSuggestionGuard);
 });
@@ -427,7 +471,10 @@ test("key questions are generated from empty high-impact fields, with no run req
   assert.ok(source.includes("MAX_OPEN_FIELD_QUESTIONS"), "open questions stay capped");
   assert.ok(source.includes("status='superseded'"), "a field that gets filled retires its question");
   assert.ok(source.includes("untitled proposal"), "the creation placeholder counts as empty");
+  assert.ok(source.includes("importantFieldPaths"), "composite questions evaluate and persist every canonical path");
+  assert.ok(source.includes("WHERE NOT EXISTS"), "field-gap sync must not duplicate an open extraction question");
   const repository = fs.readFileSync(path.join(root, "src/modules/conversations/postgresConversationRepository.ts"), "utf8");
+  assert.ok(repository.includes('field.answerType === "date_time"'), "specific load-in issues must also become one composite question");
   assert.equal((repository.match(/syncFieldGapQuestions\(/g) || []).length, 2, "wired into both read and snapshot");
   const migration = fs.readFileSync(path.join(root, "migrations/postgres/025_field_gap_questions.up.sql"), "utf8");
   assert.ok(migration.includes("ALTER COLUMN context_run_id DROP NOT NULL"));

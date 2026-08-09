@@ -9,6 +9,7 @@ import {
   IMPORTANT_FIELD_QUESTIONS,
   MAX_OPEN_FIELD_QUESTIONS,
   fieldQuestionCode,
+  importantFieldPaths,
   isCatchAllIssue,
   questionImpact,
   questionAnswerType,
@@ -148,6 +149,18 @@ const syncQuestions = async (c: PoolClient, org: string, proposalRefId: string, 
   for (const issue of issues.rows) {
     if (questionBudget <= 0) break;
     const paths = issue.paths || [];
+    const compositeField = IMPORTANT_FIELD_QUESTIONS.find((field) =>
+      field.answerType === "date_time" && importantFieldPaths(field).some((path) => paths.includes(path)));
+    if (compositeField) {
+      const inserted = await insertQuestion(
+        fieldQuestionCode(compositeField.path),
+        issue.severity,
+        importantFieldPaths(compositeField),
+        compositeField.prompt,
+      );
+      if (inserted.rows[0]) questionBudget -= 1;
+      continue;
+    }
     if (isCatchAllIssue(issue.code, paths)) {
       // A broad "missing fields" issue never becomes one giant card. It is
       // exploded into individual questions — one whitelisted high-impact field
@@ -158,8 +171,9 @@ const syncQuestions = async (c: PoolClient, org: string, proposalRefId: string, 
       // prioritized improvement rather than extending intake indefinitely.
       for (const field of IMPORTANT_FIELD_QUESTIONS) {
         if (questionBudget <= 0) break;
-        if (!paths.includes(field.path)) continue;
-        const inserted = await insertQuestion(fieldQuestionCode(field.path), issue.severity, [field.path], field.prompt);
+        const fieldPaths = importantFieldPaths(field);
+        if (!fieldPaths.some((path) => paths.includes(path))) continue;
+        const inserted = await insertQuestion(fieldQuestionCode(field.path), issue.severity, fieldPaths, field.prompt);
         if (inserted.rows[0]) questionBudget -= 1;
       }
       continue;
@@ -568,7 +582,7 @@ export const conversationRepository = {
     });
   },
 
-  async updateQuestion(ctx: Ctx & { proposalMongoId: string; questionId: string; status: "answered" | "dismissed"; answer: string; appliedPath?: string | null }) {
+  async updateQuestion(ctx: Ctx & { proposalMongoId: string; questionId: string; status: "answered" | "dismissed"; answer: string; appliedPath?: string | null; appliedPaths?: string[] }) {
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, ctx.organizationMongoId);
       const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
@@ -583,11 +597,12 @@ export const conversationRepository = {
       // mark the question superseded in the narrow gap between those writes.
       // Treat that state as this request's successful continuation when the
       // applied path is exactly one of the question's canonical paths.
+      const appliedPaths = ctx.appliedPaths?.length ? ctx.appliedPaths : ctx.appliedPath ? [ctx.appliedPath] : [];
       const supersededByThisAnswer = row.status === "superseded"
         && ctx.status === "answered"
-        && !!ctx.appliedPath
+        && appliedPaths.length > 0
         && Array.isArray(row.canonical_paths)
-        && row.canonical_paths.includes(ctx.appliedPath);
+        && appliedPaths.every((path) => row.canonical_paths.includes(path));
       if (row.status !== "open" && !supersededByThisAnswer)
         throw new ConversationError("QUESTION_NOT_OPEN", "This question has already been resolved.", 409);
       let answeredMessageId: string | null = null;
@@ -608,7 +623,7 @@ export const conversationRepository = {
         "UPDATE rfpilot.clarification_questions SET status=$2,answered_message_id=$3,answered_by_external_user_id=$4,updated_at=now() WHERE id=$1",
         [ctx.questionId, ctx.status, answeredMessageId, ctx.actorUserMongoId],
       );
-      await audit(c, org, ctx.actorUserMongoId, "clarification_question_updated", "clarification_question", ctx.questionId, ctx.correlationId, { outcome: ctx.status, appliedPath: ctx.appliedPath ?? null });
+      await audit(c, org, ctx.actorUserMongoId, "clarification_question_updated", "clarification_question", ctx.questionId, ctx.correlationId, { outcome: ctx.status, appliedPath: ctx.appliedPath ?? null, appliedPaths });
       return { id: ctx.questionId, status: ctx.status, answeredMessageId };
     });
   },
