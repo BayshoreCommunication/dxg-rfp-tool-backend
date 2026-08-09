@@ -260,6 +260,33 @@ const mapRoom = (
         }];
       })
     : [];
+  const rawLedWalls = Array.isArray(room.ledWalls) ? room.ledWalls.slice(0, 20) : [];
+  const mapLedWall = (value: unknown, wallIndex: number) => {
+    const wall = record(value);
+    return {
+      ...optional("width", measurement(wall.width, "ft", `/roomByRoom/${index}/ledWalls/${wallIndex}/width`, issues)),
+      ...optional("height", measurement(wall.height, "ft", `/roomByRoom/${index}/ledWalls/${wallIndex}/height`, issues)),
+      ...optional("pixelPitch", measurement(wall.pixelPitch, "mm", `/roomByRoom/${index}/ledWalls/${wallIndex}/pixelPitch`, issues)),
+      ...optional("specs", text(wall.specs)),
+      ...optional("shape", text(wall.shape)),
+      ...optional("switcher", text(wall.switcher)),
+      ...optional("notes", text(wall.notes)),
+    };
+  };
+  const legacyLedWall = {
+    ...optional("width", measurement(room.ledWallWidth, "ft", `/roomByRoom/${index}/ledWallWidth`, issues)),
+    ...optional("height", measurement(room.ledWallHeight, "ft", `/roomByRoom/${index}/ledWallHeight`, issues)),
+    ...optional("pixelPitch", measurement(room.ledWallPixelPitch, "mm", `/roomByRoom/${index}/ledWallPixelPitch`, issues)),
+    ...optional("specs", text(room.ledWallSpecs)),
+    ...optional("shape", text(room.ledWallShape)),
+    ...optional("switcher", text(room.ledWallSwitcher)),
+    ...optional("notes", text(room.ledWallNotes)),
+  };
+  const ledWalls = rawLedWalls.length > 0
+    ? rawLedWalls.map(mapLedWall)
+    : Object.keys(legacyLedWall).length > 0 ? [legacyLedWall] : [];
+  const requestedLedWallCount = integer(room.ledWallCount);
+  const activeLedWallCount = requestedLedWallCount ?? (ledWalls.length || undefined);
 
   return {
     id: text(room._id) ?? `room-${index + 1}`,
@@ -290,6 +317,8 @@ const mapRoom = (
       ...optional("screenCount", integer(monitors.numberOfScreens)),
       ...optional("screenSize", measurement(monitors.screenSize, "ft", `/roomByRoom/${index}/largeMonitorsOrScreenProjector/screenSize`, issues)),
       ...optional("ledWallRequired", booleanOrNull(room.ledWall)),
+      ...optional("ledWallCount", activeLedWallCount),
+      ...(ledWalls.length > 0 ? { ledWalls: ledWalls.slice(0, activeLedWallCount ?? ledWalls.length) } : {}),
       ...optional("ledWallWidth", measurement(room.ledWallWidth, "ft", `/roomByRoom/${index}/ledWallWidth`, issues)),
       ...optional("ledWallHeight", measurement(room.ledWallHeight, "ft", `/roomByRoom/${index}/ledWallHeight`, issues)),
       ...optional("ledWallPixelPitch", measurement(room.ledWallPixelPitch, "mm", `/roomByRoom/${index}/ledWallPixelPitch`, issues)),

@@ -145,21 +145,39 @@ export const readFacts = (proposal: UnknownRecord): ProposalFacts => {
   const cameraCount = rooms.map(cameraCountForRoom).find((value): value is number => value !== null)
     ?? positive(videoRecording.numberOfCameras);
   const ledWallRequested = rooms.some((room) => isYes(room.ledWall));
-  const ledWallSqFt = (() => {
-    for (const room of rooms) {
-      if (!isYes(room.ledWall)) continue;
-      const width = positive(room.ledWallWidth), height = positive(room.ledWallHeight);
-      if (width && height) return Math.round(width * height);
+  const ledWallsForRoom = (room: UnknownRecord): UnknownRecord[] => {
+    if (Array.isArray(room.ledWalls) && room.ledWalls.length > 0) {
+      return room.ledWalls.map(asRecord);
     }
-    return null;
+    return [{
+      width: room.ledWallWidth,
+      height: room.ledWallHeight,
+      pixelPitch: room.ledWallPixelPitch,
+      specs: room.ledWallSpecs,
+      notes: room.ledWallNotes,
+    }];
+  };
+  const ledWallSqFt = (() => {
+    const areas = rooms.flatMap((room) => isYes(room.ledWall)
+      ? ledWallsForRoom(room).map((wall) => {
+          const width = positive(wall.width), height = positive(wall.height);
+          return width && height ? width * height : 0;
+        })
+      : []);
+    const total = areas.reduce((sum, area) => sum + area, 0);
+    return total > 0 ? Math.round(total) : null;
   })();
   const surfaceSizeStated = rooms.some((room) => {
     const monitors = asRecord(room.largeMonitorsOrScreenProjector);
-    return filled(monitors.screenSize) || filled(room.ledWallPixelPitch) || (filled(room.ledWallWidth) && filled(room.ledWallHeight));
+    return filled(monitors.screenSize) || ledWallsForRoom(room).some((wall) =>
+      filled(wall.pixelPitch) || (filled(wall.width) && filled(wall.height)));
   });
   const freeText = [
     text(event.statementOfWork), text(event.eventProfile), text(event.sacredConstraints),
-    ...rooms.map((room) => [text(room.ledWallSpecs), text(room.ledWallNotes), text(room.contentVideoNeeds), text(room.roomSetup)].join(" ")),
+    ...rooms.map((room) => [
+      ...ledWallsForRoom(room).flatMap((wall) => [text(wall.specs), text(wall.notes)]),
+      text(room.contentVideoNeeds), text(room.roomSetup),
+    ].join(" ")),
   ].join(" ");
   const accessText = [text(venue.accessRequirements), text(venue.venueAccessRequirements), freeText].join(" ");
   const captionLanguages = Array.isArray(captions.captionLanguages)

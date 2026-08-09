@@ -114,6 +114,8 @@ export interface VideoRequirements {
   screenCount?: number;
   screenSize?: Measurement;
   ledWallRequired?: boolean | null;
+  ledWallCount?: number;
+  ledWalls?: LedWallSpecification[];
   ledWallWidth?: Measurement;
   ledWallHeight?: Measurement;
   ledWallPixelPitch?: Measurement;
@@ -153,6 +155,15 @@ export interface VideoRequirements {
 export interface Measurement {
   value: number;
   unit: "in" | "ft" | "mm" | "cm" | "m" | "amp" | "px";
+}
+export interface LedWallSpecification {
+  width?: Measurement;
+  height?: Measurement;
+  pixelPitch?: Measurement;
+  specs?: string;
+  shape?: string;
+  switcher?: string;
+  notes?: string;
 }
 export interface LightingRequirements {
   stageWashRequired?: boolean | null;

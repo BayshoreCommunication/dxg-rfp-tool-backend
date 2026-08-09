@@ -1,6 +1,7 @@
 const test = require("node:test"),
   assert = require("node:assert/strict");
 const { computeInvestmentGuidance, evaluateCondition, investmentEnabled } = require("../src/modules/investment/domain");
+const { readFacts } = require("../src/modules/investment/proposalAccess");
 const corpus = require("./investmentPricingCorpus");
 
 const { regionalFactors, modifiers, confidenceRules } = corpus;
@@ -39,6 +40,22 @@ test("enable gating follows environment authorization and flag", () => {
   assert.equal(investmentEnabled(), true);
   for (const [key, value] of [["AI_ENVIRONMENT", saved.a], ["NODE_ENV", saved.n], ["INVESTMENT_GUIDANCE_ENABLED", saved.f]])
     value === undefined ? delete process.env[key] : (process.env[key] = value);
+});
+
+test("repeated LED wall dimensions contribute their combined active area", () => {
+  const facts = readFacts(generalSessionOnly({
+    roomByRoom: [{
+      roomFunction: "General Session",
+      ledWall: "Yes",
+      ledWallCount: "2",
+      ledWalls: [
+        { width: "40", height: "15", pixelPitch: "2.6mm" },
+        { width: "16", height: "9", pixelPitch: "1.9mm" },
+      ],
+    }],
+  }));
+  assert.equal(facts.ledWallSqFt, 744);
+  assert.equal(facts.surfaceSizeStated, true);
 });
 
 test("components price a selected configuration, never the whole catalog", () => {

@@ -77,6 +77,15 @@ Schema:
     "monitorSize": "one of: 40 inch | 43 inch | 50 inch | 55 inch | 60 inch | 65 inch | 70 inch (only if numberOfMonitors > 0)",
     "screenSize": "one of: 8' Tripod | 10' Wide Fastfold | 12' Wide Fastfold | 14' Wide Fastfold | 16' Wide Fastfold | 18' Wide Fastfold | 20' Wide Fastfold | 24' Wide Fastfold | 32' Wide Fastfold (only if numberOfScreens > 0)",
     "ledWall": "one of: Yes | No",
+    "ledWallCount": "string — positive integer (only if ledWall is Yes)",
+    "ledWalls": [{
+      "width": "string — width in feet",
+      "height": "string — height in feet",
+      "shape": "one of: Flat / Straight | Curved | Multi-Panel / Segmented | Wraparound",
+      "pixelPitch": "one of: 1.9mm or finer (Premium) | 2.6mm (Standard) | 3.9mm (Acceptable for distance) | Vendor Recommendation",
+      "switcher": "one of: Barco E2/E3 | Spyder X80 | Pixelhue P20/80/Q8 | Millumin | Vendor Recommendation",
+      "notes": "string"
+    }],
     "ledWallWidth": "string — width in feet (only if ledWall is Yes)",
     "ledWallHeight": "string — height in feet (only if ledWall is Yes)",
     "ledWallPixelPitch": "string — pixel pitch in mm (only if ledWall is Yes)",

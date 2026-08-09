@@ -80,6 +80,19 @@
         }
       }
     },
+    "ledWallSpecification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": { "$ref": "#/$defs/measurement" },
+        "height": { "$ref": "#/$defs/measurement" },
+        "pixelPitch": { "$ref": "#/$defs/measurement" },
+        "specs": { "type": "string", "maxLength": 2000 },
+        "shape": { "type": "string", "maxLength": 200 },
+        "switcher": { "type": "string", "maxLength": 150 },
+        "notes": { "type": "string", "maxLength": 5000 }
+      }
+    },
     "lifecycle": {
       "type": "object",
       "additionalProperties": false,
@@ -249,6 +262,11 @@
         "screenCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "screenSize": { "$ref": "#/$defs/measurement" },
         "ledWallRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "ledWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "ledWalls": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ledWallSpecification" }
+        },
         "ledWallWidth": { "$ref": "#/$defs/measurement" },
         "ledWallHeight": { "$ref": "#/$defs/measurement" },
         "ledWallPixelPitch": { "$ref": "#/$defs/measurement" },

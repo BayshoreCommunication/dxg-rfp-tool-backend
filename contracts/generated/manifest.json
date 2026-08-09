@@ -2,7 +2,7 @@
   "contractRelease": "proposal.v1",
   "generatedAt": null,
   "schemas": {
-    "proposal.v1.schema.json": "0f74f6ece703017887120997d4b6552823726fbefe40c028b8cd292804621797",
+    "proposal.v1.schema.json": "9aec9674874bbeceaa24a1f6982d3e9813078c5ab0037ed984928ec8d700ad3e",
     "proposal-extraction-patch.v1.schema.json": "086fc8c0b863fcce2f9da5ae9e69cd0d4081aaf8b5fcb24bb6525f9f2e70a09a",
     "proposal-public.v1.schema.json": "a9f70d0dba5ab4a453e1469eccc5b3f2a78291e53ada915b28bad041bd82c3aa",
     "proposal-form-ui.v1.json": "7637e07d7ad5ae601706a4aa50c341532e70225531ff4ac95581a717c2f5f6a4"
