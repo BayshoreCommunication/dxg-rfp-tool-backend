@@ -206,6 +206,29 @@ const mapRoom = (
   const audienceQa = record(room.audienceQa);
   const cameras = record(room.cameras);
   const recording = record(room.videoRecording);
+  const cameraPlanMode = text(cameras.cameraPlanMode) === "Vendor Recommendation"
+    ? "vendor_recommendation" as const
+    : text(cameras.cameraPlanMode) === "Specific Camera Plan"
+      ? "specific" as const
+      : undefined;
+  const cameraType = (() => {
+    const value = text(cameras.cameraType);
+    if (value === "PTZ Camera") return "ptz" as const;
+    if (value === "Studio / Broadcast Camera") return "studio_broadcast" as const;
+    if (value === "Both") return "both" as const;
+    if (value === "Other — Specify") return "other" as const;
+    return undefined;
+  })();
+  const ptzCameraCount = integer(cameras.ptzCameraQty);
+  const studioCameraCount = integer(cameras.studioCameraQty);
+  const otherCameraCount = integer(cameras.otherCameraQty);
+  const derivedCameraCount = cameraPlanMode === "specific"
+    ? cameraType === "ptz" ? ptzCameraCount
+      : cameraType === "studio_broadcast" ? studioCameraCount
+        : cameraType === "both" && ptzCameraCount !== undefined && studioCameraCount !== undefined
+          ? ptzCameraCount + studioCameraCount
+          : cameraType === "other" ? otherCameraCount : integer(cameras.camerasQty)
+    : integer(cameras.camerasQty);
   const stageWash = record(room.stageWashLighting);
   const programMonitor = record(room.programConfidenceMonitor);
   const notesMonitor = record(room.notesConfidenceMonitor);
@@ -237,6 +260,33 @@ const mapRoom = (
         }];
       })
     : [];
+  const rawLedWalls = Array.isArray(room.ledWalls) ? room.ledWalls.slice(0, 20) : [];
+  const mapLedWall = (value: unknown, wallIndex: number) => {
+    const wall = record(value);
+    return {
+      ...optional("width", measurement(wall.width, "ft", `/roomByRoom/${index}/ledWalls/${wallIndex}/width`, issues)),
+      ...optional("height", measurement(wall.height, "ft", `/roomByRoom/${index}/ledWalls/${wallIndex}/height`, issues)),
+      ...optional("pixelPitch", measurement(wall.pixelPitch, "mm", `/roomByRoom/${index}/ledWalls/${wallIndex}/pixelPitch`, issues)),
+      ...optional("specs", text(wall.specs)),
+      ...optional("shape", text(wall.shape)),
+      ...optional("switcher", text(wall.switcher)),
+      ...optional("notes", text(wall.notes)),
+    };
+  };
+  const legacyLedWall = {
+    ...optional("width", measurement(room.ledWallWidth, "ft", `/roomByRoom/${index}/ledWallWidth`, issues)),
+    ...optional("height", measurement(room.ledWallHeight, "ft", `/roomByRoom/${index}/ledWallHeight`, issues)),
+    ...optional("pixelPitch", measurement(room.ledWallPixelPitch, "mm", `/roomByRoom/${index}/ledWallPixelPitch`, issues)),
+    ...optional("specs", text(room.ledWallSpecs)),
+    ...optional("shape", text(room.ledWallShape)),
+    ...optional("switcher", text(room.ledWallSwitcher)),
+    ...optional("notes", text(room.ledWallNotes)),
+  };
+  const ledWalls = rawLedWalls.length > 0
+    ? rawLedWalls.map(mapLedWall)
+    : Object.keys(legacyLedWall).length > 0 ? [legacyLedWall] : [];
+  const requestedLedWallCount = integer(room.ledWallCount);
+  const activeLedWallCount = requestedLedWallCount ?? (ledWalls.length || undefined);
 
   return {
     id: text(room._id) ?? `room-${index + 1}`,
@@ -267,6 +317,8 @@ const mapRoom = (
       ...optional("screenCount", integer(monitors.numberOfScreens)),
       ...optional("screenSize", measurement(monitors.screenSize, "ft", `/roomByRoom/${index}/largeMonitorsOrScreenProjector/screenSize`, issues)),
       ...optional("ledWallRequired", booleanOrNull(room.ledWall)),
+      ...optional("ledWallCount", activeLedWallCount),
+      ...(ledWalls.length > 0 ? { ledWalls: ledWalls.slice(0, activeLedWallCount ?? ledWalls.length) } : {}),
       ...optional("ledWallWidth", measurement(room.ledWallWidth, "ft", `/roomByRoom/${index}/ledWallWidth`, issues)),
       ...optional("ledWallHeight", measurement(room.ledWallHeight, "ft", `/roomByRoom/${index}/ledWallHeight`, issues)),
       ...optional("ledWallPixelPitch", measurement(room.ledWallPixelPitch, "mm", `/roomByRoom/${index}/ledWallPixelPitch`, issues)),
@@ -285,7 +337,13 @@ const mapRoom = (
       ...optional("audienceQaRequired", booleanOrNull(audienceQa.audienceQa)),
       ...optional("audienceQaMethod", text(audienceQa.audienceQaMethod)),
       ...optional("camerasRequired", booleanOrNull(cameras.cameras)),
-      ...optional("cameraCount", integer(cameras.camerasQty)),
+      ...optional("cameraCount", derivedCameraCount),
+      ...optional("cameraPlanMode", cameraPlanMode),
+      ...optional("cameraType", cameraType),
+      ...optional("ptzCameraCount", ptzCameraCount),
+      ...optional("studioCameraCount", studioCameraCount),
+      ...optional("otherCameraType", text(cameras.otherCameraType)),
+      ...optional("otherCameraCount", otherCameraCount),
       ...optional("videoRecordingRequired", booleanOrNull(recording.videoRecording)),
       ...optional("recordingType", text(recording.videoRecordingType)),
       ...optional("programConfidenceMonitorRequired", booleanOrNull(programMonitor.programConfidenceMonitor)),
@@ -549,6 +607,8 @@ export const mapLegacyProposalToV1 = (
       ...optional("cameraOperatorCount", integer(videoRecording.cameraOperators)),
       ...optional("isoRecordings", text(videoRecording.isoRecordings)),
       ...optional("resolution", text(videoRecording.recordingResolution)),
+      ...optional("codec", text(videoRecording.recordingCodec)),
+      ...optional("recordIn4k", booleanOrNull(videoRecording.recordIn4k)),
       ...optional("recordingMedia", text(videoRecording.recordingMedia)),
       editedDeliverable: {
         ...optional("required", booleanOrNull(editedDeliverable.needed)),

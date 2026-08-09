@@ -139,6 +139,8 @@ export interface VideoRequirements {
   screenCount?: NonNegativeInteger;
   screenSize?: Measurement;
   ledWallRequired?: NullableBoolean;
+  ledWallCount?: NonNegativeInteger;
+  ledWalls?: LedWallSpecification[];
   ledWallWidth?: Measurement;
   ledWallHeight?: Measurement;
   ledWallPixelPitch?: Measurement;
@@ -158,6 +160,12 @@ export interface VideoRequirements {
   audienceQaMethod?: string;
   camerasRequired?: NullableBoolean;
   cameraCount?: NonNegativeInteger;
+  cameraPlanMode?: "specific" | "vendor_recommendation";
+  cameraType?: "ptz" | "studio_broadcast" | "both" | "other";
+  ptzCameraCount?: NonNegativeInteger;
+  studioCameraCount?: NonNegativeInteger;
+  otherCameraType?: string;
+  otherCameraCount?: NonNegativeInteger;
   videoRecordingRequired?: NullableBoolean;
   recordingType?: string;
   programConfidenceMonitorRequired?: NullableBoolean;
@@ -172,6 +180,15 @@ export interface VideoRequirements {
 export interface Measurement {
   value: number;
   unit: "in" | "ft" | "mm" | "cm" | "m" | "amp" | "px";
+}
+export interface LedWallSpecification {
+  width?: Measurement;
+  height?: Measurement;
+  pixelPitch?: Measurement;
+  specs?: string;
+  shape?: string;
+  switcher?: string;
+  notes?: string;
 }
 export interface LightingRequirements {
   stageWashRequired?: NullableBoolean;
@@ -246,6 +263,8 @@ export interface VideoRecording {
   cameraOperatorCount?: NonNegativeInteger;
   isoRecordings?: string;
   resolution?: string;
+  codec?: "H.264" | "H.265" | "ProRes";
+  recordIn4k?: NullableBoolean;
   recordingMedia?: string;
   editedDeliverable?: EditedDeliverable;
   rawFootageTurnover?: NullableBoolean;

@@ -114,6 +114,8 @@ export interface VideoRequirements {
   screenCount?: number;
   screenSize?: Measurement;
   ledWallRequired?: boolean | null;
+  ledWallCount?: number;
+  ledWalls?: LedWallSpecification[];
   ledWallWidth?: Measurement;
   ledWallHeight?: Measurement;
   ledWallPixelPitch?: Measurement;
@@ -133,6 +135,12 @@ export interface VideoRequirements {
   audienceQaMethod?: string;
   camerasRequired?: boolean | null;
   cameraCount?: number;
+  cameraPlanMode?: "specific" | "vendor_recommendation";
+  cameraType?: "ptz" | "studio_broadcast" | "both" | "other";
+  ptzCameraCount?: number;
+  studioCameraCount?: number;
+  otherCameraType?: string;
+  otherCameraCount?: number;
   videoRecordingRequired?: boolean | null;
   recordingType?: string;
   programConfidenceMonitorRequired?: boolean | null;
@@ -147,6 +155,15 @@ export interface VideoRequirements {
 export interface Measurement {
   value: number;
   unit: "in" | "ft" | "mm" | "cm" | "m" | "amp" | "px";
+}
+export interface LedWallSpecification {
+  width?: Measurement;
+  height?: Measurement;
+  pixelPitch?: Measurement;
+  specs?: string;
+  shape?: string;
+  switcher?: string;
+  notes?: string;
 }
 export interface LightingRequirements {
   stageWashRequired?: boolean | null;
@@ -221,6 +238,8 @@ export interface VideoRecording {
   cameraOperatorCount?: number;
   isoRecordings?: string;
   resolution?: string;
+  codec?: "H.264" | "H.265" | "ProRes";
+  recordIn4k?: boolean | null;
   recordingMedia?: string;
   editedDeliverable?: EditedDeliverable;
   rawFootageTurnover?: boolean | null;

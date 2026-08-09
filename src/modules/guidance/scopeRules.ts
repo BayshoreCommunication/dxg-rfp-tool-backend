@@ -168,9 +168,15 @@ export const SCOPE_RULES: readonly ScopeRule[] = Object.freeze([
     requiredInputs: ["camera count"],
     affectedFields: ["/content/videoRecording/cameraCount"],
     source: "RFPilot recording workflow policy",
-    evaluate: ({ proposal }) => {
+    evaluate: ({ proposal, rooms }) => {
       const recording = record(proposal.videoRecordingStep);
-      if (!isYes(recording.videoRecordingRequired) || count(recording.numberOfCameras) > 0)
+      const hasRoomPlan = rooms.some((room) => {
+        const cameras = record(room.cameras);
+        return isYes(cameras.cameras) && (
+          text(cameras.cameraPlanMode) === "Vendor Recommendation" || count(cameras.camerasQty) > 0
+        );
+      });
+      if (!isYes(recording.videoRecordingRequired) || hasRoomPlan || count(recording.numberOfCameras) > 0)
         return [];
       const path = "/content/videoRecordingStep/numberOfCameras";
       return [{

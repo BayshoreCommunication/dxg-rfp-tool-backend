@@ -310,7 +310,8 @@ export const ROOM_RULES: RoomRule[] = [
       const outputs: RuleOutput[] = [];
       const cameras = nested(ctx.room.raw, "cameras", "cameras");
       const cameraQty = asCount(nested(ctx.room.raw, "cameras", "camerasQty"));
-      if (!isYes(cameras) || cameraQty === null)
+      const cameraPlanMode = nested(ctx.room.raw, "cameras", "cameraPlanMode");
+      if (cameraPlanMode !== "Vendor Recommendation" && (!isYes(cameras) || cameraQty === null))
         outputs.push({ kind: "question", questionKeySuffix: "camera-count", prompt: "Video recording is requested for this room. How many cameras should capture it?", paths: [roomPath(ctx.room.index, "cameras/camerasQty")] });
       if (!nested(ctx.room.raw, "videoRecording", "videoRecordingType"))
         outputs.push({ kind: "question", questionKeySuffix: "composition", prompt: "What recording composition is needed (program cut, ISO records, or both)?", paths: [roomPath(ctx.room.index, "videoRecording/videoRecordingType")] });

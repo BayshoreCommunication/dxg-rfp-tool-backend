@@ -71,6 +71,14 @@ test("recording quantity and delivery mismatches remain deterministic", () => {
   assert.equal(byRule(findings, "CAMERA_COUNT_MISSING").length, 0);
 });
 
+test("a per-room vendor recommendation satisfies the recording camera-plan gap", () => {
+  const findings = computeScopeGuidance({
+    videoRecordingStep: { videoRecordingRequired: "YES" },
+    roomByRoom: [{ cameras: { cameras: "Yes", cameraPlanMode: "Vendor Recommendation" } }],
+  });
+  assert.equal(byRule(findings, "CAMERA_COUNT_MISSING").length, 0);
+});
+
 test("hybrid scope requires connectivity and production ownership", () => {
   const findings = computeScopeGuidance({
     event: { eventFormat: "Hybrid" },

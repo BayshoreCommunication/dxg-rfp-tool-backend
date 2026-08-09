@@ -80,6 +80,19 @@
         }
       }
     },
+    "ledWallSpecification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": { "$ref": "#/$defs/measurement" },
+        "height": { "$ref": "#/$defs/measurement" },
+        "pixelPitch": { "$ref": "#/$defs/measurement" },
+        "specs": { "type": "string", "maxLength": 2000 },
+        "shape": { "type": "string", "maxLength": 200 },
+        "switcher": { "type": "string", "maxLength": 150 },
+        "notes": { "type": "string", "maxLength": 5000 }
+      }
+    },
     "lifecycle": {
       "type": "object",
       "additionalProperties": false,
@@ -249,6 +262,11 @@
         "screenCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "screenSize": { "$ref": "#/$defs/measurement" },
         "ledWallRequired": { "$ref": "#/$defs/nullableBoolean" },
+        "ledWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "ledWalls": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ledWallSpecification" }
+        },
         "ledWallWidth": { "$ref": "#/$defs/measurement" },
         "ledWallHeight": { "$ref": "#/$defs/measurement" },
         "ledWallPixelPitch": { "$ref": "#/$defs/measurement" },
@@ -268,6 +286,12 @@
         "audienceQaMethod": { "type": "string", "maxLength": 100 },
         "camerasRequired": { "$ref": "#/$defs/nullableBoolean" },
         "cameraCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "cameraPlanMode": { "type": "string", "enum": ["specific", "vendor_recommendation"] },
+        "cameraType": { "type": "string", "enum": ["ptz", "studio_broadcast", "both", "other"] },
+        "ptzCameraCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "studioCameraCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "otherCameraType": { "type": "string", "maxLength": 200 },
+        "otherCameraCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "videoRecordingRequired": { "$ref": "#/$defs/nullableBoolean" },
         "recordingType": { "type": "string", "maxLength": 150 },
         "programConfidenceMonitorRequired": { "$ref": "#/$defs/nullableBoolean" },
@@ -385,6 +409,8 @@
         "cameraOperatorCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "isoRecordings": { "type": "string", "maxLength": 500 },
         "resolution": { "type": "string", "maxLength": 100 },
+        "codec": { "type": "string", "enum": ["H.264", "H.265", "ProRes"] },
+        "recordIn4k": { "$ref": "#/$defs/nullableBoolean" },
         "recordingMedia": { "type": "string", "maxLength": 100 },
         "editedDeliverable": { "$ref": "#/$defs/editedDeliverable" },
         "rawFootageTurnover": { "$ref": "#/$defs/nullableBoolean" },
