@@ -76,16 +76,37 @@ export const parseMessageInput = (value: Record<string, unknown>): MessageInput 
   return { content, intent, sourceIds, expectedProposalVersion };
 };
 
+export type DateTimeQuestionAnswer = { date: string; time: string };
+export type QuestionAnswer = string | DateTimeQuestionAnswer;
+
+export const isDateTimeQuestionAnswer = (value: QuestionAnswer): value is DateTimeQuestionAnswer =>
+  typeof value !== "string";
+
+export const questionAnswerText = (answer: QuestionAnswer): string =>
+  isDateTimeQuestionAnswer(answer) ? `${answer.date} at ${answer.time}` : answer;
+
 export const parseQuestionUpdate = (value: Record<string, unknown>) => {
   const status = String(value.status || "");
   if (!["answered", "dismissed"].includes(status))
     throw new ConversationError("INVALID_QUESTION_STATUS", "Question status must be answered or dismissed.", 422);
-  const answer = typeof value.answer === "string" ? value.answer.trim() : "";
-  if (answer.length > 4000)
+  if (status === "dismissed") return { status: "dismissed" as const, answer: "" as QuestionAnswer };
+  let answer: QuestionAnswer;
+  if (typeof value.answer === "string") {
+    answer = value.answer.trim();
+  } else if (value.answer && typeof value.answer === "object" && !Array.isArray(value.answer)) {
+    const raw = value.answer as Record<string, unknown>;
+    answer = {
+      date: typeof raw.date === "string" ? raw.date.trim() : "",
+      time: typeof raw.time === "string" ? raw.time.trim() : "",
+    };
+  } else {
+    answer = "";
+  }
+  if (questionAnswerText(answer).length > 4000)
     throw new ConversationError("INVALID_QUESTION_ANSWER", "Answer exceeds 4000 characters.", 422);
-  if (status === "answered" && !answer)
+  if ((typeof answer === "string" && !answer) || (isDateTimeQuestionAnswer(answer) && (!answer.date || !answer.time)))
     throw new ConversationError("INVALID_QUESTION_ANSWER", "An answer is required to mark a question answered.", 422);
-  return { status: status as "answered" | "dismissed", answer };
+  return { status: "answered" as const, answer };
 };
 
 // Ordered whitelist of high-impact fields the assistant proactively asks about
@@ -96,10 +117,11 @@ export type ImportantFieldImpact = "schedule" | "cost" | "production" | "scope";
 // The control the dashboard renders for a question. `options` are submitted
 // verbatim, so every option string MUST be accepted by
 // canonicalMapping.normalizeCandidate for that path (covered by tests).
-export type ImportantFieldAnswerType = "date" | "time" | "choice" | "number" | "text";
-export const ANSWER_TYPES: readonly ImportantFieldAnswerType[] = Object.freeze(["date", "time", "choice", "number", "text"]);
+export type ImportantFieldAnswerType = "date" | "time" | "date_time" | "choice" | "number" | "text";
+export const ANSWER_TYPES: readonly ImportantFieldAnswerType[] = Object.freeze(["date", "time", "date_time", "choice", "number", "text"]);
 export type ImportantFieldQuestion = {
   path: string;
+  additionalPaths?: readonly string[];
   prompt: string;
   impact: ImportantFieldImpact;
   answerType: ImportantFieldAnswerType;
@@ -172,16 +194,30 @@ export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Obje
   { path: "/content/venue/inHouseAvRequired", prompt: "Must the venue's in-house AV provider be used? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
   { path: "/content/venue/riggingRequired", prompt: "Will this venue require rigging? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
   { path: "/content/venue/powerDropsRequired", prompt: "Will dedicated power drops be required? (yes / no / not sure)", impact: "cost", answerType: "choice", options: YES_NO },
-  { path: "/content/venueSchedule/loadInDate", prompt: "When can production load in? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
-  { path: "/content/venueSchedule/loadInTime", prompt: "What time can production load in? (HH:MM)", impact: "schedule", answerType: "time" },
+  {
+    path: "/content/venueSchedule/loadInDate",
+    additionalPaths: Object.freeze(["/content/venueSchedule/loadInTime"]),
+    prompt: "What date and time can production load-in?",
+    impact: "schedule",
+    answerType: "date_time",
+  },
   { path: "/content/venue/venueAccessRequirements", prompt: "Are there loading dock, freight elevator, security, parking, or access restrictions?", impact: "production", answerType: "text" },
   { path: "/content/budget/proposalSubmissionDueDate", prompt: "When is the proposal due? (YYYY-MM-DD)", impact: "schedule", answerType: "date" },
   { path: "/content/hybridVirtual/streamingPlatform", prompt: "Which streaming platform will the event use?", impact: "production", answerType: "choice", options: STREAMING_PLATFORMS },
   { path: "/content/videoRecordingStep/videoRecordingRequired", prompt: "Do you need video recording? (yes / no / not sure)", impact: "production", answerType: "choice", options: YES_NO },
 ]);
 
+export const importantFieldPaths = (field: ImportantFieldQuestion): string[] =>
+  [field.path, ...(field.additionalPaths ?? [])];
+
 export const importantFieldQuestionByPath = (path: string): ImportantFieldQuestion | null =>
-  IMPORTANT_FIELD_QUESTIONS.find((field) => field.path === path) ?? null;
+  IMPORTANT_FIELD_QUESTIONS.find((field) => importantFieldPaths(field).includes(path)) ?? null;
+
+const importantFieldQuestionByPaths = (paths: string[]): ImportantFieldQuestion | null =>
+  IMPORTANT_FIELD_QUESTIONS.find((field) => {
+    const expected = importantFieldPaths(field);
+    return expected.length === paths.length && expected.every((path, index) => path === paths[index]);
+  }) ?? null;
 
 // A catch-all extraction issue (e.g. "missing supported fields" listing dozens
 // of canonical paths) is never shown as one giant card: it is exploded into
@@ -217,13 +253,13 @@ export const fieldQuestionCode = (path: string): string => `MISSING_FIELD:${path
 
 // Impact tag surfaced to the UI ("affects cost") for single-field questions.
 export const questionImpact = (paths: string[]): ImportantFieldImpact | null =>
-  paths.length === 1 ? importantFieldQuestionByPath(paths[0])?.impact ?? null : null;
+  importantFieldQuestionByPaths(paths)?.impact ?? null;
 
 // The answer control the UI should render for a question. Only single
 // whitelisted-field questions get a typed control; anything else stays a
 // free-text box.
 export const questionAnswerType = (paths: string[]): { answerType: ImportantFieldAnswerType; options?: readonly string[] } => {
-  const field = paths.length === 1 ? importantFieldQuestionByPath(paths[0]) : null;
+  const field = importantFieldQuestionByPaths(paths);
   if (!field) return { answerType: "text" };
   return field.options ? { answerType: field.answerType, options: field.options } : { answerType: field.answerType };
 };
@@ -299,6 +335,30 @@ export const suggestedAnswerFor = (paths: string[], rawValue: unknown): string |
 // question resolves; membership of the proactive list is not a safety property.
 export const answerTargetPath = (paths: string[]): string | null =>
   paths.length === 1 && approvedCandidatePaths.includes(paths[0]) ? paths[0] : null;
+
+// Composite writes are deliberately limited to a typed proactive question.
+// Arbitrary multi-path extraction conflicts remain chat-only: one free-form
+// answer must never be copied into several unrelated proposal fields.
+export const answerTargetPaths = (paths: string[]): string[] => {
+  const single = answerTargetPath(paths);
+  if (single) return [single];
+  const field = importantFieldQuestionByPaths(paths);
+  return field?.answerType === "date_time" && paths.every((path) => approvedCandidatePaths.includes(path))
+    ? [...paths]
+    : [];
+};
+
+export const isLoadInAfterShow = (input: {
+  loadInDate: string;
+  loadInTime: string;
+  showDate?: string;
+  showTime?: string;
+}): boolean => Boolean(
+  input.showDate && (
+    input.loadInDate > input.showDate ||
+    (input.loadInDate === input.showDate && Boolean(input.showTime) && input.loadInTime > input.showTime!)
+  ),
+);
 
 // Plain-language prompts for machine issue codes shown as clarification cards.
 const QUESTION_PROMPTS: Record<string, string> = {

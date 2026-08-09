@@ -1,5 +1,7 @@
 import Proposal from "../../../modal/proposalsModel";
 import { normalizeCandidate } from "../candidateApplication/canonicalMapping";
+import { CandidateApplicationError } from "../candidateApplication/domain";
+import { isLoadInAfterShow } from "./domain";
 import { resolveVenueLocation } from "./venueLocationResolver";
 
 export type AppliedAnswerField = { path: string; mongoPath: string; value: unknown };
@@ -11,18 +13,68 @@ export type AppliedAnswerField = { path: string; mongoPath: string; value: unkno
 // re-ask. Follows the guarded findOneAndUpdate + version-increment pattern of
 // mongoProposalCandidateMutation. Returns null when the proposal is no longer
 // an owned unsubmitted draft — the answer then stays chat-only.
-export const applyAnswerToProposalField = async (input: {
+type AnswerFieldInput = { path: string; answer: string };
+
+const ownedDraftFilter = (input: {
   organizationMongoId: string;
   actorUserMongoId: string;
   proposalMongoId: string;
-  path: string;
-  answer: string;
-}): Promise<AppliedAnswerField | null> => {
-  const location = input.path === "/content/venueSchedule/venueCity"
-    ? resolveVenueLocation(input.answer)
+}) => ({
+  _id: input.proposalMongoId,
+  userId: input.actorUserMongoId,
+  organizationId: input.organizationMongoId,
+  status: "unsubmitted",
+  isDraft: true,
+  isArchived: { $ne: true },
+});
+
+const validateLoadInOrdering = async (
+  input: { organizationMongoId: string; actorUserMongoId: string; proposalMongoId: string },
+  answers: AnswerFieldInput[],
+): Promise<boolean> => {
+  const date = answers.find((item) => item.path === "/content/venueSchedule/loadInDate")?.answer;
+  const time = answers.find((item) => item.path === "/content/venueSchedule/loadInTime")?.answer;
+  if (!date || !time) return true;
+  const proposal = await Proposal.findOne(ownedDraftFilter(input))
+    .select("event.startDate venueSchedule.showStartDate venueSchedule.showStartTime")
+    .lean<{ event?: Record<string, unknown>; venueSchedule?: Record<string, unknown> }>();
+  if (!proposal) return false;
+  const venueSchedule = proposal.venueSchedule && typeof proposal.venueSchedule === "object" ? proposal.venueSchedule : {};
+  const event = proposal.event && typeof proposal.event === "object" ? proposal.event : {};
+  const showDate = typeof venueSchedule.showStartDate === "string" && venueSchedule.showStartDate
+    ? venueSchedule.showStartDate
+    : typeof event.startDate === "string" ? event.startDate : "";
+  const showTime = typeof venueSchedule.showStartTime === "string" ? venueSchedule.showStartTime : "";
+  if (isLoadInAfterShow({ loadInDate: date, loadInTime: time, showDate, showTime })) {
+    throw new CandidateApplicationError(
+      "INVALID_CANDIDATE_VALUE",
+      "Production load-in cannot be after the event starts.",
+    );
+  }
+  return true;
+};
+
+// Applies one typed answer or one deliberately supported composite answer in a
+// single Mongo update. Composite answers advance the proposal version once,
+// so the paired load-in date/time can never be observed half-written.
+export const applyAnswersToProposalFields = async (input: {
+  organizationMongoId: string;
+  actorUserMongoId: string;
+  proposalMongoId: string;
+  answers: AnswerFieldInput[];
+}): Promise<AppliedAnswerField[] | null> => {
+  if (input.answers.length === 0) return [];
+  const draftExists = await validateLoadInOrdering(input, input.answers);
+  if (!draftExists) return null;
+  const locationAnswer = input.answers.find((item) => item.path === "/content/venueSchedule/venueCity");
+  const location = locationAnswer
+    ? resolveVenueLocation(locationAnswer.answer)
     : null;
-  const normalized = normalizeCandidate(input.path, location?.city ?? input.answer);
-  const currentValue = `$${normalized.mongoPath}`;
+  const normalizedFields = input.answers.map((item) => {
+    const value = item.path === "/content/venueSchedule/venueCity" && location ? location.city : item.answer;
+    return normalizeCandidate(item.path, value);
+  });
+  const directSet = Object.fromEntries(normalizedFields.map((field) => [field.mongoPath, field.mongoValue]));
   const currentVersion = { $ifNull: ["$version", 1] };
   const empty = (mongoPath: string) => ({ $eq: [{ $ifNull: [`$${mongoPath}`, ""] }, ""] });
   const derivedSet = location
@@ -36,23 +88,16 @@ export const applyAnswerToProposalField = async (input: {
       }
     : {};
   const changes = [
-    { $ne: [currentValue, normalized.mongoValue] },
+    ...normalizedFields.map((field) => ({ $ne: [`$${field.mongoPath}`, field.mongoValue] })),
     ...(location
       ? [empty("venueSchedule.venueState"), empty("venueSchedule.timeZone")]
       : []),
   ];
   const row = await Proposal.findOneAndUpdate(
-    {
-      _id: input.proposalMongoId,
-      userId: input.actorUserMongoId,
-      organizationId: input.organizationMongoId,
-      status: "unsubmitted",
-      isDraft: true,
-      isArchived: { $ne: true },
-    },
+    ownedDraftFilter(input),
     [{
       $set: {
-        [normalized.mongoPath]: normalized.mongoValue,
+        ...directSet,
         ...derivedSet,
         // Mongo and the conversation repository live in different databases,
         // so the question-resolution request may be retried after Mongo
@@ -70,5 +115,20 @@ export const applyAnswerToProposalField = async (input: {
     { new: true },
   ).select("version").lean<{ version: number }>();
   if (!row) return null;
-  return { path: input.path, mongoPath: normalized.mongoPath, value: normalized.mongoValue };
+  return normalizedFields.map((field) => ({
+    path: field.sourcePath,
+    mongoPath: field.mongoPath,
+    value: field.mongoValue,
+  }));
+};
+
+export const applyAnswerToProposalField = async (input: {
+  organizationMongoId: string;
+  actorUserMongoId: string;
+  proposalMongoId: string;
+  path: string;
+  answer: string;
+}): Promise<AppliedAnswerField | null> => {
+  const fields = await applyAnswersToProposalFields({ ...input, answers: [{ path: input.path, answer: input.answer }] });
+  return fields?.[0] ?? null;
 };

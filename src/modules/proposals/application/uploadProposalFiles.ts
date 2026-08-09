@@ -7,12 +7,26 @@ export type ProposalUploadFile = {
   path: string;
 };
 
+export type ProposalUploadScan = (
+  localPath: string,
+) => Promise<"clean" | "infected" | "unavailable" | "skipped">;
+
+export class ProposalFileUploadError extends Error {
+  constructor(
+    public readonly code: "MALWARE_DETECTED" | "MALWARE_SCAN_UNAVAILABLE",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 const safeObjectName = (name: string) =>
   name.replace(/[^a-zA-Z0-9._-]/g, "_");
 
 export const createUploadProposalFiles = (dependencies: {
   storage: ProposalFileStoragePort;
   folderName: string;
+  malwareScan: ProposalUploadScan;
   now?: () => number;
 }) => async (input: {
   ownerUserId: string;
@@ -26,6 +40,13 @@ export const createUploadProposalFiles = (dependencies: {
     url: string;
   }> = [];
   for (const [index, file] of input.files.entries()) {
+    const scan = await dependencies.malwareScan(file.path);
+    if (scan === "infected") {
+      throw new ProposalFileUploadError("MALWARE_DETECTED", "An uploaded file failed the malware scan.");
+    }
+    if (scan === "unavailable") {
+      throw new ProposalFileUploadError("MALWARE_SCAN_UNAVAILABLE", "File scanning is temporarily unavailable.");
+    }
     const objectKey = [
       dependencies.folderName,
       // The private segment marks the object as one that must be presigned to

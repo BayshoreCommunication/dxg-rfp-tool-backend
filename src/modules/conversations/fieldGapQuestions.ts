@@ -8,6 +8,7 @@ import {
   MAX_ADAPTIVE_VENUE_QUESTIONS,
   MAX_OPEN_FIELD_QUESTIONS,
   fieldQuestionCode,
+  importantFieldPaths,
   venueNeedsOperationalFollowUp,
 } from "./domain";
 
@@ -36,8 +37,13 @@ export const syncFieldGapQuestions = async (
   input: { organizationMongoId: string; actorUserMongoId: string; proposalMongoId: string },
 ): Promise<void> => {
   // The canonical mapping owns path -> mongo path; no value validation here.
-  const allMapped = IMPORTANT_FIELD_QUESTIONS.map((field) => ({ field, mongoPath: mongoPathFor(field.path) }));
-  const paths = allMapped.map((item) => item.mongoPath).filter((path): path is string => Boolean(path));
+  const allMapped = IMPORTANT_FIELD_QUESTIONS.map((field) => ({
+    field,
+    targets: importantFieldPaths(field).map((path) => ({ path, mongoPath: mongoPathFor(path) })),
+  }));
+  const paths = allMapped
+    .flatMap((item) => item.targets.map((target) => target.mongoPath))
+    .filter((path): path is string => Boolean(path));
   const proposal = await Proposal.findOne({
     _id: input.proposalMongoId,
     userId: input.actorUserMongoId,
@@ -74,9 +80,9 @@ export const syncFieldGapQuestions = async (
   // eight-question journey quietly grows to nine, ten, and beyond.
   let budget = questionLimit - Number(asked.rows[0]?.n ?? 0);
 
-  for (const { field, mongoPath } of mapped) {
-    if (!mongoPath) continue;
-    const filled = !isEmpty(readPath(proposal, mongoPath));
+  for (const { field, targets } of mapped) {
+    if (targets.some((target) => !target.mongoPath)) continue;
+    const filled = targets.every((target) => !isEmpty(readPath(proposal, target.mongoPath!)));
     const code = fieldQuestionCode(field.path);
     if (filled) {
       // The planner answered it elsewhere (editor, extraction): retire the ask.
@@ -89,9 +95,13 @@ export const syncFieldGapQuestions = async (
     if (budget <= 0) continue;
     const inserted = await c.query<{ id: string }>(
       `INSERT INTO rfpilot.clarification_questions(id,organization_id,proposal_reference_id,conversation_id,context_run_id,issue_code,severity,canonical_paths,prompt)
-       VALUES($1,$2,$3,$4,NULL,$5,'question',$6::jsonb,$7)
+       SELECT $1,$2,$3,$4,NULL,$5,'question',$6::jsonb,$7
+       WHERE NOT EXISTS (
+         SELECT 1 FROM rfpilot.clarification_questions
+          WHERE proposal_reference_id=$3 AND issue_code=$5 AND status='open'
+       )
        ON CONFLICT DO NOTHING RETURNING id`,
-      [uuidv7(), organizationId, proposalReferenceId, conversationId, code, JSON.stringify([field.path]), field.prompt.slice(0, 1000)],
+      [uuidv7(), organizationId, proposalReferenceId, conversationId, code, JSON.stringify(targets.map((target) => target.path)), field.prompt.slice(0, 1000)],
     );
     if (inserted.rows[0]) budget -= 1;
   }

@@ -286,6 +286,8 @@ export interface SourceReference {
     | "brand_guide"
     | "event_logo"
     | "venue_document"
+    | "scenic_inspiration"
+    | "venue_coi"
     | "nda"
     | "reference"
     | "quote"
