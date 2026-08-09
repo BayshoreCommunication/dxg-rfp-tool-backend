@@ -1,6 +1,7 @@
 import { createGetOwnedProposal } from "./application/getOwnedProposal";
 import { createListOwnedProposals } from "./application/listOwnedProposals";
 import { createUploadProposalFiles } from "./application/uploadProposalFiles";
+import { vendorUploadMalwareScan } from "../vendorResponses/infrastructure/security/vendorUploadMalwareScan";
 import { createPresignProposalFile } from "./application/proposalFileAccess";
 import { presignSpacesGetUrl, spacesObjectKeyFromUrl } from "../../../utils/uploadToSpaces";
 import {
@@ -88,6 +89,7 @@ export const presignOwnedProposalFile = createPresignProposalFile({
 export const uploadOwnedProposalFiles = createUploadProposalFiles({
   storage: spacesProposalFileStorage,
   folderName: process.env.DO_FOLDER_NAME || "DXG-RFP-Tool",
+  malwareScan: vendorUploadMalwareScan,
 });
 
 export const getProposalSettingsByUserId =

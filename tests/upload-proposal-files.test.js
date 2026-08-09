@@ -28,6 +28,7 @@ test("proposal uploads are owner-scoped and object names are sanitized", async (
   const upload = createUploadProposalFiles({
     folderName: "DXG-RFP-Tool",
     now: () => 123456,
+    malwareScan: async () => "clean",
     storage: {
       upload: async (input) => {
         calls.push(input);
@@ -92,6 +93,7 @@ test("uploaded proposal files are stored privately under their owner", async () 
   const upload = createUploadProposalFiles({
     folderName: "DXG",
     now: () => 1700000000000,
+    malwareScan: async () => "clean",
     storage: { upload: async ({ objectKey }) => { keys.push(objectKey); return `https://b.r.digitaloceanspaces.com/${objectKey}`; } },
   });
   await upload({ ownerUserId: "user-001", files: [{ fieldname: "supportDocuments", originalname: "floor plan.pdf", path: "/tmp/a" }] });

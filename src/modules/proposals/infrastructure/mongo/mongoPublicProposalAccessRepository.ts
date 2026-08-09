@@ -32,6 +32,39 @@ const PUBLIC_REDACTED_FIELDS = [
   "isCopy",
 ] as const;
 
+const PRIVATE_UPLOAD_FIELDS = [
+  "brandGuideFiles",
+  "eventLogoFiles",
+  "referenceFiles",
+  "venueDocs",
+  "ndaDocumentFiles",
+  "scenicInspirationFiles",
+  "venueCoiFiles",
+] as const;
+
+const attachmentFilename = (value: unknown): string => {
+  if (typeof value !== "string") return "";
+  const segment = value.split("/").pop() || value;
+  try {
+    return decodeURIComponent(segment).replace(/^\d+-\d+-/, "");
+  } catch {
+    return segment.replace(/^\d+-\d+-/, "");
+  }
+};
+
+export const redactPrivateUploadUrls = (uploads: unknown): unknown => {
+  if (!uploads || typeof uploads !== "object" || Array.isArray(uploads)) return uploads;
+  const redacted = { ...(uploads as Record<string, unknown>) };
+  for (const field of PRIVATE_UPLOAD_FIELDS) {
+    if (Array.isArray(redacted[field])) {
+      redacted[field] = (redacted[field] as unknown[])
+        .map(attachmentFilename)
+        .filter(Boolean);
+    }
+  }
+  return redacted;
+};
+
 export const redactProposalForPublicView = (
   record: Record<string, unknown>,
 ): Record<string, unknown> => {
@@ -39,6 +72,7 @@ export const redactProposalForPublicView = (
   for (const field of PUBLIC_REDACTED_FIELDS) {
     delete redacted[field];
   }
+  redacted.uploads = redactPrivateUploadUrls(redacted.uploads);
   return redacted;
 };
 

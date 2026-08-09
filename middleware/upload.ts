@@ -120,6 +120,8 @@ export const uploadFields = (
 export const uploadProposalDocs = uploadDocument.fields([
   { name: "supportDocuments", maxCount: 20 },
   { name: "avQuoteFiles", maxCount: 10 },
+  { name: "scenicInspirationFiles", maxCount: 10 },
+  { name: "venueCoiFiles", maxCount: 10 },
 ]);
 
 // Vendor response uploads — restricted document/image types only.

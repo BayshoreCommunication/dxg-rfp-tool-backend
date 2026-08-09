@@ -439,7 +439,7 @@
         "sourceVersionId": { "$ref": "#/$defs/identifier" },
         "category": {
           "type": "string",
-          "enum": ["brief", "brand_guide", "event_logo", "venue_document", "nda", "reference", "quote", "contract", "other"]
+          "enum": ["brief", "brand_guide", "event_logo", "venue_document", "scenic_inspiration", "venue_coi", "nda", "reference", "quote", "contract", "other"]
         },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 300 },
         "externalUrl": { "type": "string", "format": "uri", "maxLength": 2048 }

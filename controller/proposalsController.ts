@@ -677,6 +677,15 @@ export const uploadProposalFiles = async (
     });
   } catch (error) {
     console.error("Upload proposal files error:", error);
+    const uploadError = error as { code?: string; message?: string };
+    if (uploadError.code === "MALWARE_DETECTED" || uploadError.code === "MALWARE_SCAN_UNAVAILABLE") {
+      res.status(422).json({
+        success: false,
+        code: uploadError.code,
+        message: uploadError.message,
+      });
+      return;
+    }
     res.status(500).json({
       success: false,
       message: "Error uploading files",
