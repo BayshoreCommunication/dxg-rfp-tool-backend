@@ -158,6 +158,12 @@ export interface VideoRequirements {
   audienceQaMethod?: string;
   camerasRequired?: NullableBoolean;
   cameraCount?: NonNegativeInteger;
+  cameraPlanMode?: "specific" | "vendor_recommendation";
+  cameraType?: "ptz" | "studio_broadcast" | "both" | "other";
+  ptzCameraCount?: NonNegativeInteger;
+  studioCameraCount?: NonNegativeInteger;
+  otherCameraType?: string;
+  otherCameraCount?: NonNegativeInteger;
   videoRecordingRequired?: NullableBoolean;
   recordingType?: string;
   programConfidenceMonitorRequired?: NullableBoolean;

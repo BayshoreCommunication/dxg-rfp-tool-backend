@@ -126,8 +126,24 @@ export const readFacts = (proposal: UnknownRecord): ProposalFacts => {
     rooms.map((room) => path.reduce<unknown>((node, key) => (node && typeof node === "object" ? (node as UnknownRecord)[key] : undefined), room));
   const firstPositive = (values: unknown[]) => values.map(positive).find((value): value is number => value !== null) ?? null;
 
+  const cameraCountForRoom = (room: UnknownRecord): number | null => {
+    const cameras = asRecord(room.cameras);
+    const type = text(cameras.cameraType);
+    if (text(cameras.cameraPlanMode) === "Specific Camera Plan") {
+      if (type === "PTZ Camera") return positive(cameras.ptzCameraQty);
+      if (type === "Studio / Broadcast Camera") return positive(cameras.studioCameraQty);
+      if (type === "Both") {
+        const ptz = positive(cameras.ptzCameraQty), studio = positive(cameras.studioCameraQty);
+        return ptz && studio ? ptz + studio : null;
+      }
+      if (type === "Other — Specify") return positive(cameras.otherCameraQty);
+    }
+    return positive(cameras.camerasQty);
+  };
+
   const wirelessChannels = firstPositive(roomValue(["wirelessMics", "wirelessMicsQty"]));
-  const cameraCount = positive(videoRecording.numberOfCameras) ?? firstPositive(roomValue(["cameras", "camerasQty"]));
+  const cameraCount = rooms.map(cameraCountForRoom).find((value): value is number => value !== null)
+    ?? positive(videoRecording.numberOfCameras);
   const ledWallRequested = rooms.some((room) => isYes(room.ledWall));
   const ledWallSqFt = (() => {
     for (const room of rooms) {

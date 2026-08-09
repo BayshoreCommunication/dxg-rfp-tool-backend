@@ -242,6 +242,18 @@ test("recording requested asks about cameras, composition and media ownership wh
   assert.ok(prompts.some((k) => k.includes("media-ownership")));
 });
 
+test("vendor-recommended room camera plans do not fabricate or request a count", () => {
+  const result = generate({
+    event: {}, venueSchedule: {},
+    roomByRoom: [room({
+      cameras: { cameras: "Yes", cameraPlanMode: "Vendor Recommendation", camerasQty: "" },
+      videoRecording: { videoRecording: "Yes", videoRecordingType: "Camera Feed Only" },
+    })],
+  });
+  const prompts = allQuestions(result).map((q) => q.questionKey);
+  assert.ok(!prompts.some((key) => key.includes("camera-count")));
+});
+
 // ── Scenario 6: union venue with unknown operational details ──
 test("no union, rigging or power requirements are ever invented", () => {
   const result = generate({

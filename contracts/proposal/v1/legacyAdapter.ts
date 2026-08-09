@@ -206,6 +206,29 @@ const mapRoom = (
   const audienceQa = record(room.audienceQa);
   const cameras = record(room.cameras);
   const recording = record(room.videoRecording);
+  const cameraPlanMode = text(cameras.cameraPlanMode) === "Vendor Recommendation"
+    ? "vendor_recommendation" as const
+    : text(cameras.cameraPlanMode) === "Specific Camera Plan"
+      ? "specific" as const
+      : undefined;
+  const cameraType = (() => {
+    const value = text(cameras.cameraType);
+    if (value === "PTZ Camera") return "ptz" as const;
+    if (value === "Studio / Broadcast Camera") return "studio_broadcast" as const;
+    if (value === "Both") return "both" as const;
+    if (value === "Other — Specify") return "other" as const;
+    return undefined;
+  })();
+  const ptzCameraCount = integer(cameras.ptzCameraQty);
+  const studioCameraCount = integer(cameras.studioCameraQty);
+  const otherCameraCount = integer(cameras.otherCameraQty);
+  const derivedCameraCount = cameraPlanMode === "specific"
+    ? cameraType === "ptz" ? ptzCameraCount
+      : cameraType === "studio_broadcast" ? studioCameraCount
+        : cameraType === "both" && ptzCameraCount !== undefined && studioCameraCount !== undefined
+          ? ptzCameraCount + studioCameraCount
+          : cameraType === "other" ? otherCameraCount : integer(cameras.camerasQty)
+    : integer(cameras.camerasQty);
   const stageWash = record(room.stageWashLighting);
   const programMonitor = record(room.programConfidenceMonitor);
   const notesMonitor = record(room.notesConfidenceMonitor);
@@ -285,7 +308,13 @@ const mapRoom = (
       ...optional("audienceQaRequired", booleanOrNull(audienceQa.audienceQa)),
       ...optional("audienceQaMethod", text(audienceQa.audienceQaMethod)),
       ...optional("camerasRequired", booleanOrNull(cameras.cameras)),
-      ...optional("cameraCount", integer(cameras.camerasQty)),
+      ...optional("cameraCount", derivedCameraCount),
+      ...optional("cameraPlanMode", cameraPlanMode),
+      ...optional("cameraType", cameraType),
+      ...optional("ptzCameraCount", ptzCameraCount),
+      ...optional("studioCameraCount", studioCameraCount),
+      ...optional("otherCameraType", text(cameras.otherCameraType)),
+      ...optional("otherCameraCount", otherCameraCount),
       ...optional("videoRecordingRequired", booleanOrNull(recording.videoRecording)),
       ...optional("recordingType", text(recording.videoRecordingType)),
       ...optional("programConfidenceMonitorRequired", booleanOrNull(programMonitor.programConfidenceMonitor)),

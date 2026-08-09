@@ -133,6 +133,12 @@ export interface VideoRequirements {
   audienceQaMethod?: string;
   camerasRequired?: boolean | null;
   cameraCount?: number;
+  cameraPlanMode?: "specific" | "vendor_recommendation";
+  cameraType?: "ptz" | "studio_broadcast" | "both" | "other";
+  ptzCameraCount?: number;
+  studioCameraCount?: number;
+  otherCameraType?: string;
+  otherCameraCount?: number;
   videoRecordingRequired?: boolean | null;
   recordingType?: string;
   programConfidenceMonitorRequired?: boolean | null;
