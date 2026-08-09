@@ -133,7 +133,7 @@ test("completeness weights the fields a vendor cannot quote without", () => {
   };
   const trimmingsOnly = {
     hybridVirtual: { sponsorOverlays: "yes", virtualNetworking: "yes", virtualBackgroundDesign: "yes", liveVirtualQa: "yes", onDemandRecording: "yes", closedCaptions: { closedCaptions: "yes", captionType: "live" }, streamingPlatform: "zoom", streamOwnership: "client", dedicatedVirtualProducer: "yes", virtualOnlyBreakouts: "no", platformIntegrationWithAv: "yes", virtualAttendeeEstimate: "200" },
-    contentCreative: { contentServicesNeeded: "yes", presentationTemplateDesign: "yes", speakerSlideCollection: "yes", motionGraphicsOpenerVideo: "yes", lowerThirdsNameSupers: "yes", eventLogoBrandStandards: "yes", sizzleRecapVideo: "yes", sponsorRecognitionContent: "yes", socialMediaContentCapture: "yes", virtualBackgroundDesign: "yes", creativeDirectionNotes: "notes" },
+    contentCreative: { contentServicesNeeded: "yes", presentationTemplateDesign: "yes", speakerSlideCollection: "yes", openingClosingVideo: "yes", motionGraphicsStingersBumpers: "yes", lowerThirdsNameSupers: "yes", eventLogoBrandStandards: "yes", sizzleRecapVideo: "yes", sponsorRecognitionContent: "yes", socialMediaContentCapture: "yes", virtualBackgroundDesign: "yes", creativeDirectionNotes: "notes" },
   };
 
   const withEssentials = computeGuidance(essentialsOnly);
