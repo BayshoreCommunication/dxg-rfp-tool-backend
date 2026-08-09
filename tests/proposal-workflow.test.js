@@ -60,7 +60,7 @@ test("a step may be held back by its own conditions, never advanced by them",()=
   // step back is allowed; claiming it complete would not be.
   const unrun=readiness(facts({draftStatus:"succeeded",acceptedSectionCount:1}));
   assert.equal(unrun[3].status,"available");
-  assert.equal(unrun[3].summary,"Run the readiness check for completeness and risk findings");
+  assert.equal(unrun[3].summary,"Readiness & risks");
 
   const run=readiness(facts({draftStatus:"succeeded",acceptedSectionCount:1,guidanceCount:1}));
   assert.equal(run[3].status,"complete");
