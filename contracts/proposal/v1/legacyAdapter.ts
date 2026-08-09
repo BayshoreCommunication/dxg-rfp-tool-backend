@@ -607,6 +607,8 @@ export const mapLegacyProposalToV1 = (
       ...optional("cameraOperatorCount", integer(videoRecording.cameraOperators)),
       ...optional("isoRecordings", text(videoRecording.isoRecordings)),
       ...optional("resolution", text(videoRecording.recordingResolution)),
+      ...optional("codec", text(videoRecording.recordingCodec)),
+      ...optional("recordIn4k", booleanOrNull(videoRecording.recordIn4k)),
       ...optional("recordingMedia", text(videoRecording.recordingMedia)),
       editedDeliverable: {
         ...optional("required", booleanOrNull(editedDeliverable.needed)),

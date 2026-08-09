@@ -409,6 +409,8 @@
         "cameraOperatorCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "isoRecordings": { "type": "string", "maxLength": 500 },
         "resolution": { "type": "string", "maxLength": 100 },
+        "codec": { "type": "string", "enum": ["H.264", "H.265", "ProRes"] },
+        "recordIn4k": { "$ref": "#/$defs/nullableBoolean" },
         "recordingMedia": { "type": "string", "maxLength": 100 },
         "editedDeliverable": { "$ref": "#/$defs/editedDeliverable" },
         "rawFootageTurnover": { "$ref": "#/$defs/nullableBoolean" },

@@ -180,6 +180,8 @@ Schema:
     "cameraOperators": "string — numeric count",
     "isoRecordings": "string — e.g. All cameras ISO",
     "recordingResolution": "string — e.g. 4K, 1080p",
+    "recordingCodec": "one of: H.264 | H.265 | ProRes",
+    "recordIn4k": "one of: YES | NO",
     "recordingMedia": "string — e.g. SSD, NVMe",
     "editedDeliverable": {
       "needed": "one of: YES | NO",

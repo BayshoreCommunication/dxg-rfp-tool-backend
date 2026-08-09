@@ -263,6 +263,8 @@ export interface VideoRecording {
   cameraOperatorCount?: NonNegativeInteger;
   isoRecordings?: string;
   resolution?: string;
+  codec?: "H.264" | "H.265" | "ProRes";
+  recordIn4k?: NullableBoolean;
   recordingMedia?: string;
   editedDeliverable?: EditedDeliverable;
   rawFootageTurnover?: NullableBoolean;
