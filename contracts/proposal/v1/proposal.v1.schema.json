@@ -380,6 +380,8 @@
         "presentationTemplateOwner": { "type": "string", "maxLength": 100 },
         "speakerSlideCollectionOwner": { "type": "string", "maxLength": 100 },
         "motionGraphicsOwner": { "type": "string", "maxLength": 100 },
+        "openingClosingVideoOwner": { "type": "string", "maxLength": 100 },
+        "motionGraphicsStingersBumpersOwner": { "type": "string", "maxLength": 100 },
         "lowerThirdsOwner": { "type": "string", "maxLength": 100 },
         "eventLogoBrandStandardsOwner": { "type": "string", "maxLength": 100 },
         "sizzleRecapOwner": { "type": "string", "maxLength": 100 },

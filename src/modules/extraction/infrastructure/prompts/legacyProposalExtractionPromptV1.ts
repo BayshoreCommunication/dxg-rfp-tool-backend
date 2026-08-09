@@ -161,7 +161,8 @@ Schema:
     "contentServicesNeeded": "one of: YES | NO",
     "presentationTemplateDesign": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
     "speakerSlideCollection": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
-    "motionGraphicsOpenerVideo": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
+    "openingClosingVideo": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
+    "motionGraphicsStingersBumpers": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
     "lowerThirdsNameSupers": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
     "sizzleRecapVideo": "one of: Client / Internal Team | AV Vendor | TBD | N/A",
     "liveDataFeeds": {

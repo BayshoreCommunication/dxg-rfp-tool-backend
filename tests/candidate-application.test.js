@@ -26,6 +26,8 @@ test("text mappings trim and enforce contract max lengths",()=>{
  assert.deepEqual(normalizeCandidate("/content/venueSchedule/venueName","  Aria Ballroom  "),{sourcePath:"/content/venueSchedule/venueName",canonicalPath:"/content/venueSchedule/venueName",mongoPath:"venueSchedule.venueName",canonicalValue:"Aria Ballroom",mongoValue:"Aria Ballroom"});
  assert.throws(()=>normalizeCandidate("/content/venueSchedule/venueName","x".repeat(301)),CandidateApplicationError);
  assert.equal(normalizeCandidate("/content/contentCreative/presentationTemplateDesign","AV Vendor").mongoValue,"AV Vendor");
+ assert.equal(normalizeCandidate("/content/contentCreative/openingClosingVideo","AV Vendor").canonicalPath,"/content/contentCreative/openingClosingVideoOwner");
+ assert.equal(normalizeCandidate("/content/contentCreative/motionGraphicsStingersBumpers","Client / Internal Team").mongoPath,"contentCreative.motionGraphicsStingersBumpers");
  assert.throws(()=>normalizeCandidate("/content/contentCreative/presentationTemplateDesign","x".repeat(101)),CandidateApplicationError);
 });
 test("enum mappings accept case/space/hyphen-insensitive input and reject unknown values",()=>{

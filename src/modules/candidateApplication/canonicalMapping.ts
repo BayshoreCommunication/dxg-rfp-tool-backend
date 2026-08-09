@@ -204,6 +204,8 @@ const mappings: Record<string, Mapping> = {
     t("presentationTemplateDesign", "presentationTemplateOwner", 100),
     t("speakerSlideCollection", "speakerSlideCollectionOwner", 100),
     t("motionGraphicsOpenerVideo", "motionGraphicsOwner", 100),
+    t("openingClosingVideo", "openingClosingVideoOwner", 100),
+    t("motionGraphicsStingersBumpers", "motionGraphicsStingersBumpersOwner", 100),
     t("lowerThirdsNameSupers", "lowerThirdsOwner", 100),
     t("eventLogoBrandStandards", "eventLogoBrandStandardsOwner", 100),
     t("sizzleRecapVideo", "sizzleRecapOwner", 100),

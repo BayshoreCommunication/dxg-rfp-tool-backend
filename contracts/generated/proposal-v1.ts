@@ -242,6 +242,8 @@ export interface ContentCreative {
   presentationTemplateOwner?: string;
   speakerSlideCollectionOwner?: string;
   motionGraphicsOwner?: string;
+  openingClosingVideoOwner?: string;
+  motionGraphicsStingersBumpersOwner?: string;
   lowerThirdsOwner?: string;
   eventLogoBrandStandardsOwner?: string;
   sizzleRecapOwner?: string;

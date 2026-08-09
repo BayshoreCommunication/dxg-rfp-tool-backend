@@ -587,6 +587,8 @@ export const mapLegacyProposalToV1 = (
       ...optional("presentationTemplateOwner", text(creative.presentationTemplateDesign)),
       ...optional("speakerSlideCollectionOwner", text(creative.speakerSlideCollection)),
       ...optional("motionGraphicsOwner", text(creative.motionGraphicsOpenerVideo)),
+      ...optional("openingClosingVideoOwner", text(creative.openingClosingVideo)),
+      ...optional("motionGraphicsStingersBumpersOwner", text(creative.motionGraphicsStingersBumpers)),
       ...optional("lowerThirdsOwner", text(creative.lowerThirdsNameSupers)),
       ...optional("eventLogoBrandStandardsOwner", text(creative.eventLogoBrandStandards)),
       ...optional("sizzleRecapOwner", text(creative.sizzleRecapVideo)),
