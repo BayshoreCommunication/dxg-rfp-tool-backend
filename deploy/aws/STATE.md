@@ -121,10 +121,11 @@ av-rfpilot.com — check `aws sesv2 get-account` for approval.
   release). Knowledge browser uploads need documents-bucket CORS
   (applied out-of-band + codified in data-stack.ts; add real admin
   origins before prod). Admin account exists (dxgrfptool+admin@gmail.com).
-- **API runs exactly 1 task** (stop-then-start deploys, ~30–60s window):
-  its cron jobs are unlocked-destructive and WebSocket fan-out is
-  process-local. Before scaling: set `CRON_ENABLED=false` on extra
-  replicas and add Redis pub/sub notification fan-out.
+- **API runs one steady-state task with rolling overlap** (`100/200`) and
+  `CRON_ENABLED=false`, keeping one healthy target throughout a deploy.
+  Unlocked destructive cron jobs run in a separate singleton `cron` service
+  that replaces stop-then-start. WebSocket fan-out is still process-local;
+  add Redis pub/sub before steady-state horizontal API scaling.
 - ClamAV fail-closed is intended behavior (vendor uploads 503 / sources
   `scan_failed` when the scanner is down).
 - Redis is transport-only (no snapshots on purpose; outbox reconciles).

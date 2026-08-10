@@ -95,11 +95,12 @@ cd deploy/aws && npx cdk deploy Rfpilot-<env>-App -c imageTag=sha-<commit> --req
 
 ## Operational notes (from the discovery report — do not "fix" casually)
 
-- **The API runs exactly one task**, deployed stop-then-start (~30–60s
-  downtime per deploy). Its cron jobs are unlocked and destructive
-  (proposal purges), and WebSocket notification fan-out is process-local.
-  Before raising `desiredCount`, set `CRON_ENABLED=false` on the extra
-  replicas and add a Redis pub/sub fan-out for notifications.
+- **The API runs one steady-state task with rolling overlap** (`100/200`), so
+  deployments keep one healthy ALB target. API tasks always set
+  `CRON_ENABLED=false`; unlocked destructive cron jobs run in the separate
+  singleton `cron` service, which deliberately replaces stop-then-start.
+  WebSocket notification fan-out remains process-local, so horizontal
+  steady-state API scaling still requires Redis pub/sub fan-out.
 - **ClamAV is fail-closed by design.** If the `clamav` service is down,
   vendor uploads 503 and planner sources sit in `scan_failed` (retryable) —
   that is intended behavior, not an outage to work around. First start

@@ -57,6 +57,7 @@ export class ObservabilityStack extends cdk.Stack {
      * worker and dispatcher, which cannot be probed over the network. */
     for (const [name, service, desired] of [
       ["api", app.apiService, 1],
+      ["cron", app.cronService, 1],
       ["worker", app.workerService, 1],
       ["dispatcher", app.dispatcherService, 1],
       ["clamav", app.clamavService, 1],

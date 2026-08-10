@@ -14,16 +14,15 @@ import { EnvironmentConfig } from './config';
 import { DataStack } from './data-stack';
 import { NetworkStack } from './network-stack';
 
-/* ECS cluster and the four services (api / worker / dispatcher / clamav),
+/* ECS cluster and the API / cron / worker / dispatcher / clamav services,
  * ALB + WAF, the one-off migration task definition, and the CDN in front of
  * app assets. The api/worker/dispatcher containers run the same immutable
  * image (tag = git SHA via `-c imageTag=...`) with different commands.
  *
  * Deliberate choices, from the discovery report:
- * - API runs exactly 1 task, deployed stop-then-start (minHealthy 0): its
- *   cron jobs have no cross-replica locking and its WebSocket fan-out is
- *   process-local, so two live API tasks — even briefly during a rolling
- *   deploy — can duplicate destructive purges and drop notifications.
+ * - API runs exactly 1 steady-state task but rolls with one-task overlap so
+ *   the ALB always has a healthy target. Singleton cron work runs in its own
+ *   stop-then-start service, where overlap cannot duplicate destructive jobs.
  * - ClamAV is a dedicated internal service (both API and worker scan).
  * - ALB health-checks GET / (static, dependency-free); GET /health couples
  *   to Mongo/PG/Redis and would evict every task on a dependency blip.
@@ -33,6 +32,7 @@ import { NetworkStack } from './network-stack';
 export class AppStack extends cdk.Stack {
   public readonly cluster: ecs.Cluster;
   public readonly apiService: ecs.FargateService;
+  public readonly cronService: ecs.FargateService;
   public readonly workerService: ecs.FargateService;
   public readonly dispatcherService: ecs.FargateService;
   public readonly clamavService: ecs.FargateService;
@@ -207,7 +207,7 @@ export class AppStack extends cdk.Stack {
     apiTaskDef.addContainer('api', {
       image: appImage,
       command: ['node', 'dist/server.js'],
-      environment: { ...sharedEnvironment, CRON_ENABLED: 'true' },
+      environment: { ...sharedEnvironment, CRON_ENABLED: 'false' },
       secrets: { ...sharedSecrets, ...apiOnlySecrets },
       logging: ecs.LogDrivers.awsLogs({
         logGroup: logGroup('Api'),
@@ -238,14 +238,59 @@ export class AppStack extends cdk.Stack {
       desiredCount: 1,
       securityGroups: [network.apiSg],
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-      // Stop-then-start (see header comment): never two API tasks at once.
-      minHealthyPercent: 0,
-      maxHealthyPercent: 100,
+      // Keep the old healthy target registered until its replacement passes
+      // container and ALB checks. Singleton mutations live in cronService, so
+      // a short API overlap is safe and production never drops to zero targets.
+      minHealthyPercent: 100,
+      maxHealthyPercent: 200,
       circuitBreaker: { enable: true, rollback: true },
       healthCheckGracePeriod: cdk.Duration.seconds(120),
       serviceConnectConfiguration: {},
       enableExecuteCommand: false,
     });
+
+    /* ── Singleton cron worker ───────────────────────────────────────── */
+    const cronTaskDef = makeTaskDefinition(
+      'Cron',
+      config.ecs.dispatcher,
+    );
+    cronTaskDef.addContainer('cron', {
+      image: appImage,
+      command: ['node', 'dist/scripts/startCronWorker.js'],
+      environment: sharedEnvironment,
+      secrets: {
+        MONGODB_URL: secret('MONGODB_URL'),
+        POSTGRES_URL: secret('POSTGRES_URL'),
+        TELEMETRY_PSEUDONYM_KEY: secret('TELEMETRY_PSEUDONYM_KEY'),
+      },
+      logging: ecs.LogDrivers.awsLogs({
+        logGroup: logGroup('Cron'),
+        streamPrefix: 'cron',
+      }),
+      stopTimeout: cdk.Duration.seconds(120),
+    });
+    documentsBucket.grantReadWrite(cronTaskDef.taskRole);
+    documentsBucket.grantDelete(cronTaskDef.taskRole);
+
+    this.cronService = new ecs.FargateService(
+      this,
+      'CronService',
+      {
+        cluster: this.cluster,
+        serviceName: 'cron',
+        taskDefinition: cronTaskDef,
+        desiredCount: 1,
+        securityGroups: [network.workerSg],
+        vpcSubnets: {
+          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+        },
+        // The jobs run immediately on startup and do not use a distributed
+        // lease. Preserve singleton execution by replacing without overlap.
+        minHealthyPercent: 0,
+        maxHealthyPercent: 100,
+        circuitBreaker: { enable: true, rollback: true },
+      },
+    );
 
     /* ── Worker ──────────────────────────────────────────────────────── */
     const workerTaskDef = makeTaskDefinition(
