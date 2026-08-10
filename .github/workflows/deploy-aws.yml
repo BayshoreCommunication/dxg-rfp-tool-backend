@@ -172,15 +172,36 @@ jobs:
           # it resets every operator-filled value to REPLACE_ME (this bit us
           # on 2026-08-02). Data/Network changes are deliberate manual
           # deploys per the README runbook.
-          # Apply the rollout policy before CloudFormation changes the task
-          # definition. On the one-time migration from 0/100, CloudFormation
-          # can otherwise start the task replacement before it updates the
-          # DeploymentConfiguration property, causing one final outage.
-          aws ecs update-service \
+          # Apply the rollout policy in a CloudFormation-only first phase when
+          # migrating an existing 0/100 service. The phase deliberately keeps
+          # the currently deployed image and in-process cron setting, so the
+          # task definition does not change before 100/200 is stored.
+          ROLLOUT=$(aws ecs describe-services \
             --cluster "${{ steps.outputs.outputs.cluster }}" \
-            --service api \
-            --deployment-configuration minimumHealthyPercent=100,maximumPercent=200 \
-            >/dev/null
+            --services api \
+            --query 'services[0].deploymentConfiguration.[minimumHealthyPercent,maximumPercent]' \
+            --output text)
+          if [ "$ROLLOUT" != $'100\t200' ]; then
+            CURRENT_TASK=$(aws ecs describe-services \
+              --cluster "${{ steps.outputs.outputs.cluster }}" \
+              --services api --query 'services[0].taskDefinition' --output text)
+            CURRENT_IMAGE=$(aws ecs describe-task-definition \
+              --task-definition "$CURRENT_TASK" \
+              --query "taskDefinition.containerDefinitions[?name=='api'].image | [0]" \
+              --output text)
+            CURRENT_TAG="${CURRENT_IMAGE##*:}"
+            echo "Migrating API rollout policy with current image ${CURRENT_TAG}"
+            npx cdk deploy "Rfpilot-${ENV_NAME}-App" \
+              --exclusively \
+              --require-approval never \
+              -c imageTag="$CURRENT_TAG" \
+              -c env="${ENV_NAME}" \
+              -c rolloutPolicyOnly=true \
+              -c certificateArn="${{ vars.CERTIFICATE_ARN }}" \
+              -c apiDomain="${{ vars.API_DOMAIN }}" \
+              -c frontendUrl="${{ vars.FRONTEND_URL }}" \
+              -c adminUrl="${{ vars.ADMIN_URL }}"
+          fi
 
           # Continuously probe the public API during the infrastructure
           # update. A post-deploy smoke test cannot detect the transient 503

@@ -48,6 +48,13 @@ export class AppStack extends cdk.Stack {
   ) {
     super(scope, id, props);
 
+    // Used only by the release workflow when migrating an existing service
+    // from stop-first (0/100) to rolling (100/200). That first phase preserves
+    // the current API task definition and omits the not-yet-deployed cron
+    // service, so CloudFormation changes only DeploymentConfiguration.
+    const rolloutPolicyOnly =
+      this.node.tryGetContext('rolloutPolicyOnly') === 'true';
+
     const imageTag =
       this.node.tryGetContext('imageTag') ?? 'bootstrap';
     const certificateArn = this.node.tryGetContext(
@@ -207,7 +214,10 @@ export class AppStack extends cdk.Stack {
     apiTaskDef.addContainer('api', {
       image: appImage,
       command: ['node', 'dist/server.js'],
-      environment: { ...sharedEnvironment, CRON_ENABLED: 'false' },
+      environment: {
+        ...sharedEnvironment,
+        CRON_ENABLED: rolloutPolicyOnly ? 'true' : 'false',
+      },
       secrets: { ...sharedSecrets, ...apiOnlySecrets },
       logging: ecs.LogDrivers.awsLogs({
         logGroup: logGroup('Api'),
@@ -250,50 +260,57 @@ export class AppStack extends cdk.Stack {
     });
 
     /* ── Singleton cron worker ───────────────────────────────────────── */
-    const cronTaskDef = makeTaskDefinition(
-      'Cron',
-      config.ecs.dispatcher,
-    );
-    cronTaskDef.addContainer('cron', {
-      image: appImage,
-      command: ['node', 'dist/scripts/startCronWorker.js'],
-      environment: sharedEnvironment,
-      // Keep startup parity with the proven API task. Some cron imports load
-      // shared application modules eagerly, so a reduced secret set can make
-      // the container exit before the scheduler starts even when a particular
-      // job would only use Mongo/Postgres at runtime.
-      secrets: { ...sharedSecrets, ...apiOnlySecrets },
-      logging: ecs.LogDrivers.awsLogs({
-        logGroup: logGroup('Cron'),
-        streamPrefix: 'cron',
-      }),
-      stopTimeout: cdk.Duration.seconds(120),
-    });
-    documentsBucket.grantReadWrite(cronTaskDef.taskRole);
-    documentsBucket.grantDelete(cronTaskDef.taskRole);
+    if (rolloutPolicyOnly) {
+      // Observability is synthesized alongside this stack but is not deployed
+      // in the policy-only phase. Keep its non-optional service reference
+      // valid without creating any cron resources in the App template.
+      this.cronService = this.apiService;
+    } else {
+      const cronTaskDef = makeTaskDefinition(
+        'Cron',
+        config.ecs.dispatcher,
+      );
+      cronTaskDef.addContainer('cron', {
+        image: appImage,
+        command: ['node', 'dist/scripts/startCronWorker.js'],
+        environment: sharedEnvironment,
+        // Keep startup parity with the proven API task. Some cron imports load
+        // shared application modules eagerly, so a reduced secret set can make
+        // the container exit before the scheduler starts even when a particular
+        // job would only use Mongo/Postgres at runtime.
+        secrets: { ...sharedSecrets, ...apiOnlySecrets },
+        logging: ecs.LogDrivers.awsLogs({
+          logGroup: logGroup('Cron'),
+          streamPrefix: 'cron',
+        }),
+        stopTimeout: cdk.Duration.seconds(120),
+      });
+      documentsBucket.grantReadWrite(cronTaskDef.taskRole);
+      documentsBucket.grantDelete(cronTaskDef.taskRole);
 
-    this.cronService = new ecs.FargateService(
-      this,
-      'CronService',
-      {
-        cluster: this.cluster,
-        serviceName: 'cron',
-        taskDefinition: cronTaskDef,
-        desiredCount: 1,
-        // Use the same outbound/network posture as the API, where these jobs
-        // previously ran successfully in-process. The cron task has no ALB
-        // target, so the API security group's ingress rule is never exercised.
-        securityGroups: [network.apiSg],
-        vpcSubnets: {
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      this.cronService = new ecs.FargateService(
+        this,
+        'CronService',
+        {
+          cluster: this.cluster,
+          serviceName: 'cron',
+          taskDefinition: cronTaskDef,
+          desiredCount: 1,
+          // Use the same outbound/network posture as the API, where these jobs
+          // previously ran successfully in-process. The cron task has no ALB
+          // target, so the API security group's ingress rule is never exercised.
+          securityGroups: [network.apiSg],
+          vpcSubnets: {
+            subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+          },
+          // The jobs run immediately on startup and do not use a distributed
+          // lease. Preserve singleton execution by replacing without overlap.
+          minHealthyPercent: 0,
+          maxHealthyPercent: 100,
+          circuitBreaker: { enable: true, rollback: true },
         },
-        // The jobs run immediately on startup and do not use a distributed
-        // lease. Preserve singleton execution by replacing without overlap.
-        minHealthyPercent: 0,
-        maxHealthyPercent: 100,
-        circuitBreaker: { enable: true, rollback: true },
-      },
-    );
+      );
+    }
 
     /* ── Worker ──────────────────────────────────────────────────────── */
     const workerTaskDef = makeTaskDefinition(
