@@ -162,6 +162,7 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
     mongoDbName: "dxg_rfp_tool_prod",
     assetPublicUrlBase: "https://d1hn23mh1h53mx.cloudfront.net",
     browserUploadOrigins: [
+      "https://av-rfpilot.com",
       "https://admin.av-rfpilot.com",
       "http://localhost:3001",
       "http://localhost:3000",

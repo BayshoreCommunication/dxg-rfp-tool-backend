@@ -56,6 +56,14 @@ export class NetworkStack extends cdk.Stack {
       new ec2.SecurityGroup(this, name, { vpc: this.vpc, description, allowAllOutbound: true });
 
     this.albSg = sg("AlbSg", "RFPilot ALB");
+    // Static, unconditional on config context: previously these came only
+    // from app-stack.ts's addListener() auto-managed connections, which
+    // exist only when `-c certificateArn=...` is passed. A manual
+    // Network/Data-only deploy (no certificateArn context) synthesizes
+    // app-stack.ts in HTTP-only bootstrap mode, silently dropping the 443
+    // rule from this shared stack and breaking HTTPS in prod (2026-08-10).
+    this.albSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), "Allow from anyone on port 80");
+    this.albSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), "Allow from anyone on port 443");
     this.apiSg = sg("ApiSg", "RFPilot API tasks");
     this.workerSg = sg("WorkerSg", "RFPilot durable worker tasks");
     this.dispatcherSg = sg("DispatcherSg", "RFPilot dispatcher tasks");
