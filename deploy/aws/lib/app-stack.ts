@@ -258,11 +258,11 @@ export class AppStack extends cdk.Stack {
       image: appImage,
       command: ['node', 'dist/scripts/startCronWorker.js'],
       environment: sharedEnvironment,
-      secrets: {
-        MONGODB_URL: secret('MONGODB_URL'),
-        POSTGRES_URL: secret('POSTGRES_URL'),
-        TELEMETRY_PSEUDONYM_KEY: secret('TELEMETRY_PSEUDONYM_KEY'),
-      },
+      // Keep startup parity with the proven API task. Some cron imports load
+      // shared application modules eagerly, so a reduced secret set can make
+      // the container exit before the scheduler starts even when a particular
+      // job would only use Mongo/Postgres at runtime.
+      secrets: { ...sharedSecrets, ...apiOnlySecrets },
       logging: ecs.LogDrivers.awsLogs({
         logGroup: logGroup('Cron'),
         streamPrefix: 'cron',
@@ -280,7 +280,10 @@ export class AppStack extends cdk.Stack {
         serviceName: 'cron',
         taskDefinition: cronTaskDef,
         desiredCount: 1,
-        securityGroups: [network.workerSg],
+        // Use the same outbound/network posture as the API, where these jobs
+        // previously ran successfully in-process. The cron task has no ALB
+        // target, so the API security group's ingress rule is never exercised.
+        securityGroups: [network.apiSg],
         vpcSubnets: {
           subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
         },

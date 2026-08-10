@@ -161,6 +161,7 @@ jobs:
       - name: Deploy application stacks
         working-directory: deploy/aws
         run: |
+          set -euo pipefail
           npm ci
           # Domain/cert/URL contexts come from environment-scoped GitHub
           # variables (empty = HTTP bootstrap mode, see app-stack.ts), so a
@@ -171,6 +172,35 @@ jobs:
           # it resets every operator-filled value to REPLACE_ME (this bit us
           # on 2026-08-02). Data/Network changes are deliberate manual
           # deploys per the README runbook.
+          # Apply the rollout policy before CloudFormation changes the task
+          # definition. On the one-time migration from 0/100, CloudFormation
+          # can otherwise start the task replacement before it updates the
+          # DeploymentConfiguration property, causing one final outage.
+          aws ecs update-service \
+            --cluster "${{ steps.outputs.outputs.cluster }}" \
+            --service api \
+            --deployment-configuration minimumHealthyPercent=100,maximumPercent=200 \
+            >/dev/null
+
+          # Continuously probe the public API during the infrastructure
+          # update. A post-deploy smoke test cannot detect the transient 503
+          # window that originally broke attachment extraction.
+          HEALTH_LOG=$(mktemp)
+          API_DOMAIN="${{ vars.API_DOMAIN }}"
+          if [ -n "$API_DOMAIN" ]; then
+            (
+              while true; do
+                CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+                  "https://${API_DOMAIN}/health" || true)
+                printf '%s %s\n' "$(date -u +%FT%TZ)" "${CODE:-curl-error}"
+                sleep 5
+              done
+            ) > "$HEALTH_LOG" &
+            HEALTH_PID=$!
+            trap 'kill "$HEALTH_PID" 2>/dev/null || true' EXIT
+          fi
+
+          DEPLOY_STATUS=0
           npx cdk deploy "Rfpilot-${ENV_NAME}-App" "Rfpilot-${ENV_NAME}-Observability" \
             --exclusively \
             --require-approval never \
@@ -179,11 +209,32 @@ jobs:
             -c certificateArn="${{ vars.CERTIFICATE_ARN }}" \
             -c apiDomain="${{ vars.API_DOMAIN }}" \
             -c frontendUrl="${{ vars.FRONTEND_URL }}" \
-            -c adminUrl="${{ vars.ADMIN_URL }}"
+            -c adminUrl="${{ vars.ADMIN_URL }}" || DEPLOY_STATUS=$?
+
+          if [ -n "${HEALTH_PID:-}" ]; then
+            kill "$HEALTH_PID" 2>/dev/null || true
+            wait "$HEALTH_PID" 2>/dev/null || true
+            trap - EXIT
+            echo "Health samples captured during deployment:"
+            cat "$HEALTH_LOG"
+            if awk '$2 != "200" { found=1 } END { exit !found }' "$HEALTH_LOG"; then
+              echo "The public API became unavailable during deployment."
+              exit 1
+            fi
+          fi
+          exit "$DEPLOY_STATUS"
 
       - name: Smoke checks
         run: |
           set -euo pipefail
+          ROLLOUT=$(aws ecs describe-services \
+            --cluster "${{ steps.outputs.outputs.cluster }}" \
+            --services api \
+            --query 'services[0].deploymentConfiguration.[minimumHealthyPercent,maximumPercent]' \
+            --output text)
+          echo "API rollout policy (minimum maximum): ${ROLLOUT}"
+          [ "$ROLLOUT" = $'100\t200' ]
+
           # -kL: follow the 80->443 redirect once HTTPS exists; the ALB's
           # default DNS name is not on the certificate, so skip verification
           # for this infrastructure smoke check only.
