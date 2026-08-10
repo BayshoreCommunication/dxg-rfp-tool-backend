@@ -184,6 +184,18 @@ av-rfpilot.com — check `aws sesv2 get-account` for approval.
 
 ## Deferred/known items
 
+- **`OBSERVABILITY_ENABLED=true` added to `sharedEnvironment` 2026-08-10**
+  (needs a deploy to take effect). Until it ships, `safeLog` returns early and
+  the only thing in `/rfpilot/<env>/api` is morgan's access line, so a failure
+  cannot be traced by correlation id — verified as 0 hits for
+  `http.request.completed` across 60k records. `OTEL_EXPORTER_OTLP_ENDPOINT`
+  stays deliberately unset because no collector sidecar exists in these task
+  definitions; `config/observability.ts` now skips the exporter entirely when
+  no endpoint is configured (with the old localhost default it opened ~3
+  doomed connections/second). `TELEMETRY_PSEUDONYM_KEY` was added to the
+  migrate task's secrets: it shares `sharedEnvironment`, and `safeTelemetry`
+  throws on import without that key in production. Set the endpoint if a
+  collector is ever added.
 - Queue-backlog + outbox-age CloudWatch metrics probe (scheduled task) —
   worker/dispatcher have no health port; today's signal is RunningTaskCount
   alarms + PG heartbeat queries (see README "Operational notes").

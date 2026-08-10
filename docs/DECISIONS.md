@@ -1,10 +1,11 @@
 # Architectural Decisions
 
-> Purpose: concise register of accepted, durable decisions. Last updated: 2026-07-29. Owner: engineering/product.
+> Purpose: concise register of accepted, durable decisions. Last updated: 2026-08-10. Owner: engineering/product.
 
 | Decision | Rationale / consequence |
 |---|---|
 | MongoDB remains proposal-content authority. | Avoids a destructive product migration; PostgreSQL references proposals and owns the AI domain. |
+| The PostgreSQL identity projection is created at sign-in, not at signup (2026-08-10). | Nothing projected MongoDB accounts into `rfpilot.users`, so every new signup authenticated and then got 503 `ASSISTANT_ACTOR_NOT_READY` from the assistant, drafts, guidance and every other AI surface. Projecting in `beginAuthenticatedSession` covers all five auth entry points with one hook and also repairs accounts created earlier, on their next sign-in. The projection returns failures as outcomes instead of throwing, because an unavailable data foundation must degrade to "AI is off for now" rather than "you cannot sign in"; the AI modules already fail closed. It never reactivates a suspended organization or removed user, so revoked access cannot restore itself by signing in. `npm run backfill:identity-projections` repairs the existing population without waiting for sign-ins. |
 | PostgreSQL owns durable AI state; Redis is transport only. | RLS, auditability, recovery, and reference-only queue messages. |
 | Canonical `proposal.v1` contract with generated types. | One validated shape across API, AI, UI, and tests while legacy adapters preserve compatibility. |
 | Canonical migration uses immutable snapshots, not in-place rewrites. | Dry-run, review, idempotency, and rollback without touching legacy records. |

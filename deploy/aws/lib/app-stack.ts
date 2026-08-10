@@ -103,6 +103,14 @@ export class AppStack extends cdk.Stack {
       POSTGRES_FOUNDATION_ENABLED: "true",
       POSTGRES_SSL: "true",
       NODE_EXTRA_CA_CERTS: "/app/rds-global-bundle.pem",
+      /* Without this safeLog returns early and the only thing reaching
+         CloudWatch is morgan's access line, so a failed request cannot be
+         traced by its correlation id. OTEL_EXPORTER_OTLP_ENDPOINT stays unset
+         on purpose: there is no collector sidecar in these task definitions,
+         and config/observability.ts skips the exporter when no endpoint is
+         configured, so this buys the structured stdout logs without an
+         export-retry loop. Set the endpoint if a collector is ever added. */
+      OBSERVABILITY_ENABLED: "true",
       DURABLE_JOBS_ENABLED: "true",
       DOCUMENT_INGESTION_ENABLED: "true",
       DOCUMENT_STORAGE_BUCKET: documentsBucket.bucketName,
@@ -340,6 +348,12 @@ export class AppStack extends cdk.Stack {
       secrets: {
         POSTGRES_URL: secret("POSTGRES_URL"),
         POSTGRES_MIGRATION_URL: secret("POSTGRES_MIGRATION_URL"),
+        /* Not used by the migrator today, but safeTelemetry throws on import
+           when observability is enabled in production without it. This task
+           shares sharedEnvironment, so one future import anywhere in the
+           migration path would otherwise fail every deployment's migrate step
+           rather than anything obviously telemetry-shaped. */
+        TELEMETRY_PSEUDONYM_KEY: secret("TELEMETRY_PSEUDONYM_KEY"),
       },
       logging: ecs.LogDrivers.awsLogs({ logGroup: logGroup("Migrate"), streamPrefix: "migrate" }),
     });

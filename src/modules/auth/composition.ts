@@ -25,6 +25,8 @@ import {
   bcryptPasswordHasher,
   bcryptPasswordVerifier,
 } from "../../shared/security/bcryptPasswordHasher";
+import { safeLog } from "../../shared/observability/safeTelemetry";
+import { ensureIdentityProjection } from "../dataFoundation/composition";
 import { REFRESH_TOKEN_EXPIRY_MS } from "../../../config/jwt";
 
 export const requestAuthenticationOtp = createRequestOtp({
@@ -84,6 +86,49 @@ export const authenticationSessions = createSessionManager({
   refreshTokenTtlMs: REFRESH_TOKEN_EXPIRY_MS,
 });
 
+/* Every governed AI table in PostgreSQL is keyed off an rfpilot.users row that
+   MongoDB signup does not create, so without this an account authenticates
+   fine and then gets 503 ASSISTANT_ACTOR_NOT_READY from the assistant, the
+   proposal draft, guidance and every other AI surface. Projecting on session
+   establishment rather than at signup also repairs accounts created before
+   this existed, on their next sign-in, with no backfill run.
+
+   A projection failure must never block authentication: the AI modules already
+   fail closed on a missing row, and the next sign-in retries. */
+const provisionIdentityProjection = async (input: {
+  userId: string;
+  organizationId: string;
+  correlationId: string;
+}) => {
+  const outcome = await ensureIdentityProjection({
+    organizationMongoId: input.organizationId,
+    userMongoId: input.userId,
+    correlationId: input.correlationId,
+  });
+  if (outcome.kind === "ensured") {
+    if (outcome.userCreated || outcome.organizationCreated) {
+      safeLog("info", "identity.projection.created", {
+        correlationId: input.correlationId,
+        outcome: "success",
+      });
+    }
+    return;
+  }
+  if (outcome.kind === "skipped") return;
+  const errorCode = outcome.kind === "failed" ? outcome.code : "INVALID_EXTERNAL_ID";
+  safeLog("error", "identity.projection.failed", {
+    correlationId: input.correlationId,
+    errorCode,
+    outcome: "failure",
+  });
+  /* safeLog is inert unless OBSERVABILITY_ENABLED, and this failure silently
+     disables every AI feature for the account, so it also goes to stdout.
+     Code and correlation id only — never the identifiers themselves. */
+  console.error(
+    `identity.projection.failed code=${errorCode} correlationId=${input.correlationId}`,
+  );
+};
+
 export const beginAuthenticatedSession = async (input: {
   userId: string;
   organizationId: string;
@@ -93,5 +138,6 @@ export const beginAuthenticatedSession = async (input: {
 }) => {
   const account = await mongoSessionAccountLoader.load(input.userId, input.organizationId);
   if (!account) throw new Error("Active organization membership is required");
+  await provisionIdentityProjection(input);
   return authenticationSessions.begin({ account, ...input });
 };
