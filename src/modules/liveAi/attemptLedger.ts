@@ -12,7 +12,7 @@ export type ProviderAttemptContext = {
   organizationId: string;
 };
 
-export type ProviderAttempt = { id: string; fingerprint: string; attemptNumber: number };
+export type ProviderAttempt = { id: string; fingerprint: string; idempotencyKey: string; attemptNumber: number };
 
 const tenant = async (c: PoolClient, organizationId: string) => {
   await c.query("SELECT set_config('app.organization_id',$1,true)", [organizationId]);
@@ -20,7 +20,7 @@ const tenant = async (c: PoolClient, organizationId: string) => {
 
 export const beginProviderAttempt = async (
   ctx: ProviderAttemptContext,
-  call: { provider: string; model: string; operation: "extractStructured" | "generateFromEvidence" },
+  call: { provider: string; model: string; operation: "extractStructured" | "generateFromEvidence"; idempotencyPhase?: string },
 ): Promise<ProviderAttempt> =>
   withPostgresTransaction(async (c) => {
     await tenant(c, ctx.organizationId);
@@ -35,11 +35,16 @@ export const beginProviderAttempt = async (
     const attemptNumber = Number(prior.rows[0]?.n ?? 0) + 1;
     const id = uuidv7();
     const fingerprint = `${ctx.runType}:${ctx.runId}:${attemptNumber}`;
+    // Attempt fingerprints remain unique audit rows, while the provider key is
+    // stable for one logical phase of an idempotent run. A worker retry can
+    // therefore be recorded as a new attempt without charging for a duplicate
+    // broad/recovery generation when the provider honors idempotency keys.
+    const idempotencyKey = `${ctx.runType}:${ctx.runId}:${call.idempotencyPhase ?? call.operation}`;
     await c.query(
       "INSERT INTO rfpilot.ai_provider_attempts(id,organization_id,run_type,run_id,attempt_number,attempt_fingerprint,state,provider,model,operation) VALUES($1,$2,$3,$4,$5,$6,'pending_call',$7,$8,$9)",
       [id, ctx.organizationId, ctx.runType, ctx.runId, attemptNumber, fingerprint, call.provider, call.model, call.operation],
     );
-    return { id, fingerprint, attemptNumber };
+    return { id, fingerprint, idempotencyKey, attemptNumber };
   });
 
 export const completeProviderAttempt = async (

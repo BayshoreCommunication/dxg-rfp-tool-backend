@@ -343,6 +343,17 @@ test("the conversation read payload carries the answer control alongside the imp
   assert.ok(/SELECT[^;]*answered_message_id[^;]*FROM rfpilot\.clarification_questions/.test(repository), "the column must be selected");
 });
 
+test("reading an existing conversation does not advance its updated timestamp", () => {
+  const repository = fs.readFileSync(path.join(root, "src/modules/conversations/postgresConversationRepository.ts"), "utf8");
+  assert.ok(repository.includes("ON CONFLICT(proposal_reference_id) DO NOTHING"));
+  assert.ok(repository.includes("SELECT * FROM rfpilot.conversations WHERE proposal_reference_id=$1"));
+  assert.equal(
+    repository.includes("ON CONFLICT(proposal_reference_id) DO UPDATE SET updated_at=now()"),
+    false,
+    "a read must not look like a conversation mutation",
+  );
+});
+
 test("the conversation endpoint exposes runtime chat-extraction capability", () => {
   const controller = fs.readFileSync(path.join(root, "controller/conversationsController.ts"), "utf8");
   assert.ok(controller.includes("conversationExtractionEnabled"));
@@ -497,15 +508,16 @@ test("deterministic chat fallbacks welcome the planner without false persistence
 });
 
 test("source extraction explicitly preserves discrete high-value facts embedded in prose", () => {
-  const operations = fs.readFileSync(path.join(root, "src/modules/liveAi/operations.ts"), "utf8");
+  const { candidateFieldGuidance } = require("../src/modules/liveAi/extractionPipeline");
+  const guidance = candidateFieldGuidance();
   for (const field of [
-    "in-person attendee count",
-    "virtual attendee count",
-    "event-room count",
-    "proposal response deadline",
-    "stated budget tier",
+    "/content/event/attendees",
+    "/content/hybridVirtual/virtualAttendeeEstimate",
+    "/content/venueSchedule/numberOfEventRooms",
+    "/content/budget/proposalSubmissionDueDate",
+    "/content/budget/estimatedAvBudget",
   ])
-    assert.ok(operations.includes(field), field);
+    assert.ok(guidance.includes(field), field);
 });
 
 test("suggested answers convert extraction candidates into submittable answer strings", () => {
@@ -525,6 +537,15 @@ test("suggested answers convert extraction candidates into submittable answer st
     suggestedAnswerFor(["/content/hybridVirtual/streamingPlatform"], "vendor recommendation needed"),
     "Vendor Recommendation Needed",
   );
+});
+
+test("the conversation payload supplies both start and end date suggestions from a split date-range candidate", () => {
+  const { suggestedAnswerFor } = require("../src/modules/conversations/domain");
+  // Once the range-splitting supplement (operations.ts) has written separate
+  // ISO candidates, each question resolves its own suggestion independently —
+  // this is the payload-level contract the guided date pickers rely on.
+  assert.equal(suggestedAnswerFor(["/content/event/startDate"], "2026-09-14"), "2026-09-14");
+  assert.equal(suggestedAnswerFor(["/content/event/endDate"], "2026-09-16"), "2026-09-16");
 });
 
 test("suggested answers refuse anything the answer flow could not accept", () => {

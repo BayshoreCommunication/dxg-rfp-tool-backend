@@ -28,10 +28,9 @@ const UNSUPPORTED_KEYWORDS = [
 ];
 
 test("live AI structured-output schemas avoid keywords strict mode rejects", () => {
-  const source = fs.readFileSync(
-    path.resolve(__dirname, "..", "src/modules/liveAi/operations.ts"),
-    "utf8",
-  );
+  const source = ["operations.ts", "extractionPipeline.ts"]
+    .map((file) => fs.readFileSync(path.resolve(__dirname, "..", "src/modules/liveAi", file), "utf8"))
+    .join("\n");
   // Only inspect the schema literals, which are the objects handed to the
   // provider as `schema:`; ordinary code may legitimately use these words.
   const schemaLiterals = [...source.matchAll(/const \w*[Ss]chema\s*=\s*(\{[\s\S]*?\});\n/g)].map((m) => m[1]);

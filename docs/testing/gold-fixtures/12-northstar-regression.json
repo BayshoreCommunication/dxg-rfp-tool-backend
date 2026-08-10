@@ -1,0 +1,25 @@
+{
+  "name": "northstar-regression",
+  "description": "Regression for the fictional Northstar brief: identity, distinct date roles, hybrid attendance, venue, and procurement deadline.",
+  "evidence": [
+    { "id": "northstar-overview", "text": "Event name: Northstar Leadership Summit 2026\nEvent format: In-person with a live virtual audience for the general sessions\nLocation: Chicago, Illinois\nVenue: Lakeside Grand Chicago\nEvent dates: September 14–16, 2026\nExpected attendance: 450 in person; up to 300 concurrent virtual viewers\nProposal due: August 7, 2026 at 5:00 p.m. Central Time" },
+    { "id": "northstar-load-in", "text": "PROGRAM SCHEDULE — 2026\nSeptember 13, 1:00–8:00 p.m.\nVendor load-in, build, and testing in the Grand Ballroom and breakout rooms." }
+  ],
+  "expected": {
+    "candidates": [
+      { "path": "/content/event/eventName", "value": "Northstar Leadership Summit 2026" },
+      { "path": "/content/event/startDate", "value": "2026-09-14" },
+      { "path": "/content/event/endDate", "value": "2026-09-16" },
+      { "path": "/content/venueSchedule/loadInDate", "value": "2026-09-13" },
+      { "path": "/content/venueSchedule/loadInTime", "value": "13:00" },
+      { "path": "/content/event/attendees", "value": "450" },
+      { "path": "/content/hybridVirtual/virtualAttendeeEstimate", "value": "300" },
+      { "path": "/content/event/eventFormat", "value": "Hybrid" },
+      { "path": "/content/venueSchedule/venueName", "value": "Lakeside Grand Chicago" },
+      { "path": "/content/venueSchedule/venueCity", "value": "Chicago" },
+      { "path": "/content/venueSchedule/venueState", "value": "Illinois" },
+      { "path": "/content/budget/proposalSubmissionDueDate", "value": "2026-08-07" }
+    ],
+    "allowAdditional": false
+  }
+}

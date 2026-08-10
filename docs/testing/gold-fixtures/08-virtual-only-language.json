@@ -1,0 +1,16 @@
+{
+  "name": "virtual-only-language",
+  "description": "A fully online event with an approximate participant count maps to Virtual and virtual attendance without fabricating onsite attendance.",
+  "evidence": [
+    { "id": "gold-virtual-1", "text": "Synthetic Online Forum is a fully online conference for approximately 500 participants." }
+  ],
+  "expected": {
+    "candidates": [
+      { "path": "/content/event/eventName", "value": "Synthetic Online Forum" },
+      { "path": "/content/event/eventFormat", "value": "Virtual" },
+      { "path": "/content/event/eventType/eventType", "value": "conference" },
+      { "path": "/content/hybridVirtual/virtualAttendeeEstimate", "value": "500" }
+    ],
+    "allowAdditional": false
+  }
+}

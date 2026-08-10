@@ -1,5 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const fs = require("node:fs");
+const path = require("node:path");
 const {
   createGetProposalByLegacyPublicId,
   createIncrementLegacyPublicProposalViews,
@@ -23,6 +25,28 @@ const settings = {
     proposals: { expiryDate: "30 days" },
   }),
 };
+
+test("authenticated proposal reads bypass the public IP/grant rate-limit bucket", () => {
+  const route = fs.readFileSync(
+    path.join(__dirname, "..", "routes", "proposalsRoute.ts"),
+    "utf8",
+  );
+
+  assert.match(
+    route,
+    /if \(\(req as AuthRequest\)\.user\) \{\s*next\(\);\s*return;/,
+    "authenticated dashboard reads must skip the shared public bucket",
+  );
+  assert.match(
+    route,
+    /router\.get\("\/:id", validateProposalId, optionalAuth, rateLimitPublicProposal, requirePublicGrant/,
+  );
+  assert.doesNotMatch(
+    route,
+    /optionalAuth, publicProposalLimit, requirePublicGrant/,
+    "the public limiter must never run directly after optional authentication",
+  );
+});
 
 test("legacy public lookup is isolated behind its compatibility port", async () => {
   let lookupId;

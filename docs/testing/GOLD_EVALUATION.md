@@ -9,8 +9,9 @@ fixtures in `docs/testing/gold-fixtures/` through the live extraction contract a
 meet all DXG-approved thresholds before it may ship. Critical citation or
 fabricated-protected-fact failures block release regardless of average score.
 
-The fixtures are entirely synthetic (no client data) and small enough that a full
-live run costs pennies.
+The fixtures are entirely synthetic (no client data). Each fixture makes one
+broad call and may make one recovery call, so operators should review the printed
+fixture count before running the live gate.
 
 ## How to run
 
@@ -20,7 +21,7 @@ npm script wiring is handled separately; invoke the script directly:
 # Offline harness-integrity mode (no network, no credentials):
 npx ts-node scripts/goldEval.ts
 
-# Live release gate (calls the pinned OpenAI model once per fixture):
+# Live release gate (one broad call and, when needed, one recovery call per fixture):
 npx ts-node scripts/goldEval.ts --live
 ```
 
@@ -58,9 +59,9 @@ Live mode refuses to run unless the controlled-pilot environment is fully declar
 | `LIVE_AI_KILL_SWITCH` not `true` | emergency stop honored |
 | `OPENAI_API_KEY` set | provider credential |
 
-For each fixture the script calls `executeOpenAiJson` with the **same instructions
-and JSON schema** as `liveRequirementExtraction`
-(`src/modules/liveAi/operations.ts`) but with the fixture's evidence, and measures:
+For each fixture the script calls the **same governed extraction pipeline** as
+`liveRequirementExtraction` (`src/modules/liveAi/extractionPipeline.ts`), including
+canonical normalization and the optional batched gap-recovery pass, and measures:
 
 - **schema validity** — the strict JSON-schema response parsed successfully;
 - **citation validity** — every candidate cites only supplied evidence ids
@@ -131,4 +132,4 @@ citation, any fabricated protected fact) block release regardless of averages.
 
 | Date | Model | Change under evaluation | Precision | Recall | Schema | Citations | Fabrications | p95 latency | Result | Operator |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| _no live runs recorded yet_ | | | | | | | | | | |
+| 2026-08-10 | `gpt-5.4-mini-2026-03-17` | Generalized proposal extraction, canonical validation, and bounded gap recovery | 94.3% | 92.6% | 100% | 100% | 0 | 6,095 ms | PASS | Codex |

@@ -1,5 +1,12 @@
 # Slice 3C — Governed Live AI on Proposal Sources
 
+> Current implementation note (2026-08-10): the canonical AI-layer controls
+> remain unchanged, but source extraction has since expanded to up to five
+> eligible uploads per run. Evidence is selected fairly across sources, and the
+> provider executes one broad extraction plus at most one ledgered, batched gap
+> recovery. See `docs/AI_LAYER.md` for current truth; the slice scope below is
+> retained as historical authorization evidence.
+
 **Status:** Authorized for isolated-test implementation
 **Depends on:** Accepted private ingestion, durable jobs, proposal context, five-step workflow, and Slice 3B
 

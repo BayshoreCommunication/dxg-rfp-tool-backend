@@ -1,0 +1,21 @@
+{
+  "name": "date-role-separation",
+  "description": "Event, load-in, strike, content-delivery, question, proposal, and decision dates remain in their own canonical fields.",
+  "evidence": [
+    { "id": "gold-dates-1", "text": "Event dates: September 14—16, 2026. Production load-in: 09/13/2026. Strike: September 16, 2026." },
+    { "id": "gold-dates-2", "text": "Final presentation content is due September 9, 2026." },
+    { "id": "gold-dates-3", "text": "Vendor questions are due 07/31/2026; proposals are due August 7, 2026; award decision date is August 21, 2026." }
+  ],
+  "expected": {
+    "candidates": [
+      { "path": "/content/event/startDate", "value": "2026-09-14" },
+      { "path": "/content/event/endDate", "value": "2026-09-16" },
+      { "path": "/content/venueSchedule/loadInDate", "value": "2026-09-13" },
+      { "path": "/content/venueSchedule/strikeDate", "value": "2026-09-16" },
+      { "path": "/content/budget/vendorQuestionsDueDate", "value": "2026-07-31" },
+      { "path": "/content/budget/proposalSubmissionDueDate", "value": "2026-08-07" },
+      { "path": "/content/budget/decisionDate", "value": "2026-08-21" }
+    ],
+    "allowAdditional": false
+  }
+}

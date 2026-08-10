@@ -25,6 +25,17 @@ import { grantAndIpIdentity, securityRateLimit } from "../middleware/securityRat
 const router = Router();
 const publicProposalLimit = securityRateLimit({ name: "proposal-public", limit: 120, windowMs: 15 * 60_000, identity: grantAndIpIdentity });
 
+// Dashboard reads arrive from a server-side frontend and can therefore share
+// one egress IP. They are already authenticated and authorized, so they must
+// not consume the public grant/IP bucket used to protect shared proposal links.
+const rateLimitPublicProposal = (req: Request, res: Response, next: NextFunction): void => {
+  if ((req as AuthRequest).user) {
+    next();
+    return;
+  }
+  publicProposalLimit(req, res, next);
+};
+
 const validateProposalId = (
   req: Request,
   res: Response,
@@ -61,12 +72,12 @@ router.get("/file-url", authenticate, authorizeAction("proposal:read"), getPropo
 router.post("/upload-files", authenticate, authorizeAction("proposal:write"), uploadProposalDocs, uploadProposalFiles);
 
 /* Routes accessible with or without auth — different controller per case */
-router.get("/:id", validateProposalId, optionalAuth, publicProposalLimit, requirePublicGrant(["proposal:view", "vendor:submit"]), (req: Request, res: Response) => {
+router.get("/:id", validateProposalId, optionalAuth, rateLimitPublicProposal, requirePublicGrant(["proposal:view", "vendor:submit"]), (req: Request, res: Response) => {
   if ((req as AuthRequest).user) return getProposalById(req as AuthRequest, res);
   return getProposalByIdPublic(req, res);
 });
 
-router.patch("/:id/views", validateProposalId, optionalAuth, publicProposalLimit, requirePublicGrant("proposal:view"), (req: Request, res: Response) => {
+router.patch("/:id/views", validateProposalId, optionalAuth, rateLimitPublicProposal, requirePublicGrant("proposal:view"), (req: Request, res: Response) => {
   if ((req as AuthRequest).user) return incrementProposalViews(req as AuthRequest, res);
   return incrementProposalViewsPublic(req, res);
 });

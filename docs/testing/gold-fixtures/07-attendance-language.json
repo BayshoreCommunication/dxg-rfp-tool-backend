@@ -1,0 +1,16 @@
+{
+  "name": "attendance-language",
+  "description": "Onsite and virtual attendance use natural language, an omitted attendee noun, and a concurrent-viewer modifier.",
+  "evidence": [
+    { "id": "gold-attendance-1", "text": "The Synthetic Audience Summit will welcome 450 onsite and up to 300 concurrent virtual viewers." }
+  ],
+  "expected": {
+    "candidates": [
+      { "path": "/content/event/eventName", "value": "Synthetic Audience Summit" },
+      { "path": "/content/event/attendees", "value": "450" },
+      { "path": "/content/hybridVirtual/virtualAttendeeEstimate", "value": "300" },
+      { "path": "/content/event/eventFormat", "value": "Hybrid" }
+    ],
+    "allowAdditional": false
+  }
+}

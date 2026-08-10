@@ -68,20 +68,21 @@ test("live provider secret remains server-only", (t) => {
   assert.equal(admin.includes("OPENAI_API_KEY"), false);
 });
 test("proposal-source live AI requires explicit classification and preserves source evidence",()=>{
-  const migration=fs.readFileSync(path.join(root,"migrations/postgres/014_live_proposal_sources.up.sql"),"utf8"),repository=fs.readFileSync(path.join(root,"src/modules/proposalContext/postgresProposalContextRepository.ts"),"utf8"),controller=fs.readFileSync(path.join(root,"controller/proposalContextController.ts"),"utf8"),operations=fs.readFileSync(path.join(root,"src/modules/liveAi/operations.ts"),"utf8");
+  const migration=fs.readFileSync(path.join(root,"migrations/postgres/014_live_proposal_sources.up.sql"),"utf8"),repository=fs.readFileSync(path.join(root,"src/modules/proposalContext/postgresProposalContextRepository.ts"),"utf8"),controller=fs.readFileSync(path.join(root,"controller/proposalContextController.ts"),"utf8"),operations=fs.readFileSync(path.join(root,"src/modules/liveAi/operations.ts"),"utf8"),pipeline=fs.readFileSync(path.join(root,"src/modules/liveAi/extractionPipeline.ts"),"utf8");
   assert.ok(migration.includes("source_id uuid REFERENCES rfpilot.document_sources"));
   for(const boundary of ["status='ready'","confidentiality='non_confidential'","proposal_reference_id=$3","deleted_at IS NULL"])assert.ok(repository.includes(boundary),boundary);
   assert.ok(controller.includes("LIVE_AI_PROPOSAL_SOURCE_ENABLED"));
-  assert.ok(operations.includes("sourceVersionId:`source:${sourceId}`"));
+  assert.ok(operations.includes("prepareSourceExtractionEvidence"));
+  assert.ok(pipeline.includes("sourceVersionId: `source:${source.sourceId}`"));
   assert.equal(repository.includes("Proposal.update"),false);
 });
 test("multi-source runs are bounded, tenant isolated, and surface conflicts",()=>{
-  const migration=fs.readFileSync(path.join(root,"migrations/postgres/015_multi_source_context.up.sql"),"utf8"),domain=fs.readFileSync(path.join(root,"src/modules/proposalContext/domain.ts"),"utf8"),repository=fs.readFileSync(path.join(root,"src/modules/proposalContext/postgresProposalContextRepository.ts"),"utf8"),operations=fs.readFileSync(path.join(root,"src/modules/liveAi/operations.ts"),"utf8"),application=fs.readFileSync(path.join(root,"src/modules/candidateApplication/postgresCandidateApplicationRepository.ts"),"utf8");
+  const migration=fs.readFileSync(path.join(root,"migrations/postgres/015_multi_source_context.up.sql"),"utf8"),domain=fs.readFileSync(path.join(root,"src/modules/proposalContext/domain.ts"),"utf8"),repository=fs.readFileSync(path.join(root,"src/modules/proposalContext/postgresProposalContextRepository.ts"),"utf8"),pipeline=fs.readFileSync(path.join(root,"src/modules/liveAi/extractionPipeline.ts"),"utf8"),application=fs.readFileSync(path.join(root,"src/modules/candidateApplication/postgresCandidateApplicationRepository.ts"),"utf8");
   assert.ok(migration.includes("FORCE ROW LEVEL SECURITY"));
   assert.ok(migration.includes("UNIQUE(run_id,ordinal)"));
   assert.ok(domain.includes("sourceIds.length>5"));
   assert.ok(repository.includes("proposal_context_run_sources"));
-  assert.ok(operations.includes("CROSS_SOURCE_CONFLICT"));
-  assert.ok(operations.includes('severity:"blocking"'));
+  assert.ok(pipeline.includes("CROSS_SOURCE_CONFLICT"));
+  assert.ok(pipeline.includes('severity: "blocking"'));
   assert.ok(application.includes("CONFLICTING_APPLICATION_SELECTION"));
 });

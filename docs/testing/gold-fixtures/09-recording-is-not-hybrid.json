@@ -1,0 +1,17 @@
+{
+  "name": "recording-is-not-hybrid",
+  "description": "Recording and later on-demand delivery do not turn a physically attended event into Hybrid.",
+  "evidence": [
+    { "id": "gold-recording-format-1", "text": "Synthetic Onsite Meeting is an in-person meeting for 240 attendees; recordings will be available afterward for on-demand viewing." }
+  ],
+  "expected": {
+    "candidates": [
+      { "path": "/content/event/eventName", "value": "Synthetic Onsite Meeting" },
+      { "path": "/content/event/eventFormat", "value": "In-Person" },
+      { "path": "/content/event/attendees", "value": "240" },
+      { "path": "/content/videoRecordingStep/videoRecordingRequired", "value": "Yes" },
+      { "path": "/content/hybridVirtual/onDemandRecording", "value": "Yes" }
+    ],
+    "allowAdditional": false
+  }
+}

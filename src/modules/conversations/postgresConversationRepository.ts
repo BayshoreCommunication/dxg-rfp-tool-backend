@@ -51,13 +51,20 @@ const audit = async (c: PoolClient, org: string, actor: string, action: string, 
 };
 
 const getOrCreateConversation = async (c: PoolClient, org: string, proposalRefId: string, actor: string) => {
-  const r = await c.query<any>(
+  await c.query(
     `INSERT INTO rfpilot.conversations(id,organization_id,proposal_reference_id,owner_external_user_id)
      VALUES($1,$2,$3,$4)
-     ON CONFLICT(proposal_reference_id) DO UPDATE SET updated_at=now()
-     RETURNING *`,
+     ON CONFLICT(proposal_reference_id) DO NOTHING`,
     [uuidv7(), org, proposalRefId, actor],
   );
+  // Reads call this helper too. Selecting the existing row separately keeps a
+  // read from pretending the conversation changed and makes concurrent first
+  // reads safe after the INSERT conflict has resolved.
+  const r = await c.query<any>(
+    "SELECT * FROM rfpilot.conversations WHERE proposal_reference_id=$1",
+    [proposalRefId],
+  );
+  if (!r.rows[0]) throw new Error("Conversation could not be initialized");
   return r.rows[0];
 };
 

@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-08-04 · **Branch:** `main` (all three repos) · **Status:** audit roadmap M1–M6 complete, DXG pricing engine imported, conversational workspace shipped, and the read-only Platform AI Assistant integrated behind deny-by-default release gates.
+**Last updated:** 2026-08-10 · **Branch:** `main` (all three repos) · **Status:** audit roadmap M1–M6 complete, DXG pricing engine imported, conversational workspace shipped, governed cross-format proposal extraction hardened, and the read-only Platform AI Assistant integrated behind deny-by-default release gates.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -210,6 +210,17 @@ Flow: type or attach → sources scan → extraction auto-runs → cited candida
 remain read-only and link to explicit per-field review → guided key questions
 with typed controls (date picker, time, choice pills, number) → progress card with
 real completeness → generate cited draft → readiness and investment guidance.
+
+Proposal-source extraction now packages PDF, DOCX, XLSX, CSV, and TXT evidence
+with source-fair selection, table-header context, exact fragment checksums, and
+opaque citations. The governed model remains the primary semantic extractor and
+receives value guidance for every scalar path. A single optional batched recovery
+call targets only high-value paths whose concepts appear in evidence but remain
+absent. Dates, attendance, and event format receive conservative field-aware
+normalization; recording or remote presenters alone never imply Hybrid.
+Candidates are canonical-normalized and deduplicated before persistence, while
+genuine disagreements remain separate and create blocking conflicts. Extracted
+values remain suggestions until the planner explicitly confirms them.
 
 ### The Platform AI Assistant
 

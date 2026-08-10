@@ -1,0 +1,17 @@
+{
+  "name": "remote-speaker-is-not-hybrid",
+  "description": "A remote presenter does not itself create a live remote audience or a Hybrid event.",
+  "evidence": [
+    { "id": "gold-remote-speaker-1", "text": "Synthetic Presenter Briefing is an otherwise onsite event for 120 guests, with one remote speaker joining the keynote." }
+  ],
+  "expected": {
+    "candidates": [
+      { "path": "/content/event/eventName", "value": "Synthetic Presenter Briefing" },
+      { "path": "/content/event/eventFormat", "value": "In-Person" },
+      { "path": "/content/event/attendees", "value": "120" },
+      { "path": "/content/hybridVirtual/remoteSpeakers/remoteSpeakers", "value": "Yes" },
+      { "path": "/content/hybridVirtual/remoteSpeakers/howManyRemoteSpeakers", "value": "1" }
+    ],
+    "allowAdditional": false
+  }
+}

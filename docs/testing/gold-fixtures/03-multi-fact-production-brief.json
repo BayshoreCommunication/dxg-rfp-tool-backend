@@ -14,6 +14,7 @@
       { "path": "/content/event/eventName", "value": "Synthetic Northwind Product Summit" },
       { "path": "/content/event/startDate", "value": "2026-10-05" },
       { "path": "/content/event/endDate", "value": "2026-10-07" },
+      { "path": "/content/event/eventFormat", "value": "Hybrid" },
       { "path": "/content/venueSchedule/numberOfEventRooms", "value": "6" },
       { "path": "/content/venueSchedule/isUnionVenue", "value": "yes" },
       { "path": "/content/hybridVirtual/streamingPlatform", "value": "Zoom Webinar" },

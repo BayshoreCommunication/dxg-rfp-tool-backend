@@ -12,7 +12,11 @@ type Mapping = {
   mongoPath: string;
   normalize: (value: unknown) => unknown;
   mongoValue: (value: unknown) => unknown;
+  valueKind: CandidateValueKind;
+  acceptedValues?: readonly string[];
 };
+
+export type CandidateValueKind = "text" | "count" | "date" | "time" | "yes_no" | "enum" | "currency" | "email" | "money_minor" | "amperage";
 
 const invalid = (message: string): never => {
   throw new CandidateApplicationError("INVALID_CANDIDATE_VALUE", message);
@@ -107,13 +111,13 @@ const asString = (value: unknown): string => String(value);
 // Field builders. `mongo` is the dot path inside the legacy Mongo section; `canonical` is the
 // slash path inside the canonical content section. The AI/dashboard-facing sourcePath is always
 // derived from the mongoPath: `/content/<section>/<mongo path with dots as slashes>`.
-type FieldSpec = { mongo: string; canonical: string; normalize: (value: unknown) => unknown; mongoValue?: (value: unknown) => unknown };
-const t = (mongo: string, canonical: string, max: number): FieldSpec => ({ mongo, canonical, normalize: text(max) });
-const yn = (mongo: string, canonical: string): FieldSpec => ({ mongo, canonical, normalize: normalizeBooleanOrNull, mongoValue: booleanMongoValue });
-const count = (mongo: string, canonical: string): FieldSpec => ({ mongo, canonical, normalize: integer(0, 100000, "Candidate count must be an integer between 0 and 100000."), mongoValue: asString });
-const day = (mongo: string, canonical: string): FieldSpec => ({ mongo, canonical, normalize: normalizeIsoDate });
-const clock = (mongo: string, canonical: string): FieldSpec => ({ mongo, canonical, normalize: normalizeLocalTime });
-const pick = (mongo: string, canonical: string, options: readonly EnumOption[], message: string): FieldSpec => ({ mongo, canonical, ...enumeration(options, message) });
+type FieldSpec = { mongo: string; canonical: string; normalize: (value: unknown) => unknown; mongoValue?: (value: unknown) => unknown; valueKind: CandidateValueKind; acceptedValues?: readonly string[] };
+const t = (mongo: string, canonical: string, max: number): FieldSpec => ({ mongo, canonical, normalize: text(max), valueKind: "text" });
+const yn = (mongo: string, canonical: string): FieldSpec => ({ mongo, canonical, normalize: normalizeBooleanOrNull, mongoValue: booleanMongoValue, valueKind: "yes_no", acceptedValues: ["Yes", "No", "Not sure"] });
+const count = (mongo: string, canonical: string): FieldSpec => ({ mongo, canonical, normalize: integer(0, 100000, "Candidate count must be an integer between 0 and 100000."), mongoValue: asString, valueKind: "count" });
+const day = (mongo: string, canonical: string): FieldSpec => ({ mongo, canonical, normalize: normalizeIsoDate, valueKind: "date" });
+const clock = (mongo: string, canonical: string): FieldSpec => ({ mongo, canonical, normalize: normalizeLocalTime, valueKind: "time" });
+const pick = (mongo: string, canonical: string, options: readonly EnumOption[], message: string): FieldSpec => ({ mongo, canonical, ...enumeration(options, message), valueKind: "enum", acceptedValues: options.map((option) => option.mongo) });
 
 const section = (mongoSection: string, canonicalSection: string, fields: readonly FieldSpec[]): Record<string, Mapping> =>
   Object.fromEntries(fields.map((field) => [
@@ -123,6 +127,8 @@ const section = (mongoSection: string, canonicalSection: string, fields: readonl
       mongoPath: `${mongoSection}.${field.mongo}`,
       normalize: field.normalize,
       mongoValue: field.mongoValue ?? identity,
+      valueKind: field.valueKind,
+      acceptedValues: field.acceptedValues,
     },
   ]));
 
@@ -150,7 +156,7 @@ const mappings: Record<string, Mapping> = {
     t("rfpTimeline", "rfpTimelineNotes", 10000),
   ]),
   ...section("venueSchedule", "venueSchedule", [
-    { mongo: "numberOfEventRooms", canonical: "roomCount", normalize: integer(1, 200, "Room count must be between 1 and 200."), mongoValue: asString },
+    { mongo: "numberOfEventRooms", canonical: "roomCount", normalize: integer(1, 200, "Room count must be between 1 and 200."), mongoValue: asString, valueKind: "count" },
     t("venueName", "venueName", 300),
     t("venueCity", "city", 150),
     t("venueState", "region", 150),
@@ -231,7 +237,7 @@ const mappings: Record<string, Mapping> = {
   ]),
   ...section("venue", "venueTechnical", [
     t("venueAvContactName", "avContact/name", 200),
-    { mongo: "venueAvContactEmail", canonical: "avContact/email", normalize: normalizeEmail },
+    { mongo: "venueAvContactEmail", canonical: "avContact/email", normalize: normalizeEmail, valueKind: "email" },
     t("venueAvContactPhone", "avContact/phone", 50),
     yn("inHouseAvRequired", "inHouseAvRequired"),
     t("inHouseAvCompanyName", "inHouseAvCompanyName", 300),
@@ -240,7 +246,7 @@ const mappings: Record<string, Mapping> = {
     yn("trussAndMotorsProvidedByVenue", "trussAndMotorsProvided"),
     yn("liftsProvidedByVenue", "liftsProvided"),
     yn("powerDropsRequired", "powerDropsRequired"),
-    { mongo: "powerDropAmperage", canonical: "powerDropAmperage", normalize: normalizeAmperage, mongoValue: (value) => `${(value as { value: number }).value}A` },
+    { mongo: "powerDropAmperage", canonical: "powerDropAmperage", normalize: normalizeAmperage, mongoValue: (value) => `${(value as { value: number }).value}A`, valueKind: "amperage" },
     count("numberOfPowerDrops", "powerDropCount"),
     yn("wirelessInternetRequired", "wirelessInternetRequired"),
     t("coiRequirements", "coiRequirements", 10000),
@@ -252,8 +258,8 @@ const mappings: Record<string, Mapping> = {
   ]),
   ...section("budget", "budgetPreferences", [
     t("estimatedAvBudget", "budgetBand", 100),
-    { mongo: "amountMinor", canonical: "budget/amountMinor", normalize: integer(0, 100_000_000_000, "Candidate budget amount must be a non-negative integer of minor units.") },
-    { mongo: "currency", canonical: "budget/currency", normalize: normalizeCurrency },
+    { mongo: "amountMinor", canonical: "budget/amountMinor", normalize: integer(0, 100_000_000_000, "Candidate budget amount must be a non-negative integer of minor units."), valueKind: "money_minor" },
+    { mongo: "currency", canonical: "budget/currency", normalize: normalizeCurrency, valueKind: "currency" },
     t("budgetFlexibility", "flexibility", 500),
     t("sustainabilityDeiNotes", "sustainabilityDeiNotes", 5000),
     day("vendorQuestionsDueDate", "vendorQuestionsDueDate"),
@@ -298,6 +304,17 @@ export const approvedCandidatePaths = Object.freeze(Object.keys(mappings));
 
 // Consumed by the AI extraction schema as the closed enum of proposable candidate paths.
 export const extractionPathEnum: readonly string[] = approvedCandidatePaths;
+
+// Extraction uses the same mapping metadata as persistence, so prompt guidance,
+// normalization, and application cannot quietly disagree about a field's value
+// representation. No normalizer or Mongo path is exposed through this view.
+export const candidateFieldMetadata = Object.freeze(Object.fromEntries(
+  Object.entries(mappings).map(([path, mapping]) => [path, Object.freeze({
+    canonicalPath: mapping.canonicalPath,
+    valueKind: mapping.valueKind,
+    acceptedValues: mapping.acceptedValues ? Object.freeze([...mapping.acceptedValues]) : undefined,
+  })]),
+)) as Readonly<Record<string, Readonly<{ canonicalPath: string; valueKind: CandidateValueKind; acceptedValues?: readonly string[] }>>>;
 
 // Path metadata without value validation, for callers that need to locate a
 // field (e.g. checking whether it is already filled) rather than write to it.

@@ -1,6 +1,6 @@
 # AI Layer
 
-> Purpose: current governed AI capabilities and invariants. Last updated: 2026-08-04. Owner: AI engineering.
+> Purpose: current governed AI capabilities and invariants. Last updated: 2026-08-10. Owner: AI engineering.
 
 ## Current status
 
@@ -10,7 +10,7 @@ The M1–M6 audit roadmap is implemented behind deny-by-default flags. The pinne
 
 | Capability | Inputs | Output/control boundary |
 |---|---|---|
-| Proposal extraction | Clean eligible files | Cited candidates restricted to 112 canonical scalar paths; invalid/conflicting values do not apply. |
+| Proposal extraction | Clean eligible PDF, DOCX, XLSX, CSV, TXT, and typed-message sources | One broad semantic pass plus at most one field-aware recovery pass; cited candidates are restricted to the canonical scalar allowlist, normalized before persistence, and invalid/conflicting values do not apply. |
 | Conversation | Messages, pasted notes, attachments | Durable chat jobs with persisted placeholders and bounded dashboard polling; closed typed-message segments use the cited extraction/review path behind a deny-by-default runtime gate. |
 | Draft generation | Proposal fields plus eligible knowledge | Cited sections with scoped regeneration and review state. |
 | Knowledge retrieval | Approved active fragments | Tenant-scoped lexical/vector results from a release registry. |
@@ -29,6 +29,19 @@ The proprietary baseline v3 workbook contains 433 items, 22 regional factors, 13
 - Never fabricate pricing or a protected fact.
 - Validate structured output and citations against supplied evidence IDs.
 - Treat source content as untrusted data and ignore embedded instructions.
+- Give the provider semantic guidance for every applicable canonical field. Keep
+  deterministic logic to evidence preparation, representation normalization,
+  and conservative recovery of explicit values; do not replace semantic
+  extraction with fixture-specific phrase matching.
+- Bound proposal extraction to one broad provider call and, only when evidence
+  signals a missing high-value field, one batched recovery call. Both calls use
+  pre-call attempt-ledger rows and stable logical-phase idempotency keys.
+- Preserve source boundaries and select evidence round-robin across uploads.
+  Table rows retain header labels; long fragments are split into exact
+  checksum-bound cited parts rather than silently truncated.
+- Run every extracted value through the candidate-application canonical mapping
+  before persistence. Equivalent candidates merge citations; distinct values
+  remain separate and produce a conflict for planner review.
 - Keep tenant isolation and proposal ownership checks at every read/write boundary.
 - Auto-apply only validated, high-confidence, single candidates into empty draft fields; use optimistic version checks.
 - Require human action for conflicts and publication.
@@ -49,7 +62,7 @@ The proprietary baseline v3 workbook contains 433 items, 22 regional factors, 13
 
 ## Open gaps
 
-Array/room extraction, weighted completeness, invalid-operation UI, vendor attempt-ledger coverage, bid comparison, report export, and a written OpenAI-versus-Anthropic comparison remain open. Typed chat extraction shipped behind `CONVERSATION_EXTRACTION_ENABLED` (2026-07-29); detailed single-turn briefs close automatically, shorter chat remains explicitly closable, and the API exposes the runtime capability state to the dashboard (2026-08-04). Room recommendations partially offset the room gap with a review-first deterministic capability (crew application, production knowledge retrieval, and any AI enrichment stage remain deferred). See [ROADMAP.md](ROADMAP.md).
+Array/room extraction, OCR for image-only scans, weighted completeness, invalid-operation UI, bid comparison, report export, and a written OpenAI-versus-Anthropic comparison remain open. Typed chat extraction shipped behind `CONVERSATION_EXTRACTION_ENABLED` (2026-07-29); detailed single-turn briefs close automatically, shorter chat remains explicitly closable, and the API exposes the runtime capability state to the dashboard (2026-08-04). Room recommendations partially offset the room gap with a review-first deterministic capability (crew application, production knowledge retrieval, and any AI enrichment stage remain deferred). See [ROADMAP.md](ROADMAP.md).
 
 ## Detailed references
 
