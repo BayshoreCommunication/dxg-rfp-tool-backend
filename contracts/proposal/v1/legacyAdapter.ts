@@ -346,6 +346,8 @@ const mapRoom = (
       ...optional("otherCameraCount", otherCameraCount),
       ...optional("videoRecordingRequired", booleanOrNull(recording.videoRecording)),
       ...optional("recordingType", text(recording.videoRecordingType)),
+      ...optional("recordingCodec", text(recording.recordingCodec)),
+      ...optional("recordIn4k", booleanOrNull(recording.recordIn4k)),
       ...optional("programConfidenceMonitorRequired", booleanOrNull(programMonitor.programConfidenceMonitor)),
       ...optional("programConfidenceMonitorCount", integer(programMonitor.programConfidenceMonitorQty)),
       ...optional("notesConfidenceMonitorRequired", booleanOrNull(notesMonitor.notesConfidenceMonitor)),

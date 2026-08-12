@@ -143,6 +143,8 @@ export interface VideoRequirements {
   otherCameraCount?: number;
   videoRecordingRequired?: boolean | null;
   recordingType?: string;
+  recordingCodec?: "H.264" | "H.265" | "ProRes";
+  recordIn4k?: boolean | null;
   programConfidenceMonitorRequired?: boolean | null;
   programConfidenceMonitorCount?: number;
   notesConfidenceMonitorRequired?: boolean | null;

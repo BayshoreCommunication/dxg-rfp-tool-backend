@@ -108,6 +108,8 @@ Schema:
     "otherCameraQty": "string — positive integer when cameraType is Other — Specify",
     "videoRecording": "one of: Yes | No",
     "videoRecordingType": "one of: Camera Feed Only | Presentation Only | Side by Side (Camera and Presentation) | All The Above",
+    "recordingCodec": "one of: H.264 | H.265 | ProRes (only if videoRecording is Yes)",
+    "recordIn4k": "one of: Yes | No (only if videoRecording is Yes)",
     "stageWashLighting": "one of: Yes | No",
     "stageWashLightingStageSize": "string (only if stageWashLighting is Yes)",
     "backlightingFor": "one of: Yes | No",

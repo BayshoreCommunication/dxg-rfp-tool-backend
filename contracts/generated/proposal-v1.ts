@@ -168,6 +168,8 @@ export interface VideoRequirements {
   otherCameraCount?: NonNegativeInteger;
   videoRecordingRequired?: NullableBoolean;
   recordingType?: string;
+  recordingCodec?: "H.264" | "H.265" | "ProRes";
+  recordIn4k?: NullableBoolean;
   programConfidenceMonitorRequired?: NullableBoolean;
   programConfidenceMonitorCount?: NonNegativeInteger;
   notesConfidenceMonitorRequired?: NullableBoolean;

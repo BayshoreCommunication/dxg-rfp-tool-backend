@@ -294,6 +294,8 @@
         "otherCameraCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "videoRecordingRequired": { "$ref": "#/$defs/nullableBoolean" },
         "recordingType": { "type": "string", "maxLength": 150 },
+        "recordingCodec": { "type": "string", "enum": ["H.264", "H.265", "ProRes"] },
+        "recordIn4k": { "$ref": "#/$defs/nullableBoolean" },
         "programConfidenceMonitorRequired": { "$ref": "#/$defs/nullableBoolean" },
         "programConfidenceMonitorCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "notesConfidenceMonitorRequired": { "$ref": "#/$defs/nullableBoolean" },
