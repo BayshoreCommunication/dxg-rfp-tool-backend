@@ -28,6 +28,7 @@ The backend is a transitional modular monolith. The API creates authoritative re
 | Proposal content and lifecycle | MongoDB | AI does not become proposal authority. Writes use validation and version checks. |
 | Vendor submission identity and immutable versions | MongoDB | A revision creates a new version; `VendorResponse` is only the latest-version compatibility projection. |
 | AI runs, evidence, reviews, knowledge, pricing, audit, outbox | PostgreSQL | Tenant RLS and immutable/reconstructable records apply. |
+| Requirement sets and evaluation-matrix versions | PostgreSQL | Derived from Mongo proposal authority; approved versions are immutable and become stale when proposal version/checksum changes. |
 | Job transport and shared rate limits | Redis | References only; never proposal or document content. |
 | Uploaded source bytes | Private S3-compatible storage | Quarantine, malware scan, retention, no public ACL. |
 | Session/user identity | Existing application identity plus external IDs | Resource IDs are never authorization. |
@@ -48,6 +49,14 @@ The backend is a transitional modular monolith. The API creates authoritative re
 3. The API resolves a stable vendor submission and creates an immutable version with parent, reason, ordered source manifest, and checksum.
 4. The latest version is projected into the legacy vendor-response record for current inbox and analysis compatibility.
 5. Eligible file metadata is registered in PostgreSQL under the governed `vendor_submission` source purpose. Registration is idempotent and may be reconciled by the backfill when the data foundation was temporarily unavailable.
+
+## Requirement registry flow
+
+1. The authenticated proposal owner requests generation with an idempotency key.
+2. The API reads the current Mongo proposal and the latest human-accepted rendered-draft paragraphs, then deterministically creates structured and narrative requirements. No model call occurs in this task.
+3. PostgreSQL stores a versioned requirement set, evaluation-matrix version, criteria, source locators, validation state, and content checksum under forced tenant RLS.
+4. Planner edits use optimistic locking. Approval requires confirmed weights totaling 100 and explicit mandatory, criterion, and verification review for every requirement.
+5. Approval freezes requirements and criteria at the database layer. A later Mongo proposal version or checksum mismatch is reported as stale; supersession creates a new draft version without rewriting the approved set.
 6. Public receipts expose version and safe file metadata but never stored object URLs.
 
 ## Security and reliability boundaries

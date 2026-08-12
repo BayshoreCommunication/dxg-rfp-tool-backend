@@ -7,7 +7,7 @@
 | Store | Owns | Does not own |
 |---|---|---|
 | MongoDB | Proposal content/lifecycle and vendor submission/version authority | AI runs and queue state |
-| PostgreSQL + pgvector | AI jobs/runs, evidence, conversations, reviews, knowledge, pricing, audit, outbox | Proposal content authority |
+| PostgreSQL + pgvector | AI jobs/runs, evidence, conversations, reviews, knowledge, pricing, requirement/evaluation versions, audit, outbox | Proposal content authority |
 | Redis | BullMQ delivery references, shared rate-limit state | Business content or durable job truth |
 | Private object storage | Quarantined and clean source bytes | Public files or application authorization |
 
@@ -27,6 +27,9 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 - `VendorResponse` remains a latest-version compatibility projection until downstream analysis and inbox reads migrate. It is not version history.
 - PostgreSQL migration 044 extends governed `document_sources` with `vendor_submission` purpose and Mongo submission/version linkage. Public submitters are deliberately not represented as planner users.
 - `npm run backfill:vendor-submission-versions` is dry-run by default; `--apply` performs idempotent v1 projection and writes a checksummed migration-journal outcome.
+- PostgreSQL migration 045 adds `requirement_sets`, `requirements`, `evaluation_matrix_versions`, `evaluation_criteria`, and idempotent registry-operation records. All five tables use forced organization RLS.
+- A requirement set records the authoritative Mongo proposal version and checksum plus the accepted rendered-RFP run/checksum. Freshness is evaluated against Mongo on read; staleness does not mutate a frozen set.
+- Draft/in-review requirements are editable with a set-level lock version. Database triggers reject edits/deletes to approved or superseded sets and their children; supersession links the old approved set to a newly generated draft.
 
 ## Pricing data
 

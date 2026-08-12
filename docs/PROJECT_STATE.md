@@ -117,6 +117,7 @@ is committed on `ai-agent`.
   rules with an approval workflow; a deterministic investment engine with
   provenance and explicit refusals; a vendor-response analysis durable job
   producing cited findings with human-escalation flags.
+- **Proposal Intelligence Task 3 — requirement registry (2026-08-12).** Migration 045 and the `requirementRegistry` module add tenant-isolated, idempotent requirement/evaluation versions derived from the complete safe proposal surface and accepted rendered narrative. Planner review is optimistic-lock protected; approval requires confirmed 100% weights and explicit mandatory/criterion/verification review. Approved rows are database-immutable, proposal version/checksum changes surface as stale, and supersession creates a linked new draft. The dashboard route is `/proposals/:id/intelligence/requirements`. Task 4 evidence extraction remains unstarted and requires confirmation.
 - **M6 — Hardening.** A real docker-compose integration suite (25 tests against
   live Postgres/Redis/Mongo), the gold evaluation harness as a release gate,
   cross-store purge propagation, `/api/v1/ai/usage-report`, PM2 config for all
