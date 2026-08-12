@@ -1,0 +1,1 @@
+{"vendors":[{"id":"vendor-a","fragments":[{"id":"00000000-0000-4000-8000-000000000601","content":"Vendor A total: USD 100,000."}]},{"id":"vendor-b","fragments":[{"id":"00000000-0000-4000-8000-000000000602","content":"Vendor B total: USD 90,000."}]}],"expected":{"callsContainOneVendorOnly":true}}
