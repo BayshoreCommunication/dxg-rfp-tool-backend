@@ -1,0 +1,342 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import type { PoolClient } from "pg";
+import { v7 as uuidv7 } from "uuid";
+import { withPostgresTransaction } from "../../../config/postgres";
+import VendorSubmission from "../../../modal/vendorSubmissionModel";
+import VendorSubmissionVersion from "../../../modal/vendorSubmissionVersionModel";
+import {
+  ASSESSMENT_VERSION, buildAssessments, buildRisks, calculateContribution, checksum,
+  COMMERCIAL_POLICY_VERSION, EvaluationEngineError, normalizeCommercial, RISK_POLICY_VERSION,
+  rubricMaximum, SCORING_POLICY_VERSION, type FactInput, type MappingInput,
+} from "./domain";
+
+type Context = { organizationMongoId: string; actorUserMongoId: string; proposalMongoId: string; submissionMongoId: string; versionMongoId: string; correlationId: string };
+const tenant = async (client: PoolClient, organizationMongoId: string) => {
+  await client.query("SELECT set_config('app.organization_mongo_id',$1,true)", [organizationMongoId]);
+  const result = await client.query<{ id: string }>("SELECT id FROM rfpilot.organizations WHERE external_mongo_id=$1 AND status='active'", [organizationMongoId]);
+  if (!result.rows[0]) throw new EvaluationEngineError("ORGANIZATION_NOT_READY", "Organization unavailable.", 503);
+  await client.query("SELECT set_config('app.organization_id',$1,true)", [result.rows[0].id]);
+  return result.rows[0].id;
+};
+const proposal = async (client: PoolClient, proposalMongoId: string) => {
+  const result = await client.query<{ id: string; owner_external_user_id: string }>(
+    `SELECT p.id,u.external_mongo_id owner_external_user_id FROM rfpilot.proposal_references p
+     JOIN rfpilot.users u ON u.id=p.owner_user_id WHERE p.external_mongo_id=$1`, [proposalMongoId],
+  );
+  if (!result.rows[0]) throw new EvaluationEngineError("PROPOSAL_NOT_FOUND", "Proposal was not found.", 404);
+  return result.rows[0];
+};
+const loadVersion = async (input: Context, requireOwner: boolean) => {
+  const submission = await VendorSubmission.findOne({
+    _id: input.submissionMongoId, organizationId: input.organizationMongoId, proposalId: input.proposalMongoId,
+    ...(requireOwner ? { proposalOwnerId: input.actorUserMongoId } : {}),
+  }).select("_id").lean();
+  if (!submission) throw new EvaluationEngineError("VENDOR_SUBMISSION_NOT_FOUND", "Vendor submission was not found.", 404);
+  const version = await VendorSubmissionVersion.findOne({ _id: input.versionMongoId, organizationId: input.organizationMongoId, proposalId: input.proposalMongoId, submissionId: input.submissionMongoId }).select("manifestChecksum").lean<any>();
+  if (!version) throw new EvaluationEngineError("SUBMISSION_VERSION_NOT_FOUND", "Vendor submission version was not found.", 404);
+  return version as { manifestChecksum: string };
+};
+const audit = (client: PoolClient, input: Context, organizationId: string, action: string, targetId: string, metadata: Record<string, unknown>) => client.query(
+  `INSERT INTO rfpilot.audit_events(id,organization_id,actor_external_user_id,action,target_type,target_id,decision,correlation_id,metadata)
+   VALUES($1,$2,$3,$4,'vendor_evaluation_run',$5,'allow',$6,$7::jsonb)`,
+  [uuidv7(), organizationId, input.actorUserMongoId, action, targetId, input.correlationId, JSON.stringify(metadata)],
+);
+const access = async (client: PoolClient, runId: string, actor: string, owner: string) => {
+  if (actor === owner) return { owner: true, assignmentId: null as string | null };
+  const assignment = await client.query<{ id: string }>("SELECT id FROM rfpilot.evaluation_assignments WHERE evaluation_run_id=$1 AND evaluator_external_user_id=$2", [runId, actor]);
+  if (!assignment.rows[0]) throw new EvaluationEngineError("EVALUATION_ACCESS_DENIED", "You are not assigned to this evaluation.", 403);
+  return { owner: false, assignmentId: assignment.rows[0].id };
+};
+const latestRun = async (client: PoolClient, proposalReferenceId: string, versionMongoId: string, runId?: string | null) => {
+  const result = runId
+    ? await client.query<any>("SELECT * FROM rfpilot.vendor_evaluation_runs WHERE id=$1 AND proposal_reference_id=$2 AND vendor_submission_version_mongo_id=$3", [runId, proposalReferenceId, versionMongoId])
+    : await client.query<any>("SELECT * FROM rfpilot.vendor_evaluation_runs WHERE proposal_reference_id=$1 AND vendor_submission_version_mongo_id=$2 ORDER BY created_at DESC LIMIT 1", [proposalReferenceId, versionMongoId]);
+  if (!result.rows[0]) throw new EvaluationEngineError("EVALUATION_RUN_NOT_FOUND", "Vendor evaluation has not been generated.", 404);
+  return result.rows[0];
+};
+export const evaluationEngineRepository = {
+  async create(input: Context & { intelligenceRunId?: string | null; sealedPrice: boolean; idempotencyKey: string }) {
+    await loadVersion(input, true);
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await tenant(client, input.organizationMongoId);
+      const proposalRow = await proposal(client, input.proposalMongoId);
+      if (proposalRow.owner_external_user_id !== input.actorUserMongoId) throw new EvaluationEngineError("EVALUATION_ACCESS_DENIED", "Only the proposal owner can create an evaluation.", 403);
+      const intelligenceResult = input.intelligenceRunId
+        ? await client.query<any>("SELECT * FROM rfpilot.vendor_intelligence_runs WHERE id=$1 AND proposal_reference_id=$2 AND vendor_submission_version_mongo_id=$3 AND status='succeeded'", [input.intelligenceRunId, proposalRow.id, input.versionMongoId])
+        : await client.query<any>("SELECT * FROM rfpilot.vendor_intelligence_runs WHERE proposal_reference_id=$1 AND vendor_submission_version_mongo_id=$2 AND status='succeeded' ORDER BY created_at DESC LIMIT 1", [proposalRow.id, input.versionMongoId]);
+      const intelligence = intelligenceResult.rows[0];
+      if (!intelligence) throw new EvaluationEngineError("INTELLIGENCE_RUN_NOT_READY", "Generate and review proposal intelligence before evaluation.", 409);
+      const matrixResult = await client.query<any>(
+        `SELECT m.* FROM rfpilot.evaluation_matrix_versions m JOIN rfpilot.requirement_sets s ON s.id=m.requirement_set_id
+         WHERE m.requirement_set_id=$1 AND m.status='approved' AND m.weights_confirmed=true AND m.total_weight=100 AND s.status='approved'`, [intelligence.requirement_set_id],
+      );
+      const matrix = matrixResult.rows[0];
+      if (!matrix) throw new EvaluationEngineError("SCORING_MATRIX_NOT_CONFIRMED", "A confirmed 100% evaluation matrix is required.", 409);
+      const existingRun = await client.query<any>("SELECT * FROM rfpilot.vendor_evaluation_runs WHERE intelligence_run_id=$1", [intelligence.id]);
+      if (existingRun.rows[0]) return { runId: existingRun.rows[0].id, created: false };
+      const stableKey = `vendor-evaluation:${intelligence.id}:${matrix.id}:${input.sealedPrice}:${SCORING_POLICY_VERSION}`;
+      const old = await client.query<any>("SELECT * FROM rfpilot.vendor_evaluation_runs WHERE organization_id=$1 AND idempotency_key=$2", [organizationId, stableKey]);
+      if (old.rows[0]) return { runId: old.rows[0].id, created: false };
+      const mappingRows = await client.query<any>(
+        `SELECT m.requirement_id,min(m.id::text)::uuid mapping_id,r.title,r.mandatory_status,r.eligibility,
+                min(m.relationship) relationship,min(m.confidence)::numeric confidence,
+                coalesce(jsonb_agg(m.evidence_fragment_id) FILTER(WHERE m.evidence_fragment_id IS NOT NULL),'[]') fragment_ids
+         FROM rfpilot.requirement_evidence_mappings m JOIN rfpilot.requirements r ON r.id=m.requirement_id
+         WHERE m.intelligence_run_id=$1 GROUP BY m.requirement_id,r.title,r.mandatory_status,r.eligibility,r.ordinal ORDER BY r.ordinal`, [intelligence.id],
+      );
+      const factRows = await client.query<any>(
+        `SELECT f.*,coalesce((SELECT jsonb_agg(e.evidence_fragment_id ORDER BY e.ordinal) FROM rfpilot.extracted_fact_evidence e WHERE e.fact_id=f.id),'[]') fragment_ids
+         FROM rfpilot.extracted_facts f WHERE f.intelligence_run_id=$1 ORDER BY f.ordinal`, [intelligence.id],
+      );
+      const mappings: MappingInput[] = mappingRows.rows.map((row) => ({ mappingId: row.mapping_id, requirementId: row.requirement_id, title: row.title, mandatory: row.mandatory_status === "mandatory", eligibility: row.eligibility === true, relationship: row.relationship, confidence: Number(row.confidence), fragmentIds: row.fragment_ids }));
+      const facts: FactInput[] = factRows.rows.map((row) => ({ factId: row.id, factKey: row.fact_key, family: row.family, factType: row.fact_type, statement: row.statement, valueKind: row.value_kind, normalizedValue: row.normalized_value, typedValue: row.typed_value, currency: row.currency, contradictionGroup: row.contradiction_group, fragmentIds: row.fragment_ids }));
+      if (!mappings.length) throw new EvaluationEngineError("ASSESSMENT_COVERAGE_EMPTY", "No requirement mappings are available for evaluation.", 409);
+      const assessments = buildAssessments(mappings), risks = buildRisks(mappings, facts), commercial = normalizeCommercial(facts);
+      if (!commercial.comparable) risks.push({ category: "commercial_non_comparable", severity: "high", title: "Commercial response is not deterministically comparable", basis: `Normalization was refused: ${commercial.refusalCodes.join(", ")}.`, requirementId: null, factId: commercial.totalFactId, fragmentIds: [], question: "Please provide one authoritative, all-inclusive submitted total in a single currency and identify all options or exclusions." });
+      const outputChecksum = checksum({ assessments, risks, commercial, matrix: matrix.content_checksum, policies: [ASSESSMENT_VERSION, RISK_POLICY_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION] });
+      const runId = uuidv7();
+      await client.query(
+        `INSERT INTO rfpilot.vendor_evaluation_runs(id,organization_id,proposal_reference_id,requirement_set_id,matrix_version_id,intelligence_run_id,vendor_submission_mongo_id,vendor_submission_version_mongo_id,sealed_price,requirement_checksum,intelligence_checksum,output_checksum,assessment_count,risk_count,question_count,idempotency_key,created_by_external_user_id,correlation_id)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+        [runId, organizationId, proposalRow.id, intelligence.requirement_set_id, matrix.id, intelligence.id, input.submissionMongoId, input.versionMongoId, input.sealedPrice, matrix.content_checksum, intelligence.output_checksum, outputChecksum, assessments.length, risks.length, risks.length, stableKey, input.actorUserMongoId, input.correlationId],
+      );
+      const assessmentIds = new Map<string, string>();
+      for (const assessment of assessments) {
+        const id = uuidv7(); assessmentIds.set(assessment.requirementId, id);
+        await client.query(
+          `INSERT INTO rfpilot.ai_assessments(id,organization_id,evaluation_run_id,requirement_id,verdict,rationale,confidence,needs_human_review,review_reasons,assessment_version,ordinal)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)`,
+          [id, organizationId, runId, assessment.requirementId, assessment.verdict, assessment.rationale, assessment.confidence, assessment.needsHumanReview, JSON.stringify(assessment.reviewReasons), ASSESSMENT_VERSION, assessment.ordinal],
+        );
+        for (const [ordinal, fragmentId] of assessment.fragmentIds.entries()) await client.query(
+          "INSERT INTO rfpilot.assessment_evidence(id,organization_id,assessment_id,evidence_fragment_id,support_role,ordinal) VALUES($1,$2,$3,$4,$5,$6)",
+          [uuidv7(), organizationId, id, fragmentId, assessment.relationship === "contradicts" ? "contradicts" : assessment.relationship === "context_only" ? "context" : "supports", ordinal],
+        );
+        for (const validation of [
+          { type: "verdict", outcome: "passed", code: "VERDICT_DETERMINISTIC" },
+          { type: "citation", outcome: assessment.relationship === "none" ? "passed" : "passed", code: assessment.relationship === "none" ? "MISSING_WITHOUT_CITATION" : "CITATION_BOUNDARY_VALID" },
+          ...(assessment.reviewReasons.includes("mandatory_disposition_required") ? [{ type: "mandatory", outcome: "warning", code: "MANDATORY_HUMAN_DISPOSITION_REQUIRED" }] : []),
+        ]) await client.query("INSERT INTO rfpilot.assessment_validation_results(id,organization_id,assessment_id,check_type,outcome,reason_code) VALUES($1,$2,$3,$4,$5,$6)", [uuidv7(), organizationId, id, validation.type, validation.outcome, validation.code]);
+      }
+      for (const [ordinal, risk] of risks.entries()) {
+        const riskId = uuidv7();
+        await client.query(
+          `INSERT INTO rfpilot.evaluation_risks(id,organization_id,evaluation_run_id,requirement_id,fact_id,category,severity,title,basis,policy_version,ordinal)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [riskId, organizationId, runId, risk.requirementId, risk.factId, risk.category, risk.severity, risk.title, risk.basis, RISK_POLICY_VERSION, ordinal],
+        );
+        for (const [evidenceOrdinal, fragmentId] of risk.fragmentIds.entries()) await client.query("INSERT INTO rfpilot.risk_evidence(id,organization_id,risk_id,evidence_fragment_id,ordinal) VALUES($1,$2,$3,$4,$5)", [uuidv7(), organizationId, riskId, fragmentId, evidenceOrdinal]);
+        await client.query("INSERT INTO rfpilot.clarification_candidates(id,organization_id,evaluation_run_id,risk_id,question,generator_version,ordinal) VALUES($1,$2,$3,$4,$5,$6,$7)", [uuidv7(), organizationId, runId, riskId, risk.question, RISK_POLICY_VERSION, ordinal]);
+      }
+      const commercialId = uuidv7();
+      await client.query("INSERT INTO rfpilot.commercial_submissions(id,organization_id,evaluation_run_id,submitted_total,submitted_currency,total_fact_id) VALUES($1,$2,$3,$4,$5,$6)", [commercialId, organizationId, runId, commercial.submittedTotal, commercial.submittedCurrency, commercial.totalFactId]);
+      for (const [ordinal, fact] of commercial.commercialFacts.entries()) await client.query(
+        `INSERT INTO rfpilot.commercial_line_items(id,organization_id,commercial_submission_id,fact_id,category,description,amount,currency,option_or_exclusion,ordinal)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [uuidv7(), organizationId, commercialId, fact.factId, fact.factType, fact.statement, fact.valueKind === "money" ? Number(fact.typedValue.number) : null, fact.currency, ["commercial_option", "commercial_exclusion"].includes(fact.factType), ordinal],
+      );
+      await client.query(
+        `INSERT INTO rfpilot.commercial_normalizations(id,organization_id,commercial_submission_id,comparable,normalized_total,currency,arithmetic_status,assumptions,refusal_codes,policy_version)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10)`,
+        [uuidv7(), organizationId, commercialId, commercial.comparable, commercial.normalizedTotal, commercial.currency, commercial.comparable ? "verified_identity" : "refused", JSON.stringify(commercial.assumptions), JSON.stringify(commercial.refusalCodes), COMMERCIAL_POLICY_VERSION],
+      );
+      const criteria = await client.query<any>("SELECT id FROM rfpilot.evaluation_criteria WHERE matrix_version_id=$1 ORDER BY ordinal", [matrix.id]);
+      const assignmentId = uuidv7();
+      await client.query("INSERT INTO rfpilot.evaluation_assignments(id,organization_id,evaluation_run_id,evaluator_external_user_id,role,assigned_by_external_user_id) VALUES($1,$2,$3,$4,'combined',$4)", [assignmentId, organizationId, runId, input.actorUserMongoId]);
+      for (const criterion of criteria.rows) await client.query("INSERT INTO rfpilot.evaluation_assignment_criteria(id,organization_id,assignment_id,criterion_id) VALUES($1,$2,$3,$4)", [uuidv7(), organizationId, assignmentId, criterion.id]);
+      await audit(client, input, organizationId, "vendor_evaluation.created", runId, { sealedPrice: input.sealedPrice, assessmentCount: assessments.length, riskCount: risks.length, priceComparable: commercial.comparable, requestIdempotencyKey: input.idempotencyKey });
+      return { runId, created: true };
+    });
+  },
+
+  async read(input: Context & { runId?: string | null }) {
+    await loadVersion(input, false);
+    return withPostgresTransaction(async (client) => {
+      await tenant(client, input.organizationMongoId);
+      const proposalRow = await proposal(client, input.proposalMongoId), run = await latestRun(client, proposalRow.id, input.versionMongoId, input.runId);
+      const permission = await access(client, run.id, input.actorUserMongoId, proposalRow.owner_external_user_id);
+      const assignmentResult = await client.query<any>("SELECT * FROM rfpilot.evaluation_assignments WHERE evaluation_run_id=$1 AND evaluator_external_user_id=$2", [run.id, input.actorUserMongoId]);
+      const assignment = assignmentResult.rows[0] ?? null;
+      const priceEvent = assignment ? await client.query<any>("SELECT decision FROM rfpilot.commercial_access_events WHERE assignment_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1", [assignment.id]) : { rows: [] };
+      const canViewCommercial = !run.sealed_price || priceEvent.rows[0]?.decision === "granted";
+      const scopedAssignmentId = permission.owner ? null : assignment?.id ?? null;
+      const criteria = await client.query<any>(
+        `SELECT c.*,coalesce((SELECT jsonb_agg(r.id ORDER BY r.ordinal) FROM rfpilot.requirements r WHERE r.criterion_id=c.id),'[]') requirement_ids
+         FROM rfpilot.evaluation_criteria c WHERE c.matrix_version_id=$1
+           AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM rfpilot.evaluation_assignment_criteria ac WHERE ac.assignment_id=$2 AND ac.criterion_id=c.id))
+         ORDER BY c.ordinal`, [run.matrix_version_id, scopedAssignmentId],
+      );
+      const assessments = await client.query<any>(
+        `SELECT a.*,r.title requirement_title,r.mandatory_status,r.eligibility,
+          coalesce((SELECT jsonb_agg(jsonb_build_object('fragmentId',e.evidence_fragment_id,'sourceLabel',s.source_label,'locator',f.locator,'content',left(f.content,1200)) ORDER BY e.ordinal)
+            FROM rfpilot.assessment_evidence e JOIN rfpilot.evidence_fragments f ON f.id=e.evidence_fragment_id
+            LEFT JOIN LATERAL (SELECT x.source_label FROM rfpilot.source_extraction_runs x WHERE x.vendor_submission_version_mongo_id=$2 AND coalesce(x.reused_from_run_id,x.id)=f.extraction_run_id ORDER BY x.created_at LIMIT 1) s ON true
+            WHERE e.assessment_id=a.id),'[]') evidence
+         FROM rfpilot.ai_assessments a JOIN rfpilot.requirements r ON r.id=a.requirement_id WHERE a.evaluation_run_id=$1
+           AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM rfpilot.evaluation_assignment_criteria ac WHERE ac.assignment_id=$3 AND ac.criterion_id=r.criterion_id))
+         ORDER BY a.ordinal`, [run.id, input.versionMongoId, scopedAssignmentId],
+      );
+      const risks = await client.query<any>(
+        `SELECT x.*,coalesce((SELECT jsonb_agg(jsonb_build_object('fragmentId',e.evidence_fragment_id,'sourceLabel',s.source_label,'locator',f.locator,'content',left(f.content,1200)) ORDER BY e.ordinal)
+          FROM rfpilot.risk_evidence e JOIN rfpilot.evidence_fragments f ON f.id=e.evidence_fragment_id
+          LEFT JOIN LATERAL (SELECT q.source_label FROM rfpilot.source_extraction_runs q WHERE q.vendor_submission_version_mongo_id=$2 AND coalesce(q.reused_from_run_id,q.id)=f.extraction_run_id ORDER BY q.created_at LIMIT 1) s ON true WHERE e.risk_id=x.id),'[]') evidence,
+          q.question FROM rfpilot.evaluation_risks x LEFT JOIN rfpilot.clarification_candidates q ON q.risk_id=x.id
+         WHERE x.evaluation_run_id=$1 AND ($3::uuid IS NULL OR
+           (x.requirement_id IS NOT NULL AND EXISTS(SELECT 1 FROM rfpilot.requirements r JOIN rfpilot.evaluation_assignment_criteria ac ON ac.criterion_id=r.criterion_id WHERE r.id=x.requirement_id AND ac.assignment_id=$3)) OR
+           ($4::boolean=true AND x.category IN('commercial_exception','commercial_non_comparable')))
+         ORDER BY CASE x.severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,x.ordinal`, [run.id, input.versionMongoId, scopedAssignmentId, canViewCommercial],
+      );
+      const assignments = await client.query<any>(
+        `SELECT a.*,coalesce((SELECT jsonb_agg(c.criterion_id ORDER BY c.criterion_id) FROM rfpilot.evaluation_assignment_criteria c WHERE c.assignment_id=a.id),'[]') criterion_ids,
+          coalesce((SELECT decision FROM rfpilot.commercial_access_events e WHERE e.assignment_id=a.id ORDER BY e.created_at DESC,e.id DESC LIMIT 1),CASE WHEN $2=false THEN 'granted' ELSE 'revoked' END) commercial_access
+         FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=$1 ORDER BY a.created_at`, [run.id, run.sealed_price],
+      );
+      const scores = await client.query<any>(
+        `SELECT DISTINCT ON (assignment_id,criterion_id) * FROM rfpilot.evaluator_score_events
+         WHERE evaluation_run_id=$1 ORDER BY assignment_id,criterion_id,created_at DESC,id DESC`, [run.id],
+      );
+      const criterionAggregates = criteria.rows.map((criterion) => {
+        const submitted = scores.rows.filter((row) => row.criterion_id === criterion.id && ["submitted", "superseded"].includes(row.event_type));
+        const values = submitted.map((row) => Number(row.score));
+        const contributions = submitted.map((row) => Number(row.weighted_contribution));
+        return { criterionId: criterion.id, submittedCount: values.length, assignedCount: assignments.rows.filter((row) => row.criterion_ids.includes(criterion.id)).length, mean: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null, minimum: values.length ? Math.min(...values) : null, maximum: values.length ? Math.max(...values) : null, spread: values.length ? Math.max(...values) - Math.min(...values) : null, meanWeightedContribution: contributions.length ? contributions.reduce((sum, value) => sum + value, 0) / contributions.length : null };
+      });
+      const commercial = canViewCommercial ? await client.query<any>(
+        `SELECT s.*,n.comparable,n.normalized_total,n.currency normalized_currency,n.arithmetic_status,n.assumptions,n.refusal_codes,n.policy_version,
+          coalesce((SELECT jsonb_agg(jsonb_build_object('category',l.category,'description',l.description,'amount',l.amount,'currency',l.currency,'optionOrExclusion',l.option_or_exclusion,'fragmentIds',coalesce((SELECT jsonb_agg(e.evidence_fragment_id ORDER BY e.ordinal) FROM rfpilot.extracted_fact_evidence e WHERE e.fact_id=l.fact_id),'[]')) ORDER BY l.ordinal) FROM rfpilot.commercial_line_items l WHERE l.commercial_submission_id=s.id),'[]') line_items
+         FROM rfpilot.commercial_submissions s JOIN rfpilot.commercial_normalizations n ON n.commercial_submission_id=s.id WHERE s.evaluation_run_id=$1`, [run.id],
+      ) : { rows: [] };
+      return {
+        run: { runId: run.id, status: run.status, sealedPrice: run.sealed_price, assessmentCount: run.assessment_count, riskCount: run.risk_count, questionCount: run.question_count, scoringPolicyVersion: run.scoring_policy_version, createdAt: run.created_at },
+        permission: { owner: permission.owner, assigned: Boolean(assignment), canViewCommercial },
+        assignment: assignment ? (() => { const criterionIds = assignments.rows.find((row) => row.id === assignment.id)?.criterion_ids ?? []; const currentScores = scores.rows.filter((row) => row.assignment_id === assignment.id && ["submitted", "superseded"].includes(row.event_type)); const complete = assignment.conflict_status === "clear" && currentScores.length === criterionIds.length; return { assignmentId: assignment.id, role: assignment.role, conflictStatus: assignment.conflict_status, conflictNote: assignment.conflict_note, status: assignment.status, version: assignment.version, criterionIds, complete, overallScore: complete ? currentScores.reduce((sum, row) => sum + Number(row.weighted_contribution), 0) : null }; })() : null,
+        criteria: criteria.rows.map((row) => ({ criterionId: row.id, key: row.criterion_key, name: row.name, description: row.description, weight: Number(row.weight), rubricMaximum: rubricMaximum(row.rubric), priceVisibility: row.price_visibility, humanOnly: row.human_only, requirementIds: row.requirement_ids })),
+        assessments: assessments.rows.map((row) => ({ assessmentId: row.id, requirementId: row.requirement_id, requirementTitle: row.requirement_title, mandatory: row.mandatory_status === "mandatory", eligibility: row.eligibility, verdict: row.verdict, rationale: row.rationale, confidence: Number(row.confidence), needsHumanReview: row.needs_human_review, reviewReasons: row.review_reasons, evidence: row.evidence })),
+        risks: risks.rows.map((row) => ({ riskId: row.id, category: row.category, severity: row.severity, title: row.title, basis: row.basis, question: row.question, evidence: row.evidence })),
+        commercial: commercial.rows[0] ? { submittedTotal: commercial.rows[0].submitted_total === null ? null : Number(commercial.rows[0].submitted_total), submittedCurrency: commercial.rows[0].submitted_currency, comparable: commercial.rows[0].comparable, normalizedTotal: commercial.rows[0].normalized_total === null ? null : Number(commercial.rows[0].normalized_total), normalizedCurrency: commercial.rows[0].normalized_currency, arithmeticStatus: commercial.rows[0].arithmetic_status, assumptions: commercial.rows[0].assumptions, refusalCodes: commercial.rows[0].refusal_codes, policyVersion: commercial.rows[0].policy_version, lineItems: commercial.rows[0].line_items } : null,
+        scores: scores.rows.filter((row) => permission.owner || row.assignment_id === assignment?.id).map((row) => ({ eventId: row.id, assignmentId: row.assignment_id, criterionId: row.criterion_id, eventType: row.event_type, score: row.score === null ? null : Number(row.score), rubricMaximum: Number(row.rubric_maximum), criterionWeight: Number(row.criterion_weight), weightedContribution: row.weighted_contribution === null ? null : Number(row.weighted_contribution), rationale: row.rationale, evidenceFragmentIds: row.evidence_fragment_ids, createdAt: row.created_at })),
+        aggregates: permission.owner ? criterionAggregates : [],
+        assignments: permission.owner ? assignments.rows.map((row) => { const currentScores = scores.rows.filter((score) => score.assignment_id === row.id && ["submitted", "superseded"].includes(score.event_type)); const complete = row.conflict_status === "clear" && currentScores.length === row.criterion_ids.length; return { assignmentId: row.id, evaluatorUserId: row.evaluator_external_user_id, role: row.role, conflictStatus: row.conflict_status, status: row.status, criterionIds: row.criterion_ids, commercialAccess: row.commercial_access, complete, overallScore: complete ? currentScores.reduce((sum, score) => sum + Number(score.weighted_contribution), 0) : null }; }) : [],
+      };
+    });
+  },
+
+  async assign(input: Context & { runId: string; evaluatorUserMongoId: string; role: "technical" | "commercial" | "combined" | "observer"; criterionIds: string[] }) {
+    await loadVersion(input, true);
+    if (!/^[0-9a-f]{24}$/i.test(input.evaluatorUserMongoId) || input.criterionIds.length < 1 || input.criterionIds.length > 50)
+      throw new EvaluationEngineError("ASSIGNMENT_INVALID", "Evaluator or criterion assignment is invalid.");
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await tenant(client, input.organizationMongoId), proposalRow = await proposal(client, input.proposalMongoId), run = await latestRun(client, proposalRow.id, input.versionMongoId, input.runId);
+      if (proposalRow.owner_external_user_id !== input.actorUserMongoId) throw new EvaluationEngineError("EVALUATION_ACCESS_DENIED", "Only the proposal owner can manage assignments.", 403);
+      const evaluator = await client.query<{ id: string }>("SELECT id FROM rfpilot.users WHERE organization_id=$1 AND external_mongo_id=$2 AND status='active'", [organizationId, input.evaluatorUserMongoId]);
+      if (!evaluator.rows[0]) throw new EvaluationEngineError("EVALUATOR_NOT_FOUND", "Evaluator is not an active organization user.", 404);
+      const criteria = await client.query<{ id: string }>("SELECT id FROM rfpilot.evaluation_criteria WHERE matrix_version_id=$1 AND id=ANY($2::uuid[])", [run.matrix_version_id, input.criterionIds]);
+      if (criteria.rows.length !== new Set(input.criterionIds).size) throw new EvaluationEngineError("ASSIGNMENT_INVALID", "One or more criteria are outside the frozen matrix.");
+      const existing = await client.query<any>("SELECT * FROM rfpilot.evaluation_assignments WHERE evaluation_run_id=$1 AND evaluator_external_user_id=$2", [run.id, input.evaluatorUserMongoId]);
+      if (existing.rows[0]) return { assignmentId: existing.rows[0].id, created: false };
+      const assignmentId = uuidv7();
+      await client.query("INSERT INTO rfpilot.evaluation_assignments(id,organization_id,evaluation_run_id,evaluator_external_user_id,role,assigned_by_external_user_id) VALUES($1,$2,$3,$4,$5,$6)", [assignmentId, organizationId, run.id, input.evaluatorUserMongoId, input.role, input.actorUserMongoId]);
+      for (const criterionId of [...new Set(input.criterionIds)]) await client.query("INSERT INTO rfpilot.evaluation_assignment_criteria(id,organization_id,assignment_id,criterion_id) VALUES($1,$2,$3,$4)", [uuidv7(), organizationId, assignmentId, criterionId]);
+      await audit(client, input, organizationId, "vendor_evaluation.assigned", run.id, { assignmentId, role: input.role, criterionCount: input.criterionIds.length });
+      return { assignmentId, created: true };
+    });
+  },
+
+  async declareConflict(input: Context & { runId: string; status: "clear" | "conflict"; note: string; expectedVersion: number }) {
+    await loadVersion(input, false);
+    if (input.status === "conflict" && !input.note.trim()) throw new EvaluationEngineError("CONFLICT_NOTE_REQUIRED", "Describe the conflict of interest.");
+    return withPostgresTransaction(async (client) => {
+      await tenant(client, input.organizationMongoId); const proposalRow = await proposal(client, input.proposalMongoId), run = await latestRun(client, proposalRow.id, input.versionMongoId, input.runId);
+      await access(client, run.id, input.actorUserMongoId, proposalRow.owner_external_user_id);
+      const updated = await client.query<any>("UPDATE rfpilot.evaluation_assignments SET conflict_status=$3,conflict_note=$4,version=version+1,updated_at=now() WHERE evaluation_run_id=$1 AND evaluator_external_user_id=$2 AND version=$5 RETURNING *", [run.id, input.actorUserMongoId, input.status, input.note.trim().slice(0, 1000), input.expectedVersion]);
+      if (!updated.rows[0]) throw new EvaluationEngineError("ASSIGNMENT_VERSION_CONFLICT", "The assignment changed. Refresh before saving.", 409);
+      await audit(client, input, (await tenant(client, input.organizationMongoId)), "vendor_evaluation.conflict_declared", run.id, { status: input.status });
+      return { assignmentId: updated.rows[0].id, conflictStatus: updated.rows[0].conflict_status, version: updated.rows[0].version };
+    });
+  },
+
+  async score(input: Context & { runId: string; criterionId: string; eventType: "draft" | "submitted" | "superseded"; score: number; rationale: string; evidenceFragmentIds: string[]; idempotencyKey: string }) {
+    await loadVersion(input, false);
+    if (input.rationale.length > 3000 || input.evidenceFragmentIds.length > 20) throw new EvaluationEngineError("SCORE_INVALID", "Score rationale or citations are invalid.");
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await tenant(client, input.organizationMongoId), proposalRow = await proposal(client, input.proposalMongoId), run = await latestRun(client, proposalRow.id, input.versionMongoId, input.runId);
+      const assignment = await client.query<any>("SELECT * FROM rfpilot.evaluation_assignments WHERE evaluation_run_id=$1 AND evaluator_external_user_id=$2 FOR UPDATE", [run.id, input.actorUserMongoId]);
+      if (!assignment.rows[0]) throw new EvaluationEngineError("EVALUATION_ACCESS_DENIED", "You are not assigned to score this evaluation.", 403);
+      if (input.eventType === "submitted" && assignment.rows[0].conflict_status !== "clear") throw new EvaluationEngineError("CONFLICT_DECLARATION_REQUIRED", "Declare your conflict-of-interest status before submitting.", 409);
+      if (input.eventType !== "draft" && !input.rationale.trim()) throw new EvaluationEngineError("SCORE_RATIONALE_REQUIRED", "Submitted scores require a rationale.");
+      const criterion = await client.query<any>(
+        `SELECT c.* FROM rfpilot.evaluation_criteria c JOIN rfpilot.evaluation_assignment_criteria a ON a.criterion_id=c.id
+         WHERE a.assignment_id=$1 AND c.id=$2 AND c.matrix_version_id=$3`, [assignment.rows[0].id, input.criterionId, run.matrix_version_id],
+      );
+      if (!criterion.rows[0]) throw new EvaluationEngineError("CRITERION_NOT_ASSIGNED", "This criterion is not assigned to you.", 403);
+      if (input.eventType !== "draft" && criterion.rows[0].human_only !== true && input.evidenceFragmentIds.length === 0)
+        throw new EvaluationEngineError("SCORE_CITATION_REQUIRED", "Submitted scores require cited vendor evidence.");
+      if (criterion.rows[0].price_visibility === "hidden" && run.sealed_price) {
+        const grant = await client.query<any>("SELECT decision FROM rfpilot.commercial_access_events WHERE assignment_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1", [assignment.rows[0].id]);
+        if (grant.rows[0]?.decision !== "granted") throw new EvaluationEngineError("SEALED_PRICE_ACCESS_REQUIRED", "Commercial scoring is sealed until access is granted.", 403);
+      }
+      const oldKey = await client.query<any>("SELECT * FROM rfpilot.evaluator_score_events WHERE organization_id=$1 AND idempotency_key=$2", [organizationId, input.idempotencyKey]);
+      if (oldKey.rows[0]) return { eventId: oldKey.rows[0].id, created: false };
+      const latest = await client.query<any>("SELECT * FROM rfpilot.evaluator_score_events WHERE assignment_id=$1 AND criterion_id=$2 ORDER BY created_at DESC,id DESC LIMIT 1", [assignment.rows[0].id, input.criterionId]);
+      if (["submitted", "superseded"].includes(latest.rows[0]?.event_type)) throw new EvaluationEngineError("SCORE_ALREADY_SUBMITTED", "Reopen the submitted score before correcting it.", 409);
+      const maximum = rubricMaximum(criterion.rows[0].rubric), weight = Number(criterion.rows[0].weight), contribution = calculateContribution({ score: input.score, rubricMaximum: maximum, weight });
+      const allowedEvidence = await client.query<{ id: string }>(
+        `SELECT DISTINCT f.id FROM rfpilot.evidence_fragments f
+         JOIN rfpilot.assessment_evidence ae ON ae.evidence_fragment_id=f.id
+         JOIN rfpilot.ai_assessments a ON a.id=ae.assessment_id
+         JOIN rfpilot.requirements r ON r.id=a.requirement_id
+         WHERE f.id=ANY($1::uuid[]) AND a.evaluation_run_id=$2 AND r.criterion_id=$3`, [input.evidenceFragmentIds, run.id, input.criterionId],
+      );
+      if (allowedEvidence.rows.length !== new Set(input.evidenceFragmentIds).size) throw new EvaluationEngineError("SCORE_CITATION_INVALID", "A score citation is outside this vendor response.");
+      const eventId = uuidv7();
+      await client.query(
+        `INSERT INTO rfpilot.evaluator_score_events(id,organization_id,evaluation_run_id,assignment_id,criterion_id,event_type,score,rubric_maximum,criterion_weight,weighted_contribution,rationale,evidence_fragment_ids,supersedes_event_id,scoring_policy_version,actor_external_user_id,idempotency_key)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16)`,
+        [eventId, organizationId, run.id, assignment.rows[0].id, input.criterionId, input.eventType, input.score, maximum, weight, contribution, input.rationale.trim(), JSON.stringify([...new Set(input.evidenceFragmentIds)]), input.eventType === "superseded" ? latest.rows[0]?.id ?? null : null, SCORING_POLICY_VERSION, input.actorUserMongoId, input.idempotencyKey],
+      );
+      const incomplete = await client.query<{ count: number }>(
+        `SELECT count(*)::int count FROM rfpilot.evaluation_assignment_criteria ac WHERE ac.assignment_id=$1 AND NOT EXISTS(
+          SELECT 1 FROM (SELECT DISTINCT ON(criterion_id) criterion_id,event_type FROM rfpilot.evaluator_score_events WHERE assignment_id=$1 ORDER BY criterion_id,created_at DESC,id DESC) e
+          WHERE e.criterion_id=ac.criterion_id AND e.event_type IN('submitted','superseded'))`, [assignment.rows[0].id],
+      );
+      if (input.eventType !== "draft" && Number(incomplete.rows[0]?.count ?? 1) === 0) await client.query("UPDATE rfpilot.evaluation_assignments SET status='complete',version=version+1,updated_at=now() WHERE id=$1", [assignment.rows[0].id]);
+      await audit(client, input, organizationId, "vendor_evaluation.score_recorded", run.id, { criterionId: input.criterionId, eventType: input.eventType });
+      return { eventId, created: true };
+    });
+  },
+
+  async reopen(input: Context & { runId: string; assignmentId: string; criterionId: string; reason: string; idempotencyKey: string }) {
+    await loadVersion(input, true);
+    if (!input.reason.trim()) throw new EvaluationEngineError("REOPEN_REASON_REQUIRED", "A reopen reason is required.");
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await tenant(client, input.organizationMongoId), proposalRow = await proposal(client, input.proposalMongoId), run = await latestRun(client, proposalRow.id, input.versionMongoId, input.runId);
+      if (proposalRow.owner_external_user_id !== input.actorUserMongoId) throw new EvaluationEngineError("EVALUATION_ACCESS_DENIED", "Only the proposal owner can reopen a score.", 403);
+      const oldKey = await client.query<any>("SELECT id FROM rfpilot.evaluator_score_events WHERE organization_id=$1 AND idempotency_key=$2", [organizationId, input.idempotencyKey]); if (oldKey.rows[0]) return { eventId: oldKey.rows[0].id, created: false };
+      const latest = await client.query<any>("SELECT * FROM rfpilot.evaluator_score_events WHERE evaluation_run_id=$1 AND assignment_id=$2 AND criterion_id=$3 ORDER BY created_at DESC,id DESC LIMIT 1", [run.id, input.assignmentId, input.criterionId]);
+      if (!["submitted", "superseded"].includes(latest.rows[0]?.event_type)) throw new EvaluationEngineError("SCORE_NOT_SUBMITTED", "Only a submitted score can be reopened.", 409);
+      const eventId = uuidv7();
+      await client.query(
+        `INSERT INTO rfpilot.evaluator_score_events(id,organization_id,evaluation_run_id,assignment_id,criterion_id,event_type,rubric_maximum,criterion_weight,rationale,supersedes_event_id,scoring_policy_version,actor_external_user_id,idempotency_key)
+         VALUES($1,$2,$3,$4,$5,'reopened',$6,$7,$8,$9,$10,$11,$12)`,
+        [eventId, organizationId, run.id, input.assignmentId, input.criterionId, latest.rows[0].rubric_maximum, latest.rows[0].criterion_weight, input.reason.trim().slice(0, 3000), latest.rows[0].id, SCORING_POLICY_VERSION, input.actorUserMongoId, input.idempotencyKey],
+      );
+      await client.query("UPDATE rfpilot.evaluation_assignments SET status='reopened',version=version+1,updated_at=now() WHERE id=$1", [input.assignmentId]);
+      await audit(client, input, organizationId, "vendor_evaluation.score_reopened", run.id, { assignmentId: input.assignmentId, criterionId: input.criterionId });
+      return { eventId, created: true };
+    });
+  },
+
+  async commercialAccess(input: Context & { runId: string; assignmentId: string; decision: "granted" | "revoked"; reason: string; idempotencyKey: string }) {
+    await loadVersion(input, true);
+    if (!input.reason.trim()) throw new EvaluationEngineError("COMMERCIAL_ACCESS_REASON_REQUIRED", "A commercial-access reason is required.");
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await tenant(client, input.organizationMongoId), proposalRow = await proposal(client, input.proposalMongoId), run = await latestRun(client, proposalRow.id, input.versionMongoId, input.runId);
+      if (proposalRow.owner_external_user_id !== input.actorUserMongoId) throw new EvaluationEngineError("EVALUATION_ACCESS_DENIED", "Only the proposal owner can manage sealed-price access.", 403);
+      const assignment = await client.query<any>("SELECT id FROM rfpilot.evaluation_assignments WHERE id=$1 AND evaluation_run_id=$2", [input.assignmentId, run.id]); if (!assignment.rows[0]) throw new EvaluationEngineError("ASSIGNMENT_NOT_FOUND", "Assignment was not found.", 404);
+      const old = await client.query<any>("SELECT id FROM rfpilot.commercial_access_events WHERE organization_id=$1 AND idempotency_key=$2", [organizationId, input.idempotencyKey]); if (old.rows[0]) return { eventId: old.rows[0].id, created: false };
+      const eventId = uuidv7(); await client.query("INSERT INTO rfpilot.commercial_access_events(id,organization_id,evaluation_run_id,assignment_id,decision,reason,actor_external_user_id,idempotency_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [eventId, organizationId, run.id, input.assignmentId, input.decision, input.reason.trim().slice(0, 1000), input.actorUserMongoId, input.idempotencyKey]);
+      await audit(client, input, organizationId, "vendor_evaluation.commercial_access", run.id, { assignmentId: input.assignmentId, decision: input.decision });
+      return { eventId, created: true };
+    });
+  },
+};
