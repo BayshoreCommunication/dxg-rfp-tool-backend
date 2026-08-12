@@ -1,9 +1,10 @@
-import { Request, Response } from "express";
+import type { Request, Response } from "express";
 import mongoose from "mongoose";
-import { AuthRequest } from "../middleware/auth";
+import type { AuthRequest } from "../middleware/auth";
 import {
   checkVendorResponse,
   getVendorSubmissionReceipt,
+  getOwnedVendorSubmissionDetail,
   getOwnedVendorResponse,
   listOwnedVendorResponses,
   submitPublicVendorResponse,
@@ -43,7 +44,16 @@ export const submitVendorResponse = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const { proposalId, vendorName, submittedBy, email, message, emailTrackingId, submissionIdempotencyKey, submissionReason } = req.body as {
+    const {
+      proposalId,
+      vendorName,
+      submittedBy,
+      email,
+      message,
+      emailTrackingId,
+      submissionIdempotencyKey,
+      submissionReason,
+    } = req.body as {
       proposalId?: string;
       vendorName?: string;
       submittedBy?: string;
@@ -55,15 +65,21 @@ export const submitVendorResponse = async (
     };
 
     if (!proposalId || !mongoose.isValidObjectId(proposalId)) {
-      res.status(400).json({ success: false, message: "Valid proposal id is required." });
+      res
+        .status(400)
+        .json({ success: false, message: "Valid proposal id is required." });
       return;
     }
     if (!vendorName?.trim()) {
-      res.status(400).json({ success: false, message: "Vendor name is required." });
+      res
+        .status(400)
+        .json({ success: false, message: "Vendor name is required." });
       return;
     }
     if (!submittedBy?.trim()) {
-      res.status(400).json({ success: false, message: "Submitted by is required." });
+      res
+        .status(400)
+        .json({ success: false, message: "Submitted by is required." });
       return;
     }
     if (!email?.trim()) {
@@ -71,9 +87,18 @@ export const submitVendorResponse = async (
       return;
     }
 
-    const rawFiles = (req as Request & {
-      files?: { documents?: Array<{ originalname: string; path: string; mimetype?: string; size?: number }> };
-    }).files?.documents;
+    const rawFiles = (
+      req as Request & {
+        files?: {
+          documents?: Array<{
+            originalname: string;
+            path: string;
+            mimetype?: string;
+            size?: number;
+          }>;
+        };
+      }
+    ).files?.documents;
     const result = await submitPublicVendorResponse({
       proposalId,
       vendorName,
@@ -100,7 +125,8 @@ export const submitVendorResponse = async (
     if (result.kind === "infected") {
       res.status(422).json({
         success: false,
-        message: "One or more uploaded files failed the malware scan and the submission was rejected.",
+        message:
+          "One or more uploaded files failed the malware scan and the submission was rejected.",
       });
       return;
     }
@@ -110,7 +136,8 @@ export const submitVendorResponse = async (
     if (result.kind === "scan_unavailable") {
       res.status(503).json({
         success: false,
-        message: "Uploads cannot be virus-scanned right now, so the submission was not accepted. Please try again shortly.",
+        message:
+          "Uploads cannot be virus-scanned right now, so the submission was not accepted. Please try again shortly.",
       });
       return;
     }
@@ -163,16 +190,35 @@ export const getVendorResponseReceipt = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const proposalId = typeof req.query.proposalId === "string" ? req.query.proposalId : "";
-    const email = typeof req.query.email === "string" ? req.query.email.trim().toLowerCase() : "";
+    const proposalId =
+      typeof req.query.proposalId === "string" ? req.query.proposalId : "";
+    const email =
+      typeof req.query.email === "string"
+        ? req.query.email.trim().toLowerCase()
+        : "";
     const versionId = req.params.versionId;
-    if (!mongoose.isValidObjectId(proposalId) || !mongoose.isValidObjectId(versionId) || !email) {
-      res.status(400).json({ success: false, message: "A valid proposal, receipt, and vendor email are required." });
+    if (
+      !mongoose.isValidObjectId(proposalId) ||
+      !mongoose.isValidObjectId(versionId) ||
+      !email
+    ) {
+      res
+        .status(400)
+        .json({
+          success: false,
+          message: "A valid proposal, receipt, and vendor email are required.",
+        });
       return;
     }
-    const receipt = await getVendorSubmissionReceipt({ proposalId, versionId, email });
+    const receipt = await getVendorSubmissionReceipt({
+      proposalId,
+      versionId,
+      email,
+    });
     if (!receipt) {
-      res.status(404).json({ success: false, message: "Submission receipt not found." });
+      res
+        .status(404)
+        .json({ success: false, message: "Submission receipt not found." });
       return;
     }
     res.status(200).json({
@@ -200,7 +246,12 @@ export const getVendorResponseReceipt = async (
       },
     });
   } catch {
-    res.status(500).json({ success: false, message: "Submission receipt is temporarily unavailable." });
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Submission receipt is temporarily unavailable.",
+      });
   }
 };
 
@@ -211,7 +262,9 @@ export const getVendorResponses = async (
   try {
     const userId = req.user?.userId;
     if (!userId) {
-      res.status(401).json({ success: false, message: "Authentication required" });
+      res
+        .status(401)
+        .json({ success: false, message: "Authentication required" });
       return;
     }
 
@@ -256,7 +309,9 @@ export const getVendorResponseById = async (
   try {
     const userId = req.user?.userId;
     if (!userId) {
-      res.status(401).json({ success: false, message: "Authentication required" });
+      res
+        .status(401)
+        .json({ success: false, message: "Authentication required" });
       return;
     }
 
@@ -272,7 +327,9 @@ export const getVendorResponseById = async (
     });
 
     if (result.kind === "not_found") {
-      res.status(404).json({ success: false, message: "Vendor response not found" });
+      res
+        .status(404)
+        .json({ success: false, message: "Vendor response not found" });
       return;
     }
 
@@ -287,6 +344,39 @@ export const getVendorResponseById = async (
   }
 };
 
+export const getVendorSubmissionDetail = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      res
+        .status(401)
+        .json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const result = await getOwnedVendorSubmissionDetail({
+      responseId: req.params.id,
+      ownerUserId: userId,
+    });
+    if (result.kind === "not_found") {
+      res
+        .status(404)
+        .json({ success: false, message: "Vendor response not found" });
+      return;
+    }
+    res.status(200).json({ success: true, data: result.detail });
+  } catch (error) {
+    console.error("Get vendor submission detail error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching vendor submission detail",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
 export const markVendorResponseRead = async (
   req: AuthRequest,
   res: Response,
@@ -294,7 +384,9 @@ export const markVendorResponseRead = async (
   try {
     const userId = req.user?.userId;
     if (!userId) {
-      res.status(401).json({ success: false, message: "Authentication required" });
+      res
+        .status(401)
+        .json({ success: false, message: "Authentication required" });
       return;
     }
 
@@ -310,7 +402,9 @@ export const markVendorResponseRead = async (
     });
 
     if (result.kind === "not_found") {
-      res.status(404).json({ success: false, message: "Vendor response not found" });
+      res
+        .status(404)
+        .json({ success: false, message: "Vendor response not found" });
       return;
     }
 

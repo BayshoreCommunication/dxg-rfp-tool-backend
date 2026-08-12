@@ -1,4 +1,5 @@
 import {
+  createGetOwnedVendorSubmissionDetail,
   createGetOwnedVendorResponse,
   createListOwnedVendorResponses,
 } from "./application/readVendorResponses";
@@ -26,6 +27,11 @@ export const getOwnedVendorResponse = createGetOwnedVendorResponse(
   mongoVendorResponseReadRepository,
   spacesVendorDocumentUrlSigner,
 );
+export const getOwnedVendorSubmissionDetail =
+  createGetOwnedVendorSubmissionDetail(
+    mongoVendorResponseReadRepository,
+    spacesVendorDocumentUrlSigner,
+  );
 export const checkVendorResponse = createCheckVendorResponse(
   mongoVendorSubmissionRepository,
 );

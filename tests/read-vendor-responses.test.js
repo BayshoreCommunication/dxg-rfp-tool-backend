@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
+  createGetOwnedVendorSubmissionDetail,
   createGetOwnedVendorResponse,
   createListOwnedVendorResponses,
 } = require("../src/modules/vendorResponses/application/readVendorResponses");
@@ -10,7 +11,11 @@ test("vendor-response list normalizes filters and carries planner ownership", as
   const list = createListOwnedVendorResponses({
     listOwned: async (input) => {
       repositoryInput = input;
-      return { responses: [{ _id: "response-001" }], total: 45, unreadCount: 3 };
+      return {
+        responses: [{ _id: "response-001" }],
+        total: 45,
+        unreadCount: 3,
+      };
     },
   });
 
@@ -155,4 +160,72 @@ test("vendor-response detail read is owner-scoped and hides cross-owner records"
     ownerUserId: "planner-001",
   });
   assert.deepEqual(result, { kind: "not_found" });
+});
+
+test("submission detail returns immutable versions with separately signed documents", async () => {
+  const detail = createGetOwnedVendorSubmissionDetail(
+    {
+      markOwnedRead: async () => ({ _id: "response-001", documents: [] }),
+      getOwnedSubmissionTimeline: async () => ({
+        submission: {
+          submissionId: "submission-001",
+          status: "active",
+          currentVersionId: "version-002",
+          currentVersionNumber: 2,
+          createdAt: "2026-08-01T00:00:00.000Z",
+          updatedAt: "2026-08-02T00:00:00.000Z",
+        },
+        versions: [
+          {
+            versionId: "version-002",
+            versionNumber: 2,
+            parentVersionId: "version-001",
+            reason: "clarification_response",
+            sourceSystem: "public_portal",
+            receivedAt: "2026-08-02T00:00:00.000Z",
+            manifestChecksum: "a".repeat(64),
+            vendorName: "Apex",
+            submittedBy: "Alex",
+            email: "alex@example.com",
+            message: "Clarification",
+            documents: [
+              {
+                name: "clarification.pdf",
+                url: "private/clarification.pdf",
+                scanStatus: "clean",
+              },
+            ],
+          },
+        ],
+      }),
+    },
+    { presignDocumentUrl: async (url) => `${url}?signed=1` },
+  );
+  const result = await detail({
+    responseId: "response-001",
+    ownerUserId: "planner-001",
+  });
+  assert.equal(result.kind, "found");
+  assert.equal(result.detail.versions[0].reason, "clarification_response");
+  assert.equal(
+    result.detail.versions[0].documents[0].url,
+    "private/clarification.pdf?signed=1",
+  );
+});
+
+test("submission detail fails closed before timeline reads for another owner", async () => {
+  let timelineRead = false;
+  const detail = createGetOwnedVendorSubmissionDetail({
+    markOwnedRead: async () => null,
+    getOwnedSubmissionTimeline: async () => {
+      timelineRead = true;
+      return null;
+    },
+  });
+  const result = await detail({
+    responseId: "response-other-owner",
+    ownerUserId: "planner-001",
+  });
+  assert.deepEqual(result, { kind: "not_found" });
+  assert.equal(timelineRead, false);
 });
