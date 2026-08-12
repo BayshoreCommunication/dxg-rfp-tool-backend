@@ -1,0 +1,10 @@
+DROP TRIGGER IF EXISTS evidence_table_cells_immutable ON rfpilot.evidence_table_cells;
+DROP TRIGGER IF EXISTS evidence_tables_immutable ON rfpilot.evidence_tables;
+DROP TRIGGER IF EXISTS evidence_fragments_immutable ON rfpilot.evidence_fragments;
+DROP FUNCTION IF EXISTS rfpilot.guard_extracted_evidence_update();
+DROP TABLE IF EXISTS rfpilot.evidence_table_cells;
+DROP TABLE IF EXISTS rfpilot.evidence_tables;
+DROP TABLE IF EXISTS rfpilot.evidence_fragments;
+DROP TABLE IF EXISTS rfpilot.source_extraction_runs;
+DROP INDEX IF EXISTS rfpilot.ai_jobs_org_id_uq;
+DROP INDEX IF EXISTS rfpilot.document_sources_org_id_uq;
