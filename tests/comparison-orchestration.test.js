@@ -67,3 +67,17 @@ test("comparison APIs expose persisted projections and never accept an AI winner
   assert.match(controller, /resultUrl/);
   assert.doesNotMatch(controller, /aiRecommendedWinner|recommendedWinner|awardVendor/);
 });
+
+test("proposal intelligence decisions are tenant isolated, append only, and explicitly human", () => {
+  const migration = read("migrations/postgres/050_proposal_intelligence_decisions.up.sql");
+  const repository = read("src/modules/comparisonOrchestration/postgresComparisonOrchestrationRepository.ts");
+  const routes = read("routes/comparisonOrchestrationRoute.ts");
+  assert.match(migration, /CREATE TABLE rfpilot\.comparison_decisions/);
+  assert.match(migration, /FORCE ROW LEVEL SECURITY/);
+  assert.match(migration, /comparison_decisions_immutable/);
+  assert.match(migration, /selected_participant_ids jsonb/);
+  assert.match(repository, /STALE_ACKNOWLEDGEMENT_REQUIRED/);
+  assert.match(repository, /comparison\.decision\.recorded/);
+  assert.match(repository, /supersedes_decision_id/);
+  assert.match(routes, /\/decisions/);
+});

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { authenticate, authorizeAction } from "../middleware/auth";
 import { securityRateLimit } from "../middleware/securityRateLimit";
-import { cancelComparison, createComparison, listComparisons, readCommercialProjection, readComparison, readComparisonStatus, readQuestionProjection, readRequirementProjection, readRiskProjection, readVendorProjection, retryComparison } from "../controller/comparisonOrchestrationController";
+import { cancelComparison, createComparison, listComparisons, readCommercialProjection, readComparison, readComparisonStatus, readEvaluationProjection, readOverviewProjection, readQuestionProjection, readRequirementProjection, readRiskProjection, readTechnicalProjection, readVendorProjection, recordComparisonDecision, retryComparison } from "../controller/comparisonOrchestrationController";
 
 const router = Router(), base = "/proposals/:proposalId/intelligence/comparisons";
 const reads = securityRateLimit({ name: "comparison-orchestration-read", limit: 180, windowMs: 15 * 60_000 });
@@ -9,12 +9,16 @@ const writes = securityRateLimit({ name: "comparison-orchestration-write", limit
 router.post(base, authenticate, authorizeAction("proposal:write"), writes, createComparison);
 router.get(base, authenticate, authorizeAction("proposal:read"), reads, listComparisons);
 router.get(`${base}/:runId/status`, authenticate, authorizeAction("proposal:read"), reads, readComparisonStatus);
+router.get(`${base}/:runId/overview`, authenticate, authorizeAction("proposal:read"), reads, readOverviewProjection);
 router.get(`${base}/:runId/requirements`, authenticate, authorizeAction("proposal:read"), reads, readRequirementProjection);
+router.get(`${base}/:runId/technical`, authenticate, authorizeAction("proposal:read"), reads, readTechnicalProjection);
 router.get(`${base}/:runId/vendors/:participantId`, authenticate, authorizeAction("proposal:read"), reads, readVendorProjection);
 router.get(`${base}/:runId/commercial`, authenticate, authorizeAction("proposal:read"), reads, readCommercialProjection);
 router.get(`${base}/:runId/risks`, authenticate, authorizeAction("proposal:read"), reads, readRiskProjection);
+router.get(`${base}/:runId/evaluation`, authenticate, authorizeAction("proposal:read"), reads, readEvaluationProjection);
 router.get(`${base}/:runId/questions`, authenticate, authorizeAction("proposal:read"), reads, readQuestionProjection);
 router.get(`${base}/:runId`, authenticate, authorizeAction("proposal:read"), reads, readComparison);
 router.post(`${base}/:runId/cancel`, authenticate, authorizeAction("proposal:write"), writes, cancelComparison);
 router.post(`${base}/:runId/retry`, authenticate, authorizeAction("proposal:write"), writes, retryComparison);
+router.post(`${base}/:runId/decisions`, authenticate, authorizeAction("proposal:write"), writes, recordComparisonDecision);
 export default router;

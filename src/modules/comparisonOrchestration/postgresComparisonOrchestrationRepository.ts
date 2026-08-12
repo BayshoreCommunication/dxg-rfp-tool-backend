@@ -158,21 +158,178 @@ const currentFreshness = async (client: PoolClient, run: any, mongo: Awaited<Ret
   return staleReasons;
 };
 
-const projection = async (client: PoolClient, run: any) => {
+const intelligenceProjection = async (client: PoolClient, run: any, priceVisibility: string) => {
+  const [requirementRows, commercialRows, riskRows, evaluationRows, decisionRows] = await Promise.all([
+    client.query<any>(
+      `SELECT r.id requirement_id,r.requirement_key,r.kind,r.title,r.normalized_text,r.mandatory_status,r.eligibility,
+              r.importance,r.verification_method,r.group_key,r.ordinal requirement_ordinal,
+              p.id participant_id,p.vendor_label,p.ordinal participant_ordinal,
+              a.id assessment_id,a.verdict,a.rationale,a.confidence,a.needs_human_review,a.review_reasons,
+              coalesce(ev.evidence,'[]'::jsonb) evidence,coalesce(rv.review_history,'[]'::jsonb) review_history
+       FROM rfpilot.comparison_participants p
+       JOIN rfpilot.requirements r ON r.requirement_set_id=$2
+       LEFT JOIN rfpilot.ai_assessments a ON a.evaluation_run_id=p.evaluation_run_id AND a.requirement_id=r.id
+       LEFT JOIN LATERAL (
+         SELECT jsonb_agg(jsonb_build_object(
+           'evidenceId',ef.id,'supportRole',ae.support_role,'sourceLabel',sx.source_label,
+           'sourceChecksum',sx.source_checksum,'locator',ef.locator,'excerpt',left(ef.content,2000),
+           'contentChecksum',ef.content_checksum,'trustClass',ef.trust_class,
+           'facts',coalesce((SELECT jsonb_agg(jsonb_build_object(
+             'factId',f.id,'key',f.fact_key,'family',f.family,'type',f.fact_type,'statement',f.statement,
+             'valueKind',f.value_kind,'typedValue',f.typed_value,'normalizedValue',f.normalized_value,
+             'unit',f.unit,'currency',f.currency,'confidence',f.confidence,'contradictionGroup',f.contradiction_group,
+             'supportRole',fe.support_role) ORDER BY f.ordinal)
+             FROM rfpilot.extracted_fact_evidence fe
+             JOIN rfpilot.extracted_facts f ON f.id=fe.fact_id
+             WHERE fe.evidence_fragment_id=ef.id AND f.intelligence_run_id=p.intelligence_run_id
+           ),'[]'::jsonb)
+         ) ORDER BY ae.ordinal) evidence
+         FROM rfpilot.assessment_evidence ae
+         JOIN rfpilot.evidence_fragments ef ON ef.id=ae.evidence_fragment_id
+         JOIN rfpilot.source_extraction_runs sx ON sx.id=ef.extraction_run_id
+         WHERE ae.assessment_id=a.id
+       ) ev ON true
+       LEFT JOIN LATERAL (
+         SELECT jsonb_agg(jsonb_build_object(
+           'reviewId',h.id,'decision',h.decision,'reasonCode',h.reason_code,'note',h.note,
+           'actorUserId',h.actor_external_user_id,'createdAt',h.created_at
+         ) ORDER BY h.created_at,h.id) review_history
+         FROM rfpilot.requirement_evidence_mappings m
+         JOIN rfpilot.human_review_events h ON h.intelligence_run_id=m.intelligence_run_id AND h.target_type='mapping' AND h.target_id=m.id
+         WHERE m.intelligence_run_id=p.intelligence_run_id AND m.requirement_id=r.id
+       ) rv ON true
+       WHERE p.comparison_run_id=$1
+       ORDER BY r.ordinal,p.ordinal`,
+      [run.id, run.requirement_set_id],
+    ),
+    client.query<any>(
+      `SELECT p.id participant_id,p.vendor_label,
+              s.submitted_total,s.submitted_currency,s.basis,
+              n.comparable,n.normalized_total,n.currency normalized_currency,n.arithmetic_status,n.assumptions,n.refusal_codes,n.policy_version,
+              coalesce(lines.line_items,'[]'::jsonb) line_items
+       FROM rfpilot.comparison_participants p
+       LEFT JOIN rfpilot.commercial_submissions s ON s.evaluation_run_id=p.evaluation_run_id
+       LEFT JOIN rfpilot.commercial_normalizations n ON n.commercial_submission_id=s.id
+       LEFT JOIN LATERAL (
+         SELECT jsonb_agg(jsonb_build_object(
+           'lineItemId',l.id,'category',l.category,'description',l.description,'amount',l.amount,
+           'currency',l.currency,'optionOrExclusion',l.option_or_exclusion
+         ) ORDER BY l.ordinal) line_items
+         FROM rfpilot.commercial_line_items l WHERE l.commercial_submission_id=s.id
+       ) lines ON true
+       WHERE p.comparison_run_id=$1 ORDER BY p.ordinal`,
+      [run.id],
+    ),
+    client.query<any>(
+      `SELECT p.id participant_id,p.vendor_label,x.id risk_id,x.requirement_id,x.category,x.severity,x.title,x.basis,x.disposition,
+              c.id question_id,c.question,coalesce(ev.evidence,'[]'::jsonb) evidence
+       FROM rfpilot.comparison_participants p
+       JOIN rfpilot.evaluation_risks x ON x.evaluation_run_id=p.evaluation_run_id
+       LEFT JOIN rfpilot.clarification_candidates c ON c.risk_id=x.id
+       LEFT JOIN LATERAL (
+         SELECT jsonb_agg(jsonb_build_object(
+           'evidenceId',ef.id,'sourceLabel',sx.source_label,'sourceChecksum',sx.source_checksum,
+           'locator',ef.locator,'excerpt',left(ef.content,2000),'contentChecksum',ef.content_checksum,
+           'trustClass',ef.trust_class
+         ) ORDER BY re.ordinal) evidence
+         FROM rfpilot.risk_evidence re
+         JOIN rfpilot.evidence_fragments ef ON ef.id=re.evidence_fragment_id
+         JOIN rfpilot.source_extraction_runs sx ON sx.id=ef.extraction_run_id
+         WHERE re.risk_id=x.id
+       ) ev ON true
+       WHERE p.comparison_run_id=$1 ORDER BY p.ordinal,x.ordinal`,
+      [run.id],
+    ),
+    client.query<any>(
+      `SELECT p.id participant_id,p.vendor_label,coalesce(pr.result->'evaluation','{}'::jsonb) score_summary,
+              (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id) evaluator_count,
+              (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id AND a.status='complete') completed_evaluator_count,
+              (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id AND a.conflict_status='conflict') conflict_count
+       FROM rfpilot.comparison_participants p
+       LEFT JOIN rfpilot.comparison_participant_results pr ON pr.participant_id=p.id
+       WHERE p.comparison_run_id=$1 ORDER BY p.ordinal`,
+      [run.id],
+    ),
+    client.query<any>(
+      `SELECT id,decision_type,selected_participant_ids,rationale,stale_acknowledged,manifest_checksum,
+              supersedes_decision_id,actor_external_user_id,created_at
+       FROM rfpilot.comparison_decisions WHERE comparison_run_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100`,
+      [run.id],
+    ),
+  ]);
+  const requirements = new Map<string, any>();
+  for (const row of requirementRows.rows) {
+    const requirement = requirements.get(row.requirement_id) ?? {
+      requirementId: row.requirement_id, key: row.requirement_key, kind: row.kind, title: row.title,
+      text: row.normalized_text, mandatoryStatus: row.mandatory_status, eligibility: row.eligibility,
+      importance: row.importance, verificationMethod: row.verification_method, groupKey: row.group_key,
+      ordinal: row.requirement_ordinal, vendors: [],
+    };
+    requirement.vendors.push({
+      participantId: row.participant_id, vendorLabel: row.vendor_label,
+      assessmentId: row.assessment_id, verdict: row.verdict ?? "not_assessable", rationale: row.rationale ?? "No persisted assessment is available.",
+      confidence: row.confidence === null ? null : Number(row.confidence), needsHumanReview: row.needs_human_review ?? true,
+      reviewReasons: row.review_reasons ?? ["ASSESSMENT_UNAVAILABLE"], evidence: row.evidence ?? [], reviewHistory: row.review_history ?? [],
+    });
+    requirements.set(row.requirement_id, requirement);
+  }
+  const requirementList = [...requirements.values()];
+  const evaluation = evaluationRows.rows.map((row) => ({
+    participantId: row.participant_id, vendorLabel: row.vendor_label,
+    submittedScores: Number(row.score_summary?.submitted_scores ?? 0), submittedEvaluators: Number(row.score_summary?.submitted_evaluators ?? 0),
+    weightedContributionTotal: Number(row.score_summary?.contribution_total ?? 0), evaluatorCount: Number(row.evaluator_count ?? 0),
+    completedEvaluatorCount: Number(row.completed_evaluator_count ?? 0), conflictCount: Number(row.conflict_count ?? 0),
+  }));
+  const mandatoryGaps = requirementList.reduce((count, requirement) => count + requirement.vendors.filter((vendor: any) => requirement.mandatoryStatus === "mandatory" && ["missing", "contradictory"].includes(vendor.verdict)).length, 0);
+  const unresolvedReviews = requirementList.reduce((count, requirement) => count + requirement.vendors.filter((vendor: any) => vendor.needsHumanReview).length, 0);
+  return {
+    overview: {
+      responseCount: run.participant_count, versionCount: run.participant_count, approvedRequirementCount: requirementList.length,
+      mandatoryGapCount: mandatoryGaps, unresolvedReviewCount: unresolvedReviews,
+      evaluatorCompletedCount: evaluation.reduce((sum, item) => sum + item.completedEvaluatorCount, 0),
+      evaluatorAssignedCount: evaluation.reduce((sum, item) => sum + item.evaluatorCount, 0),
+    },
+    requirements: requirementList,
+    technical: requirementList.filter((item) => ["technical", "staffing", "references", "sustainability_dei"].includes(item.kind)),
+    permissions: { viewCommercial: priceVisibility !== "hidden" },
+    commercial: priceVisibility === "hidden" ? [] : commercialRows.rows.map((row) => ({
+      participantId: row.participant_id, vendorLabel: row.vendor_label, submittedTotal: row.submitted_total === null ? null : Number(row.submitted_total),
+      submittedCurrency: row.submitted_currency, basis: row.basis, comparable: row.comparable ?? false,
+      normalizedTotal: row.normalized_total === null ? null : Number(row.normalized_total), normalizedCurrency: row.normalized_currency,
+      arithmeticStatus: row.arithmetic_status, assumptions: row.assumptions ?? [], refusalCodes: row.refusal_codes ?? [],
+      policyVersion: row.policy_version, lineItems: row.line_items ?? [],
+    })),
+    risks: riskRows.rows.map((row) => ({
+      participantId: row.participant_id, vendorLabel: row.vendor_label, riskId: row.risk_id, requirementId: row.requirement_id,
+      category: row.category, severity: row.severity, title: row.title, basis: row.basis, disposition: row.disposition,
+      questionId: row.question_id, question: row.question, evidence: row.evidence ?? [],
+    })),
+    evaluation,
+    decisions: decisionRows.rows.map((row) => ({
+      decisionId: row.id, decisionType: row.decision_type, selectedParticipantIds: row.selected_participant_ids,
+      rationale: row.rationale, staleAcknowledged: row.stale_acknowledged, manifestChecksum: row.manifest_checksum,
+      supersedesDecisionId: row.supersedes_decision_id, createdAt: row.created_at,
+    })),
+  };
+};
+
+const projection = async (client: PoolClient, run: any, includeIntelligence = false) => {
   const [manifest, participants, nodes, snapshot] = await Promise.all([
     client.query<any>("SELECT * FROM rfpilot.comparison_manifests WHERE comparison_run_id=$1", [run.id]),
     client.query<any>("SELECT * FROM rfpilot.comparison_participants WHERE comparison_run_id=$1 ORDER BY ordinal", [run.id]),
     client.query<any>("SELECT node_key,job_type,status,weight,safe_error_code,updated_at FROM rfpilot.comparison_job_nodes WHERE comparison_run_id=$1 ORDER BY created_at", [run.id]),
     client.query<any>("SELECT snapshot FROM rfpilot.comparison_snapshots WHERE comparison_run_id=$1", [run.id]),
   ]);
+  const priceVisibility = manifest.rows[0].price_visibility;
   return {
     schemaVersion: COMPARISON_SCHEMA_VERSION,
     run: { runId: run.id, status: run.status, progress: Number(run.progress), progressStage: run.progress_stage, participantCount: run.participant_count, completedParticipantCount: run.completed_participant_count, warnings: run.warnings, createdAt: run.created_at, completedAt: run.completed_at },
     freshness: { state: run.freshness_state, reasons: run.stale_reasons },
-    manifest: { manifestId: manifest.rows[0].id, checksum: manifest.rows[0].content_checksum, proposalVersion: manifest.rows[0].proposal_version, requirementSetVersion: manifest.rows[0].requirement_set_version, evaluationMatrixVersion: manifest.rows[0].matrix_version, priceVisibility: manifest.rows[0].price_visibility, policies: { extraction: manifest.rows[0].extraction_policy_version, assessment: manifest.rows[0].assessment_schema_version, commercial: manifest.rows[0].commercial_policy_version, scoring: manifest.rows[0].scoring_policy_version } },
+    manifest: { manifestId: manifest.rows[0].id, checksum: manifest.rows[0].content_checksum, proposalVersion: manifest.rows[0].proposal_version, requirementSetVersion: manifest.rows[0].requirement_set_version, evaluationMatrixVersion: manifest.rows[0].matrix_version, priceVisibility, policies: { extraction: manifest.rows[0].extraction_policy_version, assessment: manifest.rows[0].assessment_schema_version, commercial: manifest.rows[0].commercial_policy_version, scoring: manifest.rows[0].scoring_policy_version } },
     participants: participants.rows.map((row) => ({ participantId: row.id, vendorLabel: row.vendor_label, submissionId: row.vendor_submission_mongo_id, versionId: row.vendor_submission_version_mongo_id, status: row.status, stage: row.current_stage, warningCount: row.warning_count, safeErrorCode: row.safe_error_code })),
     jobs: nodes.rows.map((row) => ({ key: row.node_key, type: row.job_type, status: row.status, weight: Number(row.weight), safeErrorCode: row.safe_error_code, updatedAt: row.updated_at })),
     snapshot: snapshot.rows[0]?.snapshot ?? null,
+    intelligence: includeIntelligence ? await intelligenceProjection(client, run, priceVisibility) : undefined,
   };
 };
 
@@ -359,7 +516,49 @@ export const comparisonOrchestrationRepository = {
       const mongo = await loadMongoInputs(input, participantRows.rows.map((item) => ({ submissionMongoId: item.submission_mongo_id, versionMongoId: item.version_mongo_id })));
       await currentFreshness(client, run, mongo);
       run = (await client.query<any>("SELECT * FROM rfpilot.comparison_runs WHERE id=$1", [run.id])).rows[0];
-      return projection(client, run);
+      return projection(client, run, true);
+    });
+  },
+
+  async recordDecision(input: Context & { runId: string; decisionType: "shortlist" | "selection" | "no_award"; selectedParticipantIds: string[]; rationale: string; acknowledgeStale: boolean; idempotencyKey: string }) {
+    const rationale = input.rationale.trim();
+    if (rationale.length < 20 || rationale.length > 5000) throw new ComparisonOrchestrationError("DECISION_RATIONALE_REQUIRED", "Provide a decision rationale between 20 and 5,000 characters.");
+    const selected = [...new Set(input.selectedParticipantIds)].sort();
+    if (selected.length !== input.selectedParticipantIds.length) throw new ComparisonOrchestrationError("DECISION_PARTICIPANTS_INVALID", "A participant may be selected only once.");
+    if (input.decisionType === "selection" && selected.length !== 1) throw new ComparisonOrchestrationError("DECISION_PARTICIPANTS_INVALID", "A final selection must identify exactly one vendor.");
+    if (input.decisionType === "shortlist" && selected.length < 1) throw new ComparisonOrchestrationError("DECISION_PARTICIPANTS_INVALID", "A shortlist must identify at least one vendor.");
+    if (input.decisionType === "no_award" && selected.length) throw new ComparisonOrchestrationError("DECISION_PARTICIPANTS_INVALID", "A no-award decision cannot identify a selected vendor.");
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await tenant(client, input.organizationMongoId), proposalReferenceId = await ownedProposal(client, input.proposalMongoId, input.actorUserMongoId);
+      let run = await runRow(client, proposalReferenceId, input.runId);
+      if (!["succeeded", "succeeded_with_warnings"].includes(run.status)) throw new ComparisonOrchestrationError("DECISION_RUN_NOT_COMPLETE", "A decision can be recorded only after the comparison is complete.", 409);
+      const participantRows = await client.query<any>("SELECT id,vendor_submission_mongo_id submission_mongo_id,vendor_submission_version_mongo_id version_mongo_id FROM rfpilot.comparison_participants WHERE comparison_run_id=$1", [run.id]);
+      const participantIds = new Set(participantRows.rows.map((row) => String(row.id)));
+      if (selected.some((id) => !participantIds.has(id))) throw new ComparisonOrchestrationError("DECISION_PARTICIPANTS_INVALID", "The decision contains a vendor outside this comparison.");
+      const mongo = await loadMongoInputs(input, participantRows.rows.map((row) => ({ submissionMongoId: row.submission_mongo_id, versionMongoId: row.version_mongo_id })));
+      await currentFreshness(client, run, mongo);
+      run = (await client.query<any>("SELECT * FROM rfpilot.comparison_runs WHERE id=$1", [run.id])).rows[0];
+      if (run.freshness_state === "stale" && !input.acknowledgeStale) throw new ComparisonOrchestrationError("STALE_ACKNOWLEDGEMENT_REQUIRED", "Acknowledge that this historical comparison is stale before recording the decision.", 409);
+      const operationKey = `comparison-decision:${input.idempotencyKey}`;
+      const prior = await client.query<any>("SELECT * FROM rfpilot.comparison_decisions WHERE organization_id=$1 AND idempotency_key=$2", [organizationId, operationKey]);
+      if (prior.rows[0]) {
+        const priorSelected = Array.isArray(prior.rows[0].selected_participant_ids) ? [...prior.rows[0].selected_participant_ids].map(String).sort() : [];
+        if (prior.rows[0].comparison_run_id !== run.id || prior.rows[0].decision_type !== input.decisionType || JSON.stringify(priorSelected) !== JSON.stringify(selected) || prior.rows[0].rationale !== rationale)
+          throw new ComparisonOrchestrationError("IDEMPOTENCY_CONFLICT", "Idempotency key was already used for a different decision.", 409);
+        return { decisionId: prior.rows[0].id, created: false };
+      }
+      const manifest = await client.query<any>("SELECT content_checksum FROM rfpilot.comparison_manifests WHERE comparison_run_id=$1", [run.id]);
+      const latest = await client.query<any>("SELECT id FROM rfpilot.comparison_decisions WHERE comparison_run_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1", [run.id]);
+      const decisionId = uuidv7();
+      await client.query(
+        `INSERT INTO rfpilot.comparison_decisions(
+           id,organization_id,comparison_run_id,decision_type,selected_participant_ids,rationale,stale_acknowledged,
+           manifest_checksum,supersedes_decision_id,actor_external_user_id,idempotency_key,correlation_id
+         ) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12)`,
+        [decisionId, organizationId, run.id, input.decisionType, JSON.stringify(selected), rationale, run.freshness_state === "stale", manifest.rows[0].content_checksum, latest.rows[0]?.id ?? null, input.actorUserMongoId, operationKey, input.correlationId],
+      );
+      await audit(client, input, organizationId, "comparison.decision.recorded", run.id, { decisionId, decisionType: input.decisionType, selectedParticipantIds: selected, staleAcknowledged: run.freshness_state === "stale", supersedesDecisionId: latest.rows[0]?.id ?? null });
+      return { decisionId, created: true };
     });
   },
 
