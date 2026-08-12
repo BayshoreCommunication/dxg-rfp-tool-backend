@@ -4,19 +4,11 @@ import type { AuthRequest } from "../middleware/auth";
 import {
   parseExpectedVersion,
   parseRequirementUpdate,
-  requirementRegistryEnabled,
   RequirementRegistryError,
-  requirementRegistryWritesEnabled,
 } from "../src/modules/requirementRegistry/domain";
 import { requirementRegistryRepository } from "../src/modules/requirementRegistry/postgresRequirementRegistryRepository";
 
-const context = (req: AuthRequest, write = false) => {
-  if (!(write ? requirementRegistryWritesEnabled() : requirementRegistryEnabled()))
-    throw new RequirementRegistryError(
-      write ? "REQUIREMENT_REGISTRY_WRITES_DISABLED" : "REQUIREMENT_REGISTRY_DISABLED",
-      "Proposal intelligence is not enabled in this environment.",
-      503,
-    );
+const context = (req: AuthRequest) => {
   if (!req.user?.organizationId || !req.user.userId)
     throw new RequirementRegistryError("AUTHENTICATION_REQUIRED", "Authentication required.", 401);
   return {
@@ -61,7 +53,7 @@ const handle = (res: Response, error: unknown) => {
 export const createRequirementSet = async (req: AuthRequest, res: Response) => {
   try {
     const result = await requirementRegistryRepository.create({
-      ...context(req, true),
+      ...context(req),
       idempotencyKey: idempotencyKey(req),
     });
     res.status(result.created ? 201 : 200).json({ data: result.data });
@@ -78,7 +70,7 @@ export const readRequirementSet = async (req: AuthRequest, res: Response) => {
 export const updateRequirement = async (req: AuthRequest, res: Response) => {
   try {
     res.json({ data: await requirementRegistryRepository.updateRequirement({
-      ...context(req, true),
+      ...context(req),
       setId: uuid(req.params.setId),
       requirementId: uuid(req.params.requirementId, "REQUIREMENT_NOT_FOUND"),
       idempotencyKey: idempotencyKey(req),
@@ -90,7 +82,7 @@ export const updateRequirement = async (req: AuthRequest, res: Response) => {
 export const approveRequirementSet = async (req: AuthRequest, res: Response) => {
   try {
     res.json({ data: await requirementRegistryRepository.approve({
-      ...context(req, true), setId: uuid(req.params.setId),
+      ...context(req), setId: uuid(req.params.setId),
       idempotencyKey: idempotencyKey(req), expectedVersion: expectedVersion(req),
     }) });
   } catch (error) { handle(res, error); }
@@ -98,7 +90,7 @@ export const approveRequirementSet = async (req: AuthRequest, res: Response) => 
 export const supersedeRequirementSet = async (req: AuthRequest, res: Response) => {
   try {
     res.status(201).json({ data: await requirementRegistryRepository.supersede({
-      ...context(req, true), setId: uuid(req.params.setId), idempotencyKey: idempotencyKey(req),
+      ...context(req), setId: uuid(req.params.setId), idempotencyKey: idempotencyKey(req),
     }) });
   } catch (error) { handle(res, error); }
 };

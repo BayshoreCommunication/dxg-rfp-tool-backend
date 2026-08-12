@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { aiRuntimeAuthorized } from "../../../config/aiEnvironment";
 
 export class RequirementRegistryError extends Error {
   constructor(
@@ -10,12 +9,6 @@ export class RequirementRegistryError extends Error {
     super(message);
   }
 }
-
-export const requirementRegistryEnabled = () =>
-  aiRuntimeAuthorized() && process.env.PROPOSAL_INTELLIGENCE_ENABLED === "true";
-export const requirementRegistryWritesEnabled = () =>
-  requirementRegistryEnabled() &&
-  process.env.PROPOSAL_INTELLIGENCE_WRITES_ENABLED === "true";
 
 export const REQUIREMENT_KINDS = [
   "submission",

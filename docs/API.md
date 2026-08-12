@@ -19,7 +19,7 @@
 
 ## Requirement registry
 
-All routes require an authenticated organization membership and proposal ownership. Reads require `proposal:read`; mutations require `proposal:write`, `Idempotency-Key`, and the deny-by-default proposal-intelligence write gate. Edit/approve requests also require the current set lock version through `If-Match` (or `expectedVersion`).
+All routes are available by default without feature-flag environment variables. They still require an authenticated organization membership and proposal ownership. Reads require `proposal:read`; mutations require `proposal:write` and `Idempotency-Key`. Edit/approve requests also require the current set lock version through `If-Match` (or `expectedVersion`).
 
 - `POST /api/v1/proposals/:proposalId/intelligence/requirement-sets` creates or idempotently returns a deterministic draft from current proposal fields and accepted rendered-RFP narrative.
 - `GET /api/v1/proposals/:proposalId/intelligence/requirement-sets` lists versions with requirement counts and freshness.
@@ -28,7 +28,6 @@ All routes require an authenticated organization membership and proposal ownersh
 - `POST .../:setId/approve` validates confirmed weights and completed human review, then freezes the version.
 - `POST .../:setId/supersede` links an approved set to a new draft generated from the current proposal.
 
-Runtime gates: `PROPOSAL_INTELLIGENCE_ENABLED=true` enables reads; `PROPOSAL_INTELLIGENCE_WRITES_ENABLED=true` separately enables mutations. Both also require an authorized AI runtime environment even though Task 3 generation is deterministic.
 - Existing authenticated list/detail endpoints return current version metadata while retaining their response shape.
 
 ## Where to find endpoints

@@ -125,7 +125,7 @@ test("migration enforces tenant isolation, versioning, and approved-row immutabi
   assert.match(migration, /UNIQUE\(organization_id,idempotency_key\)/);
 });
 
-test("requirement registry routes separate reads from authorized idempotent writes", () => {
+test("requirement registry routes are available by default and separate reads from authorized idempotent writes", () => {
   const routes = read("routes/requirementRegistryRoute.ts");
   const controller = read("controller/requirementRegistryController.ts");
   assert.match(routes, /\/proposals\/:proposalId\/intelligence/);
@@ -134,5 +134,6 @@ test("requirement registry routes separate reads from authorized idempotent writ
   assert.match(routes, /authorizeAction\("proposal:write"\)/);
   assert.match(controller, /idempotency-key/);
   assert.match(controller, /if-match/);
-  assert.match(controller, /REQUIREMENT_REGISTRY_WRITES_DISABLED/);
+  assert.doesNotMatch(controller, /PROPOSAL_INTELLIGENCE|REQUIREMENT_REGISTRY_(WRITES_)?DISABLED/);
+  assert.doesNotMatch(read("src/modules/requirementRegistry/domain.ts"), /process\.env|aiRuntimeAuthorized/);
 });
