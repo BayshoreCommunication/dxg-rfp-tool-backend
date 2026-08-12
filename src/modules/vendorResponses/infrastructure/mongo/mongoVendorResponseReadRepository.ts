@@ -5,7 +5,7 @@ import type { VendorResponseReadRepository } from "../../domain/ports/vendorResp
 import { tenantFilter } from "../../../shared/tenancy/tenantContext";
 
 const VENDOR_RESPONSE_SELECT =
-  "_id proposalId proposalOwnerId proposalTitle vendorName submittedBy email message documents isRead createdAt updatedAt";
+  "_id proposalId proposalOwnerId proposalTitle vendorName submittedBy email message documents isRead createdAt updatedAt submissionId currentVersionId currentVersionNumber versionReason versionReceivedAt manifestChecksum";
 
 export const mongoVendorResponseReadRepository: VendorResponseReadRepository = {
   async listOwned({

@@ -1,12 +1,12 @@
 # Database and Storage
 
-> Purpose: data ownership, consistency, and migration rules. Last updated: 2026-07-22. Owner: backend engineering.
+> Purpose: data ownership, consistency, and migration rules. Last updated: 2026-08-12. Owner: backend engineering.
 
 ## Ownership
 
 | Store | Owns | Does not own |
 |---|---|---|
-| MongoDB | Proposal content, lifecycle, legacy application records | AI runs and queue state |
+| MongoDB | Proposal content/lifecycle and vendor submission/version authority | AI runs and queue state |
 | PostgreSQL + pgvector | AI jobs/runs, evidence, conversations, reviews, knowledge, pricing, audit, outbox | Proposal content authority |
 | Redis | BullMQ delivery references, shared rate-limit state | Business content or durable job truth |
 | Private object storage | Quarantined and clean source bytes | Public files or application authorization |
@@ -19,6 +19,14 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 - Canonical proposal migration is non-destructive: immutable Mongo snapshots, dry-run by default, explicit tenant/run IDs, and no legacy overwrite.
 - Cross-store deletion uses purge propagation and must preserve audit-safe evidence without retaining deleted business content.
 - Schema changes that alter ownership or trust boundaries require an entry in [DECISIONS.md](DECISIONS.md).
+
+## Vendor submission versions
+
+- `VendorSubmission` is the stable proposal/vendor identity and points to the current immutable version.
+- `VendorSubmissionVersion` is append-only. It stores parent/version/reason, snapshotted contact/message, ordered document manifest, source IDs, checksums, scan state, receipt time, and a tenant-scoped idempotency key.
+- `VendorResponse` remains a latest-version compatibility projection until downstream analysis and inbox reads migrate. It is not version history.
+- PostgreSQL migration 044 extends governed `document_sources` with `vendor_submission` purpose and Mongo submission/version linkage. Public submitters are deliberately not represented as planner users.
+- `npm run backfill:vendor-submission-versions` is dry-run by default; `--apply` performs idempotent v1 projection and writes a checksummed migration-journal outcome.
 
 ## Pricing data
 

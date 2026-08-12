@@ -1,6 +1,6 @@
 # RFPilot Architecture
 
-> Purpose: current system map and source-of-truth boundaries. Last updated: 2026-08-04. Owner: engineering.
+> Purpose: current system map and source-of-truth boundaries. Last updated: 2026-08-12. Owner: engineering.
 
 ## System
 
@@ -26,6 +26,7 @@ The backend is a transitional modular monolith. The API creates authoritative re
 | Concern | Authority | Rule |
 |---|---|---|
 | Proposal content and lifecycle | MongoDB | AI does not become proposal authority. Writes use validation and version checks. |
+| Vendor submission identity and immutable versions | MongoDB | A revision creates a new version; `VendorResponse` is only the latest-version compatibility projection. |
 | AI runs, evidence, reviews, knowledge, pricing, audit, outbox | PostgreSQL | Tenant RLS and immutable/reconstructable records apply. |
 | Job transport and shared rate limits | Redis | References only; never proposal or document content. |
 | Uploaded source bytes | Private S3-compatible storage | Quarantine, malware scan, retention, no public ACL. |
@@ -39,6 +40,15 @@ The backend is a transitional modular monolith. The API creates authoritative re
 4. Valid, high-confidence, single candidates may fill empty draft fields. Conflicts, existing values, low confidence, and invalid values require review.
 5. Guided questions close high-impact gaps. Cited drafting, readiness guidance, and deterministic investment guidance follow.
 6. A human reviews and publishes. The AI never publishes.
+
+## Vendor submission flow
+
+1. A scoped public grant admits a vendor response; every file is size/count bounded, scanned, and stored privately.
+2. The client supplies a stable submission idempotency key. A retry returns the original receipt before scanning or uploading again.
+3. The API resolves a stable vendor submission and creates an immutable version with parent, reason, ordered source manifest, and checksum.
+4. The latest version is projected into the legacy vendor-response record for current inbox and analysis compatibility.
+5. Eligible file metadata is registered in PostgreSQL under the governed `vendor_submission` source purpose. Registration is idempotent and may be reconciled by the backfill when the data foundation was temporarily unavailable.
+6. Public receipts expose version and safe file metadata but never stored object URLs.
 
 ## Security and reliability boundaries
 

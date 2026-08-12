@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import crypto from "node:crypto";
 import {
   presignSpacesGetUrl,
   spacesObjectKeyFromUrl,
@@ -20,6 +21,13 @@ const PRESIGN_EXPIRY_SECONDS = 15 * 60; // 15 minutes
 export const spacesVendorDocumentStorage: VendorDocumentStorage = {
   upload({ localPath, objectKey }) {
     return uploadPrivateToSpaces(localPath, objectKey);
+  },
+  async inspect(localPath) {
+    const bytes = await fs.readFile(localPath);
+    return {
+      sizeBytes: bytes.byteLength,
+      sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+    };
   },
   async cleanup(localPath) {
     try {

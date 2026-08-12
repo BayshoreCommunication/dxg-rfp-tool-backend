@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { Request, Response, NextFunction } from "express";
 import {
   checkVendorResponseExists,
+  getVendorResponseReceipt,
   submitVendorResponse,
   getVendorResponses,
   getVendorResponseById,
@@ -26,6 +27,12 @@ const validateResponseId = (req: Request, res: Response, next: NextFunction) => 
 
 /* Public routes — no authentication required */
 router.get("/check", publicGrantLimit, requirePublicGrant("vendor:submit"), checkVendorResponseExists);
+router.get(
+  "/receipt/:versionId",
+  publicGrantLimit,
+  requirePublicGrant("vendor:submit"),
+  getVendorResponseReceipt,
+);
 router.post(
   "/",
   publicGrantLimit,

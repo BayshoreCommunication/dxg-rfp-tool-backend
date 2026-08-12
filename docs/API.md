@@ -1,6 +1,6 @@
 # API Guide
 
-> Purpose: API discovery and contract ownership. Last updated: 2026-07-22. Owner: backend engineering.
+> Purpose: API discovery and contract ownership. Last updated: 2026-08-12. Owner: backend engineering.
 
 ## Contract rules
 
@@ -10,6 +10,13 @@
 - Long-running operations return durable job/run references; clients recover through reads and SSE/status updates.
 - Proposal writes validate canonical paths/values and use version checks against MongoDB authority.
 - Public proposal payloads use an allowlisted projection.
+
+## Version-aware vendor submissions
+
+- `GET /api/vendor-responses/check` returns the stable submission ID, current version number, latest version ID, revision eligibility, and the latest compatibility response.
+- `POST /api/vendor-responses` accepts `submissionIdempotencyKey` (or `Idempotency-Key`) and optional `submissionReason`. It creates version 1 or a new immutable revision; an idempotent replay returns the original version and receipt.
+- `GET /api/vendor-responses/receipt/:versionId?proposalId=...&email=...` requires the same scoped `vendor:submit` public grant and a normalized vendor-email match. It returns version, checksum, timestamps, and safe file metadata without private object URLs.
+- Existing authenticated list/detail endpoints return current version metadata while retaining their response shape.
 
 ## Where to find endpoints
 
