@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 
 export const MAPPING_VERSION = "requirement-mapping.v1";
-export const FACT_VERSION = "vendor-fact.v1";
-export const VALIDATION_VERSION = "mapping-fact-validation.v1";
-export const PROMPT_VERSION = "vendor-intelligence-prompt.v1";
+export const FACT_VERSION = "vendor-fact.v3";
+export const VALIDATION_VERSION = "mapping-fact-validation.v5";
+export const PROMPT_VERSION = "vendor-intelligence-prompt.v3";
+export const MAX_FACTS_PER_CHUNK = 24;
 
 export const factFamilies = [
   "company_profile", "experience", "references", "staffing", "equipment",
@@ -132,10 +133,10 @@ const validateValue = (kind: ValueKind, value: ProviderValue) => {
 };
 
 export const validateFacts = (output: ProviderFactOutput, allowedFragments: Set<string>): ValidatedFact[] => {
-  if (!output || !Array.isArray(output.facts) || output.facts.length > 120)
+  if (!output || !Array.isArray(output.facts) || output.facts.length > MAX_FACTS_PER_CHUNK)
     throw new VendorIntelligenceError("SCHEMA_VALIDATION_FAILED", "Provider fact output is invalid.");
   const seen = new Set<string>();
-  return output.facts.map((fact) => {
+  const validated = output.facts.map((fact): ValidatedFact | null => {
     if (!FACT_KEY.test(fact.factKey) || !factFamilies.includes(fact.family) || !factTypes.includes(fact.factType))
       throw new VendorIntelligenceError("SCHEMA_VALIDATION_FAILED", "Provider fact identity is invalid.");
     const statement = boundedText(fact.statement, 1200);
@@ -147,13 +148,22 @@ export const validateFacts = (output: ProviderFactOutput, allowedFragments: Set<
       if (!allowedFragments.has(citation.fragmentId) || !["supports", "contradicts", "context"].includes(citation.role))
         throw new VendorIntelligenceError("CITATION_VALIDATION_FAILED", "Provider citation is outside the vendor evidence boundary.");
     }
-    const value = validateValue(fact.valueKind, fact.value);
-    const fingerprint = `${fact.factKey}:${fact.valueKind}:${value.normalizedValue}:${fact.citations.map((item) => item.fragmentId).sort().join(",")}`;
-    if (seen.has(fingerprint))
-      throw new VendorIntelligenceError("SCHEMA_VALIDATION_FAILED", "Provider returned a duplicate fact.");
+    const citations = [...new Map(
+      fact.citations.map((citation) => [`${citation.fragmentId}:${citation.role}`, citation]),
+    ).values()];
+    let value: ReturnType<typeof validateValue>;
+    try {
+      value = validateValue(fact.valueKind, fact.value);
+    } catch (error) {
+      if (error instanceof VendorIntelligenceError && error.code === "SCHEMA_VALIDATION_FAILED") return null;
+      throw error;
+    }
+    const fingerprint = `${fact.factKey}:${fact.valueKind}:${value.normalizedValue}:${citations.map((item) => `${item.fragmentId}:${item.role}`).sort().join(",")}`;
+    if (seen.has(fingerprint)) return null;
     seen.add(fingerprint);
-    return { ...fact, statement, confidence: finiteConfidence(fact.confidence), ...value };
+    return { ...fact, citations, statement, confidence: finiteConfidence(fact.confidence), ...value };
   });
+  return validated.filter((fact): fact is ValidatedFact => fact !== null);
 };
 
 export const validateMappings = (

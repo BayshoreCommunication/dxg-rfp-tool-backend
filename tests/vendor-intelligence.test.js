@@ -4,6 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { assignContradictionGroups, validateFacts, validateMappings, VendorIntelligenceError } = require("../src/modules/vendorIntelligence/domain");
 const { runVendorFactMappingPipeline } = require("../src/modules/vendorIntelligence/pipeline");
+const { factSchemaFor, mappingSchemaFor } = require("../src/modules/vendorIntelligence/openAiVendorFactMappingProvider");
 
 const fragmentA = "00000000-0000-4000-8000-000000000101";
 const fragmentB = "00000000-0000-4000-8000-000000000102";
@@ -28,13 +29,40 @@ test("facts require in-boundary citations and reject decision language", () => {
   assert.throws(() => validateFacts({ facts: [fact({ statement: "Select this vendor as the winner." })] }, new Set([fragmentA])), (error) => error.code === "PROHIBITED_DECISION_LANGUAGE");
 });
 
-test("typed facts reject incomplete money values", () => {
-  assert.throws(() => validateFacts({ facts: [fact({ value: { ...fact().value, currency: null } })] }, new Set([fragmentA])), (error) => error.code === "SCHEMA_VALIDATION_FAILED");
+test("facts collapse duplicate provider citations before immutable persistence", () => {
+  const citations = [
+    { fragmentId: fragmentA, role: "supports" },
+    { fragmentId: fragmentA, role: "supports" },
+    { fragmentId: fragmentA, role: "context" },
+  ];
+  assert.deepEqual(validateFacts({ facts: [fact({ citations })] }, new Set([fragmentA]))[0].citations, [
+    { fragmentId: fragmentA, role: "supports" },
+    { fragmentId: fragmentA, role: "context" },
+  ]);
+});
+
+test("facts retain the first identical provider fact and discard exact duplicates", () => {
+  const output = validateFacts({ facts: [fact(), fact()] }, new Set([fragmentA]));
+  assert.equal(output.length, 1);
+  assert.equal(output[0].factKey, "commercial.total");
+});
+
+test("typed facts discard incomplete values without failing valid output", () => {
+  const incomplete = fact({ value: { ...fact().value, currency: null } });
+  assert.deepEqual(validateFacts({ facts: [incomplete, fact()] }, new Set([fragmentA])), validateFacts({ facts: [fact()] }, new Set([fragmentA])));
 });
 
 test("mappings are complete and none cannot carry citations", () => {
   assert.throws(() => validateMappings({ mappings: [] }, new Set([requirement]), new Set([fragmentA])), (error) => error.code === "SCHEMA_VALIDATION_FAILED");
   assert.throws(() => validateMappings({ mappings: [{ requirementId: requirement, relationship: "none", confidence: 0.7, candidateFragmentIds: [fragmentA], ambiguityReasons: [] }] }, new Set([requirement]), new Set([fragmentA])), (error) => error.code === "CITATION_VALIDATION_FAILED");
+});
+
+test("provider schemas constrain all cited identities to the current input boundary", () => {
+  const factSchema = factSchemaFor([fragmentA, fragmentB]);
+  assert.deepEqual(factSchema.properties.facts.items.properties.citations.items.properties.fragmentId.enum, [fragmentA, fragmentB]);
+  const mappingSchema = mappingSchemaFor([requirement], [fragmentA]);
+  assert.deepEqual(mappingSchema.properties.mappings.items.properties.requirementId.enum, [requirement]);
+  assert.deepEqual(mappingSchema.properties.mappings.items.properties.candidateFragmentIds.items.enum, [fragmentA]);
 });
 
 test("conflicting normalized values receive the same deterministic contradiction group", () => {
@@ -54,6 +82,28 @@ test("pipeline sends only the supplied vendor evidence and ledgers stable phases
   assert.deepEqual(seen.map((call) => call.ids), [[fragmentA], [fragmentA]]);
   assert.deepEqual(seen.map((call) => call.phase), ["facts:1", "mappings:1"]);
   assert.ok(seen.every((call) => call.ledger.runId === "run-a"));
+});
+
+test("pipeline bounds fact extraction chunks to fit the structured-output ceiling", async () => {
+  const evidence = Array.from({ length: 21 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${String(index + 300).padStart(12, "0")}`,
+    content: `Vendor evidence page ${index + 1}`,
+    sourceLabel: "Vendor.pdf",
+    locator: { page: index + 1 },
+    trustClass: "untrusted_vendor_content",
+  }));
+  const factChunkSizes = [];
+  const provider = {
+    extractFacts: async (input) => { factChunkSizes.push(input.evidence.length); return { model: "fixture-model", output: { facts: [] } }; },
+    mapRequirements: async () => ({ model: "fixture-model", output: { mappings: [{ requirementId: requirement, relationship: "none", confidence: 0.9, candidateFragmentIds: [], ambiguityReasons: [] }] } }),
+  };
+  await runVendorFactMappingPipeline({
+    requirements: [{ id: requirement, title: "Pricing", text: "Provide total price", kind: "commercial", mandatory: true }],
+    evidence,
+    provider,
+    ledger: { runType: "vendor_requirement_facts", runId: "run-b", organizationId: "org-a" },
+  });
+  assert.deepEqual(factChunkSizes, [10, 10, 1]);
 });
 
 test("migration enforces tenant isolation, immutable outputs, and append-only review", () => {

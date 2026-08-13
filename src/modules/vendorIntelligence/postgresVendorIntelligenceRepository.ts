@@ -138,6 +138,8 @@ export const vendorIntelligenceRepository = {
         evidence: extraction.map((row) => [row.id, row.output_checksum]),
         mappingVersion: MAPPING_VERSION,
         factVersion: FACT_VERSION,
+        validationVersion: VALIDATION_VERSION,
+        promptVersion: PROMPT_VERSION,
       });
       const stableKey = `vendor-intelligence:${input.versionMongoId}:${set.id}:${inputChecksum}`;
       const old = await client.query<any>(

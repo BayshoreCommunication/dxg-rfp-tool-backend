@@ -3,8 +3,11 @@ import crypto from "node:crypto";
 import {
   presignSpacesGetUrl,
   spacesObjectKeyFromUrl,
-  uploadPrivateToSpaces,
 } from "../../../../../utils/uploadToSpaces";
+import {
+  presignPrivateDocumentGetUrl,
+  uploadPrivateDocumentFile,
+} from "../../../documentIngestion/s3PrivateDocumentStorage";
 import type { VendorDocumentStorage } from "../../domain/ports/vendorSubmissionPorts";
 import type { VendorDocumentUrlSigner } from "../../domain/ports/vendorResponseReadRepository";
 
@@ -15,12 +18,27 @@ import type { VendorDocumentUrlSigner } from "../../domain/ports/vendorResponseR
  * (those keep working via their stored absolute URL, passed through as-is).
  */
 export const VENDOR_PRIVATE_KEY_SEGMENT = "/vendor-responses-private/";
+export const GOVERNED_VENDOR_OBJECT_PREFIX = "rfpilot-private:";
 
 const PRESIGN_EXPIRY_SECONDS = 15 * 60; // 15 minutes
 
+export const governedVendorObjectUrl = (objectKey: string) =>
+  `${GOVERNED_VENDOR_OBJECT_PREFIX}${encodeURIComponent(objectKey)}`;
+
+export const governedVendorObjectKey = (url: string) => {
+  if (!url.startsWith(GOVERNED_VENDOR_OBJECT_PREFIX)) return null;
+  try {
+    const objectKey = decodeURIComponent(url.slice(GOVERNED_VENDOR_OBJECT_PREFIX.length));
+    return objectKey || null;
+  } catch {
+    return null;
+  }
+};
+
 export const spacesVendorDocumentStorage: VendorDocumentStorage = {
-  upload({ localPath, objectKey }) {
-    return uploadPrivateToSpaces(localPath, objectKey);
+  async upload({ localPath, objectKey }) {
+    await uploadPrivateDocumentFile({ localPath, objectKey });
+    return governedVendorObjectUrl(objectKey);
   },
   async inspect(localPath) {
     const bytes = await fs.readFile(localPath);
@@ -40,7 +58,16 @@ export const spacesVendorDocumentStorage: VendorDocumentStorage = {
 
 export const spacesVendorDocumentUrlSigner: VendorDocumentUrlSigner = {
   async presignDocumentUrl(url) {
-    if (typeof url !== "string" || !url.includes(VENDOR_PRIVATE_KEY_SEGMENT)) {
+    if (typeof url !== "string") return url;
+    const governedObjectKey = governedVendorObjectKey(url);
+    if (governedObjectKey) {
+      try {
+        return await presignPrivateDocumentGetUrl(governedObjectKey, PRESIGN_EXPIRY_SECONDS);
+      } catch {
+        return url;
+      }
+    }
+    if (!url.includes(VENDOR_PRIVATE_KEY_SEGMENT)) {
       // Legacy public object (pre-dates the private storage change) or
       // unexpected value — pass through unchanged.
       return url;

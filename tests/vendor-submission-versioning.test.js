@@ -5,6 +5,10 @@ const test = require("node:test");
 const {
   vendorSubmissionManifestChecksum,
 } = require("../src/modules/vendorResponses/infrastructure/mongo/mongoVendorSubmissionRepository");
+const {
+  governedVendorObjectKey,
+  governedVendorObjectUrl,
+} = require("../src/modules/vendorResponses/infrastructure/storage/spacesVendorDocumentStorage");
 
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
@@ -39,6 +43,14 @@ test("vendor submission manifest checksum is deterministic and content sensitive
   assert.match(first, /^[0-9a-f]{64}$/);
   assert.equal(replay, first);
   assert.notEqual(changed, first);
+});
+
+test("new private vendor objects use the governed document-storage reference", () => {
+  const objectKey = "rfp-tool/vendor-responses-private/proposal/sources/source-response.pdf";
+  const storedReference = governedVendorObjectUrl(objectKey);
+  assert.match(storedReference, /^rfpilot-private:/);
+  assert.equal(governedVendorObjectKey(storedReference), objectKey);
+  assert.equal(governedVendorObjectKey("https://legacy.example/response.pdf"), null);
 });
 
 test("vendor source migration is tenant isolated, version linked, and reversible", () => {

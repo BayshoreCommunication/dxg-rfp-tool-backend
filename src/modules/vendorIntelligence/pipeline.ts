@@ -9,7 +9,7 @@ import {
 } from "./domain";
 import type { IntelligenceEvidence, IntelligenceRequirement, VendorFactMappingProvider } from "./ports";
 
-const FACT_CHUNK = 35;
+const FACT_CHUNK = 10;
 const REQUIREMENT_CHUNK = 20;
 const MAX_MAPPING_EVIDENCE = 70;
 const stopWords = new Set(["that", "this", "with", "from", "will", "must", "shall", "have", "into", "your", "their", "vendor", "proposal", "requirement"]);

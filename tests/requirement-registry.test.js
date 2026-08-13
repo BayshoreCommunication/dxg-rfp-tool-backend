@@ -139,3 +139,10 @@ test("requirement registry routes are available by default and separate reads fr
   assert.doesNotMatch(controller, /PROPOSAL_INTELLIGENCE|REQUIREMENT_REGISTRY_(WRITES_)?DISABLED/);
   assert.doesNotMatch(read("src/modules/requirementRegistry/domain.ts"), /process\.env|aiRuntimeAuthorized/);
 });
+
+test("draft requirement edits persist while approved registry children remain immutable", () => {
+  const migration = read("migrations/postgres/052_requirement_registry_edit_fix.up.sql");
+  assert.match(migration, /approved requirement registry records are immutable/);
+  assert.match(migration, /IF TG_OP = 'DELETE' THEN\s+RETURN OLD;/);
+  assert.match(migration, /RETURN NEW;/);
+});
