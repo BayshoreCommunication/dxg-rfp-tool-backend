@@ -26,14 +26,14 @@ const PRIVATE_OR_DERIVED = new Set([
 ]);
 const PRIVATE_LEAF = /(files?|urls?|emails?|phones?|docs?|document(ids?)?|storage|objectkey|sha256)$/i;
 
-const CRITERIA: Record<string, { name: string; description: string }> = {
-  technicalApproach: { name: "Technical Approach", description: "Technical compliance, equipment, production design, and delivery approach." },
-  crewExperience: { name: "Crew Experience & References", description: "Staffing plan, team qualifications, references, and comparable experience." },
-  hybridVirtual: { name: "Hybrid / Virtual Production Capability", description: "Streaming, platform integration, virtual production, and remote attendee experience." },
-  pricing: { name: "Pricing & Value", description: "Price competitiveness, transparency, assumptions, alternatives, and value." },
-  creativeScenic: { name: "Creative & Scenic Design Capability", description: "Creative approach, scenic design, brand experience, and content services." },
-  responsiveness: { name: "Responsiveness & Communication", description: "Submission quality, response completeness, communication, and project management." },
-  sustainabilityDei: { name: "Sustainability & DEI Practices", description: "Sustainability, accessibility, diversity, equity, and inclusion practices." },
+const CRITERIA: Record<string, { proposalKey: string; name: string; description: string }> = {
+  technical_approach: { proposalKey: "technicalApproach", name: "Technical Approach", description: "Technical compliance, equipment, production design, and delivery approach." },
+  crew_experience: { proposalKey: "crewExperience", name: "Crew Experience & References", description: "Staffing plan, team qualifications, references, and comparable experience." },
+  hybrid_virtual: { proposalKey: "hybridVirtual", name: "Hybrid / Virtual Production Capability", description: "Streaming, platform integration, virtual production, and remote attendee experience." },
+  pricing: { proposalKey: "pricing", name: "Pricing & Value", description: "Price competitiveness, transparency, assumptions, alternatives, and value." },
+  creative_scenic: { proposalKey: "creativeScenic", name: "Creative & Scenic Design Capability", description: "Creative approach, scenic design, brand experience, and content services." },
+  responsiveness: { proposalKey: "responsiveness", name: "Responsiveness & Communication", description: "Submission quality, response completeness, communication, and project management." },
+  sustainability_dei: { proposalKey: "sustainabilityDei", name: "Sustainability & DEI Practices", description: "Sustainability, accessibility, diversity, equity, and inclusion practices." },
 };
 
 const words = (value: string) => value
@@ -65,12 +65,12 @@ const kindFor = (path: string): RequirementKind => {
 const criterionFor = (path: string, kind: RequirementKind) => {
   const lower = path.toLowerCase();
   if (kind === "commercial") return "pricing";
-  if (kind === "staffing" || kind === "references") return "crewExperience";
-  if (kind === "sustainability_dei") return "sustainabilityDei";
-  if (/hybrid|virtual|stream|remote/.test(lower)) return "hybridVirtual";
-  if (/creative|scenic|brand|content/.test(lower)) return "creativeScenic";
+  if (kind === "staffing" || kind === "references") return "crew_experience";
+  if (kind === "sustainability_dei") return "sustainability_dei";
+  if (/hybrid|virtual|stream|remote/.test(lower)) return "hybrid_virtual";
+  if (/creative|scenic|brand|content/.test(lower)) return "creative_scenic";
   if (kind === "submission" || kind === "legal_policy") return "responsiveness";
-  return "technicalApproach";
+  return "technical_approach";
 };
 const safeKey = (prefix: string, locator: unknown) => `${prefix}_${checksum(locator).slice(0, 20)}`;
 
@@ -78,9 +78,9 @@ export const generateCriteria = (proposal: Record<string, unknown>): GeneratedCr
   const budget = proposal.budget && typeof proposal.budget === "object" ? proposal.budget as Record<string, unknown> : {};
   const matrix = budget.evaluationMatrix && typeof budget.evaluationMatrix === "object" ? budget.evaluationMatrix as Record<string, unknown> : {};
   return Object.entries(CRITERIA).flatMap(([key, presentation], ordinal) => {
-    const weight = Number(matrix[key]);
+    const weight = Number(matrix[presentation.proposalKey]);
     return Number.isFinite(weight) && weight >= 0 && weight <= 100
-      ? [{ key, ...presentation, weight, ordinal }]
+      ? [{ key, name: presentation.name, description: presentation.description, weight, ordinal }]
       : [];
   });
 };

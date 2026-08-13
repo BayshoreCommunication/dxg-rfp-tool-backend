@@ -56,6 +56,8 @@ test("evaluation criteria preserve confirmed proposal weights", () => {
   } } });
   assert.equal(criteria.reduce((sum, criterion) => sum + criterion.weight, 0), 100);
   assert.equal(criteria.find((criterion) => criterion.key === "pricing").name, "Pricing & Value");
+  assert.equal(criteria.find((criterion) => criterion.key === "technical_approach").weight, 30);
+  assert.ok(criteria.every((criterion) => /^[a-z][a-z0-9_]{0,79}$/.test(criterion.key)), "generated keys satisfy the persisted database contract");
 });
 
 test("approval validation blocks unreviewed requirements and invalid weights", () => {
