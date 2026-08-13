@@ -516,7 +516,8 @@ export const comparisonOrchestrationRepository = {
       const mongo = await loadMongoInputs(input, participantRows.rows.map((item) => ({ submissionMongoId: item.submission_mongo_id, versionMongoId: item.version_mongo_id })));
       await currentFreshness(client, run, mongo);
       run = (await client.query<any>("SELECT * FROM rfpilot.comparison_runs WHERE id=$1", [run.id])).rows[0];
-      return projection(client, run, true);
+      const value = await projection(client, run, true);
+      return { ...value, proposal: { proposalId: input.proposalMongoId, title: String(mongo.proposal?.event?.eventName || "Proposal") } };
     });
   },
 

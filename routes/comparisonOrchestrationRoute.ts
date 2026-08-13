@@ -2,6 +2,7 @@ import { Router } from "express";
 import { authenticate, authorizeAction } from "../middleware/auth";
 import { securityRateLimit } from "../middleware/securityRateLimit";
 import { cancelComparison, createComparison, listComparisons, readCommercialProjection, readComparison, readComparisonStatus, readEvaluationProjection, readOverviewProjection, readQuestionProjection, readRequirementProjection, readRiskProjection, readTechnicalProjection, readVendorProjection, recordComparisonDecision, retryComparison } from "../controller/comparisonOrchestrationController";
+import { approveClarificationSet, createClarificationSet, exportProposalIntelligenceReport, listClarificationSets, placeIntelligenceLegalHold, readComparisonAudit, readComparisonOperations, recordClarificationDispatch, releaseIntelligenceLegalHold, updateClarificationQuestion, updateIntelligenceRetentionPolicy } from "../controller/proposalIntelligenceOperationsController";
 
 const router = Router(), base = "/proposals/:proposalId/intelligence/comparisons";
 const reads = securityRateLimit({ name: "comparison-orchestration-read", limit: 180, windowMs: 15 * 60_000 });
@@ -17,8 +18,19 @@ router.get(`${base}/:runId/commercial`, authenticate, authorizeAction("proposal:
 router.get(`${base}/:runId/risks`, authenticate, authorizeAction("proposal:read"), reads, readRiskProjection);
 router.get(`${base}/:runId/evaluation`, authenticate, authorizeAction("proposal:read"), reads, readEvaluationProjection);
 router.get(`${base}/:runId/questions`, authenticate, authorizeAction("proposal:read"), reads, readQuestionProjection);
+router.get(`${base}/:runId/audit`, authenticate, authorizeAction("proposal:read"), reads, readComparisonAudit);
+router.get(`${base}/:runId/operations`, authenticate, authorizeAction("proposal:read"), reads, readComparisonOperations);
+router.get(`${base}/:runId/clarification-sets`, authenticate, authorizeAction("proposal:read"), reads, listClarificationSets);
+router.get(`${base}/:runId/reports/:reportType`, authenticate, authorizeAction("proposal:read"), reads, exportProposalIntelligenceReport);
 router.get(`${base}/:runId`, authenticate, authorizeAction("proposal:read"), reads, readComparison);
 router.post(`${base}/:runId/cancel`, authenticate, authorizeAction("proposal:write"), writes, cancelComparison);
 router.post(`${base}/:runId/retry`, authenticate, authorizeAction("proposal:write"), writes, retryComparison);
 router.post(`${base}/:runId/decisions`, authenticate, authorizeAction("proposal:write"), writes, recordComparisonDecision);
+router.post(`${base}/:runId/clarification-sets`, authenticate, authorizeAction("proposal:write"), writes, createClarificationSet);
+router.patch(`${base}/:runId/clarification-sets/:setId/questions/:questionId`, authenticate, authorizeAction("proposal:write"), writes, updateClarificationQuestion);
+router.post(`${base}/:runId/clarification-sets/:setId/approve`, authenticate, authorizeAction("proposal:write"), writes, approveClarificationSet);
+router.post(`${base}/:runId/clarification-sets/:setId/record-dispatch`, authenticate, authorizeAction("proposal:write"), writes, recordClarificationDispatch);
+router.put(`${base}/:runId/governance/retention-policy`, authenticate, authorizeAction("organization:manage"), writes, updateIntelligenceRetentionPolicy);
+router.post(`${base}/:runId/governance/legal-holds`, authenticate, authorizeAction("organization:manage"), writes, placeIntelligenceLegalHold);
+router.post(`${base}/:runId/governance/legal-holds/:holdId/release`, authenticate, authorizeAction("organization:manage"), writes, releaseIntelligenceLegalHold);
 export default router;
