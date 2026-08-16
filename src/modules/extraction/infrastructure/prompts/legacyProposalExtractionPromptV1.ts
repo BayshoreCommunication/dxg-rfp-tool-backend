@@ -215,7 +215,7 @@ Schema:
   },
   "budget": {
     "estimatedAvBudget": "one of: Essential | Standard | Production | Premium | Enterprise | Signature | Not Yet Determined",
-    "proposalFormatPreferences": "array of any matching: Itemized Gear List | Labor Breakdown | All-In Total Estimate | Alternate / Value-Engineered Option | Creative / Scenic Approach Narrative | Crew Bios | References | LED Wall Line-Itemed Separately",
+    "proposalFormatPreferences": "array of any matching: Itemized Gear List | Labor Breakdown | All-In Total Estimate | Alternate / Value-Engineered Option | Creative / Scenic Approach Narrative | Crew Bios | References | Value Added Solutions Detailed Separately",
     "sustainabilityDeiNotes": "string — sustainability or DEI requirements/preferences (omit if not mentioned)",
     "vendorQuestionsDueDate": "YYYY-MM-DD",
     "responseToVendorQuestionsDate": "YYYY-MM-DD",
