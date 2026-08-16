@@ -5,6 +5,7 @@ import path from "node:path";
 import { Pool, type PoolClient } from "pg";
 
 type Migration = { version: string; name: string; up: string; down: string; checksum: string };
+type AppliedMigration = { version: string; name: string; checksum: string };
 const migrationDir = path.resolve(__dirname, "../migrations/postgres");
 const command = process.argv[2] || "status";
 const allowed = new Set(["up", "status", "rollback", "help"]);
@@ -40,6 +41,62 @@ const bootstrap = (client: PoolClient) => client.query(`
   )
 `);
 
+// A branch merge briefly created two independent migration sequences starting
+// at 026. The merged tree moved one sequence forward, but databases that had
+// already applied that sequence still carry its original version numbers.
+// Reconcile those ledger keys by immutable name + checksum before deciding
+// what is pending. This changes migration metadata only; migration SQL is
+// never replayed for a schema change that is already present.
+const reconcileShiftedVersions = async (
+  client: PoolClient,
+  available: Migration[],
+  appliedRows: AppliedMigration[],
+) => {
+  const availableByName = new Map(available.map((item) => [item.name, item]));
+  const moves = appliedRows.flatMap((row) => {
+    const target = availableByName.get(row.name);
+    if (!target || target.version === row.version) return [];
+    if (row.checksum.trim() !== target.checksum) {
+      throw new Error(
+        `Cannot reconcile migration ${row.version}_${row.name}: checksum does not match ${target.version}_${target.name}`,
+      );
+    }
+    return [{ from: row.version, to: target.version, name: row.name }];
+  });
+  if (!moves.length) return;
+
+  const movingVersions = new Set(moves.map((move) => move.from));
+  const occupiedVersions = new Set(appliedRows.map((row) => row.version));
+  for (const move of moves) {
+    if (occupiedVersions.has(move.to) && !movingVersions.has(move.to)) {
+      throw new Error(
+        `Cannot reconcile migration ${move.from}_${move.name}: target version ${move.to} is occupied`,
+      );
+    }
+  }
+
+  await client.query("BEGIN");
+  try {
+    for (const move of moves) {
+      await client.query(
+        "UPDATE public.rfpilot_schema_migrations SET version=$2 WHERE version=$1",
+        [move.from, `__reconcile__${move.from}`],
+      );
+    }
+    for (const move of moves) {
+      await client.query(
+        "UPDATE public.rfpilot_schema_migrations SET version=$2 WHERE version=$1",
+        [`__reconcile__${move.from}`, move.to],
+      );
+      console.log(`Reconciled ${move.from}_${move.name} -> ${move.to}_${move.name}`);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+};
+
 const main = async () => {
   if (!allowed.has(command)) throw new Error(`Unknown command: ${command}`);
   if (command === "help") {
@@ -51,20 +108,25 @@ const main = async () => {
   try {
     await bootstrap(client);
     await client.query("SELECT pg_advisory_lock(hashtext('rfpilot-postgres-migrations'))");
-    const appliedResult = await client.query<{ version: string; checksum: string }>(
-      "SELECT version, checksum FROM public.rfpilot_schema_migrations ORDER BY version",
+    const available = migrations();
+    let appliedResult = await client.query<AppliedMigration>(
+      "SELECT version, name, checksum FROM public.rfpilot_schema_migrations ORDER BY version",
+    );
+    await reconcileShiftedVersions(client, available, appliedResult.rows);
+    appliedResult = await client.query<AppliedMigration>(
+      "SELECT version, name, checksum FROM public.rfpilot_schema_migrations ORDER BY version",
     );
     const applied = new Map(appliedResult.rows.map((row) => [row.version, row.checksum.trim()]));
-    for (const migration of migrations()) {
+    for (const migration of available) {
       const checksum = applied.get(migration.version);
       if (checksum && checksum !== migration.checksum) throw new Error(`Checksum mismatch for migration ${migration.version}`);
     }
     if (command === "status") {
-      console.log(JSON.stringify(migrations().map((migration) => ({ version: migration.version, name: migration.name, status: applied.has(migration.version) ? "applied" : "pending" })), null, 2));
+      console.log(JSON.stringify(available.map((migration) => ({ version: migration.version, name: migration.name, status: applied.has(migration.version) ? "applied" : "pending" })), null, 2));
       return;
     }
     if (command === "up") {
-      for (const migration of migrations().filter((item) => !applied.has(item.version))) {
+      for (const migration of available.filter((item) => !applied.has(item.version))) {
         await client.query("BEGIN");
         try {
           await client.query(migration.up);
@@ -78,7 +140,7 @@ const main = async () => {
       }
       return;
     }
-    const latest = [...migrations()].reverse().find((item) => applied.has(item.version));
+    const latest = [...available].reverse().find((item) => applied.has(item.version));
     if (!latest) { console.log("No applied migration to roll back"); return; }
     await client.query("BEGIN");
     try {
