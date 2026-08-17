@@ -78,13 +78,13 @@ const connectDB = async (): Promise<void> => {
       isConnected = false;
       connectionPromise = null; // Reset connection promise on error
 
-      // Don't exit in production (serverless can't handle process.exit)
-      if (process.env.NODE_ENV !== 'production') {
-        process.exit(1);
-      } else {
-        // In production, throw the error so the serverless function can report it
-        throw error;
-      }
+      // This helper is also called by request middleware after a dropped
+      // connection.  Exiting here turns a transient Atlas/network failure into
+      // a full development-server crash and prevents a later request from
+      // reconnecting.  Let the caller decide how to handle the failure:
+      // startup still fails through startServer(), while request middleware
+      // returns an error and can retry on the next request.
+      throw error;
     }
   })();
 
