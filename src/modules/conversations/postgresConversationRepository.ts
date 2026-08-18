@@ -538,6 +538,60 @@ export const conversationRepository = {
     });
   },
 
+  // A rich typed/voice turn is extracted through the same source pipeline as
+  // TXT/PDF/DOC uploads. Once safe empty fields are applied, add one calm,
+  // idempotent confirmation so the proposal UI refreshes and the planner knows
+  // their message did more than become chat history.
+  async appendAutoAppliedFieldsSummary(ctx: Ctx & {
+    proposalMongoId: string;
+    runId: string;
+    fieldCount: number;
+  }) {
+    return withPostgresTransaction(async (c) => {
+      const org = await tenant(c, ctx.organizationMongoId);
+      const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
+      const conversation = await getOrCreateConversation(c, org, proposalRefId, ctx.actorUserMongoId);
+      await c.query("SELECT id FROM rfpilot.conversations WHERE id=$1 FOR UPDATE", [conversation.id]);
+      const key = `conversation-auto-apply:${ctx.runId}`;
+      const existing = await c.query<{ id: string; ordinal: number }>(
+        "SELECT id,ordinal FROM rfpilot.conversation_messages WHERE conversation_id=$1 AND idempotency_key=$2",
+        [conversation.id, key],
+      );
+      if (existing.rows[0]) return { ...existing.rows[0], created: false };
+
+      const count = await c.query<{ n: number }>(
+        "SELECT message_count n FROM rfpilot.conversations WHERE id=$1",
+        [conversation.id],
+      );
+      const ordinal = Number(count.rows[0]?.n ?? 0) + 1;
+      const id = uuidv7();
+      const noun = ctx.fieldCount === 1 ? "detail" : "details";
+      const content = `I found and added ${ctx.fieldCount} proposal ${noun} from your message. Existing proposal values were kept unchanged. I’ll ask only about anything still missing or unclear.`;
+      await c.query(
+        `INSERT INTO rfpilot.conversation_messages(
+           id,organization_id,conversation_id,ordinal,role,kind,content,status,
+           idempotency_key,actor_external_user_id
+         ) VALUES($1,$2,$3,$4,'assistant','status',$5,'complete',$6,$7)`,
+        [id, org, conversation.id, ordinal, content, key, ctx.actorUserMongoId],
+      );
+      await c.query(
+        "UPDATE rfpilot.conversations SET message_count=$2,updated_at=now() WHERE id=$1",
+        [conversation.id, ordinal],
+      );
+      await audit(
+        c,
+        org,
+        ctx.actorUserMongoId,
+        "conversation_auto_apply_summary_created",
+        "proposal_context_run",
+        ctx.runId,
+        ctx.correlationId,
+        { fieldCount: ctx.fieldCount },
+      );
+      return { id, ordinal, created: true };
+    });
+  },
+
   // The spreadsheet workflow belongs after the minimum intake, not in the
   // opening greeting. Append it once, immediately after the final open guided
   // question is answered or skipped. Explicit user requests are still handled

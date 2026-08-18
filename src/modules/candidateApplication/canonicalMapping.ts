@@ -277,6 +277,26 @@ const mappings: Record<string, Mapping> = {
     t("howDidYouHear", "referralSource", 200),
     t("howDidYouHearOther", "referralSourceOther", 500),
   ]),
+  ...section("contact", "contacts/primary", [
+    t("contactFirstName", "firstName", 100),
+    t("contactLastName", "lastName", 100),
+    t("contactTitle", "title", 200),
+    t("contactOrganization", "organizationDisplayName", 300),
+    t("organizationLegalName", "organizationLegalName", 300),
+    { mongo: "contactEmail", canonical: "email", normalize: normalizeEmail, valueKind: "email" },
+    t("contactPhone", "phone", 50),
+    t("contactPhoneExt", "phoneExtension", 20),
+    t("contactPhoneType", "phoneType", 50),
+  ]),
+  ...section("contact", "contacts", [
+    pick("preferredContactMethod", "preferredMethod", [
+      { canonical: "email", mongo: "Email" },
+      { canonical: "phone", mongo: "Phone" },
+      { canonical: "either", mongo: "Either" },
+    ], "Preferred contact method is invalid."),
+    t("bestTimeToReach", "bestTimeToReach", 500),
+    t("anythingElse", "additionalNotes", 10000),
+  ]),
 };
 
 // Deferred (intentionally unmapped) canonical fields:
@@ -288,7 +308,7 @@ const mappings: Record<string, Mapping> = {
 //   videoRecording.deliverableFormats, videoRecording.deliveryMethods,
 //   venueTechnical.internetUseCases, budgetPreferences.proposalFormats).
 // - rooms[], sourceReferences[], vendorCoordination, budgetPreferences.evaluationWeights,
-//   contacts.*, presentation.*: out of scope for scalar candidate application.
+//   contact.additionalContacts[] and presentation.*: out of scope for scalar candidate application.
 
 export type NormalizedCandidate = { sourcePath: string; canonicalPath: string; mongoPath: string; canonicalValue: unknown; mongoValue: unknown };
 

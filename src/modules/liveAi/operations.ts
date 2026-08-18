@@ -10,7 +10,7 @@ import {
  type PreparedExtractionEvidence,
 } from "./extractionPipeline";
 
-export {supplementExplicitAttendanceCounts,supplementExplicitDateRanges,supplementExplicitEventFormat} from "./extractionPipeline";
+export {supplementExplicitAttendanceCounts,supplementExplicitDateRanges,supplementExplicitEventFormat,supplementExplicitPrimaryContact} from "./extractionPipeline";
 
 const fixtureEvidence={
  "synthetic-conference-simple":[

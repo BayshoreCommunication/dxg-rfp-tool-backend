@@ -30,7 +30,7 @@ const unsegmentedTurns = async (
   organizationMongoId: string,
   proposalMongoId: string,
   actorUserMongoId: string,
-): Promise<SegmentTurn[]> => {
+): Promise<{ turns: SegmentTurn[]; nextSourceOrdinal: number }> => {
   // Resolve the tenant before touching any tenant table, or RLS filters
   // everything and the segment silently never closes.
   await c.query("SELECT set_config('app.organization_mongo_id',$1,true)", [organizationMongoId]);
@@ -38,7 +38,7 @@ const unsegmentedTurns = async (
     "SELECT id FROM rfpilot.organizations WHERE external_mongo_id=$1 AND status='active'",
     [organizationMongoId],
   );
-  if (!org.rows[0]) return [];
+  if (!org.rows[0]) return { turns: [], nextSourceOrdinal: 1 };
   await c.query("SELECT set_config('app.organization_id',$1,true)", [org.rows[0].id]);
   const ref = await c.query<{ id: string; conversation_id: string }>(
     `SELECT p.id, cv.id conversation_id
@@ -48,8 +48,18 @@ const unsegmentedTurns = async (
       WHERE p.external_mongo_id=$1 AND u.external_mongo_id=$2 AND u.status='active'`,
     [proposalMongoId, actorUserMongoId],
   );
-  if (!ref.rows[0]) return [];
+  if (!ref.rows[0]) return { turns: [], nextSourceOrdinal: 1 };
   const conversationId = ref.rows[0].conversation_id, proposalRefId = ref.rows[0].id;
+  // A rich brief often contains one turn, so turns.length is almost always 1
+  // and produced duplicate filenames in the source rail. Count every prior
+  // conversation source (including soft-deleted rows) so a later source never
+  // reuses a planner-visible title.
+  const sourceCount = await c.query<{ n: number }>(
+    `SELECT count(*)::int n
+       FROM rfpilot.document_sources
+      WHERE proposal_reference_id=$1 AND origin='conversation'`,
+    [proposalRefId],
+  );
   const rows = await c.query<{ id: string; content: string; created_at: Date }>(
     `WITH last_segment AS (
        SELECT COALESCE(MAX(m.ordinal), 0) AS ordinal
@@ -65,7 +75,10 @@ const unsegmentedTurns = async (
       ORDER BY m.ordinal`,
     [conversationId, proposalRefId],
   );
-  return rows.rows.map((row) => ({ id: row.id, content: row.content, createdAt: row.created_at }));
+  return {
+    turns: rows.rows.map((row) => ({ id: row.id, content: row.content, createdAt: row.created_at })),
+    nextSourceOrdinal: Number(sourceCount.rows[0]?.n ?? 0) + 1,
+  };
 };
 
 export const maybeExtractSegment = async (input: {
@@ -79,11 +92,11 @@ export const maybeExtractSegment = async (input: {
   if (!conversationExtractionEnabled()) return { created: false, reason: "disabled" };
   if (!documentIngestionEnabled()) return { created: false, reason: "ingestion_disabled" };
   try {
-    const turns = await withPostgresTransaction((c) =>
+    const segmentInput = await withPostgresTransaction((c) =>
       unsegmentedTurns(c, input.organizationMongoId, input.proposalMongoId, input.actorUserMongoId),
     );
     const decision = evaluateSegment({
-      turns,
+      turns: segmentInput.turns,
       now: input.now ?? new Date(),
       explicit: input.explicit,
     });
@@ -99,7 +112,7 @@ export const maybeExtractSegment = async (input: {
       correlationId: input.correlationId,
       proposalMongoId: input.proposalMongoId,
       text: decision.text,
-      title: segmentTitle(turns.length),
+      title: segmentTitle(segmentInput.nextSourceOrdinal),
       origin: "conversation",
       classification: "non_confidential",
       idempotencyKey: decision.idempotencyKey,

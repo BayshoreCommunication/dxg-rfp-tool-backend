@@ -9,10 +9,16 @@ import {
   type AssistantActionId,
 } from "./domain";
 import { buildSelectedProposalKnowledge } from "./selectedProposalKnowledge";
+import {
+  conversationExtractionEnabled,
+  isSubstantive,
+  RICH_TURN_CHARS,
+} from "./segmentation";
 
 const FIRST_TURN_REPLY = "Absolutely — I’ll help you build this proposal. We’ll start with a few key event details, then I’ll prepare a first draft for you to review. Answer the first question below whenever you’re ready.";
 const FOLLOW_UP_REPLY = "Thanks — I’ll use that as conversation context while we build the proposal. Continue with the next guided question below whenever you’re ready.";
 const ROOM_SCHEDULE_REPLY = "For several room functions, use the room schedule template. Download it, add one row per function, repeat the same Room Name for functions sharing a physical room, then open Room Specifications and upload the completed .xlsx file. Those functions will share the room’s AV specifications.";
+const DETAILED_BRIEF_REPLY = "Thanks — I’m reading this as an event brief, just like an uploaded TXT, PDF, or DOC file. I’ll add clear details to empty proposal fields, keep existing values unchanged, and ask only about anything missing or unclear.";
 
 type Ctx = { organizationMongoId: string; actorUserMongoId: string; correlationId: string };
 
@@ -35,10 +41,17 @@ export const buildChatReply = async (
     const latestUserMessage = [...conversation.messages].reverse().find((message: { role: string }) => message.role === "user");
     const userTurnCount = conversation.messages.filter((message: { role: string }) => message.role === "user").length;
     reply = userTurnCount <= 1 ? FIRST_TURN_REPLY : FOLLOW_UP_REPLY;
-    const explicitlyAsked = asksForRoomScheduleHelp(String(latestUserMessage?.content ?? ""));
+    const latestContent = String(latestUserMessage?.content ?? "");
+    const explicitlyAsked = asksForRoomScheduleHelp(latestContent);
+    const detailedBrief =
+      conversationExtractionEnabled() &&
+      latestContent.length >= RICH_TURN_CHARS &&
+      isSubstantive(latestContent);
     if (explicitlyAsked) {
       reply = ROOM_SCHEDULE_REPLY;
       actions = [...ROOM_SCHEDULE_ASSISTANT_ACTIONS];
+    } else if (detailedBrief) {
+      reply = DETAILED_BRIEF_REPLY;
     } else if (process.env.LIVE_AI_PILOT_ENABLED === "true") {
       const sources = await documentIngestion.list(ctx.organizationMongoId, proposalMongoId, 20).catch(() => []);
       const proposalDoc = await Proposal.findOne({

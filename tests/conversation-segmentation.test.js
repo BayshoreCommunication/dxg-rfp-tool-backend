@@ -165,6 +165,14 @@ test("segment intake resolves the tenant before reading any tenant table", () =>
   assert.ok(guc < firstRead, "organization GUC precedes the first tenant-table read");
   // Neither intake nor the chain may fail the caller.
   assert.ok(intake.includes("} catch (error) {"), "intake swallows its own failures");
+  assert.ok(
+    intake.includes("segmentTitle(segmentInput.nextSourceOrdinal)"),
+    "conversation source titles use a proposal-wide ordinal, not the current turn count",
+  );
+  assert.ok(
+    intake.includes("count(*)::int n") && intake.includes("origin='conversation'"),
+    "every prior conversation source advances the next visible source number",
+  );
 });
 
 test("extraction chains only for conversation sources that cleared the gates", () => {

@@ -143,6 +143,13 @@ const HIGH_VALUE_MEANINGS: Readonly<Record<string, string>> = Object.freeze({
   "/content/budget/proposalSubmissionDueDate": "vendor proposal/response submission deadline",
   "/content/budget/vendorQuestionsDueDate": "vendor question deadline",
   "/content/budget/decisionDate": "procurement award/decision date",
+  "/content/contact/contactFirstName": "primary client contact's given name",
+  "/content/contact/contactLastName": "primary client contact's family name",
+  "/content/contact/contactTitle": "primary client contact's job title or role",
+  "/content/contact/contactOrganization": "client organization's display name",
+  "/content/contact/organizationLegalName": "client organization's explicitly stated legal entity name",
+  "/content/contact/contactEmail": "primary client contact's email address",
+  "/content/contact/contactPhone": "primary client contact's phone number",
 });
 
 const fieldGuide = (paths: readonly string[]): string => paths.map((path) =>
@@ -393,6 +400,58 @@ export const supplementExplicitDateRanges = (
   return result;
 };
 
+const sameScalarCandidate = (candidate: ExtractionCandidate, path: string, value: string): boolean =>
+  candidate.path === path && String(candidate.value).trim().toLocaleLowerCase() === value.toLocaleLowerCase();
+
+const addExplicitContactCandidate = (
+  candidates: ExtractionCandidate[],
+  path: string,
+  value: string | undefined,
+  citation: string,
+): void => {
+  const normalized = value?.trim();
+  if (!normalized || candidates.some((candidate) => sameScalarCandidate(candidate, path, normalized))) return;
+  candidates.push({ path, value: normalized, confidence: 0.98, citations: [citation] });
+};
+
+// Contact labels are common in TXT/PDF/DOC briefs and are sufficiently
+// explicit to recover deterministically if the model omits them. The parser is
+// deliberately label-bound: an arbitrary name or email elsewhere in a brief
+// never becomes the proposal's primary contact.
+export const supplementExplicitPrimaryContact = (
+  candidates: ExtractionCandidate[],
+  evidence: Array<{ id: string; text: string }>,
+): ExtractionCandidate[] => {
+  const result = [...candidates];
+  for (const item of evidence) {
+    if (looksLikeEmbeddedInstruction(item.text)) continue;
+    for (const line of item.text.split(/\r?\n/)) {
+      const organization = /^\s*(?:client\s+)?organization\s*:\s*(.+?)\s*$/i.exec(line)?.[1];
+      if (organization) {
+        addExplicitContactCandidate(result, "/content/contact/contactOrganization", organization, item.id);
+        continue;
+      }
+
+      const contact = /^\s*(?:primary\s+)?contact\s*:\s*(.+?)\s*$/i.exec(line)?.[1];
+      if (!contact) continue;
+      const email = contact.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0];
+      const withoutEmail = contact
+        .replace(email ?? "", "")
+        .replace(/[\s,;|–—-]+$/, "")
+        .trim();
+      const [namePart = "", ...titleParts] = withoutEmail.split(/\s*(?:,|\s[-–—]\s)\s*/);
+      const nameTokens = namePart.trim().split(/\s+/).filter(Boolean);
+      if (nameTokens.length >= 2 && nameTokens.length <= 6 && nameTokens.every((token) => /^[\p{L}][\p{L}'’.-]*$/u.test(token))) {
+        addExplicitContactCandidate(result, "/content/contact/contactFirstName", nameTokens[0], item.id);
+        addExplicitContactCandidate(result, "/content/contact/contactLastName", nameTokens.slice(1).join(" "), item.id);
+      }
+      addExplicitContactCandidate(result, "/content/contact/contactTitle", titleParts.join(", "), item.id);
+      addExplicitContactCandidate(result, "/content/contact/contactEmail", email, item.id);
+    }
+  }
+  return result;
+};
+
 const candidateValue = (
   candidate: ExtractionCandidate,
   evidenceById: ReadonlyMap<string, PreparedExtractionEvidence>,
@@ -567,8 +626,11 @@ export const extractRequirementCandidates = async (input: {
     throw Object.assign(new Error("Invalid citation"), { code: "LIVE_AI_CITATION_INVALID" });
 
   const evidenceView = input.evidence.map((item) => ({ id: item.id, text: item.text, sourceKey: item.sourceKey }));
-  const supplement = (candidates: ExtractionCandidate[]) => supplementExplicitEventFormat(
-    supplementExplicitDateRanges(supplementExplicitAttendanceCounts(candidates, evidenceView), evidenceView),
+  const supplement = (candidates: ExtractionCandidate[]) => supplementExplicitPrimaryContact(
+    supplementExplicitEventFormat(
+      supplementExplicitDateRanges(supplementExplicitAttendanceCounts(candidates, evidenceView), evidenceView),
+      evidenceView,
+    ),
     evidenceView,
   );
   const first = normalizeAndDeduplicateExtractionCandidates(supplement(broad.output.candidates), input.evidence);

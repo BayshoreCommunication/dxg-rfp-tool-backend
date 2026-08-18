@@ -15,6 +15,21 @@ export type AppliedAnswerField = { path: string; mongoPath: string; value: unkno
 // an owned unsubmitted draft — the answer then stays chat-only.
 type AnswerFieldInput = { path: string; answer: string };
 
+const isEmptyProposalValue = (value: unknown): boolean =>
+  value === undefined ||
+  value === null ||
+  (typeof value === "string" &&
+    ["", "untitled proposal"].includes(value.trim().toLowerCase()));
+
+const readMongoPath = (row: Record<string, unknown>, mongoPath: string): unknown =>
+  mongoPath.split(".").reduce<unknown>(
+    (value, key) =>
+      value && typeof value === "object"
+        ? (value as Record<string, unknown>)[key]
+        : undefined,
+    row,
+  );
+
 const ownedDraftFilter = (input: {
   organizationMongoId: string;
   actorUserMongoId: string;
@@ -41,9 +56,14 @@ const validateLoadInOrdering = async (
   if (!proposal) return false;
   const venueSchedule = proposal.venueSchedule && typeof proposal.venueSchedule === "object" ? proposal.venueSchedule : {};
   const event = proposal.event && typeof proposal.event === "object" ? proposal.event : {};
-  const showDate = typeof venueSchedule.showStartDate === "string" && venueSchedule.showStartDate
-    ? venueSchedule.showStartDate
-    : typeof event.startDate === "string" ? event.startDate : "";
+  const incomingEventStart = answers.find(
+    (item) => item.path === "/content/event/startDate",
+  )?.answer;
+  const showDate = incomingEventStart || (
+    typeof venueSchedule.showStartDate === "string" && venueSchedule.showStartDate
+      ? venueSchedule.showStartDate
+      : typeof event.startDate === "string" ? event.startDate : ""
+  );
   const showTime = typeof venueSchedule.showStartTime === "string" ? venueSchedule.showStartTime : "";
   if (isLoadInAfterShow({ loadInDate: date, loadInTime: time, showDate, showTime })) {
     throw new CandidateApplicationError(
@@ -62,6 +82,7 @@ export const applyAnswersToProposalFields = async (input: {
   actorUserMongoId: string;
   proposalMongoId: string;
   answers: AnswerFieldInput[];
+  onlyIfEmpty?: boolean;
 }): Promise<AppliedAnswerField[] | null> => {
   if (input.answers.length === 0) return [];
   const draftExists = await validateLoadInOrdering(input, input.answers);
@@ -74,23 +95,91 @@ export const applyAnswersToProposalFields = async (input: {
     const value = item.path === "/content/venueSchedule/venueCity" && location ? location.city : item.answer;
     return normalizeCandidate(item.path, value);
   });
-  const directSet = Object.fromEntries(normalizedFields.map((field) => [field.mongoPath, field.mongoValue]));
+  // Automatic document/conversation extraction may only fill a blank target.
+  // Keep this guard inside the Mongo update, not in a prior read, so a manual
+  // edit racing the extraction can never be overwritten.
+  const normalizedString = (mongoPath: string) => ({
+    $toLower: {
+      $trim: {
+        input: {
+          $convert: {
+            input: { $ifNull: [`$${mongoPath}`, ""] },
+            to: "string",
+            onError: "__material_value__",
+            onNull: "",
+          },
+        },
+      },
+    },
+  });
+  const empty = (mongoPath: string) => ({
+    $in: [normalizedString(mongoPath), ["", "untitled proposal"]],
+  });
+  const directSet = Object.fromEntries(
+    normalizedFields.map((field) => [
+      field.mongoPath,
+      input.onlyIfEmpty
+        ? { $cond: [empty(field.mongoPath), field.mongoValue, `$${field.mongoPath}`] }
+        : field.mongoValue,
+    ]),
+  );
   const currentVersion = { $ifNull: ["$version", 1] };
-  const empty = (mongoPath: string) => ({ $eq: [{ $ifNull: [`$${mongoPath}`, ""] }, ""] });
+  const locationCompatible = location
+    ? {
+        $or: [
+          empty("venueSchedule.venueCity"),
+          { $eq: ["$venueSchedule.venueCity", location.city] },
+        ],
+      }
+    : null;
   const derivedSet = location
     ? {
         "venueSchedule.venueState": {
-          $cond: [empty("venueSchedule.venueState"), location.state, "$venueSchedule.venueState"],
+          $cond: [
+            {
+              $and: [
+                empty("venueSchedule.venueState"),
+                ...(input.onlyIfEmpty && locationCompatible ? [locationCompatible] : []),
+              ],
+            },
+            location.state,
+            "$venueSchedule.venueState",
+          ],
         },
         "venueSchedule.timeZone": {
-          $cond: [empty("venueSchedule.timeZone"), location.timeZone, "$venueSchedule.timeZone"],
+          $cond: [
+            {
+              $and: [
+                empty("venueSchedule.timeZone"),
+                ...(input.onlyIfEmpty && locationCompatible ? [locationCompatible] : []),
+              ],
+            },
+            location.timeZone,
+            "$venueSchedule.timeZone",
+          ],
         },
       }
     : {};
   const changes = [
-    ...normalizedFields.map((field) => ({ $ne: [`$${field.mongoPath}`, field.mongoValue] })),
+    ...normalizedFields.map((field) =>
+      input.onlyIfEmpty
+        ? {
+            $and: [
+              empty(field.mongoPath),
+              { $ne: [`$${field.mongoPath}`, field.mongoValue] },
+            ],
+          }
+        : { $ne: [`$${field.mongoPath}`, field.mongoValue] },
+    ),
     ...(location
-      ? [empty("venueSchedule.venueState"), empty("venueSchedule.timeZone")]
+      ? [
+          input.onlyIfEmpty && locationCompatible
+            ? { $and: [empty("venueSchedule.venueState"), locationCompatible] }
+            : empty("venueSchedule.venueState"),
+          input.onlyIfEmpty && locationCompatible
+            ? { $and: [empty("venueSchedule.timeZone"), locationCompatible] }
+            : empty("venueSchedule.timeZone"),
+        ]
       : []),
   ];
   const row = await Proposal.findOneAndUpdate(
@@ -112,10 +201,20 @@ export const applyAnswersToProposalFields = async (input: {
         },
       },
     }],
-    { new: true },
-  ).select("version").lean<{ version: number }>();
+    // The pre-image tells the caller which blank fields this operation really
+    // filled. The update itself remains atomic because the conditional writes
+    // above are evaluated against that same document state.
+    { new: false },
+  )
+    .select(["version", ...normalizedFields.map((field) => field.mongoPath)].join(" "))
+    .lean<Record<string, unknown>>();
   if (!row) return null;
-  return normalizedFields.map((field) => ({
+  const appliedFields = input.onlyIfEmpty
+    ? normalizedFields.filter((field) =>
+        isEmptyProposalValue(readMongoPath(row, field.mongoPath)),
+      )
+    : normalizedFields;
+  return appliedFields.map((field) => ({
     path: field.sourcePath,
     mongoPath: field.mongoPath,
     value: field.mongoValue,

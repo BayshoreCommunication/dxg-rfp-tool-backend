@@ -29,6 +29,7 @@ const {
 } = require("../src/modules/conversations/domain");
 const { approvedCandidatePaths, normalizeCandidate } = require("../src/modules/candidateApplication/canonicalMapping");
 const { resolveVenueLocation } = require("../src/modules/conversations/venueLocationResolver");
+const { selectConversationAutoApplyAnswers } = require("../src/modules/conversations/conversationAutoApply");
 
 const root = path.join(__dirname, "..");
 
@@ -58,6 +59,47 @@ test("message input validation bounds content, intent, sources and version", () 
   const parsed = parseMessageInput({ content: "extract these", intent: "extract_requirements", sourceIds: [uuid, uuid] });
   assert.deepEqual(parsed.sourceIds, [uuid]);
   assert.equal(parseMessageInput({ content: "", intent: "generate_draft", expectedProposalVersion: 3 }).expectedProposalVersion, 3);
+});
+
+test("a Northstar-style chat brief selects every safe explicit field for empty-only application", () => {
+  const candidates = [
+    { path: "/content/event/eventName", value: "Northstar Leadership Summit 2026", confidence: 0.99 },
+    { path: "/content/event/startDate", value: "2026-09-14", confidence: 0.97 },
+    { path: "/content/event/endDate", value: "2026-09-16", confidence: 0.97 },
+    { path: "/content/event/eventFormat", value: "Hybrid", confidence: 0.97 },
+    { path: "/content/event/eventType/eventType", value: "Corporate Conference", confidence: 0.94 },
+    { path: "/content/event/attendees", value: "450", confidence: 0.99 },
+    { path: "/content/hybridVirtual/virtualAttendeeEstimate", value: "300", confidence: 0.98 },
+    { path: "/content/venueSchedule/venueName", value: "Lakeside Grand Chicago", confidence: 0.98 },
+    { path: "/content/venueSchedule/venueCity", value: "Chicago", confidence: 0.98 },
+    { path: "/content/budget/proposalSubmissionDueDate", value: "2026-08-07", confidence: 0.98 },
+    // Weak output remains reviewable instead of being applied unattended.
+    { path: "/content/budget/estimatedAvBudget", value: "USD 180,000–240,000", confidence: 0.79 },
+    // Invalid model output is also left for review.
+    { path: "/content/venueSchedule/loadInDate", value: "September 13", confidence: 0.99 },
+    // Two values for one field are an extraction conflict, never a guess.
+    { path: "/content/venueSchedule/venueType", value: "Hotel Ballroom", confidence: 0.96 },
+    { path: "/content/venueSchedule/venueType", value: "Convention Center", confidence: 0.95 },
+  ];
+  const answers = selectConversationAutoApplyAnswers(
+    candidates,
+    new Set(["/content/venueSchedule/venueType"]),
+  );
+  assert.deepEqual(
+    answers.map((answer) => answer.path),
+    [
+      "/content/event/eventName",
+      "/content/event/startDate",
+      "/content/event/endDate",
+      "/content/event/eventFormat",
+      "/content/event/eventType/eventType",
+      "/content/event/attendees",
+      "/content/hybridVirtual/virtualAttendeeEstimate",
+      "/content/venueSchedule/venueName",
+      "/content/venueSchedule/venueCity",
+      "/content/budget/proposalSubmissionDueDate",
+    ],
+  );
 });
 
 test("room schedule help selects only allowlisted assistant actions", () => {
@@ -396,6 +438,33 @@ test("catch-all explosion and answer field writing are wired into repository and
     assert.ok(repository.includes(delayedSuggestionGuard), delayedSuggestionGuard);
 });
 
+test("rich chat extraction uses the document pipeline and only fills empty proposal fields", () => {
+  const handler = fs.readFileSync(
+    path.join(root, "src/modules/durableJobs/proposalContextHandler.ts"),
+    "utf8",
+  );
+  const autoApply = fs.readFileSync(
+    path.join(root, "src/modules/conversations/conversationAutoApply.ts"),
+    "utf8",
+  );
+  const writer = fs.readFileSync(
+    path.join(root, "src/modules/conversations/answerFieldWriter.ts"),
+    "utf8",
+  );
+  const repository = fs.readFileSync(
+    path.join(root, "src/modules/conversations/postgresConversationRepository.ts"),
+    "utf8",
+  );
+
+  assert.ok(handler.includes("autoApplyConversationContextRun"));
+  assert.ok(autoApply.includes('source.origin === "conversation"'));
+  assert.ok(autoApply.includes("AUTO_APPLY_MIN_CONFIDENCE"));
+  assert.ok(autoApply.includes("onlyIfEmpty: true"));
+  assert.ok(writer.includes("input.onlyIfEmpty"));
+  assert.ok(writer.includes("untitled proposal"));
+  assert.ok(repository.includes("conversation-auto-apply:${ctx.runId}"));
+});
+
 test("run status narration covers every lifecycle state", () => {
   for (const runType of ["proposal_context", "proposal_draft"])
     for (const status of ["queued", "running", "succeeded", "failed", "conflict"])
@@ -503,6 +572,9 @@ test("deterministic chat fallbacks welcome the planner without false persistence
   const replySource = fs.readFileSync(path.join(root, "src/modules/conversations/chatReply.ts"), "utf8");
   assert.match(replySource, /I’ll help you build this proposal/);
   assert.match(replySource, /Answer the first question below/);
+  assert.match(replySource, /uploaded TXT, PDF, or DOC file/);
+  assert.match(replySource, /keep existing values unchanged/);
+  assert.ok(replySource.includes("latestContent.length >= RICH_TURN_CHARS"));
   assert.doesNotMatch(replySource, /I've saved that to this proposal/);
   assert.doesNotMatch(replySource, /I’ve saved that to this proposal/);
 });
