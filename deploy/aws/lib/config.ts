@@ -125,6 +125,24 @@ const AI_RELEASE: Record<string, string> = {
   LIVE_AI_PROPOSAL_SOURCE_ENABLED: "true",
 };
 
+/* ⚠️ TEMPORARY PRE-LAUNCH COST POSTURE — set to false BEFORE real users.
+ *
+ * Production has no users yet (2026-08-18), so the redundancy that protects
+ * against an AZ failure protects nobody: a single-AZ database and a
+ * replica-less Redis save ~$61/month for a recovery window that currently
+ * costs nothing. Durability is NOT affected — 30-day automated backups and
+ * deletion protection both stay on. This trades AUTOMATIC failover for
+ * MANUAL restore.
+ *
+ * Setting this to false and redeploying the Data stack restores Multi-AZ RDS
+ * and the Redis replica. It is a LAUNCH BLOCKER, tracked in
+ * deploy/aws/STATE.md — do not put real users on this posture.
+ *
+ * Both changes apply in place, and each causes a brief interruption when
+ * applied AND again when reverted. Schedule them.
+ */
+export const PRE_LAUNCH_REDUCED_REDUNDANCY = true;
+
 export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
   production: {
     envName: "production",
@@ -134,12 +152,12 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
     privateAwsEndpoints: false,
     rds: {
       instanceClass: "t4g.medium",
-      multiAz: true,
+      multiAz: !PRE_LAUNCH_REDUCED_REDUNDANCY,
       allocatedStorageGb: 50,
       backupRetentionDays: 30,
       deletionProtection: true,
     },
-    redis: { nodeType: "cache.t4g.small", replicas: 1 },
+    redis: { nodeType: "cache.t4g.small", replicas: PRE_LAUNCH_REDUCED_REDUNDANCY ? 0 : 1 },
     // CPU rightsized 2026-08-18 from 1024 on api/worker/clamav. Seven-day
     // observed utilisation at the time: api 2.3% avg / 8.8% peak, worker
     // 1.1% / 3.0%, clamav 1.1% / 1.8% — i.e. under a tenth of one vCPU.

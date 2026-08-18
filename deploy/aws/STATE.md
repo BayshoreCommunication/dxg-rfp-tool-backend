@@ -117,6 +117,52 @@ new domain. SES production-access case: reply sent 2026-08-04 referencing
 av-rfpilot.com. **APPROVED** — verified 2026-08-18,
 `ProductionAccessEnabled: true` (50k/day, 14/sec).
 
+## Cost posture (2026-08-18)
+
+August 1–18 billing showed gross usage $337.54 against a net of $212.49 —
+**credits absorbed $125.05, covering 100% of Fargate compute and part of
+VPC**. That subsidy is invisible in the cost console's default view: when it
+lapses the bill roughly doubles with no change in usage. The balance and
+expiry are only in Billing → Credits (no API). Budget for the gross number.
+
+Reductions applied (all deployed and verified):
+
+| Change | Saving |
+|---|---|
+| Staging environment deleted | ~$115/mo |
+| 4 VPC interface endpoints removed | ~$58/mo |
+| Container Insights disabled | ~$47/mo |
+| Fargate CPU 1024→512 on api/worker/clamav | ~$44/mo |
+| | **~$264/mo** |
+
+- The interface endpoints (ECR/Logs/Secrets) cost ~$58/month to divert about
+  1.3 GB/month of traffic — roughly $0.06 through the NAT gateway that
+  already exists. The free S3 *gateway* endpoint is kept. Reversible via
+  `privateAwsEndpoints: true` in `lib/config.ts` if private-only egress ever
+  becomes a compliance requirement rather than an optimisation.
+- Container Insights was the ONLY source of `ECS/ContainerInsights`
+  `RunningTaskCount`, which the `*-tasks-low` alarms used — and worker and
+  dispatcher have no health port. Turning it off therefore REQUIRED the
+  alarm rewrite in `observability-stack.ts`: `AWS/ECS CPUUtilization` with an
+  impossible threshold (`< 0`) and `treatMissingData: BREACHING`, so the
+  alarm can only be driven by missing datapoints, which ECS stops publishing
+  when no task runs. **It detects zero tasks, not below-desired** — turn
+  Insights back on before running any service at a steady-state count above
+  one. cdk-nag `AwsSolutions-ECS4` is suppressed in `bin/rfpilot.ts` for this.
+- Fargate was grossly oversized: seven-day utilisation was api 2.3% avg /
+  8.8% peak CPU using 158 MB of 2048, worker 1.1%, clamav 1.1% using 990 MB
+  of 3072. Memory was deliberately NOT cut — it is the headroom that absorbs
+  load, and autoscaling is the intended answer to traffic.
+
+**Not done, deliberately:** RDS Multi-AZ → single-AZ would save ~$42/mo but
+trades away automatic failover on the system of record.
+
+**Still open:** no AWS Budgets exist; the `env` and `project` cost-allocation
+tags exist on resources but are INACTIVE, so per-environment splits have to
+be inferred from usage types. Optional further cut: the ElastiCache replica
+(~$19/mo) — defensible since Redis is transport-only with no snapshots and
+the outbox reconciles, but it is a real availability trade.
+
 ## Branch model
 
 - `ai-agent` — development (local dev unchanged: `npm run dev*` etc.)
@@ -161,6 +207,27 @@ av-rfpilot.com. **APPROVED** — verified 2026-08-18,
 - ClamAV fail-closed is intended behavior (vendor uploads 503 / sources
   `scan_failed` when the scanner is down).
 - Redis is transport-only (no snapshots on purpose; outbox reconciles).
+
+## 🚩 LAUNCH BLOCKER — restore redundancy before real users
+
+`PRE_LAUNCH_REDUCED_REDUNDANCY` in `deploy/aws/lib/config.ts` is **true**
+(set 2026-08-18). While it is true, production runs a **single-AZ** RDS
+instance and a **replica-less** Redis, saving ~$61/month on redundancy that
+protects nobody while there are no users. Durability is unaffected — 30-day
+automated backups and deletion protection both remain on; this trades
+AUTOMATIC failover for MANUAL restore.
+
+**Set it to false and redeploy the Data stack before onboarding real users.**
+
+Deploy notes, both directions:
+- The Redis change is CloudFormation `Replacement: False` — safe in place.
+- The RDS `MultiAZ` change is `Replacement: Conditional`. For PostgreSQL it
+  is a documented no-interruption in-place modify (SQL Server is the engine
+  that forces replacement), but CloudFormation will not guarantee it. **Take
+  a manual RDS snapshot before deploying in either direction** — with
+  `RemovalPolicy.RETAIN` a replacement would retain the old instance and
+  silently point production at a NEW EMPTY database.
+- Each direction causes a brief failover interruption. Schedule it.
 
 ## Next steps, in order
 
