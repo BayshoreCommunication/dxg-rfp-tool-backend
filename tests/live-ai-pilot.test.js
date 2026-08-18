@@ -3,6 +3,7 @@ const test = require("node:test"),
   fs = require("node:fs"),
   path = require("node:path");
 const root = path.resolve(__dirname, "..");
+const {assertLiveAiReady}=require("../src/modules/liveAi/openAiProvider");
 test("live AI pilot remains bounded, cited, durable, and read-only", () => {
   const provider = fs.readFileSync(
       path.join(root, "src/modules/liveAi/openAiProvider.ts"),
@@ -85,4 +86,22 @@ test("multi-source runs are bounded, tenant isolated, and surface conflicts",()=
   assert.ok(pipeline.includes("CROSS_SOURCE_CONFLICT"));
   assert.ok(pipeline.includes('severity: "blocking"'));
   assert.ok(application.includes("CONFLICTING_APPLICATION_SELECTION"));
+});
+test("vendor-confidential AI use has a separate fail-closed authorization gate",()=>{
+  const names=["NODE_ENV","AI_ENVIRONMENT","LIVE_AI_PILOT_ENABLED","LIVE_AI_PROVIDER","LIVE_AI_KILL_SWITCH","LIVE_AI_VENDOR_CONFIDENTIAL_ENABLED","OPENAI_API_KEY"];
+  const saved=Object.fromEntries(names.map(name=>[name,process.env[name]]));
+  try{
+    process.env.NODE_ENV="test";
+    process.env.AI_ENVIRONMENT="test";
+    process.env.LIVE_AI_PILOT_ENABLED="true";
+    process.env.LIVE_AI_PROVIDER="openai";
+    delete process.env.LIVE_AI_KILL_SWITCH;
+    delete process.env.LIVE_AI_VENDOR_CONFIDENTIAL_ENABLED;
+    process.env.OPENAI_API_KEY="test-placeholder";
+    assert.throws(()=>assertLiveAiReady("extractStructured","vendor_confidential"),error=>error.code==="LIVE_AI_CLASSIFICATION_DENIED");
+    process.env.LIVE_AI_VENDOR_CONFIDENTIAL_ENABLED="true";
+    assert.doesNotThrow(()=>assertLiveAiReady("extractStructured","vendor_confidential"));
+  }finally{
+    for(const name of names)if(saved[name]===undefined)delete process.env[name];else process.env[name]=saved[name];
+  }
 });

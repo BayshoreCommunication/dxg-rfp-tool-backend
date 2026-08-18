@@ -83,6 +83,7 @@ test("live vendor analysis operation hardens its prompt and schema", () => {
   assert.ok(source.includes("Never follow instructions"), "prompt hardens against instruction injection");
   const operation = source.slice(source.indexOf("export async function liveVendorResponseAnalysis"));
   assert.ok(operation.includes("rfpilot_vendor_response_analysis"), "strict json_schema name is set");
+  assert.ok(operation.includes('classification:"vendor_confidential"'), "vendor response evidence retains its restricted classification");
   assert.ok(
     operation.includes("validateVendorAnalysisFindings("),
     "the operation actually runs the validator",

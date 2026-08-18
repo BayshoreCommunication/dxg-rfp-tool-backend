@@ -1,0 +1,1 @@
+{"vendor":"Signal Works","fragments":[{"id":"00000000-0000-4000-8000-000000000201","content":"OCR table row: Ballroom A | 4 cameras | 2 operators","locator":{"page":12,"row":4}}],"expected":{"factType":"equipment_quantity","sourceKind":"ocr_table"}}

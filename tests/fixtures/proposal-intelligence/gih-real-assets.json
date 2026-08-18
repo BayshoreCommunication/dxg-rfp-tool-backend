@@ -1,0 +1,85 @@
+{
+  "schemaVersion": "proposal-intelligence-gold.v1",
+  "fixtureId": "gih-annual-conference-real-assets-2025-26",
+  "reviewedAt": "2026-08-13T00:00:00.000Z",
+  "sourceContentCommitted": false,
+  "purpose": "Acceptance expectations derived from the user-supplied RFP and two example vendor responses. This fixture stores checksums and review expectations only, never document text.",
+  "sources": [
+    {
+      "role": "rfp",
+      "filename": "Audio Visual x26 Technology Provider - Grantmakers In Health 2025-26 Annual Conference - Request for Proposal (RFP).pdf",
+      "sha256": "781386ffa05e202c48b23f2a45d1c0ea0ce992fe33afe8adcf072d324d0be760",
+      "pages": 5,
+      "bytes": 652664
+    },
+    {
+      "role": "vendor_response",
+      "filename": "RFP Example Response 3.pdf",
+      "sha256": "43dcc6ff6aec5a0e19fdfd09a97de50bd3cfe340120cb5820de0e5114993a6be",
+      "pages": 32,
+      "bytes": 8219510
+    },
+    {
+      "role": "vendor_response",
+      "filename": "RFP Response Example 1 (1).pdf",
+      "sha256": "3c92b5a0e58d4ec38a5ed80ab2198274b4d3a651356e41be07ff8bbdb65fc8a8",
+      "pages": 9,
+      "bytes": 308057
+    }
+  ],
+  "expectedRfpSignals": {
+    "organization": "Grantmakers In Health",
+    "attendanceUpperBound": 800,
+    "eventMode": "in_person_with_hybrid_board_meeting",
+    "responseRequirements": [
+      "organization_profile_and_history",
+      "staffing_team_and_resumes",
+      "dei_practices",
+      "client_distribution_and_company_size",
+      "detailed_line_item_costs_and_budget_narrative",
+      "two_client_references"
+    ],
+    "evaluationDimensions": [
+      "responsiveness_to_rfp",
+      "cost_and_value",
+      "client_centered_approach"
+    ],
+    "technicalSignals": [
+      "plenary_wireless_microphones",
+      "video_recording",
+      "staging_and_lighting",
+      "breakout_session_support"
+    ]
+  },
+  "expectedResponseSignals": [
+    {
+      "filename": "RFP Example Response 3.pdf",
+      "signals": [
+        "company_profile",
+        "named_staffing_information",
+        "dei_narrative",
+        "client_profile",
+        "references"
+      ]
+    },
+    {
+      "filename": "RFP Response Example 1 (1).pdf",
+      "signals": [
+        "event_schedule",
+        "equipment_quantities_and_rates",
+        "detailed_av_line_items",
+        "submitted_costs"
+      ]
+    }
+  ],
+  "releaseThresholds": {
+    "source_checksum_match_rate": 1,
+    "approved_requirement_source_coverage_min": 0.95,
+    "mandatory_assessment_citation_rate": 1,
+    "cross_vendor_contamination_count_max": 0,
+    "sealed_price_leakage_count_max": 0,
+    "unsupported_winner_language_count_max": 0,
+    "clarification_approval_before_dispatch_rate": 1,
+    "report_manifest_presence_rate": 1
+  }
+}

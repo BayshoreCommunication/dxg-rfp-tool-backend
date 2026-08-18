@@ -15,17 +15,20 @@ export class LiveAiError extends Error{
 const estimatedTokens=(value:string)=>Math.ceil(Buffer.byteLength(value,"utf8")/4);
 const enabled=()=>aiRuntimeAuthorized()&&process.env.LIVE_AI_PILOT_ENABLED==="true"&&process.env.LIVE_AI_PROVIDER==="openai";
 
-export const assertLiveAiReady=(operation:"extractStructured"|"generateFromEvidence",classification:"synthetic"|"non_confidential")=>{
+export type LiveAiClassification="synthetic"|"non_confidential"|"vendor_confidential";
+
+export const assertLiveAiReady=(operation:"extractStructured"|"generateFromEvidence",classification:LiveAiClassification)=>{
  if(!enabled())throw new LiveAiError("LIVE_AI_DISABLED","The controlled live-AI pilot is disabled.",503);
  if(process.env.LIVE_AI_KILL_SWITCH==="true"||process.env[`LIVE_AI_KILL_SWITCH_${operation.toUpperCase()}`]==="true")throw new LiveAiError("LIVE_AI_KILLED","Live AI is stopped by an emergency kill switch.",503);
  if(classification==="synthetic"&&process.env.LIVE_AI_SYNTHETIC_ENABLED!=="true")throw new LiveAiError("LIVE_AI_CLASSIFICATION_DENIED","Synthetic live-AI processing is disabled.",403);
  if(classification==="non_confidential"&&process.env.LIVE_AI_NON_CONFIDENTIAL_ENABLED!=="true")throw new LiveAiError("LIVE_AI_CLASSIFICATION_DENIED","Non-confidential live-AI processing is disabled.",403);
+ if(classification==="vendor_confidential"&&process.env.LIVE_AI_VENDOR_CONFIDENTIAL_ENABLED!=="true")throw new LiveAiError("LIVE_AI_CLASSIFICATION_DENIED","Vendor-confidential live-AI processing is disabled.",403);
  if(!process.env.OPENAI_API_KEY)throw new LiveAiError("LIVE_AI_CREDENTIAL_UNAVAILABLE","The live provider credential is unavailable.",503);
 };
 
 export type LiveAiResult<T>={output:T;inputTokens:number;outputTokens:number;providerRequestId:string|null;finishReason:string;model:string};
 
-export async function executeOpenAiJson<T>(input:{operation:"extractStructured"|"generateFromEvidence";classification:"synthetic"|"non_confidential";instructions:string;evidence:unknown;schemaName:string;schema:Record<string,unknown>;timeoutMs?:number;ledger?:ProviderAttemptContext;idempotencyPhase?:string}):Promise<LiveAiResult<T>>{
+export async function executeOpenAiJson<T>(input:{operation:"extractStructured"|"generateFromEvidence";classification:LiveAiClassification;instructions:string;evidence:unknown;schemaName:string;schema:Record<string,unknown>;timeoutMs?:number;ledger?:ProviderAttemptContext;idempotencyPhase?:string}):Promise<LiveAiResult<T>>{
  assertLiveAiReady(input.operation,input.classification);
  const evidence=JSON.stringify(input.evidence),inputTokens=estimatedTokens(input.instructions)+estimatedTokens(evidence);
  if(inputTokens>LIVE_AI_INPUT_TOKEN_LIMIT)throw new LiveAiError("LIVE_AI_INPUT_TOO_LARGE","Evidence exceeds the live-AI input token ceiling.",413);

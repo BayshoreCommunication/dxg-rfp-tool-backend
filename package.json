@@ -12,12 +12,12 @@
     "start:dispatcher": "node dist/scripts/startDurableDispatcher.js",
     "start:cron": "node dist/scripts/startCronWorker.js",
     "migrate:postgres:prod": "node dist/scripts/migratePostgres.js",
-    "lint": "eslint src contracts config/postgres.ts controller/platformAssistantController.ts controller/historicalInsightsController.ts routes/platformAssistantRoute.ts routes/historicalInsightsRoute.ts scripts/migrateProposalV1.ts scripts/migrateDxgOrganization.ts scripts/migrateOrganizationMemberships.ts scripts/migratePostgres.ts scripts/backfillPostgresProposalReferences.ts scripts/backfillIdentityProjections.ts scripts/cleanupAssistantRetention.ts scripts/checkAssistantReleaseReadiness.ts scripts/verifyAuthRefreshE2E.ts scripts/verifyDocumentIngestionE2E.ts scripts/verifyDurableJobsE2E.ts scripts/verifyKnowledgeIngestionE2E.ts scripts/verifyKnowledgeReviewE2E.ts scripts/verifyKnowledgeRetrievalE2E.ts scripts/verifyProposalContextE2E.ts scripts/verifyRetentionSweepE2E.ts scripts/platformAssistantEval.ts scripts/startCronWorker.ts scripts/startDurableWorker.ts scripts/startDurableDispatcher.ts scripts/startAiGatewayWorker.ts --max-warnings=0",
+    "lint": "eslint src contracts config/postgres.ts controller/platformAssistantController.ts controller/historicalInsightsController.ts controller/requirementRegistryController.ts controller/evidenceExtractionController.ts controller/vendorIntelligenceController.ts controller/evaluationEngineController.ts controller/comparisonOrchestrationController.ts controller/proposalIntelligenceOperationsController.ts controller/vendorResponseController.ts routes/platformAssistantRoute.ts routes/historicalInsightsRoute.ts routes/requirementRegistryRoute.ts routes/evidenceExtractionRoute.ts routes/vendorIntelligenceRoute.ts routes/evaluationEngineRoute.ts routes/comparisonOrchestrationRoute.ts routes/vendorResponseRoute.ts scripts/migrateProposalV1.ts scripts/migrateDxgOrganization.ts scripts/migrateOrganizationMemberships.ts scripts/migratePostgres.ts scripts/backfillPostgresProposalReferences.ts scripts/backfillIdentityProjections.ts scripts/backfillVendorSubmissionVersions.ts scripts/cleanupAssistantRetention.ts scripts/checkAssistantReleaseReadiness.ts scripts/verifyAuthRefreshE2E.ts scripts/verifyDocumentIngestionE2E.ts scripts/verifyDurableJobsE2E.ts scripts/verifyKnowledgeIngestionE2E.ts scripts/verifyKnowledgeReviewE2E.ts scripts/verifyKnowledgeRetrievalE2E.ts scripts/verifyProposalContextE2E.ts scripts/verifyRetentionSweepE2E.ts scripts/renderProposalIntelligenceReportFixture.ts scripts/platformAssistantEval.ts scripts/startCronWorker.ts scripts/startDurableWorker.ts scripts/startDurableDispatcher.ts scripts/startAiGatewayWorker.ts --max-warnings=0",
     "type-check": "tsc --noEmit",
     "test": "node --test --require ts-node/register tests/*.test.js",
     "contracts:generate": "node scripts/generateContracts.mjs",
     "contracts:check": "node scripts/generateContracts.mjs --check",
-    "migration:check": "ts-node scripts/migrateProposalV1.ts --help && ts-node scripts/migrateDxgOrganization.ts --help && ts-node scripts/migrateOrganizationMemberships.ts --help && ts-node scripts/migratePostgres.ts help && ts-node scripts/backfillPostgresProposalReferences.ts --help && ts-node scripts/backfillIdentityProjections.ts --help && ts-node scripts/cleanupAssistantRetention.ts --help && ts-node scripts/checkAssistantReleaseReadiness.ts --help",
+    "migration:check": "ts-node scripts/migrateProposalV1.ts --help && ts-node scripts/migrateDxgOrganization.ts --help && ts-node scripts/migrateOrganizationMemberships.ts --help && ts-node scripts/migratePostgres.ts help && ts-node scripts/backfillPostgresProposalReferences.ts --help && ts-node scripts/backfillIdentityProjections.ts --help && ts-node scripts/backfillVendorSubmissionVersions.ts --help && ts-node scripts/cleanupAssistantRetention.ts --help && ts-node scripts/checkAssistantReleaseReadiness.ts --help",
     "ci": "npm run contracts:check && npm run lint && npm run type-check && npm run migration:check && npm test && npm run build",
     "migrate:proposal-v1": "ts-node scripts/migrateProposalV1.ts",
     "migrate:dxg-organization": "ts-node scripts/migrateDxgOrganization.ts",
@@ -25,6 +25,7 @@
     "migrate:postgres": "ts-node scripts/migratePostgres.ts",
     "backfill:postgres-proposals": "ts-node scripts/backfillPostgresProposalReferences.ts",
     "backfill:identity-projections": "ts-node scripts/backfillIdentityProjections.ts",
+    "backfill:vendor-submission-versions": "ts-node scripts/backfillVendorSubmissionVersions.ts",
     "create-super-user": "ts-node scripts/createSuperUser.ts",
     "test-image-upload": "ts-node scripts/testImageUpload.ts",
     "verify:document-ingestion": "ts-node scripts/verifyDocumentIngestionE2E.ts",
@@ -50,7 +51,8 @@
     "test:integration": "INTEGRATION=1 node --test --require ts-node/register --test-concurrency=1 tests-integration/*.test.ts",
     "dev:worker": "nodemon --quiet --watch src --watch config --watch modal --watch contracts --ext ts --exec ts-node scripts/startDurableWorker.ts",
     "dev:dispatcher": "nodemon --quiet --watch src --watch config --ext ts --exec ts-node scripts/startDurableDispatcher.ts",
-    "verify:retention-sweep": "ts-node scripts/verifyRetentionSweepE2E.ts"
+    "verify:retention-sweep": "ts-node scripts/verifyRetentionSweepE2E.ts",
+    "verify:proposal-intelligence-report": "ts-node scripts/renderProposalIntelligenceReportFixture.ts"
   },
   "keywords": [
     "express",
@@ -62,6 +64,7 @@
   "license": "ISC",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1007.0",
+    "@aws-sdk/client-textract": "^3.1108.0",
     "@aws-sdk/s3-request-presigner": "^3.1090.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/api-logs": "^0.220.0",
@@ -89,6 +92,7 @@
     "multer": "^2.0.2",
     "nodemailer": "^9.0.3",
     "openai": "^6.47.0",
+    "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
     "pg": "^8.22.0",
     "resend": "^6.10.0",
