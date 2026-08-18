@@ -1,22 +1,37 @@
 import { Router } from "express";
 import mongoose from "mongoose";
-import { Request, Response, NextFunction } from "express";
+import type { Request, Response, NextFunction } from "express";
 import {
   checkVendorResponseExists,
+  getVendorResponseReceipt,
   submitVendorResponse,
   getVendorResponses,
+  getVendorResponseProposals,
   getVendorResponseById,
+  getVendorSubmissionDetail,
   markVendorResponseRead,
 } from "../controller/vendorResponseController";
 import { authenticate, authorizeAction } from "../middleware/auth";
 import { uploadVendorDocs } from "../middleware/upload";
 import { requirePublicGrant } from "../middleware/publicAccess";
-import { grantAndIpIdentity, securityRateLimit } from "../middleware/securityRateLimit";
+import {
+  grantAndIpIdentity,
+  securityRateLimit,
+} from "../middleware/securityRateLimit";
 
 const router = Router();
-const publicGrantLimit = securityRateLimit({ name: "vendor-public", limit: 60, windowMs: 15 * 60_000, identity: grantAndIpIdentity });
+const publicGrantLimit = securityRateLimit({
+  name: "vendor-public",
+  limit: 60,
+  windowMs: 15 * 60_000,
+  identity: grantAndIpIdentity,
+});
 
-const validateResponseId = (req: Request, res: Response, next: NextFunction) => {
+const validateResponseId = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     res.status(400).json({ success: false, message: "Invalid response id" });
     return;
@@ -25,7 +40,18 @@ const validateResponseId = (req: Request, res: Response, next: NextFunction) => 
 };
 
 /* Public routes — no authentication required */
-router.get("/check", publicGrantLimit, requirePublicGrant("vendor:submit"), checkVendorResponseExists);
+router.get(
+  "/check",
+  publicGrantLimit,
+  requirePublicGrant("vendor:submit"),
+  checkVendorResponseExists,
+);
+router.get(
+  "/receipt/:versionId",
+  publicGrantLimit,
+  requirePublicGrant("vendor:submit"),
+  getVendorResponseReceipt,
+);
 router.post(
   "/",
   publicGrantLimit,
@@ -49,8 +75,38 @@ router.post(
 );
 
 /* Protected routes — planner dashboard */
-router.get("/", authenticate, authorizeAction("vendor-response:read"), getVendorResponses);
-router.get("/:id", authenticate, authorizeAction("vendor-response:read"), validateResponseId, getVendorResponseById);
-router.patch("/:id/read", authenticate, authorizeAction("vendor-response:read"), validateResponseId, markVendorResponseRead);
+router.get(
+  "/",
+  authenticate,
+  authorizeAction("vendor-response:read"),
+  getVendorResponses,
+);
+router.get(
+  "/proposals",
+  authenticate,
+  authorizeAction("vendor-response:read"),
+  getVendorResponseProposals,
+);
+router.get(
+  "/:id/submission-detail",
+  authenticate,
+  authorizeAction("vendor-response:read"),
+  validateResponseId,
+  getVendorSubmissionDetail,
+);
+router.get(
+  "/:id",
+  authenticate,
+  authorizeAction("vendor-response:read"),
+  validateResponseId,
+  getVendorResponseById,
+);
+router.patch(
+  "/:id/read",
+  authenticate,
+  authorizeAction("vendor-response:read"),
+  validateResponseId,
+  markVendorResponseRead,
+);
 
 export default router;

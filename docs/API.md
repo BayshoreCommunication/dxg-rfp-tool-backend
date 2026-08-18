@@ -1,6 +1,6 @@
 # API Guide
 
-> Purpose: API discovery and contract ownership. Last updated: 2026-07-22. Owner: backend engineering.
+> Purpose: API discovery and contract ownership. Last updated: 2026-08-12. Owner: backend engineering.
 
 ## Contract rules
 
@@ -10,6 +10,25 @@
 - Long-running operations return durable job/run references; clients recover through reads and SSE/status updates.
 - Proposal writes validate canonical paths/values and use version checks against MongoDB authority.
 - Public proposal payloads use an allowlisted projection.
+
+## Version-aware vendor submissions
+
+- `GET /api/vendor-responses/check` returns the stable submission ID, current version number, latest version ID, revision eligibility, and the latest compatibility response.
+- `POST /api/vendor-responses` accepts `submissionIdempotencyKey` (or `Idempotency-Key`) and optional `submissionReason`. It creates version 1 or a new immutable revision; an idempotent replay returns the original version and receipt.
+- `GET /api/vendor-responses/receipt/:versionId?proposalId=...&email=...` requires the same scoped `vendor:submit` public grant and a normalized vendor-email match. It returns version, checksum, timestamps, and safe file metadata without private object URLs.
+
+## Requirement registry
+
+All routes are available by default without feature-flag environment variables. They still require an authenticated organization membership and proposal ownership. Reads require `proposal:read`; mutations require `proposal:write` and `Idempotency-Key`. Edit/approve requests also require the current set lock version through `If-Match` (or `expectedVersion`).
+
+- `POST /api/v1/proposals/:proposalId/intelligence/requirement-sets` creates or idempotently returns a deterministic draft from current proposal fields and accepted rendered-RFP narrative.
+- `GET /api/v1/proposals/:proposalId/intelligence/requirement-sets` lists versions with requirement counts and freshness.
+- `GET /api/v1/proposals/:proposalId/intelligence/requirement-sets/:setId` returns the set, evaluation matrix, criteria, requirements, exact source locators, validation, and freshness reasons.
+- `PATCH /api/v1/proposals/:proposalId/intelligence/requirement-sets/:setId/requirements/:requirementId` edits bounded review fields with optimistic locking.
+- `POST .../:setId/approve` validates confirmed weights and completed human review, then freezes the version.
+- `POST .../:setId/supersede` links an approved set to a new draft generated from the current proposal.
+
+- Existing authenticated list/detail endpoints return current version metadata while retaining their response shape.
 
 ## Where to find endpoints
 

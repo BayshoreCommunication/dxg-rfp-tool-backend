@@ -1,5 +1,6 @@
 export interface VendorDocumentStorage {
   upload(input: { localPath: string; objectKey: string }): Promise<string>;
+  inspect(localPath: string): Promise<{ sizeBytes: number; sha256: string }>;
   cleanup(localPath: string): Promise<void>;
 }
 
