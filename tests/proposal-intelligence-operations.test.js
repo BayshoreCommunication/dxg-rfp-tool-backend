@@ -64,13 +64,14 @@ test("comparison workbook carries full matrix and omits sealed commercial values
   assert.equal(sealedBook.getWorksheet("Commercial"), undefined);
 });
 
-test("HTML report escapes persisted content and never introduces a winner", async () => {
+test("HTML report escapes persisted content and keeps advisory ranking separate from an award", async () => {
   const unsafe = workspace(); unsafe.intelligence.risks[0].title = "<script>alert(1)</script>";
   const report = await buildProposalIntelligenceReport({ reportType: "executive_html", proposalTitle: "GIH Annual Conference", workspace: unsafe, clarifications, audit });
   const html = report.body.toString();
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.match(html, /Report provenance/);
-  assert.match(html, /does not rank vendors or recommend an award/);
+  assert.match(html, /Any ranking is an advisory result/);
+  assert.match(html, /it is not an award decision/);
   assert.doesNotMatch(html, /<script>alert/);
   assert.doesNotMatch(html, /recommended winner|award recommendation/i);
 });

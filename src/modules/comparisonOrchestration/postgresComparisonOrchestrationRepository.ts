@@ -7,7 +7,7 @@ import VendorSubmission from "../../../modal/vendorSubmissionModel";
 import VendorSubmissionVersion from "../../../modal/vendorSubmissionVersionModel";
 import { ASSESSMENT_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION } from "../evaluationEngine/domain";
 import { EXTRACTION_POLICY_VERSION } from "../evidenceExtraction/domain";
-import { COMPARISON_SCHEMA_VERSION, ComparisonOrchestrationError, PARTICIPANT_SCHEMA_VERSION, comparisonChecksum, uniqueReasons, weightedProgress } from "./domain";
+import { buildVendorRecommendation, COMPARISON_SCHEMA_VERSION, ComparisonOrchestrationError, PARTICIPANT_SCHEMA_VERSION, RECOMMENDATION_POLICY_VERSION, comparisonChecksum, evaluatorPanelSignature, freezeScoreInput, uniqueReasons, weightedProgress } from "./domain";
 
 type Context = { organizationMongoId: string; actorUserMongoId: string; proposalMongoId: string; correlationId: string };
 type SelectedParticipant = { submissionMongoId: string; versionMongoId: string };
@@ -32,12 +32,28 @@ const ownedProposal = async (client: PoolClient, proposalMongoId: string, actorM
 const loadMongoInputs = async (input: Context, selected: SelectedParticipant[], requireActive = false) => {
   const proposal = await Proposal.findOne({ _id: input.proposalMongoId, organizationId: input.organizationMongoId, userId: input.actorUserMongoId }).lean<any>();
   if (!proposal) throw new ComparisonOrchestrationError("PROPOSAL_NOT_FOUND", "Proposal was not found.", 404);
+  const [submissions, versions] = selected.length ? await Promise.all([
+    VendorSubmission.find({
+      _id: { $in: selected.map((item) => item.submissionMongoId) },
+      organizationId: input.organizationMongoId,
+      proposalId: input.proposalMongoId,
+      proposalOwnerId: input.actorUserMongoId,
+      ...(requireActive ? { status: "active" } : {}),
+    }).lean<any[]>(),
+    VendorSubmissionVersion.find({
+      _id: { $in: selected.map((item) => item.versionMongoId) },
+      organizationId: input.organizationMongoId,
+      proposalId: input.proposalMongoId,
+    }).lean<any[]>(),
+  ]) : [[], []];
+  const submissionById = new Map(submissions.map((item: any) => [String(item._id), item]));
+  const versionById = new Map(versions.map((item: any) => [String(item._id), item]));
   const participants = [];
   for (const item of selected) {
-    const submission = await VendorSubmission.findOne({ _id: item.submissionMongoId, organizationId: input.organizationMongoId, proposalId: input.proposalMongoId, proposalOwnerId: input.actorUserMongoId, ...(requireActive ? { status: "active" } : {}) }).lean<any>();
+    const submission = submissionById.get(item.submissionMongoId);
     if (!submission) throw new ComparisonOrchestrationError("SUBMISSION_VERSION_NOT_FOUND", "A selected vendor submission was not found.", 404);
-    const version = await VendorSubmissionVersion.findOne({ _id: item.versionMongoId, organizationId: input.organizationMongoId, proposalId: input.proposalMongoId, submissionId: item.submissionMongoId }).lean<any>();
-    if (!version) throw new ComparisonOrchestrationError("SUBMISSION_VERSION_NOT_FOUND", "A selected vendor version was not found.", 404);
+    const version = versionById.get(item.versionMongoId);
+    if (!version || String(version.submissionId) !== item.submissionMongoId) throw new ComparisonOrchestrationError("SUBMISSION_VERSION_NOT_FOUND", "A selected vendor version was not found.", 404);
     participants.push({
       submissionMongoId: item.submissionMongoId,
       versionMongoId: item.versionMongoId,
@@ -129,6 +145,96 @@ const materializeAggregate = async (client: PoolClient, input: { organizationId:
   return true;
 };
 
+const reviewInputChecksum = async (client: PoolClient, intelligenceRunId: string) => {
+  const reviews = await client.query<any>(
+    `SELECT id review_id,target_type,target_id,decision,corrected_payload
+     FROM rfpilot.human_review_events WHERE intelligence_run_id=$1 ORDER BY created_at,id`,
+    [intelligenceRunId],
+  );
+  return comparisonChecksum(reviews.rows.map((row) => ({
+    reviewId: row.review_id,
+    targetType: row.target_type,
+    targetId: row.target_id,
+    decision: row.decision,
+    correctedPayload: row.corrected_payload,
+  })));
+};
+
+const scoreInputState = async (client: PoolClient, evaluationRunId: string) => {
+  const rows = await client.query<any>(
+    `SELECT a.id assignment_id,a.role,a.conflict_status,ac.criterion_id,
+            s.id event_id,s.event_type,s.score,s.weighted_contribution
+     FROM rfpilot.evaluation_assignments a
+     LEFT JOIN rfpilot.evaluation_assignment_criteria ac ON ac.assignment_id=a.id
+     LEFT JOIN LATERAL (
+       SELECT e.id,e.event_type,e.score,e.weighted_contribution
+       FROM rfpilot.evaluator_score_events e
+       WHERE e.assignment_id=a.id AND e.criterion_id=ac.criterion_id
+       ORDER BY e.created_at DESC,e.id DESC LIMIT 1
+     ) s ON true
+     WHERE a.evaluation_run_id=$1 ORDER BY a.id,ac.criterion_id`,
+    [evaluationRunId],
+  );
+  return freezeScoreInput(rows.rows.map((row) => ({
+    assignmentId: row.assignment_id,
+    role: row.role,
+    conflictStatus: row.conflict_status,
+    criterionId: row.criterion_id,
+    eventId: row.event_id,
+    eventType: row.event_type,
+    score: row.score === null ? null : Number(row.score),
+    weightedContribution: row.weighted_contribution === null ? null : Number(row.weighted_contribution),
+  })));
+};
+
+const evaluationPanelSignature = async (client: PoolClient, evaluationRunId: string) => {
+  const rows = await client.query<any>(
+    `SELECT a.evaluator_external_user_id,a.role,a.conflict_status,
+            coalesce(jsonb_agg(ac.criterion_id ORDER BY ac.criterion_id) FILTER(WHERE ac.criterion_id IS NOT NULL),'[]') criterion_ids
+     FROM rfpilot.evaluation_assignments a
+     LEFT JOIN rfpilot.evaluation_assignment_criteria ac ON ac.assignment_id=a.id
+     WHERE a.evaluation_run_id=$1
+     GROUP BY a.id,a.evaluator_external_user_id,a.role,a.conflict_status`,
+    [evaluationRunId],
+  );
+  return evaluatorPanelSignature(rows.rows.map((row) => ({
+    evaluatorExternalUserId: String(row.evaluator_external_user_id),
+    role: String(row.role),
+    conflictStatus: String(row.conflict_status),
+    criterionIds: Array.isArray(row.criterion_ids) ? row.criterion_ids.map(String) : [],
+  })));
+};
+
+const criticalReviewState = async (client: PoolClient, intelligenceRunId: string, requirementSetId: string) => {
+  const result = await client.query<{ count: number }>(
+    `SELECT (
+       SELECT count(*) FROM rfpilot.requirements r
+       WHERE r.requirement_set_id=$2 AND r.included=true AND (r.mandatory_status='mandatory' OR r.eligibility=true)
+         AND NOT EXISTS (
+           SELECT 1 FROM rfpilot.requirement_evidence_mappings m
+           JOIN LATERAL (
+             SELECT h.decision FROM rfpilot.human_review_events h
+             WHERE h.intelligence_run_id=$1 AND h.target_type='mapping' AND h.target_id=m.id
+             ORDER BY h.created_at DESC,h.id DESC LIMIT 1
+           ) review ON review.decision IN ('accepted','rejected','corrected')
+           WHERE m.intelligence_run_id=$1 AND m.requirement_id=r.id
+         )
+     ) + (
+       SELECT count(*) FROM rfpilot.extracted_facts f
+       WHERE f.intelligence_run_id=$1 AND f.contradiction_group IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM LATERAL (
+             SELECT h.decision FROM rfpilot.human_review_events h
+             WHERE h.intelligence_run_id=$1 AND h.target_type='fact' AND h.target_id=f.id
+             ORDER BY h.created_at DESC,h.id DESC LIMIT 1
+           ) review WHERE review.decision IN ('accepted','rejected','corrected')
+         )
+     )::int count`,
+    [intelligenceRunId, requirementSetId],
+  );
+  return { complete: Number(result.rows[0]?.count ?? 0) === 0, unresolvedCount: Number(result.rows[0]?.count ?? 0) };
+};
+
 const currentFreshness = async (client: PoolClient, run: any, mongo: Awaited<ReturnType<typeof loadMongoInputs>>) => {
   const manifestResult = await client.query<any>("SELECT * FROM rfpilot.comparison_manifests WHERE comparison_run_id=$1", [run.id]);
   const manifest = manifestResult.rows[0], reasons: string[] = [];
@@ -140,19 +246,30 @@ const currentFreshness = async (client: PoolClient, run: any, mongo: Awaited<Ret
   for (const participant of mongo.participants) if (participant.currentVersionMongoId && participant.currentVersionMongoId !== participant.versionMongoId) reasons.push("submission_version_available");
   const frozenParticipants = Array.isArray(manifest.manifest?.participants) ? manifest.manifest.participants : [];
   for (const participant of frozenParticipants) {
+    if (participant?.intelligenceRunId) {
+      const currentReviewChecksum = await reviewInputChecksum(client, String(participant.intelligenceRunId));
+      if (currentReviewChecksum !== String(participant.reviewInputChecksum ?? "")) reasons.push("evidence_review_changed");
+    }
+    if (participant?.evaluationRunId) {
+      const scoreState = await scoreInputState(client, String(participant.evaluationRunId));
+      if (scoreState.checksum !== String(participant.scoreInputChecksum ?? "")) reasons.push("evaluator_scores_changed");
+      if (!scoreState.complete) reasons.push("evaluation_incomplete");
+    }
     const documents = Array.isArray(participant?.documents) ? participant.documents.filter((document: any) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(document?.documentId))) : [];
-    if (!documents.length) continue;
-    const sources = await client.query<any>(
-      `SELECT s.vendor_document_id,o.sha256 FROM rfpilot.document_sources s JOIN rfpilot.document_objects o ON o.source_id=s.id
-       WHERE s.vendor_document_id=ANY($1::uuid[])`, [documents.map((document: any) => document.documentId)],
-    );
-    const current = new Map(sources.rows.map((row: any) => [String(row.vendor_document_id), String(row.sha256)]));
-    if (documents.some((document: any) => current.get(String(document.documentId)) !== String(document.checksum))) reasons.push("source_replaced");
+    if (documents.length) {
+      const sources = await client.query<any>(
+        `SELECT s.vendor_document_id,o.sha256 FROM rfpilot.document_sources s JOIN rfpilot.document_objects o ON o.source_id=s.id
+         WHERE s.vendor_document_id=ANY($1::uuid[])`, [documents.map((document: any) => document.documentId)],
+      );
+      const current = new Map(sources.rows.map((row: any) => [String(row.vendor_document_id), String(row.sha256)]));
+      if (documents.some((document: any) => current.get(String(document.documentId)) !== String(document.checksum))) reasons.push("source_replaced");
+    }
   }
   if (manifest.extraction_policy_version !== EXTRACTION_POLICY_VERSION) reasons.push("extraction_policy_changed");
   if (manifest.assessment_schema_version !== ASSESSMENT_VERSION) reasons.push("assessment_schema_changed");
   if (manifest.scoring_policy_version !== SCORING_POLICY_VERSION) reasons.push("scoring_policy_changed");
   if (manifest.commercial_policy_version !== COMMERCIAL_POLICY_VERSION) reasons.push("commercial_policy_changed");
+  if (manifest.manifest?.policies?.recommendation !== RECOMMENDATION_POLICY_VERSION) reasons.push("recommendation_policy_changed");
   const staleReasons = uniqueReasons(reasons);
   await client.query("UPDATE rfpilot.comparison_runs SET freshness_state=$2,stale_reasons=$3::jsonb,updated_at=now() WHERE id=$1", [run.id, staleReasons.length ? "stale" : "current", JSON.stringify(staleReasons)]);
   return staleReasons;
@@ -167,7 +284,7 @@ const intelligenceProjection = async (client: PoolClient, run: any, priceVisibil
               a.id assessment_id,a.verdict,a.rationale,a.confidence,a.needs_human_review,a.review_reasons,
               coalesce(ev.evidence,'[]'::jsonb) evidence,coalesce(rv.review_history,'[]'::jsonb) review_history
        FROM rfpilot.comparison_participants p
-       JOIN rfpilot.requirements r ON r.requirement_set_id=$2
+       JOIN rfpilot.requirements r ON r.requirement_set_id=$2 AND r.included=true
        LEFT JOIN rfpilot.ai_assessments a ON a.evaluation_run_id=p.evaluation_run_id AND a.requirement_id=r.id
        LEFT JOIN LATERAL (
          SELECT jsonb_agg(jsonb_build_object(
@@ -242,9 +359,9 @@ const intelligenceProjection = async (client: PoolClient, run: any, priceVisibil
     ),
     client.query<any>(
       `SELECT p.id participant_id,p.vendor_label,coalesce(pr.result->'evaluation','{}'::jsonb) score_summary,
-              (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id) evaluator_count,
-              (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id AND a.status='complete') completed_evaluator_count,
-              (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id AND a.conflict_status='conflict') conflict_count
+              (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id AND a.role<>'observer') evaluator_count,
+              (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id AND a.role<>'observer' AND a.status='complete' AND a.conflict_status='clear') completed_evaluator_count,
+              (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id AND a.role<>'observer' AND a.conflict_status='conflict') conflict_count
        FROM rfpilot.comparison_participants p
        LEFT JOIN rfpilot.comparison_participant_results pr ON pr.participant_id=p.id
        WHERE p.comparison_run_id=$1 ORDER BY p.ordinal`,
@@ -279,6 +396,12 @@ const intelligenceProjection = async (client: PoolClient, run: any, priceVisibil
     submittedScores: Number(row.score_summary?.submitted_scores ?? 0), submittedEvaluators: Number(row.score_summary?.submitted_evaluators ?? 0),
     weightedContributionTotal: Number(row.score_summary?.contribution_total ?? 0), evaluatorCount: Number(row.evaluator_count ?? 0),
     completedEvaluatorCount: Number(row.completed_evaluator_count ?? 0), conflictCount: Number(row.conflict_count ?? 0),
+    criteria: (Array.isArray(row.score_summary?.criterion_scores) ? row.score_summary.criterion_scores : []).map((criterion: any) => ({
+      criterionId: String(criterion.criterionId ?? ""), name: String(criterion.name ?? "Criterion"),
+      meanScore: Number(criterion.meanScore ?? 0), meanWeightedContribution: Number(criterion.meanWeightedContribution ?? 0),
+      spread: Number(criterion.spread ?? 0), rubricMaximum: Number(criterion.rubricMaximum ?? 0),
+      originalWeight: Number(criterion.originalWeight ?? 0),
+    })),
   }));
   const mandatoryGaps = requirementList.reduce((count, requirement) => count + requirement.vendors.filter((vendor: any) => requirement.mandatoryStatus === "mandatory" && ["missing", "contradictory"].includes(vendor.verdict)).length, 0);
   const unresolvedReviews = requirementList.reduce((count, requirement) => count + requirement.vendors.filter((vendor: any) => vendor.needsHumanReview).length, 0);
@@ -325,7 +448,7 @@ const projection = async (client: PoolClient, run: any, includeIntelligence = fa
     schemaVersion: COMPARISON_SCHEMA_VERSION,
     run: { runId: run.id, status: run.status, progress: Number(run.progress), progressStage: run.progress_stage, participantCount: run.participant_count, completedParticipantCount: run.completed_participant_count, warnings: run.warnings, createdAt: run.created_at, completedAt: run.completed_at },
     freshness: { state: run.freshness_state, reasons: run.stale_reasons },
-    manifest: { manifestId: manifest.rows[0].id, checksum: manifest.rows[0].content_checksum, proposalVersion: manifest.rows[0].proposal_version, requirementSetVersion: manifest.rows[0].requirement_set_version, evaluationMatrixVersion: manifest.rows[0].matrix_version, priceVisibility, policies: { extraction: manifest.rows[0].extraction_policy_version, assessment: manifest.rows[0].assessment_schema_version, commercial: manifest.rows[0].commercial_policy_version, scoring: manifest.rows[0].scoring_policy_version } },
+    manifest: { manifestId: manifest.rows[0].id, checksum: manifest.rows[0].content_checksum, proposalVersion: manifest.rows[0].proposal_version, requirementSetVersion: manifest.rows[0].requirement_set_version, evaluationMatrixVersion: manifest.rows[0].matrix_version, priceVisibility, policies: { extraction: manifest.rows[0].extraction_policy_version, assessment: manifest.rows[0].assessment_schema_version, commercial: manifest.rows[0].commercial_policy_version, scoring: manifest.rows[0].scoring_policy_version, comparison: manifest.rows[0].manifest?.policies?.comparison ?? "", recommendation: manifest.rows[0].manifest?.policies?.recommendation ?? "" } },
     participants: participants.rows.map((row) => ({ participantId: row.id, vendorLabel: row.vendor_label, submissionId: row.vendor_submission_mongo_id, versionId: row.vendor_submission_version_mongo_id, status: row.status, stage: row.current_stage, warningCount: row.warning_count, safeErrorCode: row.safe_error_code })),
     jobs: nodes.rows.map((row) => ({ key: row.node_key, type: row.job_type, status: row.status, weight: Number(row.weight), safeErrorCode: row.safe_error_code, updatedAt: row.updated_at })),
     snapshot: snapshot.rows[0]?.snapshot ?? null,
@@ -347,6 +470,7 @@ export const comparisonOrchestrationRepository = {
       const matrixResult = await client.query<any>("SELECT * FROM rfpilot.evaluation_matrix_versions WHERE id=$1 AND requirement_set_id=$2 AND status='approved' AND weights_confirmed=true AND total_weight=100", [input.matrixVersionId, input.requirementSetId]);
       if (!matrixResult.rows[0]) throw new ComparisonOrchestrationError("EVALUATION_MATRIX_NOT_CONFIRMED", "A confirmed 100% evaluation matrix is required.", 409);
       const selected = [];
+      let commonPanelSignature: string | null = null;
       for (let ordinal = 0; ordinal < mongo.participants.length; ordinal += 1) {
         const item = mongo.participants[ordinal];
         const evaluation = await client.query<any>(
@@ -354,17 +478,31 @@ export const comparisonOrchestrationRepository = {
            FROM rfpilot.vendor_evaluation_runs e JOIN rfpilot.vendor_intelligence_runs i ON i.id=e.intelligence_run_id
            WHERE e.proposal_reference_id=$1 AND e.requirement_set_id=$2 AND e.matrix_version_id=$3
              AND e.vendor_submission_mongo_id=$4 AND e.vendor_submission_version_mongo_id=$5 AND e.status='ready' AND i.status='succeeded'
-           ORDER BY e.created_at DESC LIMIT 1`, [proposalReferenceId, input.requirementSetId, input.matrixVersionId, item.submissionMongoId, item.versionMongoId],
+             AND e.assessment_version=$6 AND e.commercial_policy_version=$7 AND e.scoring_policy_version=$8
+           ORDER BY e.created_at DESC LIMIT 1`, [proposalReferenceId, input.requirementSetId, input.matrixVersionId, item.submissionMongoId, item.versionMongoId, ASSESSMENT_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION],
         );
         if (!evaluation.rows[0]) throw new ComparisonOrchestrationError("COMPARISON_NOT_READY", `Complete proposal intelligence and evaluation for ${item.vendorLabel} before comparison.`, 409);
-        selected.push({ ...item, ordinal, evaluation: evaluation.rows[0] });
+        const currentReviewChecksum = await reviewInputChecksum(client, evaluation.rows[0].intelligence_run_id);
+        if (currentReviewChecksum !== evaluation.rows[0].review_input_checksum)
+          throw new ComparisonOrchestrationError("COMPARISON_NOT_READY", `Regenerate the evaluation for ${item.vendorLabel} after its evidence review changed.`, 409);
+        const criticalReviews = await criticalReviewState(client, evaluation.rows[0].intelligence_run_id, input.requirementSetId);
+        if (!criticalReviews.complete)
+          throw new ComparisonOrchestrationError("COMPARISON_CRITICAL_REVIEW_INCOMPLETE", `Resolve ${criticalReviews.unresolvedCount} mandatory or eligibility evidence reviews for ${item.vendorLabel} before comparison.`, 409);
+        const scoreState = await scoreInputState(client, evaluation.rows[0].id);
+        if (!scoreState.complete)
+          throw new ComparisonOrchestrationError("COMPARISON_EVALUATION_INCOMPLETE", `Complete all eligible evaluator scores for ${item.vendorLabel} before comparison.`, 409);
+        const panelSignature = await evaluationPanelSignature(client, evaluation.rows[0].id);
+        if (commonPanelSignature && commonPanelSignature !== panelSignature)
+          throw new ComparisonOrchestrationError("COMPARISON_EVALUATOR_PANEL_MISMATCH", "Use the same evaluators, roles, conflict dispositions, and criterion assignments for every compared vendor.", 409);
+        commonPanelSignature = panelSignature;
+        selected.push({ ...item, ordinal, evaluation: evaluation.rows[0], reviewInputChecksum: currentReviewChecksum, scoreInputChecksum: scoreState.checksum });
       }
       const manifestBody = {
         proposal: { mongoId: input.proposalMongoId, version: mongo.proposalVersion, checksum: mongo.proposalChecksum },
         requirementSet: { id: setResult.rows[0].id, version: setResult.rows[0].version, checksum: setResult.rows[0].content_checksum },
         matrix: { id: matrixResult.rows[0].id, version: matrixResult.rows[0].version, checksum: matrixResult.rows[0].content_checksum, totalWeight: Number(matrixResult.rows[0].total_weight) },
-        participants: selected.map((item) => ({ submissionId: item.submissionMongoId, versionId: item.versionMongoId, manifestChecksum: item.submissionManifestChecksum, documents: item.documents, intelligenceRunId: item.evaluation.intelligence_run_id, intelligenceChecksum: item.evaluation.intelligence_output_checksum, evaluationRunId: item.evaluation.id, evaluationChecksum: item.evaluation.output_checksum, provider: item.evaluation.provider, model: item.evaluation.model })),
-        policies: { extraction: EXTRACTION_POLICY_VERSION, assessment: ASSESSMENT_VERSION, commercial: COMMERCIAL_POLICY_VERSION, scoring: SCORING_POLICY_VERSION },
+        participants: selected.map((item) => ({ submissionId: item.submissionMongoId, versionId: item.versionMongoId, manifestChecksum: item.submissionManifestChecksum, documents: item.documents, intelligenceRunId: item.evaluation.intelligence_run_id, intelligenceChecksum: item.evaluation.intelligence_output_checksum, reviewInputChecksum: item.reviewInputChecksum, evaluationRunId: item.evaluation.id, evaluationChecksum: item.evaluation.output_checksum, scoreInputChecksum: item.scoreInputChecksum, provider: item.evaluation.provider, model: item.evaluation.model })),
+        policies: { extraction: EXTRACTION_POLICY_VERSION, assessment: ASSESSMENT_VERSION, commercial: COMMERCIAL_POLICY_VERSION, scoring: SCORING_POLICY_VERSION, comparison: COMPARISON_SCHEMA_VERSION, recommendation: RECOMMENDATION_POLICY_VERSION },
         priceVisibility: input.priceVisibility,
       };
       const manifestChecksum = comparisonChecksum(manifestBody), requestKey = `comparison-request:${input.idempotencyKey}`;
@@ -395,7 +533,7 @@ export const comparisonOrchestrationRepository = {
       );
       const parentNodes = [];
       for (const item of selected) {
-        const participantId = uuidv7(), nodeId = uuidv7(), inputChecksum = comparisonChecksum({ evaluationRunId: item.evaluation.id, evaluationChecksum: item.evaluation.output_checksum, participantSchema: PARTICIPANT_SCHEMA_VERSION });
+        const participantId = uuidv7(), nodeId = uuidv7(), inputChecksum = comparisonChecksum({ evaluationRunId: item.evaluation.id, evaluationChecksum: item.evaluation.output_checksum, reviewInputChecksum: item.reviewInputChecksum, scoreInputChecksum: item.scoreInputChecksum, participantSchema: PARTICIPANT_SCHEMA_VERSION });
         await client.query(
           `INSERT INTO rfpilot.comparison_participants(id,organization_id,comparison_run_id,vendor_submission_mongo_id,vendor_submission_version_mongo_id,vendor_label,submission_manifest_checksum,intelligence_run_id,evaluation_run_id,ordinal)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
@@ -438,7 +576,30 @@ export const comparisonOrchestrationRepository = {
         client.query<any>(`SELECT verdict,count(*)::int count,count(*) FILTER(WHERE needs_human_review)::int review_count FROM rfpilot.ai_assessments WHERE evaluation_run_id=$1 GROUP BY verdict ORDER BY verdict`, [participant.evaluation_run_id]),
         client.query<any>(`SELECT severity,category,count(*)::int count FROM rfpilot.evaluation_risks WHERE evaluation_run_id=$1 GROUP BY severity,category ORDER BY severity,category`, [participant.evaluation_run_id]),
         client.query<any>(`SELECT s.submitted_total,s.submitted_currency,n.comparable,n.normalized_total,n.currency normalized_currency,n.arithmetic_status,n.assumptions,n.refusal_codes,n.policy_version FROM rfpilot.commercial_submissions s JOIN rfpilot.commercial_normalizations n ON n.commercial_submission_id=s.id WHERE s.evaluation_run_id=$1`, [participant.evaluation_run_id]),
-        client.query<any>(`WITH latest AS (SELECT DISTINCT ON(assignment_id,criterion_id) assignment_id,criterion_id,event_type,weighted_contribution FROM rfpilot.evaluator_score_events WHERE evaluation_run_id=$1 ORDER BY assignment_id,criterion_id,created_at DESC,id DESC) SELECT count(*) FILTER(WHERE event_type IN('submitted','superseded'))::int submitted_scores,count(DISTINCT assignment_id) FILTER(WHERE event_type IN('submitted','superseded'))::int submitted_evaluators,coalesce(sum(weighted_contribution) FILTER(WHERE event_type IN('submitted','superseded')),0)::numeric contribution_total FROM latest`, [participant.evaluation_run_id]),
+        client.query<any>(`WITH latest AS (
+          SELECT DISTINCT ON(s.assignment_id,s.criterion_id) s.assignment_id,s.criterion_id,s.event_type,s.score,s.weighted_contribution,
+                 s.rubric_maximum,s.criterion_weight
+          FROM rfpilot.evaluator_score_events s WHERE s.evaluation_run_id=$1
+          ORDER BY s.assignment_id,s.criterion_id,s.created_at DESC,s.id DESC
+        ), eligible AS (
+          SELECT l.* FROM latest l JOIN rfpilot.evaluation_assignments a ON a.id=l.assignment_id
+          WHERE a.role<>'observer' AND a.conflict_status='clear' AND l.event_type IN('submitted','superseded')
+        ), criterion_means AS (
+          SELECT e.criterion_id,c.name,avg(e.score) mean_score,avg(e.weighted_contribution) mean_contribution,
+                 max(e.score)-min(e.score) score_spread,max(e.rubric_maximum) rubric_maximum,
+                 max(e.criterion_weight) original_weight
+          FROM eligible e JOIN rfpilot.evaluation_criteria c ON c.id=e.criterion_id
+          GROUP BY e.criterion_id,c.name
+        ) SELECT
+          (SELECT count(*)::int FROM eligible) submitted_scores,
+          (SELECT count(DISTINCT assignment_id)::int FROM eligible) submitted_evaluators,
+          coalesce((SELECT max(score_spread) FROM criterion_means),0)::numeric max_criterion_spread,
+          coalesce((SELECT sum(mean_contribution) FROM criterion_means),0)::numeric contribution_total,
+          coalesce((SELECT jsonb_agg(jsonb_build_object(
+            'criterionId',criterion_id,'name',name,'meanScore',mean_score,
+            'meanWeightedContribution',mean_contribution,'spread',score_spread,
+            'rubricMaximum',rubric_maximum,'originalWeight',original_weight
+          ) ORDER BY name,criterion_id) FROM criterion_means),'[]'::jsonb) criterion_scores`, [participant.evaluation_run_id]),
       ]);
       const result = { participantId: participant.id, vendorLabel: participant.vendor_label, submissionId: participant.vendor_submission_mongo_id, versionId: participant.vendor_submission_version_mongo_id, evaluationRunId: participant.evaluation_run_id, assessments: assessments.rows, risks: risks.rows, commercial: commercial.rows[0] ?? null, evaluation: scoreSummary.rows[0], schemaVersion: PARTICIPANT_SCHEMA_VERSION };
       const outputChecksum = comparisonChecksum(result), resultId = uuidv7();
@@ -458,7 +619,7 @@ export const comparisonOrchestrationRepository = {
       const results = await client.query<any>(`SELECT p.ordinal,r.result,r.content_checksum FROM rfpilot.comparison_participants p JOIN rfpilot.comparison_participant_results r ON r.participant_id=p.id WHERE p.comparison_run_id=$1 ORDER BY p.ordinal`, [run.id]);
       if (results.rows.length !== run.participant_count) throw new ComparisonOrchestrationError("COMPARISON_NOT_READY", "Participant snapshots are incomplete.", 409, true);
       const requirementMatrix = await client.query<any>(
-        `SELECT r.id requirement_id,r.title,r.mandatory_status,p.id participant_id,p.vendor_label,a.verdict,a.needs_human_review
+        `SELECT r.id requirement_id,r.title,r.mandatory_status,r.eligibility,p.id participant_id,p.vendor_label,a.verdict,a.needs_human_review
          FROM rfpilot.comparison_participants p JOIN rfpilot.ai_assessments a ON a.evaluation_run_id=p.evaluation_run_id
          JOIN rfpilot.requirements r ON r.id=a.requirement_id WHERE p.comparison_run_id=$1 ORDER BY r.ordinal,p.ordinal`, [run.id],
       );
@@ -467,7 +628,21 @@ export const comparisonOrchestrationRepository = {
          FROM rfpilot.comparison_participants p JOIN rfpilot.evaluation_risks x ON x.evaluation_run_id=p.evaluation_run_id
          LEFT JOIN rfpilot.clarification_candidates c ON c.risk_id=x.id WHERE p.comparison_run_id=$1 ORDER BY p.ordinal,x.ordinal`, [run.id],
       );
-      const snapshot = { schemaVersion: COMPARISON_SCHEMA_VERSION, runId: run.id, participants: results.rows.map((row) => row.result), requirementMatrix: requirementMatrix.rows, risks: risks.rows, generatedFrom: results.rows.map((row) => row.content_checksum) };
+      const participantResults = results.rows.map((row) => row.result);
+      const recommendation = buildVendorRecommendation({
+        participants: participantResults.map((participant) => ({
+          participantId: String(participant.participantId), vendorLabel: String(participant.vendorLabel),
+          score: Number(participant.evaluation?.contribution_total ?? 0),
+          evaluatorCount: Number(participant.evaluation?.submitted_evaluators ?? 0),
+          maxCriterionSpread: Number(participant.evaluation?.max_criterion_spread ?? 0),
+        })),
+        requirements: requirementMatrix.rows.map((row) => ({
+          participantId: row.participant_id, eligibility: row.eligibility === true, mandatoryStatus: row.mandatory_status,
+          verdict: row.verdict, needsHumanReview: row.needs_human_review === true,
+        })),
+        risks: risks.rows.map((row) => ({ participantId: row.participant_id, severity: row.severity })),
+      });
+      const snapshot = { schemaVersion: COMPARISON_SCHEMA_VERSION, runId: run.id, participants: participantResults, requirementMatrix: requirementMatrix.rows, risks: risks.rows, recommendation, generatedFrom: results.rows.map((row) => row.content_checksum) };
       const outputChecksum = comparisonChecksum(snapshot);
       await client.query("INSERT INTO rfpilot.comparison_snapshots(id,organization_id,comparison_run_id,snapshot,content_checksum) VALUES($1,$2,$3,$4::jsonb,$5)", [uuidv7(), organizationId, run.id, JSON.stringify(snapshot), outputChecksum]);
       await client.query("UPDATE rfpilot.comparison_runs SET status=CASE WHEN jsonb_array_length(warnings)>0 THEN 'succeeded_with_warnings' ELSE 'succeeded' END,progress=100,progress_stage='completed',snapshot_checksum=$2,completed_at=now(),updated_at=now() WHERE id=$1", [run.id, outputChecksum]);
@@ -539,6 +714,8 @@ export const comparisonOrchestrationRepository = {
       const mongo = await loadMongoInputs(input, participantRows.rows.map((row) => ({ submissionMongoId: row.submission_mongo_id, versionMongoId: row.version_mongo_id })));
       await currentFreshness(client, run, mongo);
       run = (await client.query<any>("SELECT * FROM rfpilot.comparison_runs WHERE id=$1", [run.id])).rows[0];
+      if (Array.isArray(run.stale_reasons) && run.stale_reasons.includes("evaluation_incomplete"))
+        throw new ComparisonOrchestrationError("COMPARISON_EVALUATION_INCOMPLETE", "Complete every eligible evaluator scorecard before recording a vendor decision.", 409);
       if (run.freshness_state === "stale" && !input.acknowledgeStale) throw new ComparisonOrchestrationError("STALE_ACKNOWLEDGEMENT_REQUIRED", "Acknowledge that this historical comparison is stale before recording the decision.", 409);
       const operationKey = `comparison-decision:${input.idempotencyKey}`;
       const prior = await client.query<any>("SELECT * FROM rfpilot.comparison_decisions WHERE organization_id=$1 AND idempotency_key=$2", [organizationId, operationKey]);

@@ -2,8 +2,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
-const { assignContradictionGroups, validateFacts, validateMappings, VendorIntelligenceError } = require("../src/modules/vendorIntelligence/domain");
-const { runVendorFactMappingPipeline } = require("../src/modules/vendorIntelligence/pipeline");
+const { assignContradictionGroups, sourceCoverageWarnings, validateFactCorrectionPayload, validateFacts, validateGroundedFacts, validateMappings, VendorIntelligenceError } = require("../src/modules/vendorIntelligence/domain");
+const { runVendorFactMappingPipeline, selectMappingEvidence } = require("../src/modules/vendorIntelligence/pipeline");
 const { factSchemaFor, mappingSchemaFor } = require("../src/modules/vendorIntelligence/openAiVendorFactMappingProvider");
 
 const fragmentA = "00000000-0000-4000-8000-000000000101";
@@ -23,6 +23,12 @@ test("gold fixtures cover native, OCR, contradictions, injection, missing values
   names.forEach((name) => assert.doesNotThrow(() => JSON.parse(fs.readFileSync(path.join(directory, name), "utf8"))));
 });
 
+test("vendor evidence is never mislabeled as non-confidential at the provider boundary", () => {
+  const provider = fs.readFileSync(path.join(__dirname, "../src/modules/vendorIntelligence/openAiVendorFactMappingProvider.ts"), "utf8");
+  assert.equal(provider.includes('classification: "non_confidential"'), false);
+  assert.equal((provider.match(/classification: "vendor_confidential"/g) || []).length, 2);
+});
+
 test("facts require in-boundary citations and reject decision language", () => {
   assert.equal(validateFacts({ facts: [fact()] }, new Set([fragmentA]))[0].normalizedValue, "USD 148500");
   assert.throws(() => validateFacts({ facts: [fact({ citations: [{ fragmentId: fragmentB, role: "supports" }] })] }, new Set([fragmentA])), (error) => error instanceof VendorIntelligenceError && error.code === "CITATION_VALIDATION_FAILED");
@@ -39,6 +45,30 @@ test("facts collapse duplicate provider citations before immutable persistence",
     { fragmentId: fragmentA, role: "supports" },
     { fragmentId: fragmentA, role: "context" },
   ]);
+});
+
+test("explicit numeric facts must contain the claimed value in their cited vendor text", () => {
+  const validated = validateFacts({ facts: [fact()] }, new Set([fragmentA]));
+  assert.doesNotThrow(() => validateGroundedFacts(validated, new Map([[fragmentA, "The all-inclusive total is USD 148,500."]])));
+  assert.throws(
+    () => validateGroundedFacts(validated, new Map([[fragmentA, "The all-inclusive total is USD 98,500."]])),
+    (error) => error.code === "CITATION_GROUNDING_FAILED",
+  );
+});
+
+test("explicit facts must match both their typed value and semantic fact type", () => {
+  const organizationSize = validateFacts({ facts: [fact({
+    factKey: "company.organization_size", family: "company_profile", factType: "organization_size",
+    statement: "The organization size is Frank Brewster.", valueKind: "string",
+    value: { text: "Frank Brewster", number: null, boolean: null, list: [], currency: null, unit: null, periodStart: null, periodEnd: null },
+  })] }, new Set([fragmentA]));
+  assert.throws(() => validateGroundedFacts(organizationSize, new Map([[fragmentA, "Salesperson: Frank Brewster"]])), (error) => error.code === "CITATION_GROUNDING_FAILED");
+  const validSize = validateFacts({ facts: [fact({
+    factKey: "company.organization_size", family: "company_profile", factType: "organization_size",
+    statement: "The company has 75 employees.", valueKind: "number",
+    value: { text: null, number: 75, boolean: null, list: [], currency: null, unit: "employees", periodStart: null, periodEnd: null },
+  })] }, new Set([fragmentA]));
+  assert.doesNotThrow(() => validateGroundedFacts(validSize, new Map([[fragmentA, "Our company has 75 full-time employees."]])));
 });
 
 test("facts retain the first identical provider fact and discard exact duplicates", () => {
@@ -69,6 +99,37 @@ test("conflicting normalized values receive the same deterministic contradiction
   const output = assignContradictionGroups([{ factKey: "commercial.total", normalizedValue: "USD 120000" }, { factKey: "commercial.total", normalizedValue: "USD 128000" }]);
   assert.match(output[0].contradictionGroup, /^contradiction:[0-9a-f]{16}$/);
   assert.equal(output[0].contradictionGroup, output[1].contradictionGroup);
+});
+
+test("human fact corrections preserve the extracted value type", () => {
+  assert.deepEqual(
+    validateFactCorrectionPayload("money", {
+      normalizedValue: "USD 125000",
+      typedValue: { kind: "money", number: 125000, currency: "USD" },
+    }),
+    {
+      normalizedValue: "USD 125000",
+      typedValue: { kind: "money", number: 125000, currency: "USD" },
+      currency: "USD",
+    },
+  );
+  assert.throws(
+    () => validateFactCorrectionPayload("money", {
+      normalizedValue: "USD 125000",
+      typedValue: { kind: "string", text: "USD 125000" },
+    }),
+    (error) => error.code === "REVIEW_CORRECTION_INVALID",
+  );
+});
+
+test("partial, unavailable, and bounded source coverage remain explicit intelligence blockers", () => {
+  const result = sourceCoverageWarnings([
+    { status: "succeeded", sourceLabel: "Cover message", warnings: [] },
+    { status: "partial", sourceLabel: "Technical.pdf", warnings: [{ code: "PAGE_COVERAGE_INCOMPLETE", message: "Some pages were unreadable." }] },
+    { status: "unreadable", sourceLabel: "Pricing.pdf", warnings: [] },
+  ], 400, 240);
+  assert.deepEqual(result.map((warning) => warning.code), ["PAGE_COVERAGE_INCOMPLETE", "SOURCE_COVERAGE_INCOMPLETE", "SOURCE_UNAVAILABLE", "EVIDENCE_COVERAGE_BOUNDED"]);
+  assert.ok(result.every((warning) => warning.sourceLabel || warning.code === "EVIDENCE_COVERAGE_BOUNDED"));
 });
 
 test("pipeline sends only the supplied vendor evidence and ledgers stable phases", async () => {
@@ -104,6 +165,25 @@ test("pipeline bounds fact extraction chunks to fit the structured-output ceilin
     ledger: { runType: "vendor_requirement_facts", runId: "run-b", organizationId: "org-a" },
   });
   assert.deepEqual(factChunkSizes, [10, 10, 1]);
+});
+
+test("mapping retrieval reserves lexical evidence for late requirements instead of favoring early requirements", () => {
+  const requirements = Array.from({ length: 20 }, (_, index) => ({ id: `r-${index}`, title: `Capability keyword${index}`, text: `Provide keyword${index}`, kind: "technical", mandatory: false }));
+  const evidence = requirements.flatMap((requirement, requirementIndex) => Array.from({ length: 5 }, (_, evidenceIndex) => ({
+    id: `f-${requirementIndex}-${evidenceIndex}`,
+    content: `${requirement.title} is explicitly included in the response.`,
+    sourceLabel: `source-${evidenceIndex}.pdf`, locator: { page: requirementIndex + 1 }, trustClass: "untrusted_vendor_content",
+  })));
+  const selected = selectMappingEvidence(requirements, evidence);
+  assert.ok(selected.some((item) => item.id.startsWith("f-19-")));
+  assert.ok(selected.length <= 70);
+});
+
+test("human mapping corrections can cite only the current extraction attempt", () => {
+  const repository = fs.readFileSync(path.join(__dirname, "../src/modules/vendorIntelligence/postgresVendorIntelligenceRepository.ts"), "utf8");
+  const reviewBoundary = repository.slice(repository.indexOf("async review("));
+  assert.match(reviewBoundary, /DISTINCT ON \(source_kind,coalesce\(vendor_document_id::text,'cover_message'\)\)/);
+  assert.match(reviewBoundary, /current_sources s ON s\.effective_id=f\.extraction_run_id/);
 });
 
 test("migration enforces tenant isolation, immutable outputs, and append-only review", () => {

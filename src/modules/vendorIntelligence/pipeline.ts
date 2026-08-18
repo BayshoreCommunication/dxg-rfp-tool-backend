@@ -3,6 +3,7 @@ import {
   assignContradictionGroups,
   contentChecksum,
   validateFacts,
+  validateGroundedFacts,
   validateMappings,
   type ProviderMapping,
   type ValidatedFact,
@@ -12,6 +13,8 @@ import type { IntelligenceEvidence, IntelligenceRequirement, VendorFactMappingPr
 const FACT_CHUNK = 10;
 const REQUIREMENT_CHUNK = 20;
 const MAX_MAPPING_EVIDENCE = 70;
+const GUARANTEED_EVIDENCE_PER_REQUIREMENT = 3;
+const SOURCE_BASELINE_LIMIT = 10;
 const stopWords = new Set(["that", "this", "with", "from", "will", "must", "shall", "have", "into", "your", "their", "vendor", "proposal", "requirement"]);
 const tokens = (value: string): string[] => [...new Set(value.toLocaleLowerCase().match(/[a-z0-9]{3,}/g) ?? [])]
   .filter((token) => !stopWords.has(token));
@@ -27,16 +30,47 @@ export const selectMappingEvidence = (
   evidence: IntelligenceEvidence[],
 ): IntelligenceEvidence[] => {
   const selected = new Map<string, IntelligenceEvidence>();
-  for (const requirement of requirements) {
+  const fragmentTokens = new Map(evidence.map((fragment) => [fragment.id, new Set(tokens(fragment.content))]));
+  const ranked = requirements.map((requirement) => {
     const terms = tokens(`${requirement.title} ${requirement.text}`);
-    evidence.map((fragment) => ({
+    return evidence.map((fragment) => ({
       fragment,
-      score: terms.reduce((score, term) => score + (fragment.content.toLocaleLowerCase().includes(term) ? 1 : 0), 0),
+      score: terms.reduce((score, term) => score + (fragmentTokens.get(fragment.id)?.has(term) ? 1 : 0), 0),
     }))
       .filter((item) => item.score > 0)
-      .sort((left, right) => right.score - left.score || left.fragment.id.localeCompare(right.fragment.id))
-      .slice(0, 5)
-      .forEach((item) => selected.set(item.fragment.id, item.fragment));
+      .sort((left, right) => right.score - left.score || left.fragment.id.localeCompare(right.fragment.id));
+  });
+  for (let round = 0; round < GUARANTEED_EVIDENCE_PER_REQUIREMENT; round += 1) {
+    for (const candidates of ranked) {
+      const item = candidates[round];
+      if (item && selected.size < MAX_MAPPING_EVIDENCE) selected.set(item.fragment.id, item.fragment);
+    }
+  }
+  const bySource = new Map<string, IntelligenceEvidence[]>();
+  evidence.forEach((fragment) => bySource.set(fragment.sourceLabel, [...(bySource.get(fragment.sourceLabel) ?? []), fragment]));
+  let baseline = 0;
+  for (let round = 0; baseline < SOURCE_BASELINE_LIMIT && selected.size < MAX_MAPPING_EVIDENCE; round += 1) {
+    let added = false;
+    for (const source of [...bySource.keys()].sort()) {
+      const fragment = bySource.get(source)?.[round];
+      if (!fragment) continue;
+      const before = selected.size;
+      selected.set(fragment.id, fragment);
+      if (selected.size > before) baseline += 1;
+      added = true;
+      if (baseline >= SOURCE_BASELINE_LIMIT || selected.size >= MAX_MAPPING_EVIDENCE) break;
+    }
+    if (!added) break;
+  }
+  for (let round = GUARANTEED_EVIDENCE_PER_REQUIREMENT; selected.size < MAX_MAPPING_EVIDENCE; round += 1) {
+    let added = false;
+    for (const candidates of ranked) {
+      const item = candidates[round];
+      if (!item) continue;
+      selected.set(item.fragment.id, item.fragment); added = true;
+      if (selected.size >= MAX_MAPPING_EVIDENCE) break;
+    }
+    if (!added) break;
   }
   if (!selected.size) evidence.slice(0, 20).forEach((fragment) => selected.set(fragment.id, fragment));
   return [...selected.values()].slice(0, MAX_MAPPING_EVIDENCE);
@@ -57,7 +91,10 @@ export const runVendorFactMappingPipeline = async (input: {
       phase: `facts:${index + 1}`,
     });
     model = result.model;
-    facts.push(...validateFacts(result.output, new Set(evidenceChunk.map((item) => item.id))));
+    facts.push(...validateGroundedFacts(
+      validateFacts(result.output, new Set(evidenceChunk.map((item) => item.id))),
+      new Map(evidenceChunk.map((item) => [item.id, item.content])),
+    ));
   }
   const uniqueFacts = new Map<string, ValidatedFact>();
   facts.forEach((fact) => uniqueFacts.set(contentChecksum({

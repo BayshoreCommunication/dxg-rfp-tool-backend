@@ -6,6 +6,7 @@ import {
   getVendorResponseReceipt,
   submitVendorResponse,
   getVendorResponses,
+  getVendorResponseProposals,
   getVendorResponseById,
   getVendorSubmissionDetail,
   markVendorResponseRead,
@@ -79,6 +80,12 @@ router.get(
   authenticate,
   authorizeAction("vendor-response:read"),
   getVendorResponses,
+);
+router.get(
+  "/proposals",
+  authenticate,
+  authorizeAction("vendor-response:read"),
+  getVendorResponseProposals,
 );
 router.get(
   "/:id/submission-detail",

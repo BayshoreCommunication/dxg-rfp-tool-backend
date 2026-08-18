@@ -44,6 +44,11 @@ export type GeneratedCriterion = {
   description: string;
   weight: number;
   ordinal: number;
+  rubric: {
+    minimum: 0;
+    maximum: 5;
+    anchors: Array<{ score: number; label: string; description: string }>;
+  };
 };
 export type GeneratedRequirement = {
   key: string;
@@ -104,6 +109,8 @@ export type RequirementUpdate = {
   criterionReviewed?: boolean;
   importance?: Importance;
   verificationMethod?: VerificationMethod;
+  included?: boolean;
+  inclusionReviewed?: boolean;
 };
 
 export const parseRequirementUpdate = (value: unknown): RequirementUpdate => {
@@ -117,7 +124,7 @@ export const parseRequirementUpdate = (value: unknown): RequirementUpdate => {
   if (body.mandatoryStatus !== undefined) update.mandatoryStatus = oneOf(body.mandatoryStatus, MANDATORY_STATUSES, "mandatoryStatus");
   if (body.importance !== undefined) update.importance = oneOf(body.importance, IMPORTANCE_LEVELS, "importance");
   if (body.verificationMethod !== undefined) update.verificationMethod = oneOf(body.verificationMethod, VERIFICATION_METHODS, "verificationMethod");
-  for (const field of ["mandatoryReviewed", "eligibility", "criterionReviewed"] as const) {
+  for (const field of ["mandatoryReviewed", "eligibility", "criterionReviewed", "included", "inclusionReviewed"] as const) {
     if (body[field] !== undefined) {
       if (typeof body[field] !== "boolean")
         throw new RequirementRegistryError("INVALID_REQUIREMENT_UPDATE", `${field} must be a boolean.`, 400);
@@ -145,6 +152,9 @@ export const validateForApproval = (input: {
   weightsConfirmed: boolean;
   criteria: Array<{ id: string; weight: number }>;
   requirements: Array<{
+    included: boolean;
+    inclusion_reviewed: boolean;
+    normalized_text: string;
     mandatory_status: MandatoryStatus;
     mandatory_reviewed: boolean;
     source_locator: unknown;
@@ -156,18 +166,22 @@ export const validateForApproval = (input: {
   const blocking: RegistryValidation["blocking"] = [];
   const warnings: RegistryValidation["warnings"] = [];
   const total = input.criteria.reduce((sum, item) => sum + Number(item.weight), 0);
+  const included = input.requirements.filter((item) => item.included);
   if (!input.weightsConfirmed)
     blocking.push({ code: "WEIGHTS_NOT_CONFIRMED", message: "Confirm the evaluation matrix before approval." });
   if (!input.criteria.length)
     blocking.push({ code: "CRITERIA_REQUIRED", message: "At least one evaluation criterion is required." });
   else if (Math.abs(total - 100) > 0.001)
     blocking.push({ code: "WEIGHTS_MUST_TOTAL_100", message: `Evaluation weights total ${total}, not 100.` });
-  const mandatoryPending = input.requirements.filter((item) => !item.mandatory_reviewed || item.mandatory_status === "pending").length;
-  const criteriaPending = input.requirements.filter((item) => !item.criterion_reviewed || !item.criterion_id).length;
-  const verificationPending = input.requirements.filter((item) => item.verification_method === "pending").length;
-  const sourceMissing = input.requirements.filter((item) => item.mandatory_status === "mandatory" && (!item.source_locator || typeof item.source_locator !== "object")).length;
-  if (!input.requirements.length)
+  const inclusionPending = input.requirements.filter((item) => !item.inclusion_reviewed).length;
+  const mandatoryPending = included.filter((item) => !item.mandatory_reviewed || item.mandatory_status === "pending").length;
+  const criteriaPending = included.filter((item) => !item.criterion_reviewed || !item.criterion_id).length;
+  const verificationPending = included.filter((item) => item.verification_method === "pending").length;
+  const sourceMissing = included.filter((item) => item.mandatory_status === "mandatory" && (!item.source_locator || typeof item.source_locator !== "object")).length;
+  if (!included.length)
     blocking.push({ code: "REQUIREMENTS_REQUIRED", message: "At least one requirement is required." });
+  if (inclusionPending)
+    blocking.push({ code: "INCLUSION_REVIEW_REQUIRED", count: inclusionPending, message: `${inclusionPending} requirements need an include/exclude decision.` });
   if (mandatoryPending)
     blocking.push({ code: "MANDATORY_REVIEW_REQUIRED", count: mandatoryPending, message: `${mandatoryPending} requirements need mandatory-status review.` });
   if (criteriaPending)
@@ -176,5 +190,17 @@ export const validateForApproval = (input: {
     blocking.push({ code: "VERIFICATION_REVIEW_REQUIRED", count: verificationPending, message: `${verificationPending} requirements need a verification method.` });
   if (sourceMissing)
     blocking.push({ code: "MANDATORY_SOURCE_REQUIRED", count: sourceMissing, message: `${sourceMissing} mandatory requirements are missing a source.` });
+  const normalized = included.map((item) => new Set(item.normalized_text.toLocaleLowerCase().normalize("NFKC").match(/[a-z0-9]{3,}/g) ?? []));
+  let duplicates = 0;
+  for (let left = 0; left < normalized.length; left += 1) for (let right = left + 1; right < normalized.length; right += 1) {
+    const a = normalized[left], b = normalized[right];
+    if (!a.size || !b.size) continue;
+    const overlap = [...a].filter((token) => b.has(token)).length;
+    const union = new Set([...a, ...b]).size;
+    const shorter = Math.min(a.size, b.size);
+    if (shorter >= 4 && (overlap / union >= 0.85 || overlap / shorter >= 0.9)) duplicates += 1;
+  }
+  if (duplicates)
+    blocking.push({ code: "DUPLICATE_REQUIREMENTS", count: duplicates, message: `${duplicates} included requirement pairs appear duplicative. Exclude or rewrite duplicates before approval.` });
   return { blocking, warnings };
 };

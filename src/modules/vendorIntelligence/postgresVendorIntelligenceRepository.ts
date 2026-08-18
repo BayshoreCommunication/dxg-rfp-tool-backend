@@ -9,6 +9,8 @@ import {
   FACT_VERSION,
   MAPPING_VERSION,
   PROMPT_VERSION,
+  sourceCoverageWarnings,
+  validateFactCorrectionPayload,
   VALIDATION_VERSION,
   VendorIntelligenceError,
 } from "./domain";
@@ -59,9 +61,9 @@ const loadVersion = async (input: Context) => {
     organizationId: input.organizationMongoId,
     proposalId: input.proposalMongoId,
     submissionId: input.submissionMongoId,
-  }).select("manifestChecksum").lean<any>();
+  }).select("manifestChecksum documents.documentId documents.name").lean<any>();
   if (!version) throw new VendorIntelligenceError("SUBMISSION_VERSION_NOT_FOUND", "Vendor submission version was not found.", 404);
-  return version as { manifestChecksum: string };
+  return version as { manifestChecksum: string; documents?: Array<{ documentId?: string; name?: string }> };
 };
 
 const approvedRequirementSet = async (client: PoolClient, proposalReferenceId: string, requirementSetId?: string | null) => {
@@ -78,19 +80,31 @@ const approvedRequirementSet = async (client: PoolClient, proposalReferenceId: s
   return result.rows[0];
 };
 
-const extractionInput = async (client: PoolClient, versionMongoId: string) => {
+const extractionInput = async (client: PoolClient, versionMongoId: string, expectedDocuments: Array<{ documentId?: string; name?: string }> = []) => {
   const result = await client.query<any>(
-    `SELECT id,status,source_label,coalesce(reused_from_run_id,id) effective_run_id,output_checksum,warnings
+    `SELECT DISTINCT ON (source_kind,coalesce(vendor_document_id::text,'cover_message'))
+            id,vendor_document_id,status,source_label,coalesce(reused_from_run_id,id) effective_run_id,output_checksum,warnings
      FROM rfpilot.source_extraction_runs
-     WHERE vendor_submission_version_mongo_id=$1 ORDER BY created_at,id`,
+     WHERE vendor_submission_version_mongo_id=$1
+     ORDER BY source_kind,coalesce(vendor_document_id::text,'cover_message'),created_at DESC,id DESC`,
     [versionMongoId],
   );
-  if (!result.rows.length) throw new VendorIntelligenceError("SOURCE_NOT_READY", "Vendor evidence has not been extracted.", 409);
-  if (result.rows.some((row) => ["queued", "running"].includes(row.status)))
+  const rows = [...result.rows];
+  const currentDocumentIds = new Set(rows.map((row) => String(row.vendor_document_id ?? "")).filter(Boolean));
+  for (const document of expectedDocuments) if (document.documentId && !currentDocumentIds.has(String(document.documentId))) rows.push({
+    id: `unavailable:${document.documentId}`,
+    status: "unavailable",
+    source_label: String(document.name || "Attachment"),
+    effective_run_id: null,
+    output_checksum: null,
+    warnings: [],
+  });
+  if (!rows.length) throw new VendorIntelligenceError("SOURCE_NOT_READY", "Vendor evidence has not been extracted.", 409);
+  if (rows.some((row) => ["queued", "running"].includes(row.status)))
     throw new VendorIntelligenceError("SOURCE_NOT_READY", "Vendor evidence extraction is still running.", 409);
-  const usable = result.rows.filter((row) => ["succeeded", "partial"].includes(row.status));
+  const usable = rows.filter((row) => ["succeeded", "partial"].includes(row.status));
   if (!usable.length) throw new VendorIntelligenceError("SOURCE_NOT_READY", "Vendor evidence is unreadable.", 409);
-  return usable;
+  return rows;
 };
 
 const runView = (row: any) => ({
@@ -131,11 +145,16 @@ export const vendorIntelligenceRepository = {
       const organizationId = await tenant(client, input.organizationMongoId);
       const proposalReferenceId = await ownedProposal(client, input.proposalMongoId, input.actorUserMongoId);
       const set = await approvedRequirementSet(client, proposalReferenceId, input.requirementSetId);
-      const extraction = await extractionInput(client, input.versionMongoId);
+      const extraction = await extractionInput(client, input.versionMongoId, version.documents ?? []);
+      const inputWarnings = sourceCoverageWarnings(extraction.map((row) => ({
+        status: row.status,
+        sourceLabel: row.source_label,
+        warnings: Array.isArray(row.warnings) ? row.warnings : [],
+      })), 0, 0);
       const inputChecksum = contentChecksum({
         requirementSet: set.content_checksum,
         submissionVersion: version.manifestChecksum,
-        evidence: extraction.map((row) => [row.id, row.output_checksum]),
+        evidence: extraction.map((row) => ({ id: row.id, status: row.status, outputChecksum: row.output_checksum, warnings: row.warnings })),
         mappingVersion: MAPPING_VERSION,
         factVersion: FACT_VERSION,
         validationVersion: VALIDATION_VERSION,
@@ -159,11 +178,11 @@ export const vendorIntelligenceRepository = {
         `INSERT INTO rfpilot.vendor_intelligence_runs(
            id,organization_id,proposal_reference_id,requirement_set_id,vendor_submission_mongo_id,
            vendor_submission_version_mongo_id,job_id,input_checksum,requirement_mapping_version,
-           fact_schema_version,validation_version,prompt_version,idempotency_key,correlation_id,actor_external_user_id
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+           fact_schema_version,validation_version,prompt_version,warning_count,warnings,idempotency_key,correlation_id,actor_external_user_id
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17) RETURNING *`,
         [runId, organizationId, proposalReferenceId, set.id, input.submissionMongoId, input.versionMongoId,
           jobId, inputChecksum, MAPPING_VERSION, FACT_VERSION, VALIDATION_VERSION, PROMPT_VERSION,
-          stableKey, input.correlationId, input.actorUserMongoId],
+          inputWarnings.length, JSON.stringify(inputWarnings), stableKey, input.correlationId, input.actorUserMongoId],
       );
       const payload = {
         jobId,
@@ -207,35 +226,47 @@ export const vendorIntelligenceRepository = {
         throw new VendorIntelligenceError("REQUIREMENT_SET_NOT_APPROVED", "The requirement set is no longer approved.", 409);
       const requirements = await client.query<any>(
         `SELECT id,title,normalized_text,kind,mandatory_status
-         FROM rfpilot.requirements WHERE requirement_set_id=$1 ORDER BY ordinal`,
+         FROM rfpilot.requirements WHERE requirement_set_id=$1 AND included=true ORDER BY ordinal`,
         [run.requirement_set_id],
       );
+      const sourceRuns = await extractionInput(client, run.vendor_submission_version_mongo_id);
       const available = await client.query<{ count: number }>(
-        `SELECT count(*)::int count FROM rfpilot.evidence_fragments f
-         WHERE f.extraction_run_id IN (
-           SELECT coalesce(reused_from_run_id,id) FROM rfpilot.source_extraction_runs
-           WHERE vendor_submission_version_mongo_id=$1 AND status IN ('succeeded','partial')
-         )`,
+        `WITH current_sources AS (
+           SELECT DISTINCT ON (source_kind,coalesce(vendor_document_id::text,'cover_message'))
+                  coalesce(reused_from_run_id,id) effective_id,status
+           FROM rfpilot.source_extraction_runs WHERE vendor_submission_version_mongo_id=$1
+           ORDER BY source_kind,coalesce(vendor_document_id::text,'cover_message'),created_at DESC,id DESC
+         )
+         SELECT count(*)::int count FROM rfpilot.evidence_fragments f
+         JOIN current_sources s ON s.effective_id=f.extraction_run_id
+         WHERE s.status IN ('succeeded','partial')`,
         [run.vendor_submission_version_mongo_id],
       );
       const fragments = await client.query<any>(
         `WITH source_runs AS (
-           SELECT id,source_label,coalesce(reused_from_run_id,id) effective_id
-           FROM rfpilot.source_extraction_runs
-           WHERE vendor_submission_version_mongo_id=$1 AND status IN ('succeeded','partial')
+           SELECT DISTINCT ON (source_kind,coalesce(vendor_document_id::text,'cover_message'))
+                  id,source_label,coalesce(reused_from_run_id,id) effective_id,status
+           FROM rfpilot.source_extraction_runs WHERE vendor_submission_version_mongo_id=$1
+           ORDER BY source_kind,coalesce(vendor_document_id::text,'cover_message'),created_at DESC,id DESC
          ), ranked AS (
            SELECT f.id,f.content,f.locator,s.source_label,
                   row_number() OVER (PARTITION BY s.id ORDER BY f.ordinal) source_rank
            FROM source_runs s JOIN rfpilot.evidence_fragments f ON f.extraction_run_id=s.effective_id
+           WHERE s.status IN ('succeeded','partial')
          )
          SELECT id,content,locator,source_label FROM ranked
          WHERE source_rank<=80 ORDER BY source_label,id LIMIT 240`,
         [run.vendor_submission_version_mongo_id],
       );
       if (!fragments.rows.length) throw new VendorIntelligenceError("SOURCE_NOT_READY", "Vendor evidence is unavailable.", 409);
-      const warnings = Number(available.rows[0]?.count ?? 0) > fragments.rows.length
-        ? [{ code: "EVIDENCE_COVERAGE_BOUNDED", message: "The run used a bounded source-fair evidence sample.", availableFragments: Number(available.rows[0]?.count ?? 0), usedFragments: fragments.rows.length }]
-        : [];
+      const currentWarnings = sourceCoverageWarnings(sourceRuns.map((row) => ({
+        status: row.status,
+        sourceLabel: row.source_label,
+        warnings: Array.isArray(row.warnings) ? row.warnings : [],
+      })), Number(available.rows[0]?.count ?? 0), fragments.rows.length);
+      const warnings = [...(Array.isArray(run.warnings) ? run.warnings : []), ...currentWarnings].filter((warning, index, all) =>
+        all.findIndex((candidate) => candidate.code === warning.code && candidate.sourceLabel === warning.sourceLabel) === index,
+      );
       await client.query(
         "UPDATE rfpilot.vendor_intelligence_runs SET status='running',started_at=coalesce(started_at,now()),safe_error_code=NULL,updated_at=now() WHERE id=$1",
         [input.runId],
@@ -464,8 +495,8 @@ export const vendorIntelligenceRepository = {
       if (run.rows[0]?.status !== "succeeded")
         throw new VendorIntelligenceError("INTELLIGENCE_RUN_NOT_READY", "Vendor intelligence is not ready for review.", 409);
       const targetTable = input.targetType === "fact" ? "extracted_facts" : "requirement_evidence_mappings";
-      const target = await client.query<{ id: string }>(
-        `SELECT id FROM rfpilot.${targetTable} WHERE id=$1 AND intelligence_run_id=$2`,
+      const target = await client.query<{ id: string; value_kind?: string }>(
+        `SELECT id${input.targetType === "fact" ? ",value_kind" : ""} FROM rfpilot.${targetTable} WHERE id=$1 AND intelligence_run_id=$2`,
         [input.targetId, input.runId],
       );
       if (!target.rows[0]) throw new VendorIntelligenceError("REVIEW_TARGET_NOT_FOUND", "Review target was not found.", 404);
@@ -477,20 +508,22 @@ export const vendorIntelligenceRepository = {
           || (relationship === "none" ? fragmentIds.length !== 0 : fragmentIds.length === 0))
           throw new VendorIntelligenceError("REVIEW_INVALID", "Corrected mapping is invalid.", 422);
         const allowed = await client.query<{ id: string }>(
-          `SELECT f.id FROM rfpilot.evidence_fragments f WHERE f.id=ANY($1::uuid[]) AND f.extraction_run_id IN (
-             SELECT coalesce(reused_from_run_id,id) FROM rfpilot.source_extraction_runs
-             WHERE vendor_submission_version_mongo_id=$2)`,
+          `WITH current_sources AS (
+             SELECT DISTINCT ON (source_kind,coalesce(vendor_document_id::text,'cover_message'))
+                    coalesce(reused_from_run_id,id) effective_id,status
+             FROM rfpilot.source_extraction_runs WHERE vendor_submission_version_mongo_id=$2
+             ORDER BY source_kind,coalesce(vendor_document_id::text,'cover_message'),created_at DESC,id DESC
+           )
+           SELECT f.id FROM rfpilot.evidence_fragments f
+           JOIN current_sources s ON s.effective_id=f.extraction_run_id
+           WHERE f.id=ANY($1::uuid[]) AND s.status IN ('succeeded','partial')`,
           [fragmentIds, input.versionMongoId],
         );
         if (allowed.rows.length !== new Set(fragmentIds).size)
           throw new VendorIntelligenceError("CITATION_VALIDATION_FAILED", "Corrected mapping citation is invalid.", 422);
       }
       if (input.decision === "corrected" && input.targetType === "fact") {
-        const normalizedValue = input.correctedPayload?.normalizedValue;
-        const typedValue = input.correctedPayload?.typedValue;
-        if (typeof normalizedValue !== "string" || !normalizedValue.trim() || normalizedValue.length > 2000
-          || !typedValue || typeof typedValue !== "object" || Array.isArray(typedValue))
-          throw new VendorIntelligenceError("REVIEW_INVALID", "Corrected fact value is invalid.", 422);
+        validateFactCorrectionPayload(String(target.rows[0].value_kind), input.correctedPayload);
       }
       const old = await client.query<any>(
         "SELECT * FROM rfpilot.human_review_events WHERE organization_id=$1 AND idempotency_key=$2",

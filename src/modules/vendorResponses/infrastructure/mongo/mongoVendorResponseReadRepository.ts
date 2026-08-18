@@ -4,7 +4,10 @@ import VendorResponse from "../../../../../modal/vendorResponseModel";
 import VendorSubmission from "../../../../../modal/vendorSubmissionModel";
 import VendorSubmissionVersion from "../../../../../modal/vendorSubmissionVersionModel";
 import type { VendorResponseReadRepository } from "../../domain/ports/vendorResponseReadRepository";
-import { tenantFilter } from "../../../shared/tenancy/tenantContext";
+import {
+  tenantFilter,
+  tenantObjectId,
+} from "../../../shared/tenancy/tenantContext";
 
 const VENDOR_RESPONSE_SELECT =
   "_id proposalId proposalOwnerId proposalTitle vendorName submittedBy email message documents isRead createdAt updatedAt submissionId currentVersionId currentVersionNumber versionReason versionReceivedAt manifestChecksum";
@@ -46,6 +49,87 @@ type TimelineVersion = {
 };
 
 export const mongoVendorResponseReadRepository: VendorResponseReadRepository = {
+  async listOwnedProposalSummaries({
+    ownerUserId,
+    search,
+    page,
+    limit,
+  }) {
+    const ownerId = new mongoose.Types.ObjectId(ownerUserId);
+    const baseFilter: Record<string, unknown> = {
+      proposalOwnerId: ownerId,
+      // Mongoose casts find filters but does not cast aggregation pipelines.
+      organizationId: tenantObjectId(),
+    };
+    const escapedSearch = search?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const groupedFilter = escapedSearch
+      ? { proposalTitle: { $regex: escapedSearch, $options: "i" } }
+      : {};
+
+    const [grouped, totals] = await Promise.all([
+      VendorResponse.aggregate<{
+        proposals: Array<{
+          _id: mongoose.Types.ObjectId;
+          proposalTitle: string;
+          responseCount: number;
+          unreadCount: number;
+          latestResponseAt: Date;
+          latestVendorName: string;
+        }>;
+        total: Array<{ count: number }>;
+      }>([
+        { $match: baseFilter },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: "$proposalId",
+            proposalTitle: { $first: "$proposalTitle" },
+            responseCount: { $sum: 1 },
+            unreadCount: {
+              $sum: { $cond: [{ $eq: ["$isRead", false] }, 1, 0] },
+            },
+            latestResponseAt: { $first: "$createdAt" },
+            latestVendorName: { $first: "$vendorName" },
+          },
+        },
+        { $match: groupedFilter },
+        { $sort: { latestResponseAt: -1, _id: 1 } },
+        {
+          $facet: {
+            proposals: [{ $skip: (page - 1) * limit }, { $limit: limit }],
+            total: [{ $count: "count" }],
+          },
+        },
+      ]),
+      VendorResponse.aggregate<{ responseCount: number; unreadCount: number }>([
+        { $match: baseFilter },
+        {
+          $group: {
+            _id: null,
+            responseCount: { $sum: 1 },
+            unreadCount: {
+              $sum: { $cond: [{ $eq: ["$isRead", false] }, 1, 0] },
+            },
+          },
+        },
+      ]),
+    ]);
+    const result = grouped[0];
+    return {
+      proposals: (result?.proposals ?? []).map((proposal) => ({
+        proposalId: String(proposal._id),
+        proposalTitle: String(proposal.proposalTitle || "Untitled proposal"),
+        responseCount: Number(proposal.responseCount || 0),
+        unreadCount: Number(proposal.unreadCount || 0),
+        latestResponseAt: new Date(proposal.latestResponseAt).toISOString(),
+        latestVendorName: String(proposal.latestVendorName || "Unknown vendor"),
+      })),
+      total: Number(result?.total[0]?.count || 0),
+      responseCount: Number(totals[0]?.responseCount || 0),
+      unreadCount: Number(totals[0]?.unreadCount || 0),
+    };
+  },
+
   async listOwned({
     ownerUserId,
     unreadOnly,
@@ -73,14 +157,23 @@ export const mongoVendorResponseReadRepository: VendorResponseReadRepository = {
         .map((recipient) => recipient.trackingId)
         .filter(Boolean);
       if (trackingIds.length === 0) {
-        return { responses: [], total: 0, unreadCount: 0 };
+        return {
+          responses: [],
+          total: 0,
+          unreadCount: await VendorResponse.countDocuments({
+            proposalOwnerId: ownerId,
+            isRead: false,
+            ...tenantFilter(),
+          }),
+          filteredUnreadCount: 0,
+        };
       }
       filter.emailTrackingId = { $in: trackingIds };
     } else if (proposalId) {
       filter.proposalId = new mongoose.Types.ObjectId(proposalId);
     }
 
-    const [responses, total, unreadCount] = await Promise.all([
+    const [responses, total, unreadCount, filteredUnreadCount] = await Promise.all([
       VendorResponse.find(filter)
         .select(VENDOR_RESPONSE_SELECT)
         .sort({ createdAt: -1 })
@@ -93,8 +186,12 @@ export const mongoVendorResponseReadRepository: VendorResponseReadRepository = {
         isRead: false,
         ...tenantFilter(),
       }),
+      VendorResponse.countDocuments({
+        ...filter,
+        isRead: false,
+      }),
     ]);
-    return { responses, total, unreadCount };
+    return { responses, total, unreadCount, filteredUnreadCount };
   },
 
   markOwnedRead({ responseId, ownerUserId }) {

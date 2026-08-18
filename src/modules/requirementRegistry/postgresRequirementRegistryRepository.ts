@@ -12,6 +12,7 @@ import type { RequirementUpdate } from "./domain";
 import {
   generateCriteria,
   generateRequirements,
+  REQUIREMENT_GENERATOR_VERSION,
 } from "./generator";
 import type { RenderedParagraph } from "./generator";
 
@@ -121,7 +122,7 @@ const refreshValidationAndChecksum = async (client: PoolClient, setId: string) =
   });
   const contentChecksum = checksum({
     criteria: criteria.rows.map(({ id, criterion_key, name, description, weight, rubric, price_visibility, human_only, ordinal }) => ({ id, criterion_key, name, description, weight: Number(weight), rubric, price_visibility, human_only, ordinal })),
-    requirements: requirements.rows.map(({ id, requirement_key, kind, title, normalized_text, mandatory_status, mandatory_reviewed, eligibility, source_kind, source_locator, criterion_id, criterion_reviewed, importance, verification_method, group_key, parent_requirement_id, ordinal, provenance }) => ({ id, requirement_key, kind, title, normalized_text, mandatory_status, mandatory_reviewed, eligibility, source_kind, source_locator, criterion_id, criterion_reviewed, importance, verification_method, group_key, parent_requirement_id, ordinal, provenance })),
+    requirements: requirements.rows.map(({ id, requirement_key, kind, title, normalized_text, mandatory_status, mandatory_reviewed, eligibility, source_kind, source_locator, criterion_id, criterion_reviewed, importance, verification_method, included, inclusion_reviewed, group_key, parent_requirement_id, ordinal, provenance }) => ({ id, requirement_key, kind, title, normalized_text, mandatory_status, mandatory_reviewed, eligibility, source_kind, source_locator, criterion_id, criterion_reviewed, importance, verification_method, included, inclusion_reviewed, group_key, parent_requirement_id, ordinal, provenance })),
   });
   await client.query(
     "UPDATE rfpilot.requirement_sets SET validation=$2::jsonb,content_checksum=$3,updated_at=now() WHERE id=$1",
@@ -171,6 +172,7 @@ const view = async (
   const staleReasons: string[] = [];
   if (String(set.proposal_version) !== current.version) staleReasons.push("proposal_version_changed");
   if (String(set.proposal_checksum) !== current.checksum) staleReasons.push("proposal_content_changed");
+  if (String(set.generator_version) !== REQUIREMENT_GENERATOR_VERSION) staleReasons.push("requirement_policy_changed");
   return {
     set,
     matrix: criteria.rows.length ? {
@@ -213,14 +215,14 @@ export const requirementRegistryRepository = {
       const initialValidation = validateForApproval({
         weightsConfirmed: (current.proposal.budget as any)?.evaluationMatrixConfirmed === true,
         criteria: criteria.map((item) => ({ id: criterionIds.get(item.key)!, weight: item.weight })),
-        requirements: requirements.map(() => ({ mandatory_status: "pending", mandatory_reviewed: false, source_locator: {}, criterion_id: null, criterion_reviewed: false, verification_method: "pending" })),
+        requirements: requirements.map((item) => ({ included: true, inclusion_reviewed: false, normalized_text: item.text, mandatory_status: "pending", mandatory_reviewed: false, source_locator: item.sourceLocator, criterion_id: null, criterion_reviewed: false, verification_method: "pending" })),
       });
       await client.query(
         `INSERT INTO rfpilot.requirement_sets(
           id,organization_id,proposal_reference_id,version,proposal_version,proposal_checksum,
-          rendered_rfp_run_id,rendered_rfp_checksum,validation,content_checksum,idempotency_key,created_by_external_user_id
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12)`,
-        [setId, organizationId, proposalReferenceId, version, current.version, current.checksum, rendered.run?.id ?? null, rendered.run?.output_checksum ?? null, JSON.stringify(initialValidation), checksum({ criteria, requirements }), input.idempotencyKey, input.actorUserMongoId],
+          rendered_rfp_run_id,rendered_rfp_checksum,generator_version,validation,content_checksum,idempotency_key,created_by_external_user_id
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)`,
+        [setId, organizationId, proposalReferenceId, version, current.version, current.checksum, rendered.run?.id ?? null, rendered.run?.output_checksum ?? null, REQUIREMENT_GENERATOR_VERSION, JSON.stringify(initialValidation), checksum({ criteria, requirements }), input.idempotencyKey, input.actorUserMongoId],
       );
       const totalWeight = criteria.reduce((sum, item) => sum + item.weight, 0);
       await client.query(
@@ -232,9 +234,9 @@ export const requirementRegistryRepository = {
       for (const criterion of criteria) {
         await client.query(
           `INSERT INTO rfpilot.evaluation_criteria(
-            id,organization_id,matrix_version_id,criterion_key,name,description,weight,ordinal
-           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [criterionIds.get(criterion.key), organizationId, matrixId, criterion.key, criterion.name, criterion.description, criterion.weight, criterion.ordinal],
+            id,organization_id,matrix_version_id,criterion_key,name,description,weight,rubric,ordinal
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)`,
+          [criterionIds.get(criterion.key), organizationId, matrixId, criterion.key, criterion.name, criterion.description, criterion.weight, JSON.stringify(criterion.rubric), criterion.ordinal],
         );
       }
       for (const requirement of requirements) {
@@ -269,10 +271,11 @@ export const requirementRegistryRepository = {
       return result.rows.map((set) => ({
         ...set,
         freshness: {
-          stale: String(set.proposal_version) !== current.version || String(set.proposal_checksum) !== current.checksum,
+          stale: String(set.proposal_version) !== current.version || String(set.proposal_checksum) !== current.checksum || String(set.generator_version) !== REQUIREMENT_GENERATOR_VERSION,
           reasons: [
             ...(String(set.proposal_version) !== current.version ? ["proposal_version_changed"] : []),
             ...(String(set.proposal_checksum) !== current.checksum ? ["proposal_content_changed"] : []),
+            ...(String(set.generator_version) !== REQUIREMENT_GENERATOR_VERSION ? ["requirement_policy_changed"] : []),
           ],
         },
       }));
@@ -316,6 +319,7 @@ export const requirementRegistryRepository = {
         title: "title", text: "normalized_text", kind: "kind", mandatoryStatus: "mandatory_status",
         mandatoryReviewed: "mandatory_reviewed", eligibility: "eligibility", criterionId: "criterion_id",
         criterionReviewed: "criterion_reviewed", importance: "importance", verificationMethod: "verification_method",
+        included: "included", inclusionReviewed: "inclusion_reviewed",
       };
       for (const [key, column] of Object.entries(mapping) as Array<[keyof RequirementUpdate, string]>)
         if (Object.prototype.hasOwnProperty.call(input.update, key)) columns.push([column, input.update[key] ?? null]);

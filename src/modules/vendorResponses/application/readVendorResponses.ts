@@ -8,6 +8,34 @@ const positiveInteger = (value: string | undefined, fallback: number) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+export const createListOwnedVendorResponseProposals =
+  (repository: VendorResponseReadRepository) =>
+  async (input: {
+    ownerUserId: string;
+    query: { page?: string; limit?: string; search?: string };
+  }) => {
+    const page = positiveInteger(input.query.page, 1);
+    const limit = Math.min(50, positiveInteger(input.query.limit, 12));
+    const search = input.query.search?.trim().slice(0, 120) || undefined;
+    const result = await repository.listOwnedProposalSummaries({
+      ownerUserId: input.ownerUserId,
+      search,
+      page,
+      limit,
+    });
+    return {
+      proposals: result.proposals,
+      pagination: {
+        total: result.total,
+        page,
+        limit,
+        totalPages: Math.ceil(result.total / limit),
+      },
+      responseCount: result.responseCount,
+      unreadCount: result.unreadCount,
+    };
+  };
+
 // New vendor documents are stored privately, so owner-facing reads swap the
 // stored URL for a short-lived presigned GET URL. Legacy (public) URLs and
 // responses without documents pass through unchanged.
@@ -69,6 +97,7 @@ export const createListOwnedVendorResponses =
         totalPages: Math.ceil(result.total / limit),
       },
       unreadCount: result.unreadCount,
+      filteredUnreadCount: result.filteredUnreadCount,
     };
   };
 

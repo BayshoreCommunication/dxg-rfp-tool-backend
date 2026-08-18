@@ -5,9 +5,9 @@ import { withPostgresTransaction } from "../../../config/postgres";
 import VendorSubmission from "../../../modal/vendorSubmissionModel";
 import VendorSubmissionVersion from "../../../modal/vendorSubmissionVersionModel";
 import {
-  ASSESSMENT_VERSION, buildAssessments, buildRisks, calculateContribution, checksum,
+  aggregateCriterionScores, applyHumanReviews, ASSESSMENT_VERSION, buildAssessments, buildRisks, calculateContribution, checksum, coverageEligibility,
   COMMERCIAL_POLICY_VERSION, EvaluationEngineError, normalizeCommercial, RISK_POLICY_VERSION,
-  rubricMaximum, SCORING_POLICY_VERSION, type FactInput, type MappingInput,
+  rubricAnchors, rubricMaximum, SCORING_POLICY_VERSION, type FactInput, type MappingInput,
 } from "./domain";
 
 type Context = { organizationMongoId: string; actorUserMongoId: string; proposalMongoId: string; submissionMongoId: string; versionMongoId: string; correlationId: string };
@@ -66,20 +66,18 @@ export const evaluationEngineRepository = {
         : await client.query<any>("SELECT * FROM rfpilot.vendor_intelligence_runs WHERE proposal_reference_id=$1 AND vendor_submission_version_mongo_id=$2 AND status='succeeded' ORDER BY created_at DESC LIMIT 1", [proposalRow.id, input.versionMongoId]);
       const intelligence = intelligenceResult.rows[0];
       if (!intelligence) throw new EvaluationEngineError("INTELLIGENCE_RUN_NOT_READY", "Generate and review proposal intelligence before evaluation.", 409);
+      const coverage = coverageEligibility(Array.isArray(intelligence.warnings) ? intelligence.warnings : []);
+      if (!coverage.eligible) throw new EvaluationEngineError("INTELLIGENCE_COVERAGE_INCOMPLETE", `Resolve source coverage before evaluation: ${coverage.blockingCodes.join(", ")}.`, 409);
       const matrixResult = await client.query<any>(
         `SELECT m.* FROM rfpilot.evaluation_matrix_versions m JOIN rfpilot.requirement_sets s ON s.id=m.requirement_set_id
          WHERE m.requirement_set_id=$1 AND m.status='approved' AND m.weights_confirmed=true AND m.total_weight=100 AND s.status='approved'`, [intelligence.requirement_set_id],
       );
       const matrix = matrixResult.rows[0];
       if (!matrix) throw new EvaluationEngineError("SCORING_MATRIX_NOT_CONFIRMED", "A confirmed 100% evaluation matrix is required.", 409);
-      const existingRun = await client.query<any>("SELECT * FROM rfpilot.vendor_evaluation_runs WHERE intelligence_run_id=$1", [intelligence.id]);
-      if (existingRun.rows[0]) return { runId: existingRun.rows[0].id, created: false };
-      const stableKey = `vendor-evaluation:${intelligence.id}:${matrix.id}:${input.sealedPrice}:${SCORING_POLICY_VERSION}`;
-      const old = await client.query<any>("SELECT * FROM rfpilot.vendor_evaluation_runs WHERE organization_id=$1 AND idempotency_key=$2", [organizationId, stableKey]);
-      if (old.rows[0]) return { runId: old.rows[0].id, created: false };
       const mappingRows = await client.query<any>(
         `SELECT m.requirement_id,min(m.id::text)::uuid mapping_id,r.title,r.mandatory_status,r.eligibility,
                 min(m.relationship) relationship,min(m.confidence)::numeric confidence,
+                jsonb_agg(m.id ORDER BY m.ordinal) mapping_ids,
                 coalesce(jsonb_agg(m.evidence_fragment_id) FILTER(WHERE m.evidence_fragment_id IS NOT NULL),'[]') fragment_ids
          FROM rfpilot.requirement_evidence_mappings m JOIN rfpilot.requirements r ON r.id=m.requirement_id
          WHERE m.intelligence_run_id=$1 GROUP BY m.requirement_id,r.title,r.mandatory_status,r.eligibility,r.ordinal ORDER BY r.ordinal`, [intelligence.id],
@@ -88,17 +86,49 @@ export const evaluationEngineRepository = {
         `SELECT f.*,coalesce((SELECT jsonb_agg(e.evidence_fragment_id ORDER BY e.ordinal) FROM rfpilot.extracted_fact_evidence e WHERE e.fact_id=f.id),'[]') fragment_ids
          FROM rfpilot.extracted_facts f WHERE f.intelligence_run_id=$1 ORDER BY f.ordinal`, [intelligence.id],
       );
-      const mappings: MappingInput[] = mappingRows.rows.map((row) => ({ mappingId: row.mapping_id, requirementId: row.requirement_id, title: row.title, mandatory: row.mandatory_status === "mandatory", eligibility: row.eligibility === true, relationship: row.relationship, confidence: Number(row.confidence), fragmentIds: row.fragment_ids }));
-      const facts: FactInput[] = factRows.rows.map((row) => ({ factId: row.id, factKey: row.fact_key, family: row.family, factType: row.fact_type, statement: row.statement, valueKind: row.value_kind, normalizedValue: row.normalized_value, typedValue: row.typed_value, currency: row.currency, contradictionGroup: row.contradiction_group, fragmentIds: row.fragment_ids }));
+      const reviewRows = await client.query<any>(
+        `SELECT id review_id,target_type,target_id,decision,corrected_payload
+         FROM rfpilot.human_review_events WHERE intelligence_run_id=$1 ORDER BY created_at,id`,
+        [intelligence.id],
+      );
+      const reviewInputChecksum = checksum(reviewRows.rows.map((row) => ({
+        reviewId: row.review_id,
+        targetType: row.target_type,
+        targetId: row.target_id,
+        decision: row.decision,
+        correctedPayload: row.corrected_payload,
+      })));
+      const existingRun = await client.query<any>(
+        "SELECT * FROM rfpilot.vendor_evaluation_runs WHERE intelligence_run_id=$1 AND review_input_checksum=$2 AND scoring_policy_version=$3 ORDER BY created_at DESC LIMIT 1",
+        [intelligence.id, reviewInputChecksum, SCORING_POLICY_VERSION],
+      );
+      if (existingRun.rows[0]) return { runId: existingRun.rows[0].id, created: false };
+      const stableKey = `vendor-evaluation:${intelligence.id}:${matrix.id}:${input.sealedPrice}:${reviewInputChecksum}:${SCORING_POLICY_VERSION}`;
+      const old = await client.query<any>("SELECT * FROM rfpilot.vendor_evaluation_runs WHERE organization_id=$1 AND idempotency_key=$2", [organizationId, stableKey]);
+      if (old.rows[0]) return { runId: old.rows[0].id, created: false };
+      const rawMappings: MappingInput[] = mappingRows.rows.map((row) => ({ mappingId: row.mapping_id, mappingTargetIds: row.mapping_ids, requirementId: row.requirement_id, title: row.title, mandatory: row.mandatory_status === "mandatory", eligibility: row.eligibility === true, relationship: row.relationship, confidence: Number(row.confidence), fragmentIds: row.fragment_ids }));
+      const rawFacts: FactInput[] = factRows.rows.map((row) => ({ factId: row.id, factKey: row.fact_key, family: row.family, factType: row.fact_type, statement: row.statement, valueKind: row.value_kind, normalizedValue: row.normalized_value, typedValue: row.typed_value, currency: row.currency, contradictionGroup: row.contradiction_group, fragmentIds: row.fragment_ids }));
+      const effective = applyHumanReviews({
+        mappings: rawMappings,
+        facts: rawFacts,
+        reviews: reviewRows.rows.map((row) => ({
+          reviewId: row.review_id,
+          targetType: row.target_type,
+          targetId: row.target_id,
+          decision: row.decision,
+          correctedPayload: row.corrected_payload,
+        })),
+      });
+      const mappings = effective.mappings, facts = effective.facts;
       if (!mappings.length) throw new EvaluationEngineError("ASSESSMENT_COVERAGE_EMPTY", "No requirement mappings are available for evaluation.", 409);
       const assessments = buildAssessments(mappings), risks = buildRisks(mappings, facts), commercial = normalizeCommercial(facts);
       if (!commercial.comparable) risks.push({ category: "commercial_non_comparable", severity: "high", title: "Commercial response is not deterministically comparable", basis: `Normalization was refused: ${commercial.refusalCodes.join(", ")}.`, requirementId: null, factId: commercial.totalFactId, fragmentIds: [], question: "Please provide one authoritative, all-inclusive submitted total in a single currency and identify all options or exclusions." });
-      const outputChecksum = checksum({ assessments, risks, commercial, matrix: matrix.content_checksum, policies: [ASSESSMENT_VERSION, RISK_POLICY_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION] });
+      const outputChecksum = checksum({ assessments, risks, commercial, reviewInputChecksum, matrix: matrix.content_checksum, policies: [ASSESSMENT_VERSION, RISK_POLICY_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION] });
       const runId = uuidv7();
       await client.query(
-        `INSERT INTO rfpilot.vendor_evaluation_runs(id,organization_id,proposal_reference_id,requirement_set_id,matrix_version_id,intelligence_run_id,vendor_submission_mongo_id,vendor_submission_version_mongo_id,sealed_price,requirement_checksum,intelligence_checksum,output_checksum,assessment_count,risk_count,question_count,idempotency_key,created_by_external_user_id,correlation_id)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
-        [runId, organizationId, proposalRow.id, intelligence.requirement_set_id, matrix.id, intelligence.id, input.submissionMongoId, input.versionMongoId, input.sealedPrice, matrix.content_checksum, intelligence.output_checksum, outputChecksum, assessments.length, risks.length, risks.length, stableKey, input.actorUserMongoId, input.correlationId],
+        `INSERT INTO rfpilot.vendor_evaluation_runs(id,organization_id,proposal_reference_id,requirement_set_id,matrix_version_id,intelligence_run_id,vendor_submission_mongo_id,vendor_submission_version_mongo_id,sealed_price,assessment_version,risk_policy_version,commercial_policy_version,scoring_policy_version,review_input_checksum,requirement_checksum,intelligence_checksum,output_checksum,assessment_count,risk_count,question_count,idempotency_key,created_by_external_user_id,correlation_id)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+        [runId, organizationId, proposalRow.id, intelligence.requirement_set_id, matrix.id, intelligence.id, input.submissionMongoId, input.versionMongoId, input.sealedPrice, ASSESSMENT_VERSION, RISK_POLICY_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION, reviewInputChecksum, matrix.content_checksum, intelligence.output_checksum, outputChecksum, assessments.length, risks.length, risks.length, stableKey, input.actorUserMongoId, input.correlationId],
       );
       const assessmentIds = new Map<string, string>();
       for (const assessment of assessments) {
@@ -161,7 +191,7 @@ export const evaluationEngineRepository = {
       const canViewCommercial = !run.sealed_price || priceEvent.rows[0]?.decision === "granted";
       const scopedAssignmentId = permission.owner ? null : assignment?.id ?? null;
       const criteria = await client.query<any>(
-        `SELECT c.*,coalesce((SELECT jsonb_agg(r.id ORDER BY r.ordinal) FROM rfpilot.requirements r WHERE r.criterion_id=c.id),'[]') requirement_ids
+        `SELECT c.*,coalesce((SELECT jsonb_agg(r.id ORDER BY r.ordinal) FROM rfpilot.requirements r WHERE r.criterion_id=c.id AND r.included=true),'[]') requirement_ids
          FROM rfpilot.evaluation_criteria c WHERE c.matrix_version_id=$1
            AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM rfpilot.evaluation_assignment_criteria ac WHERE ac.assignment_id=$2 AND ac.criterion_id=c.id))
          ORDER BY c.ordinal`, [run.matrix_version_id, scopedAssignmentId],
@@ -195,11 +225,10 @@ export const evaluationEngineRepository = {
         `SELECT DISTINCT ON (assignment_id,criterion_id) * FROM rfpilot.evaluator_score_events
          WHERE evaluation_run_id=$1 ORDER BY assignment_id,criterion_id,created_at DESC,id DESC`, [run.id],
       );
-      const criterionAggregates = criteria.rows.map((criterion) => {
-        const submitted = scores.rows.filter((row) => row.criterion_id === criterion.id && ["submitted", "superseded"].includes(row.event_type));
-        const values = submitted.map((row) => Number(row.score));
-        const contributions = submitted.map((row) => Number(row.weighted_contribution));
-        return { criterionId: criterion.id, submittedCount: values.length, assignedCount: assignments.rows.filter((row) => row.criterion_ids.includes(criterion.id)).length, mean: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null, minimum: values.length ? Math.min(...values) : null, maximum: values.length ? Math.max(...values) : null, spread: values.length ? Math.max(...values) - Math.min(...values) : null, meanWeightedContribution: contributions.length ? contributions.reduce((sum, value) => sum + value, 0) / contributions.length : null };
+      const criterionAggregates = aggregateCriterionScores({
+        criterionIds: criteria.rows.map((criterion) => criterion.id),
+        assignments: assignments.rows.map((row) => ({ assignmentId: row.id, role: row.role, conflictStatus: row.conflict_status, criterionIds: row.criterion_ids })),
+        scores: scores.rows.map((row) => ({ assignmentId: row.assignment_id, criterionId: row.criterion_id, eventType: row.event_type, score: Number(row.score), weightedContribution: Number(row.weighted_contribution) })),
       });
       const commercial = canViewCommercial ? await client.query<any>(
         `SELECT s.*,n.comparable,n.normalized_total,n.currency normalized_currency,n.arithmetic_status,n.assumptions,n.refusal_codes,n.policy_version,
@@ -209,14 +238,14 @@ export const evaluationEngineRepository = {
       return {
         run: { runId: run.id, status: run.status, sealedPrice: run.sealed_price, assessmentCount: run.assessment_count, riskCount: run.risk_count, questionCount: run.question_count, scoringPolicyVersion: run.scoring_policy_version, createdAt: run.created_at },
         permission: { owner: permission.owner, assigned: Boolean(assignment), canViewCommercial },
-        assignment: assignment ? (() => { const criterionIds = assignments.rows.find((row) => row.id === assignment.id)?.criterion_ids ?? []; const currentScores = scores.rows.filter((row) => row.assignment_id === assignment.id && ["submitted", "superseded"].includes(row.event_type)); const complete = assignment.conflict_status === "clear" && currentScores.length === criterionIds.length; return { assignmentId: assignment.id, role: assignment.role, conflictStatus: assignment.conflict_status, conflictNote: assignment.conflict_note, status: assignment.status, version: assignment.version, criterionIds, complete, overallScore: complete ? currentScores.reduce((sum, row) => sum + Number(row.weighted_contribution), 0) : null }; })() : null,
-        criteria: criteria.rows.map((row) => ({ criterionId: row.id, key: row.criterion_key, name: row.name, description: row.description, weight: Number(row.weight), rubricMaximum: rubricMaximum(row.rubric), priceVisibility: row.price_visibility, humanOnly: row.human_only, requirementIds: row.requirement_ids })),
+        assignment: assignment ? (() => { const criterionIds = assignments.rows.find((row) => row.id === assignment.id)?.criterion_ids ?? []; const currentScores = scores.rows.filter((row) => row.assignment_id === assignment.id && ["submitted", "superseded"].includes(row.event_type)); const complete = assignment.role !== "observer" && assignment.conflict_status === "clear" && currentScores.length === criterionIds.length; return { assignmentId: assignment.id, role: assignment.role, conflictStatus: assignment.conflict_status, conflictNote: assignment.conflict_note, status: assignment.status, version: assignment.version, criterionIds, complete, overallScore: complete ? currentScores.reduce((sum, row) => sum + Number(row.weighted_contribution), 0) : null }; })() : null,
+        criteria: criteria.rows.map((row) => ({ criterionId: row.id, key: row.criterion_key, name: row.name, description: row.description, weight: Number(row.weight), rubricMaximum: rubricMaximum(row.rubric), rubricAnchors: rubricAnchors(row.rubric), priceVisibility: row.price_visibility, humanOnly: row.human_only, requirementIds: row.requirement_ids })),
         assessments: assessments.rows.map((row) => ({ assessmentId: row.id, requirementId: row.requirement_id, requirementTitle: row.requirement_title, mandatory: row.mandatory_status === "mandatory", eligibility: row.eligibility, verdict: row.verdict, rationale: row.rationale, confidence: Number(row.confidence), needsHumanReview: row.needs_human_review, reviewReasons: row.review_reasons, evidence: row.evidence })),
         risks: risks.rows.map((row) => ({ riskId: row.id, category: row.category, severity: row.severity, title: row.title, basis: row.basis, question: row.question, evidence: row.evidence })),
         commercial: commercial.rows[0] ? { submittedTotal: commercial.rows[0].submitted_total === null ? null : Number(commercial.rows[0].submitted_total), submittedCurrency: commercial.rows[0].submitted_currency, comparable: commercial.rows[0].comparable, normalizedTotal: commercial.rows[0].normalized_total === null ? null : Number(commercial.rows[0].normalized_total), normalizedCurrency: commercial.rows[0].normalized_currency, arithmeticStatus: commercial.rows[0].arithmetic_status, assumptions: commercial.rows[0].assumptions, refusalCodes: commercial.rows[0].refusal_codes, policyVersion: commercial.rows[0].policy_version, lineItems: commercial.rows[0].line_items } : null,
         scores: scores.rows.filter((row) => permission.owner || row.assignment_id === assignment?.id).map((row) => ({ eventId: row.id, assignmentId: row.assignment_id, criterionId: row.criterion_id, eventType: row.event_type, score: row.score === null ? null : Number(row.score), rubricMaximum: Number(row.rubric_maximum), criterionWeight: Number(row.criterion_weight), weightedContribution: row.weighted_contribution === null ? null : Number(row.weighted_contribution), rationale: row.rationale, evidenceFragmentIds: row.evidence_fragment_ids, createdAt: row.created_at })),
         aggregates: permission.owner ? criterionAggregates : [],
-        assignments: permission.owner ? assignments.rows.map((row) => { const currentScores = scores.rows.filter((score) => score.assignment_id === row.id && ["submitted", "superseded"].includes(score.event_type)); const complete = row.conflict_status === "clear" && currentScores.length === row.criterion_ids.length; return { assignmentId: row.id, evaluatorUserId: row.evaluator_external_user_id, role: row.role, conflictStatus: row.conflict_status, status: row.status, criterionIds: row.criterion_ids, commercialAccess: row.commercial_access, complete, overallScore: complete ? currentScores.reduce((sum, score) => sum + Number(score.weighted_contribution), 0) : null }; }) : [],
+        assignments: permission.owner ? assignments.rows.map((row) => { const currentScores = scores.rows.filter((score) => score.assignment_id === row.id && ["submitted", "superseded"].includes(score.event_type)); const complete = row.role !== "observer" && row.conflict_status === "clear" && currentScores.length === row.criterion_ids.length; return { assignmentId: row.id, evaluatorUserId: row.evaluator_external_user_id, role: row.role, conflictStatus: row.conflict_status, status: row.status, criterionIds: row.criterion_ids, commercialAccess: row.commercial_access, complete, overallScore: complete ? currentScores.reduce((sum, score) => sum + Number(score.weighted_contribution), 0) : null }; }) : [],
       };
     });
   },
@@ -262,6 +291,7 @@ export const evaluationEngineRepository = {
       const organizationId = await tenant(client, input.organizationMongoId), proposalRow = await proposal(client, input.proposalMongoId), run = await latestRun(client, proposalRow.id, input.versionMongoId, input.runId);
       const assignment = await client.query<any>("SELECT * FROM rfpilot.evaluation_assignments WHERE evaluation_run_id=$1 AND evaluator_external_user_id=$2 FOR UPDATE", [run.id, input.actorUserMongoId]);
       if (!assignment.rows[0]) throw new EvaluationEngineError("EVALUATION_ACCESS_DENIED", "You are not assigned to score this evaluation.", 403);
+      if (assignment.rows[0].role === "observer") throw new EvaluationEngineError("OBSERVER_SCORING_FORBIDDEN", "Observer assignments are read-only.", 403);
       if (input.eventType === "submitted" && assignment.rows[0].conflict_status !== "clear") throw new EvaluationEngineError("CONFLICT_DECLARATION_REQUIRED", "Declare your conflict-of-interest status before submitting.", 409);
       if (input.eventType !== "draft" && !input.rationale.trim()) throw new EvaluationEngineError("SCORE_RATIONALE_REQUIRED", "Submitted scores require a rationale.");
       const criterion = await client.query<any>(

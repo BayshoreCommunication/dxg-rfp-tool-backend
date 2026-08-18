@@ -1,4 +1,22 @@
 export interface VendorResponseReadRepository {
+  listOwnedProposalSummaries(input: {
+    ownerUserId: string;
+    search?: string;
+    page: number;
+    limit: number;
+  }): Promise<{
+    proposals: Array<{
+      proposalId: string;
+      proposalTitle: string;
+      responseCount: number;
+      unreadCount: number;
+      latestResponseAt: string;
+      latestVendorName: string;
+    }>;
+    total: number;
+    responseCount: number;
+    unreadCount: number;
+  }>;
   listOwned(input: {
     ownerUserId: string;
     unreadOnly: boolean;
@@ -10,6 +28,7 @@ export interface VendorResponseReadRepository {
     responses: Record<string, unknown>[];
     total: number;
     unreadCount: number;
+    filteredUnreadCount: number;
   }>;
   markOwnedRead(input: {
     responseId: string;

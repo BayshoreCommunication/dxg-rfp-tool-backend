@@ -6,6 +6,7 @@ import {
   getVendorSubmissionReceipt,
   getOwnedVendorSubmissionDetail,
   getOwnedVendorResponse,
+  listOwnedVendorResponseProposals,
   listOwnedVendorResponses,
   submitPublicVendorResponse,
 } from "../src/modules/vendorResponses/composition";
@@ -269,6 +270,16 @@ export const getVendorResponses = async (
     }
 
     const { page, limit, unreadOnly, proposalId, campaignId } = req.query;
+    if (
+      (typeof proposalId === "string" && !mongoose.isValidObjectId(proposalId)) ||
+      (typeof campaignId === "string" && !mongoose.isValidObjectId(campaignId))
+    ) {
+      res.status(400).json({
+        success: false,
+        message: "Invalid vendor response filter",
+      });
+      return;
+    }
     const result = await listOwnedVendorResponses({
       ownerUserId: userId,
       query: {
@@ -291,12 +302,52 @@ export const getVendorResponses = async (
       data: result.responses,
       pagination: result.pagination,
       unreadCount: result.unreadCount,
+      filteredUnreadCount: result.filteredUnreadCount,
     });
   } catch (error) {
     console.error("Get vendor responses error:", error);
     res.status(500).json({
       success: false,
       message: "Error fetching vendor responses",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+export const getVendorResponseProposals = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      res
+        .status(401)
+        .json({ success: false, message: "Authentication required" });
+      return;
+    }
+
+    const { page, limit, search } = req.query;
+    const result = await listOwnedVendorResponseProposals({
+      ownerUserId: userId,
+      query: {
+        page: typeof page === "string" ? page : undefined,
+        limit: typeof limit === "string" ? limit : undefined,
+        search: typeof search === "string" ? search : undefined,
+      },
+    });
+    res.status(200).json({
+      success: true,
+      data: result.proposals,
+      pagination: result.pagination,
+      responseCount: result.responseCount,
+      unreadCount: result.unreadCount,
+    });
+  } catch (error) {
+    console.error("Get vendor response proposals error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching vendor response proposals",
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }

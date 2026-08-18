@@ -2,8 +2,8 @@ import crypto from "node:crypto";
 
 export const MAPPING_VERSION = "requirement-mapping.v1";
 export const FACT_VERSION = "vendor-fact.v3";
-export const VALIDATION_VERSION = "mapping-fact-validation.v5";
-export const PROMPT_VERSION = "vendor-intelligence-prompt.v3";
+export const VALIDATION_VERSION = "mapping-fact-validation.v7";
+export const PROMPT_VERSION = "vendor-intelligence-prompt.v4";
 export const MAX_FACTS_PER_CHUNK = 24;
 
 export const factFamilies = [
@@ -76,6 +76,54 @@ export class VendorIntelligenceError extends Error {
     public readonly retryable = false,
   ) { super(message); }
 }
+
+export type SourceCoverageInput = {
+  status: string;
+  sourceLabel: string;
+  warnings: Array<{ code?: unknown; message?: unknown; locator?: unknown }>;
+};
+
+export type IntelligenceCoverageWarning = {
+  code: string;
+  message: string;
+  sourceLabel?: string;
+  locator?: Record<string, unknown>;
+  availableFragments?: number;
+  usedFragments?: number;
+};
+
+export const sourceCoverageWarnings = (
+  sources: SourceCoverageInput[],
+  availableFragments: number,
+  usedFragments: number,
+): IntelligenceCoverageWarning[] => {
+  const warnings: IntelligenceCoverageWarning[] = [];
+  for (const source of sources) {
+    if (source.status === "partial") {
+      for (const warning of source.warnings) {
+        const code = String(warning.code ?? "SOURCE_COVERAGE_INCOMPLETE");
+        warnings.push({
+          code,
+          message: String(warning.message ?? "Some source content could not be extracted."),
+          sourceLabel: source.sourceLabel,
+          ...(warning.locator && typeof warning.locator === "object" ? { locator: warning.locator as Record<string, unknown> } : {}),
+        });
+      }
+      warnings.push({ code: "SOURCE_COVERAGE_INCOMPLETE", message: "This source was only partially readable.", sourceLabel: source.sourceLabel });
+    } else if (!["succeeded"].includes(source.status)) {
+      warnings.push({ code: "SOURCE_UNAVAILABLE", message: "This source was not available to proposal intelligence.", sourceLabel: source.sourceLabel });
+    }
+  }
+  if (availableFragments > usedFragments) warnings.push({
+    code: "EVIDENCE_COVERAGE_BOUNDED",
+    message: "The run used a bounded source-fair evidence sample rather than all extracted fragments.",
+    availableFragments,
+    usedFragments,
+  });
+  return warnings.filter((warning, index, all) => all.findIndex((candidate) =>
+    candidate.code === warning.code && candidate.sourceLabel === warning.sourceLabel,
+  ) === index);
+};
 
 const FACT_KEY = /^[a-z][a-z0-9_.:-]{0,149}$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -166,6 +214,56 @@ export const validateFacts = (output: ProviderFactOutput, allowedFragments: Set<
   return validated.filter((fact): fact is ValidatedFact => fact !== null);
 };
 
+const numberWords = new Map([
+  [0, "zero"], [1, "one"], [2, "two"], [3, "three"], [4, "four"], [5, "five"],
+  [6, "six"], [7, "seven"], [8, "eight"], [9, "nine"], [10, "ten"], [11, "eleven"],
+  [12, "twelve"], [13, "thirteen"], [14, "fourteen"], [15, "fifteen"], [16, "sixteen"],
+  [17, "seventeen"], [18, "eighteen"], [19, "nineteen"], [20, "twenty"],
+]);
+const containsNumber = (content: string, expected: number) => {
+  const values = content.match(/[-+]?\d[\d,]*(?:\.\d+)?/g) ?? [];
+  if (values.some((value) => Number(value.replace(/,/g, "")) === expected)) return true;
+  const word = numberWords.get(expected);
+  return word ? new RegExp(`\\b${word}\\b`, "i").test(content) : false;
+};
+
+const meaningfulTokens = (value: string) => value.toLocaleLowerCase().normalize("NFKC")
+  .match(/[a-z0-9]{3,}/g)?.filter((token) => !new Set(["and", "the", "with", "from", "this", "that", "will", "for"]).has(token)) ?? [];
+
+const containsTypedValue = (fact: ValidatedFact, content: string) => {
+  if (["number", "money", "quantity"].includes(fact.valueKind))
+    return containsNumber(content, Number(fact.typedValue.number));
+  if (fact.valueKind === "boolean") {
+    const expected = fact.typedValue.boolean === true ? /\b(?:yes|true|required|included|provided)\b/i : /\b(?:no|false|excluded)\b|\bnot\s+(?:required|included|provided)\b/i;
+    return expected.test(content);
+  }
+  const tokens = meaningfulTokens(fact.normalizedValue);
+  if (!tokens.length) return false;
+  const available = new Set(meaningfulTokens(content));
+  const matches = tokens.filter((token) => available.has(token)).length;
+  return matches >= Math.min(2, tokens.length) && matches / tokens.length >= 0.5;
+};
+
+const semanticTypeGrounded = (fact: ValidatedFact, content: string) => {
+  if (fact.factType === "organization_size")
+    return /\b(?:employees?|staff(?:ing)?|team\s+(?:of|size)|headcount|organization\s+size)\b/i.test(content) && /\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|hundred|thousand)\b/i.test(content);
+  if (fact.factType === "client_reference")
+    return /\b(?:client\s+reference|reference\s+contact|past\s+client|reference\s+project|project\s+reference)\b/i.test(content);
+  return true;
+};
+
+export const validateGroundedFacts = (facts: ValidatedFact[], evidenceContent: Map<string, string>) => {
+  for (const fact of facts) {
+    if (fact.explicitness !== "explicit") continue;
+    const citedContent = fact.citations
+      .filter((citation) => citation.role !== "context")
+      .map((citation) => evidenceContent.get(citation.fragmentId) ?? "");
+    if (!citedContent.some((content) => containsTypedValue(fact, content) && semanticTypeGrounded(fact, content)))
+      throw new VendorIntelligenceError("CITATION_GROUNDING_FAILED", "An explicit fact is not grounded by both its typed value and semantic fact type in the cited vendor text.");
+  }
+  return facts;
+};
+
 export const validateMappings = (
   output: ProviderMappingOutput,
   allowedRequirements: Set<string>,
@@ -209,6 +307,49 @@ export const assignContradictionGroups = <T extends { factKey: string; normalize
       ? `contradiction:${crypto.createHash("sha256").update(fact.factKey).digest("hex").slice(0, 16)}`
       : null,
   }));
+};
+
+export const validateFactCorrectionPayload = (
+  valueKind: string,
+  payload: Record<string, unknown> | null,
+) => {
+  const normalizedValue = typeof payload?.normalizedValue === "string"
+    ? payload.normalizedValue.trim()
+    : "";
+  const candidate = payload?.typedValue;
+  if (
+    !normalizedValue
+    || normalizedValue.length > 2000
+    || !candidate
+    || typeof candidate !== "object"
+    || Array.isArray(candidate)
+  ) throw new VendorIntelligenceError("REVIEW_CORRECTION_INVALID", "The reviewed fact correction is invalid.", 409);
+  const typedValue = candidate as Record<string, unknown>;
+  if (![
+    "string", "number", "boolean", "money", "date", "date_range",
+    "duration", "quantity", "list", "unknown",
+  ].includes(valueKind) || typedValue.kind !== valueKind)
+    throw new VendorIntelligenceError("REVIEW_CORRECTION_INVALID", "The reviewed fact correction does not match the extracted fact type.", 409);
+  const numeric = Number(typedValue.number);
+  if (["number", "money", "quantity"].includes(valueKind) && !Number.isFinite(numeric))
+    throw new VendorIntelligenceError("REVIEW_CORRECTION_INVALID", "The reviewed numeric correction is invalid.", 409);
+  if (valueKind === "money" && (typeof typedValue.currency !== "string" || !/^[A-Z]{3}$/.test(typedValue.currency)))
+    throw new VendorIntelligenceError("REVIEW_CORRECTION_INVALID", "The reviewed money correction requires an ISO currency.", 409);
+  if (valueKind === "boolean" && typeof typedValue.boolean !== "boolean")
+    throw new VendorIntelligenceError("REVIEW_CORRECTION_INVALID", "The reviewed boolean correction is invalid.", 409);
+  if (valueKind === "list" && (
+    !Array.isArray(typedValue.list)
+    || typedValue.list.length === 0
+    || typedValue.list.length > 30
+    || typedValue.list.some((item) => typeof item !== "string" || !item.trim() || item.length > 300)
+  )) throw new VendorIntelligenceError("REVIEW_CORRECTION_INVALID", "The reviewed list correction is invalid.", 409);
+  if (["string", "date", "date_range", "duration"].includes(valueKind) && (typeof typedValue.text !== "string" || !typedValue.text.trim()))
+    throw new VendorIntelligenceError("REVIEW_CORRECTION_INVALID", "The reviewed text correction is invalid.", 409);
+  return {
+    normalizedValue,
+    typedValue,
+    currency: valueKind === "money" ? String(typedValue.currency) : null,
+  };
 };
 
 export const contentChecksum = (value: unknown): string =>

@@ -107,3 +107,11 @@ test("evidence migration enforces RLS, immutable output, checksums, and untruste
   assert.match(sql, /source_extraction_document_tenant_fk/);
   assert.match(sql, /FOREIGN KEY \(organization_id,evidence_table_id\)/);
 });
+
+test("repository retries incomplete extraction but reuses completed extraction and reads only current source attempts", () => {
+  const repository = fs.readFileSync(path.join(__dirname, "../src/modules/evidenceExtraction/postgresEvidenceExtractionRepository.ts"), "utf8");
+  assert.match(repository, /status='succeeded'/);
+  assert.doesNotMatch(repository, /status IN \('succeeded','partial'\)/);
+  assert.match(repository, /DISTINCT ON \(source_kind,coalesce\(vendor_document_id::text,'cover_message'\)\)/);
+  assert.match(repository, /request:/);
+});

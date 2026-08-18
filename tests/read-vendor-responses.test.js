@@ -1,10 +1,69 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const fs = require("node:fs");
+const path = require("node:path");
 const {
   createGetOwnedVendorSubmissionDetail,
   createGetOwnedVendorResponse,
+  createListOwnedVendorResponseProposals,
   createListOwnedVendorResponses,
 } = require("../src/modules/vendorResponses/application/readVendorResponses");
+
+test("proposal summary aggregation uses object identifiers for tenant matching", () => {
+  const source = fs.readFileSync(
+    path.join(
+      __dirname,
+      "../src/modules/vendorResponses/infrastructure/mongo/mongoVendorResponseReadRepository.ts",
+    ),
+    "utf8",
+  );
+  assert.match(source, /organizationId:\s*tenantObjectId\(\)/);
+});
+
+test("vendor-response proposal summaries normalize paging and preserve complete counts", async () => {
+  let repositoryInput;
+  const list = createListOwnedVendorResponseProposals({
+    listOwnedProposalSummaries: async (input) => {
+      repositoryInput = input;
+      return {
+        proposals: [
+          {
+            proposalId: "proposal-001",
+            proposalTitle: "Annual Summit",
+            responseCount: 4,
+            unreadCount: 2,
+            latestResponseAt: "2026-08-16T10:00:00.000Z",
+            latestVendorName: "Apex Events",
+          },
+        ],
+        total: 13,
+        responseCount: 45,
+        unreadCount: 7,
+      };
+    },
+  });
+
+  const result = await list({
+    ownerUserId: "planner-001",
+    query: { page: "2", limit: "500", search: `  ${"x".repeat(150)}  ` },
+  });
+
+  assert.deepEqual(repositoryInput, {
+    ownerUserId: "planner-001",
+    search: "x".repeat(120),
+    page: 2,
+    limit: 50,
+  });
+  assert.deepEqual(result.pagination, {
+    total: 13,
+    page: 2,
+    limit: 50,
+    totalPages: 1,
+  });
+  assert.equal(result.responseCount, 45);
+  assert.equal(result.unreadCount, 7);
+  assert.equal(result.proposals[0].responseCount, 4);
+});
 
 test("vendor-response list normalizes filters and carries planner ownership", async () => {
   let repositoryInput;
@@ -15,6 +74,7 @@ test("vendor-response list normalizes filters and carries planner ownership", as
         responses: [{ _id: "response-001" }],
         total: 45,
         unreadCount: 3,
+        filteredUnreadCount: 2,
       };
     },
   });
@@ -45,6 +105,7 @@ test("vendor-response list normalizes filters and carries planner ownership", as
     totalPages: 1,
   });
   assert.equal(result.unreadCount, 3);
+  assert.equal(result.filteredUnreadCount, 2);
 });
 
 test("invalid vendor-response paging uses safe defaults", async () => {
@@ -52,7 +113,12 @@ test("invalid vendor-response paging uses safe defaults", async () => {
   const list = createListOwnedVendorResponses({
     listOwned: async (input) => {
       repositoryInput = input;
-      return { responses: [], total: 0, unreadCount: 0 };
+      return {
+        responses: [],
+        total: 0,
+        unreadCount: 0,
+        filteredUnreadCount: 0,
+      };
     },
   });
 
@@ -94,6 +160,7 @@ test("private document urls are presigned while legacy urls pass through", async
         ],
         total: 1,
         unreadCount: 0,
+        filteredUnreadCount: 0,
       }),
     },
     signer,

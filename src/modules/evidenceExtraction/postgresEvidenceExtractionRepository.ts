@@ -138,16 +138,25 @@ export const evidenceExtractionRepository = {
       }
       const runs: Array<any> = [];
       for (const source of sources) {
-        const stableKey = `evidence:${input.versionMongoId}:${source.kind}:${source.documentId || "message"}:${source.sourceChecksum}:${EXTRACTION_POLICY_VERSION}`;
-        const existing = await client.query<any>(
+        const sourceKey = `evidence:${input.versionMongoId}:${source.kind}:${source.documentId || "message"}:${source.sourceChecksum}:${EXTRACTION_POLICY_VERSION}`;
+        const stableKey = `${sourceKey}:request:${input.idempotencyKey}`;
+        const priorRequest = await client.query<any>(
           "SELECT * FROM rfpilot.source_extraction_runs WHERE organization_id=$1 AND idempotency_key=$2",
           [organizationId, stableKey],
         );
-        if (existing.rows[0]) { runs.push(rowView(existing.rows[0])); continue; }
+        if (priorRequest.rows[0]) { runs.push(rowView(priorRequest.rows[0])); continue; }
+        const existing = await client.query<any>(
+          `SELECT * FROM rfpilot.source_extraction_runs
+           WHERE organization_id=$1 AND vendor_submission_version_mongo_id=$2 AND source_kind=$3
+             AND coalesce(vendor_document_id::text,'cover_message')=$4 AND source_checksum=$5 AND policy_version=$6
+           ORDER BY created_at DESC,id DESC LIMIT 1`,
+          [organizationId, input.versionMongoId, source.kind, source.documentId || "cover_message", source.sourceChecksum, EXTRACTION_POLICY_VERSION],
+        );
+        if (existing.rows[0] && ["queued", "running", "succeeded"].includes(existing.rows[0].status)) { runs.push(rowView(existing.rows[0])); continue; }
         const reusable = await client.query<any>(
           `SELECT * FROM rfpilot.source_extraction_runs
            WHERE organization_id=$1 AND source_checksum=$2 AND mime_type=$3 AND policy_version=$4
-             AND status IN ('succeeded','partial')
+             AND status='succeeded'
            ORDER BY completed_at DESC NULLS LAST LIMIT 1`,
           [organizationId, source.sourceChecksum, source.mimeType, EXTRACTION_POLICY_VERSION],
         );
@@ -316,9 +325,10 @@ export const evidenceExtractionRepository = {
       await tenant(client, input.organizationMongoId);
       await ownedProposal(client, input.proposalMongoId, input.actorUserMongoId);
       const result = await client.query<any>(
-        `SELECT * FROM rfpilot.source_extraction_runs
+        `SELECT DISTINCT ON (source_kind,coalesce(vendor_document_id::text,'cover_message')) *
+         FROM rfpilot.source_extraction_runs
          WHERE vendor_submission_mongo_id=$1 AND vendor_submission_version_mongo_id=$2
-         ORDER BY created_at,source_label`,
+         ORDER BY source_kind,coalesce(vendor_document_id::text,'cover_message'),created_at DESC,id DESC`,
         [input.submissionMongoId, input.versionMongoId],
       );
       const runs = [];
