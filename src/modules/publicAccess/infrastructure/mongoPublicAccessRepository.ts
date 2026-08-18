@@ -10,9 +10,11 @@ export const mongoPublicAccessRepository: PublicAccessRepository = {
     const grant = await PublicAccessGrant.create({ ...input, resourceType: "proposal", policyVersion: "public-access.v1" });
     return { id: String(grant._id) };
   },
-  async consume(tokenHash, purpose, resourceId, now) {
+  async consume(tokenHash, purpose, resourceId, now, recipientHash) {
+    if (purpose === "vendor:submit" && recipientHash === undefined) return null;
     const grant = await PublicAccessGrant.findOneAndUpdate({
       tokenHash, purpose, resourceId, revokedAt: null, expiresAt: { $gt: now },
+      ...(recipientHash ? { recipientHash } : {}),
       $expr: { $or: [{ $eq: ["$maxUses", null] }, { $lt: ["$useCount", "$maxUses"] }] },
     }, { $inc: { useCount: 1 }, $set: { lastUsedAt: now } }, { new: true }).select("+tokenHash").lean();
     return grant ? {

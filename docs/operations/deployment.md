@@ -8,18 +8,16 @@
 ```mermaid
 flowchart LR
     DEV[Developer branch<br/>off ai-agent] --> PR[PR / merge to ai-agent]
-    PR --> MAIN[Merge ai-agent → main<br/>= staging release]
-    MAIN --> CI1[GitHub Actions<br/>Deploy to AWS]
+    PR --> MAIN[Merge ai-agent → main<br/>CI only, no deploy]
+    MAIN --> PROMOTE[git checkout production<br/>git merge --ff-only main<br/>git push]
+    PROMOTE --> CI1[GitHub Actions<br/>Deploy to AWS]
     CI1 --> QG[Quality gates<br/>contracts, lint, types,<br/>migration check, 621 tests, build,<br/>cdk synth --strict + cdk-nag]
     QG --> IMG[Docker build<br/>+ Trivy scan]
     IMG --> ECR[Push immutable<br/>sha-&lt;commit&gt; to ECR]
     ECR --> MIG[One-off migrate task<br/>NEW image, services still old]
     MIG --> CDK[cdk deploy App + Observability<br/>--exclusively]
     CDK --> SMOKE[Smoke checks<br/>GET / and /health via ALB]
-    SMOKE --> STG[(Staging live)]
-    STG --> PROMOTE[git checkout production<br/>git merge --ff-only main<br/>git push]
-    PROMOTE --> CI2[Same pipeline,<br/>production environment]
-    CI2 --> PROD[(Production live)]
+    SMOKE --> PROD[(Production live)]
 ```
 
 ## Branch model
@@ -27,10 +25,10 @@ flowchart LR
 | Branch | Role |
 |---|---|
 | `ai-agent` | Day-to-day development (local dev unchanged) |
-| `main` | **Is** staging: every push (except doc-only) deploys staging |
+| `main` | Integration branch: CI only, deploys nothing |
 | `production` | **Is** production: pushing deploys production. Only ever fast-forwarded from `main` |
 
-Promotion command (after staging has soaked):
+Promotion command (this is the deploy):
 
 ```bash
 git fetch origin && git checkout production && git merge --ff-only origin/main && git push origin production && git checkout main
@@ -42,8 +40,8 @@ Doc-only pushes (`**.md`, `docs/**`) do **not** deploy (`paths-ignore`).
 
 - The build produces **one image** for all services; they differ only by
   command. On promotion, the image for that exact commit already exists in
-  ECR from the staging run and is **reused** (immutable tags; the workflow
-  detects and tolerates this).
+  ECR if that commit was built before, and is **reused** (immutable tags;
+  the workflow detects and tolerates this).
 - **Migrations run before services roll**, as a one-off ECS task using the
   *new* image — so new migration files ship with the code that needs them,
   while traffic still runs on the old image. The pipeline fails hard if the
@@ -64,9 +62,8 @@ Doc-only pushes (`**.md`, `docs/**`) do **not** deploy (`paths-ignore`).
 # Pipeline status
 gh run list --repo BayshoreCommunication/dxg-rfp-tool-backend --workflow "Deploy to AWS" --limit 3
 
-# Health (production / staging)
+# Health
 curl -s https://api.dxg-agency.com/health | jq
-curl -s https://api-staging.dxg-agency.com/health | jq
 # Expect: status OK, database connected, postgres.migrationVersion current, queue.ready true
 
 # What's actually running

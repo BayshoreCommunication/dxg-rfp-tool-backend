@@ -42,7 +42,7 @@ debugging; ask for it first.
 - **MongoDB (Atlas):** access via the Atlas console (org owner invites
   you). Programmatic access from your laptop requires your IP added to the
   Atlas Network Access allowlist — remember to remove it after. Databases:
-  `dxg_rfp_tool_staging`, `dxg_rfp_tool_prod` on the shared cluster.
+  `dxg_rfp_tool_prod`.
 - **Redis:** in-VPC only, AUTH + TLS. There is essentially never a reason
   to connect manually (transport-only queues); use the Postgres job tables
   instead.
@@ -50,9 +50,9 @@ debugging; ask for it first.
 ## CI/CD
 
 - GitHub repo `BayshoreCommunication/dxg-rfp-tool-backend` — org membership
-  with write access lets you push `main` (= deploy staging). Pushing
+  with write access lets you push `main` (CI only). Pushing
   `production` deploys production; treat that as an operator action.
-- GitHub *environments* (`staging`, `production`) hold the deploy variables;
+- The GitHub *environment* `production` holds the deploy variables;
   repo admins can edit them (Settings → Environments).
 - `gh` CLI is the fastest way to watch runs: `gh run list`, `gh run watch`.
 
@@ -68,7 +68,7 @@ debugging; ask for it first.
 2. AWS IAM user (or shared operator profile, per team policy) → configure
    as `AWS_PROFILE=rfpilot`.
 3. CloudWatch Logs read (minimum) — verify:
-   `aws logs tail /rfpilot/staging/api --profile rfpilot`.
+   `aws logs tail /rfpilot/production/api --profile rfpilot`.
 4. Atlas console invite (read-only to start).
 5. Local dev: clone, `npm ci`, copy `.env.example` → `.env`, run per
    [`docs/DEVELOPMENT.md`](../DEVELOPMENT.md).

@@ -116,7 +116,12 @@ export class AppStack extends cdk.Stack {
     this.cluster = new ecs.Cluster(this, 'Cluster', {
       vpc: network.vpc,
       clusterName: `rfpilot-${config.envName}`,
-      containerInsightsV2: ecs.ContainerInsights.ENABLED,
+      // ~158 custom metrics for this cluster (~$47/month). Off in production;
+      // observability-stack.ts compensates — read the comment on the
+      // tasks-low alarms there before flipping this back.
+      containerInsightsV2: config.containerInsights
+        ? ecs.ContainerInsights.ENABLED
+        : ecs.ContainerInsights.DISABLED,
       defaultCloudMapNamespace: {
         name: `rfpilot-${config.envName}.local`,
         useForServiceConnect: true,

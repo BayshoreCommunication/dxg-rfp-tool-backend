@@ -16,9 +16,19 @@ export const requirePublicGrant = (purpose: PublicGrantPurpose | readonly Public
     res.status(401).json({ success: false, message: "A valid access grant is required" }); return;
   }
   const purposes = Array.isArray(purpose) ? purpose : [purpose];
+  const recipient = typeof req.query.email === "string" ? req.query.email
+    : typeof req.body?.email === "string" ? req.body.email : undefined;
   let grant = null;
   for (const candidate of purposes) {
-    grant = await publicAccess.validateAndConsume({ token, purpose: candidate, resourceId });
+    grant = await publicAccess.validateAndConsume({
+      token,
+      purpose: candidate,
+      resourceId,
+      recipient,
+      // A vendor invite may render the read-only proposal before the vendor
+      // enters an email. Dedicated vendor operations always bind the email.
+      allowRecipientlessVendorProposalRead: Array.isArray(purpose),
+    });
     if (grant) break;
   }
   if (!grant) { res.status(403).json({ success: false, message: "Access grant is invalid, expired, revoked, or exhausted" }); return; }

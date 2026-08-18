@@ -1,69 +1,97 @@
 # AWS deployment — current state and handoff
 
-> Status as of 2026-08-02. Owner: Travis (Bayshore). This file is the
+> Status as of 2026-08-18. Owner: Travis (Bayshore). This file is the
 > single place to read before continuing AWS work in a new session.
 > Operating docs: [README.md](README.md) (bootstrap/deploy/rollback runbook).
 > No secrets in this file — all secret values live in AWS Secrets Manager.
 
 ## What is live
 
-**Staging is deployed, healthy, and continuously delivered.**
+**Production is the only environment.** The staging environment was removed
+from AWS on 2026-08-18 (see "Staging removal" below).
 
 | Fact | Value |
 |---|---|
 | AWS account | `295229565954` (IAM user `aidev`, local CLI profile `rfpilot`) |
 | Region | `us-east-2` |
-| Staging API | `https://api-staging.dxg-agency.com` (HTTPS, 80→443 redirect; CNAME in Namecheap → ALB `Rfpilo-Alb16-0eZHo0YAZQnj-2062746735.us-east-2.elb.amazonaws.com`) |
+| Production API | `https://api.dxg-agency.com` (HTTPS, 80→443 redirect; CNAME in Namecheap → ALB `Rfpilo-Alb16-pj5OOUBQqRrt-519967115.us-east-2.elb.amazonaws.com`) |
 | TLS cert | ACM wildcard `*.dxg-agency.com` + apex, us-east-2, `.../f6976da6-0174-40b4-86bc-9525267a8b08` (DNS-validated; validation CNAME lives in Namecheap — do not delete it, ACM renews through it) |
-| Health | `GET /health` → 200 OK; Mongo connected, Postgres migrated to `043`, Redis queue ready |
-| ECS cluster | `rfpilot-staging` — services `api`(1), `worker`(1), `dispatcher`(1), `clamav`(1) |
-| Assets CDN | `d3bje2jgtaou7s.cloudfront.net` (fronts `rfpilot-staging-assets-*` bucket) |
-| NAT egress IP | `18.223.236.137` (allowlisted in Atlas Network Access) |
-| MongoDB | New Atlas account/cluster (connection string in the app secret) |
-| ECR | `295229565954.dkr.ecr.us-east-2.amazonaws.com/rfpilot-backend`, immutable `sha-<commit>` tags |
-| Secrets | `rfpilot/staging/app` (all keys filled), `rfpilot/staging/redis-auth` (rotated, alphanumeric) |
+| Health | `GET /health` → 200 OK; Mongo connected, Postgres migrated to `043`, Redis queue ready, observability enabled |
+| ECS cluster | `rfpilot-production` — services `api`(1), `worker`(1), `dispatcher`(1), `cron`(1), `clamav`(1), `ai-gateway`(1) |
+| Assets CDN | `d1hn23mh1h53mx.cloudfront.net` |
+| NAT egress IP | `13.58.171.171` (allowlisted in Atlas Network Access) |
+| MongoDB | Atlas, database `dxg_rfp_tool_prod` |
+| ECR | `295229565954.dkr.ecr.us-east-2.amazonaws.com/rfpilot-backend`, immutable `sha-<commit>` tags (shared, in `Rfpilot-Cicd`) |
+| Secrets | `rfpilot/production/app`, `rfpilot/production/redis-auth` |
+| Deployed image | `sha-bf698269` (2026-08-10) |
 
-**CI/CD**: push to `main` → `.github/workflows/deploy-aws.yml` runs quality
-gates → image build → Trivy scan (currently ZERO findings) → ECR push →
-one-off Postgres migration task (new image, before services roll) → CDK
-deploy of App+Observability → smoke checks. Auth is GitHub OIDC only
-(branch/environment-locked roles, no stored AWS keys). Domain/cert/URL CDK
-contexts flow from environment-scoped GitHub variables (`CERTIFICATE_ARN`,
-`API_DOMAIN` set on `staging`; `FRONTEND_URL`/`ADMIN_URL` reserved, empty =
-unset). Last fully green run: `30733670506`, deployed image `sha-f846726...`.
-Doc-only pushes do not deploy (`paths-ignore`).
+**CI/CD**: push to `production` → `.github/workflows/deploy-aws.yml` runs quality
+gates → image build → Trivy scan → ECR push → one-off Postgres migration task
+(new image, before services roll) → CDK deploy of App+Observability → smoke
+checks. Auth is GitHub OIDC only (branch/environment-locked role, no stored AWS
+keys). Domain/cert/URL CDK contexts flow from the `production` GitHub
+environment's variables. Doc-only pushes do not deploy (`paths-ignore`).
+`main` carries CI only and no longer deploys anything.
 
-**Stacks deployed**: `Rfpilot-Cicd` + all four stacks in BOTH envs.
-**CUTOVER DONE 2026-08-03: `api.dxg-agency.com` now points at the AWS
-prod ALB** (verified on the real domain: valid TLS, health 200, 301
-redirect, SES OTP delivered). Fresh start — the droplet + old Atlas
-remain as an untouched archive; decommission after a grace period.
-⚠️ SES is STILL IN SANDBOX (production access pending AWS review):
-only verified addresses receive email. Until approved, real-user
-signups won't get their OTPs. ON HOLD by decision 2026-08-03:
-**dxg-agency.com is NOT the final product domain** — the real domain
-is not yet purchased. When it is: verify it in SES (+DKIM), reply to
-the open AWS case referencing the real domain, and sweep the domain
-through ACM/DNS/GitHub `API_DOMAIN`/frontend constants/`SMTP_MAIL`.
-**PRODUCTION IS LIVE ON AWS as of 2026-08-03** (verified: HTTPS health
-200 w/ Mongo `dxg_rfp_tool_prod` + PG 043 + queue; 301 redirect;
-wildcard cert; SES OTP email sent end-to-end; org seeded
-`6a703ea649ac55f3c2327b6e` + PG backfill done; zero AI flags, no
-ai-gateway service — deny-by-default posture). Prod ALB:
-`Rfpilo-Alb16-pj5OOUBQqRrt-519967115.us-east-2.elb.amazonaws.com`;
-prod NAT EIP `13.58.171.171` (Atlas-allowlisted). Prod Mongo = SAME
-Atlas cluster as staging, different database (per-env `MONGODB_DB_NAME`:
-`dxg_rfp_tool_staging` / `dxg_rfp_tool_prod`); consider M10+/separate
-cluster before real load. **NOT yet cut over**: `api.dxg-agency.com`
-DNS still points at the DO droplet (68.183.227.9) serving current
-production — the Namecheap CNAME flip to the prod ALB is the cutover
-moment, gated on the DO→S3/Mongo data migration.
+⚠️ **CD is currently RED.** The 2026-08-12 deploy runs on both branches failed
+at the quality gate — two failing tests (`proposal field guidance covers the
+canonical form contract`, `schema field inventory digest detects unreviewed
+additions, removals, and renames`). Nothing has deployed since 2026-08-10, so
+production runs migration `043` while the repo carries `044`–`052` committed
+and `053`–`058` uncommitted. Fixing those two tests is the gate for shipping
+the vendor-intelligence / evaluation-engine work.
+
+**Stacks deployed**: `Rfpilot-Cicd` + the four `Rfpilot-production-*` stacks.
+`api.dxg-agency.com` has pointed at the AWS prod ALB since 2026-08-03.
+**SES production access is GRANTED** (verified 2026-08-18:
+`ProductionAccessEnabled: true`, 50k/day, 14/sec) — the old sandbox
+restriction is lifted and real-user signups receive OTPs.
+ON HOLD by decision 2026-08-03: **dxg-agency.com is NOT the final product
+domain**; the API keeps `api.dxg-agency.com` by decision (2026-08-04), while
+the product domain is av-rfpilot.com.
 Bootstrap lessons now fixed in code: promotion reuses the immutable
 image (+ race tolerance + `ecr:DescribeImages` on deploy roles); FIRST
 App deploy of a new env must be manual (CI's migrate step needs the
 App stack's task definition); listener SG rules land in the NETWORK
 stack template at synth time — after enabling HTTPS, redeploy Network
 with the cert context or port 443 stays closed (bit us on prod).
+
+## Staging removal (2026-08-18)
+
+Staging was deleted at Travis's request — production is now the only
+environment. What was done:
+
+- All four `Rfpilot-staging-*` stacks deleted (Observability → App → Data →
+  Network). No production resource depended on them: all 26 staging
+  CloudFormation exports were imported only by other staging stacks.
+- The `RemovalPolicy.RETAIN` leftovers were deleted explicitly afterwards —
+  RDS instance (no final snapshot, by decision), KMS key (scheduled), the
+  three S3 buckets and their contents, and the three Secrets Manager secrets.
+  Skipping this pass would have left RDS and storage billing indefinitely.
+- Code: `staging` removed from `ENVIRONMENTS` in `lib/config.ts`, the
+  staging-only cdk-nag suppressions removed from `bin/rfpilot.ts`,
+  `deploy-aws.yml` restricted to the `production` branch (the `STAGING_PAUSED`
+  guard and the env-name ternaries are gone), `compose-app-secrets.sh` now
+  defaults to `production`.
+- IAM: user `rfpilot-staging-ses-smtp` deleted along with its access key and
+  its `ses-send-only` inline policy (last used 2026-08-02; production sends
+  through its own `rfpilot-production-ses-smtp`, key last used 2026-08-11 —
+  verified unaffected). The `rfpilot-staging-github-deploy` role is the last
+  staging artifact: remove it with
+  `npx cdk deploy Rfpilot-Cicd --exclusively` (diff confirmed it destroys
+  only that role, its policy and its output).
+- GitHub: repository variable `STAGING_PAUSED` and the staging environment's
+  variables deleted. The empty `staging` *environment* itself still exists —
+  deleting it needs repo admin rights.
+- External, still outstanding: the Namecheap `api-staging` CNAME, the Atlas
+  `dxg_rfp_tool_staging` database, and the stale NAT allowlist entry
+  `18.223.236.137`. Leave the ACM validation CNAME and DKIM records alone.
+- Shared and therefore untouched: the ECR repository and GitHub OIDC provider
+  (both in `Rfpilot-Cicd`), and the ACM wildcard certificate.
+
+To recreate a staging environment, add its entry back to `ENVIRONMENTS` and
+follow the bootstrap sequence in README.md — note the first App deploy of a
+new environment must be manual.
 
 ## Production AI release (2026-08-03)
 
@@ -86,35 +114,39 @@ change. SES: `av-rfpilot.com` identity verified (DKIM + DMARC in GoDaddy),
 `SMTP_MAIL=noreply@av-rfpilot.com` in both env secrets and verified
 sending. Production `FRONTEND_URL`/`ADMIN_URL` GitHub vars point at the
 new domain. SES production-access case: reply sent 2026-08-04 referencing
-av-rfpilot.com — check `aws sesv2 get-account` for approval.
+av-rfpilot.com. **APPROVED** — verified 2026-08-18,
+`ProductionAccessEnabled: true` (50k/day, 14/sec).
 
 ## Branch model
 
 - `ai-agent` — development (local dev unchanged: `npm run dev*` etc.)
-- `main` — deploys **staging** on push
-- `production` — deploys **production** on push; currently at `f66f60a`
-  (pre-AWS), promotion = fast-forward to `main` when ready
+- `main` — integration; **CI only, deploys nothing** since staging was removed
+  on 2026-08-18
+- `production` — deploys **production** on push; promotion = fast-forward
+  from `main`
 - DigitalOcean deploy retired to manual `workflow_dispatch`
   ("Deploy to DigitalOcean (legacy)"); DO assets under `deploy/` untouched.
-  The old droplet is still running and serves the current production domain.
+  The old droplet is still running but no longer serves the production
+  domain — decommission is outstanding.
 
 ## Platform posture (do not change casually)
 
-- **AI on staging is ON as of 2026-08-02** (operator-approved release):
-  `config.aiEnvironment` in `deploy/aws/lib/config.ts` carries the full
-  local-dev-parity flag set (workspace, workflow, assistant, knowledge
-  with deterministic embeddings, live OpenAI replies), and a conditional
-  `ai-gateway` Fargate service runs the assistant's job worker.
-  **Production's `aiEnvironment` is `{}` — every AI flag absent,
-  deny-by-default** — and enabling it there is a separate release per
+- **AI is ON in production** (operator-approved release 2026-08-03; see
+  "Production AI release" above). `config.aiEnvironment` in
+  `deploy/aws/lib/config.ts` carries the full local-dev-parity flag set
+  (workspace, workflow, assistant, knowledge with deterministic embeddings,
+  live OpenAI replies), and a conditional `ai-gateway` Fargate service runs
+  the assistant's job worker. Deny-by-default is the platform's safe state —
+  an environment with `aiEnvironment: {}` has every AI flag absent — but no
+  environment is currently in it. Changing the flag set is a release per
   `docs/runbooks/PRODUCTION.md`, never part of an infra deploy.
   NOTE: a fresh environment ALSO needs the Postgres data foundation
   seeded or all AI endpoints 503 `ORGANIZATION_NOT_READY`: run
   `node dist/scripts/backfillPostgresProposalReferences.js --apply
   --organization-id=<mongo org id>` as a one-off ECS task using the
   **api** task definition (the migrate taskdef lacks MONGODB_URL).
-  Staging org: `6a6ef9d1a85e65f5a53ca10c` (slug `dxg`).
-  All AI surfaces VERIFIED on staging 2026-08-02: workspace conversation +
+  Production org: `6a703ea649ac55f3c2327b6e`.
+  All AI surfaces were VERIFIED on the (now removed) staging env 2026-08-02: workspace conversation +
   live extraction/draft (real OpenAI, pinned model), candidate
   review/apply, five-step workflow, platform assistant, knowledge
   pipeline end-to-end (upload → scan → parse → review → approved
@@ -131,6 +163,28 @@ av-rfpilot.com — check `aws sesv2 get-account` for approval.
 - Redis is transport-only (no snapshots on purpose; outbox reconciles).
 
 ## Next steps, in order
+
+1. **Fix the two failing quality-gate tests** — `proposal field guidance
+   covers the canonical form contract` and `schema field inventory digest
+   detects unreviewed additions, removals, and renames`. CD has been red
+   since 2026-08-12; nothing ships until they pass.
+2. **Ship the pending migrations** — production is on `043`; `044`–`052` are
+   committed and `053`–`058` are still uncommitted on the feature branch.
+3. **Subscribe an email to the alarm topic** — redeploy Observability with
+   `-c alertEmail=<address>`. Alarms currently fire into nothing.
+4. **Decommission the DigitalOcean droplet** (68.183.227.9) and the old Atlas
+   cluster — the grace period after the 2026-08-03 cutover has long passed.
+5. **Delete the empty `staging` GitHub environment** — needs repo admin
+   rights; everything else about staging is gone.
+6. Smaller carryovers: redact AUTH args from ioredis error logs, scope the
+   assets-bucket KMS key policy to the real CloudFront distribution ARN, and
+   add the queue-backlog / outbox-age metrics probe.
+
+## Completed milestones (historical notes)
+
+> Kept for the gotchas embedded in them, not as a backlog. Every item below
+> is done.
+
 
 1. ~~**DNS + HTTPS**~~ — **DONE 2026-08-02.** `dxg-agency.com` DNS is on
    Namecheap. Staging API is `https://api-staging.dxg-agency.com` (verified:
@@ -185,11 +239,10 @@ av-rfpilot.com — check `aws sesv2 get-account` for approval.
 
 ## Deferred/known items
 
-- **`OBSERVABILITY_ENABLED=true` added to `sharedEnvironment` 2026-08-10**
-  (needs a deploy to take effect). Until it ships, `safeLog` returns early and
-  the only thing in `/rfpilot/<env>/api` is morgan's access line, so a failure
-  cannot be traced by correlation id — verified as 0 hits for
-  `http.request.completed` across 60k records. `OTEL_EXPORTER_OTLP_ENDPOINT`
+- ~~**`OBSERVABILITY_ENABLED=true`**~~ — **SHIPPED.** Verified live
+  2026-08-18: production `/health` reports `observability.enabled: true`, so
+  `safeLog` no longer returns early and failures are traceable by correlation
+  id. `OTEL_EXPORTER_OTLP_ENDPOINT`
   stays deliberately unset because no collector sidecar exists in these task
   definitions; `config/observability.ts` now skips the exporter entirely when
   no endpoint is configured (with the old localhost default it opened ~3

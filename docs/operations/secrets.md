@@ -62,8 +62,8 @@ Local-dev variables are documented in [`.env.example`](https://github.com/Baysho
     jq -r 'to_entries|map(select(.value=="REPLACE_ME" or .value==""))|if length==0 then "ALL KEYS FILLED" else "MISSING: \(map(.key)|join(","))" end'
   ```
 
-- Staging and production values are **fully independent** — sharing a
-  signing secret across environments would make staging tokens valid in
+- Every environment's values must be **fully independent** — sharing a
+  signing secret across environments would make one environment's tokens valid in
   production.
 
 ## The secret-wipe footgun (critical)

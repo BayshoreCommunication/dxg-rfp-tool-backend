@@ -14,10 +14,10 @@
 # operator to fill in the Secrets Manager console.
 #
 # Usage:
-#   AWS_PROFILE=rfpilot ./compose-app-secrets.sh [staging|production]
+#   AWS_PROFILE=rfpilot ./compose-app-secrets.sh [production]
 set -euo pipefail
 
-ENV_NAME="${1:-staging}"
+ENV_NAME="${1:-production}"
 REGION="${AWS_REGION:-us-east-2}"
 STACK="Rfpilot-${ENV_NAME}-Data"
 

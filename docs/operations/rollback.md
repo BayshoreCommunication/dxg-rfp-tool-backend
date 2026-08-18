@@ -44,7 +44,7 @@ AWS_PROFILE=rfpilot AWS_REGION=us-east-2 npx cdk deploy Rfpilot-$ENV-App \
   --exclusively --require-approval never \
   -c env=$ENV -c imageTag=sha-<previous-git-sha> \
   -c certificateArn=arn:aws:acm:us-east-2:295229565954:certificate/f6976da6-0174-40b4-86bc-9525267a8b08 \
-  -c apiDomain=$([ "$ENV" = production ] && echo api.dxg-agency.com || echo api-staging.dxg-agency.com)
+  -c apiDomain=api.dxg-agency.com
 ```
 
 > The cert/domain contexts are **required** — omitting them deploys the
@@ -52,7 +52,7 @@ AWS_PROFILE=rfpilot AWS_REGION=us-east-2 npx cdk deploy Rfpilot-$ENV-App \
 
 Git bookkeeping afterwards: `production` must never be force-pushed.
 Land the revert forward instead —
-`git revert <bad-commit>` on `main`, let staging verify it, then promote.
+`git revert <bad-commit>` on `main`, confirm CI is green, then promote.
 
 ## 3. Database considerations
 
