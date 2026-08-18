@@ -62,7 +62,7 @@ nav:
       - Portal: operations/README.md
       - Architecture: operations/architecture.md
       - AWS Infrastructure: operations/aws-infrastructure.md
-      - Environments: operations/environments.md
+      - Environment: operations/environments.md
       - Deployment: operations/deployment.md
       - CI/CD: operations/cicd.md
       - Services: operations/services.md

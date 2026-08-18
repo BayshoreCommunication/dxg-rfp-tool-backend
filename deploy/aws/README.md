@@ -20,8 +20,11 @@ DigitalOcean (legacy)` workflow).
 | `Rfpilot-<env>-App` | ECS services, ALB, WAF, migration task definition | Every release, by CI |
 | `Rfpilot-<env>-Observability` | Alarms + SNS alert topic | With App |
 
-`<env>` is `staging` (deployed from `main`) or `production` (deployed from
-`production`). Sizing lives in [`lib/config.ts`](lib/config.ts).
+`<env>` is `production` (deployed from the `production` branch) — the only
+environment. A separate `staging` environment existed until 2026-08-18 and was
+removed; recreating one means adding an entry back to `ENVIRONMENTS` and
+running the bootstrap below with its name. Sizing lives in
+[`lib/config.ts`](lib/config.ts).
 
 ## One-time bootstrap (operator, admin credentials)
 
@@ -31,15 +34,15 @@ DigitalOcean (legacy)` workflow).
    `RepositoryUri` outputs.
 4. In GitHub repo settings, set the repository variable `AWS_ACCOUNT_ID`.
    (The deploy workflow is inert until this exists.)
-5. `npx cdk deploy Rfpilot-staging-Network Rfpilot-staging-Data`
-6. **Fill secrets**: open `rfpilot/staging/app` in Secrets Manager and replace
+5. `npx cdk deploy Rfpilot-<env>-Network Rfpilot-<env>-Data`
+6. **Fill secrets**: open `rfpilot/<env>/app` in Secrets Manager and replace
    every `REPLACE_ME`:
    - `POSTGRES_URL` / `POSTGRES_MIGRATION_URL`:
      `postgresql://rfpilot_admin:<password>@<DatabaseEndpoint>/rfpilot`
      (password from the RDS-generated secret; endpoint from the Data stack
      `DatabaseEndpoint` output).
    - `REDIS_URL`: `rediss://:<auth-token>@<RedisPrimaryEndpoint>` (token from
-     `rfpilot/staging/redis-auth`; note the scheme **must** be `rediss://`).
+     `rfpilot/<env>/redis-auth`; note the scheme **must** be `rediss://`).
    - `MONGODB_URL`: the Atlas connection string (rotate the existing
      credential as part of cutover).
    - Remaining keys: JWT/OTP/BFF/admin secrets (fresh long random values),
@@ -61,11 +64,12 @@ DigitalOcean (legacy)` workflow).
     `wildcardKeyPolicyForOac`), and subscribe an email via
     `-c alertEmail=<address>` on the Observability stack.
 
-Repeat 5–9 with `production` names when standing up production.
+Repeat 5–9 with that environment's names when standing up a new environment.
 
 ## Everyday deployment
 
-Push to `main` → staging; merge/push to `production` → production.
+Push to `production` → production. That is the only automatic deploy; `main`
+carries CI only.
 `.github/workflows/deploy-aws.yml` is the pipeline: quality gates → image
 build → Trivy scan (fails on fixable HIGH/CRITICAL) → ECR push (immutable
 `sha-<commit>` tag) → **one-off migration task using the new image** (services
@@ -130,7 +134,7 @@ both the source secret and the composed URL keys.
 
 ## Backups and restore
 
-- **RDS**: automated backups (7d staging / 30d production) + manual
+- **RDS**: automated backups (30d in production) + manual
   pre-migration snapshots. Restore creates a new instance: restore, then
   update `POSTGRES_URL`/`POSTGRES_MIGRATION_URL` in the app secret and force
   new deployments.

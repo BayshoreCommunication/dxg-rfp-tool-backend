@@ -54,7 +54,23 @@ export class ObservabilityStack extends cdk.Stack {
     );
 
     /* Service health: running tasks below desired for 5 minutes. Covers the
-     * worker and dispatcher, which cannot be probed over the network. */
+     * worker and dispatcher, which cannot be probed over the network.
+     *
+     * RunningTaskCount lives ONLY in the ECS/ContainerInsights namespace, so
+     * when Container Insights is off (config.containerInsights === false, the
+     * production default — it costs ~$47/month) the alarm falls back to the
+     * standard AWS/ECS CPUUtilization metric with an impossible threshold:
+     * utilisation is never below zero, so the alarm can only be driven by
+     * MISSING data, and ECS publishes no service datapoints when no task is
+     * running. That detects "this service has stopped" without Container
+     * Insights.
+     *
+     * The fallback is deliberately NOT equivalent: it detects zero running
+     * tasks, not "fewer running than desired". Every service here has a
+     * desired count of 1, so the two coincide today — but if worker ever
+     * runs a steady-state count above 1 (workerMaxCount allows scaling to
+     * 4), partial degradation would go unalarmed. Turn Container Insights
+     * back on before relying on multi-task services. */
     for (const [name, service, desired] of [
       ["api", app.apiService, 1],
       ["cron", app.cronService, 1],
@@ -65,14 +81,16 @@ export class ObservabilityStack extends cdk.Stack {
       alert(
         new cloudwatch.Alarm(this, `${name}TasksLow`, {
           alarmName: `rfpilot-${config.envName}-${name}-tasks-low`,
-          metric: new cloudwatch.Metric({
-            namespace: "ECS/ContainerInsights",
-            metricName: "RunningTaskCount",
-            dimensionsMap: { ClusterName: app.cluster.clusterName, ServiceName: service.serviceName },
-            period: cdk.Duration.minutes(1),
-            statistic: "Minimum",
-          }),
-          threshold: desired,
+          metric: config.containerInsights
+            ? new cloudwatch.Metric({
+                namespace: "ECS/ContainerInsights",
+                metricName: "RunningTaskCount",
+                dimensionsMap: { ClusterName: app.cluster.clusterName, ServiceName: service.serviceName },
+                period: cdk.Duration.minutes(1),
+                statistic: "Minimum",
+              })
+            : service.metricCpuUtilization({ period: cdk.Duration.minutes(1), statistic: "Minimum" }),
+          threshold: config.containerInsights ? desired : 0,
           comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
           evaluationPeriods: 5,
           treatMissingData: cloudwatch.TreatMissingData.BREACHING,

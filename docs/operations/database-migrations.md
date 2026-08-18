@@ -23,8 +23,9 @@ pointing at the **new** image and runs it as a one-off Fargate task
 a non-zero exit, so broken migrations never reach running services. Output:
 CloudWatch `/rfpilot/<env>/migrate`.
 
-Staging gets every migration first by construction (push to `main` →
-staging; production only ever fast-forwards `main`).
+There is no staging environment, so a migration first executes against real
+data in production. Review the migration and its rollback path before
+promoting `main`.
 
 ### Writing a safe migration
 
@@ -39,7 +40,7 @@ staging; production only ever fast-forwards `main`).
    existing migration.
 3. Big/risky change? Take a manual snapshot first:
    `aws rds create-db-snapshot --db-instance-identifier <id> --db-snapshot-identifier pre-<sha>`
-   (automated backups exist regardless: 7d staging / 30d production).
+   (automated backups exist regardless: 30d in production).
 4. Zero-downtime notes: the API is stop-then-start anyway (~30–60s window
    per deploy), so you get a brief natural quiesce — but the worker and
    dispatcher keep running on old code against the new schema during the

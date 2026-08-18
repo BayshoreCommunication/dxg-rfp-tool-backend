@@ -1,7 +1,8 @@
 # Production Architecture
 
 > Verified against the deployed stacks 2026-08-03. Both environments share
-> this shape; names below use production. Staging differs only in sizing and
+> this shape; names below use production, the only environment. A staging
+> environment existed until 2026-08-18 and differed only in sizing and
 > hostnames — see [Environments](environments.md).
 
 ## Diagram
@@ -83,12 +84,12 @@ flowchart TD
 
 Defined in [`deploy/aws/lib/network-stack.ts`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/lib/network-stack.ts):
 
-- VPC (staging `10.40.0.0/16`, production `10.41.0.0/16`), 2 AZs
+- VPC (`10.41.0.0/16`), 2 AZs
   (us-east-2a/b), pinned for deterministic synth.
 - Subnets: `public` /24 (ALB, NAT), `private` /20 with egress (all ECS
   tasks), `isolated` /24 (RDS, Redis).
 - 1 NAT gateway per environment. Egress IPs (allowlisted in Atlas):
-  staging `18.223.236.137`, production `13.58.171.171`.
+  production `13.58.171.171`.
 - VPC endpoints keep S3, ECR (api + docker), CloudWatch Logs, and Secrets
   Manager traffic off the NAT.
 - VPC Flow Logs capture **rejected** traffic to CloudWatch.
@@ -109,7 +110,7 @@ contexts. This bit production on 2026-08-03.
 ## Trust boundaries
 
 - No long-lived AWS keys anywhere: CI assumes per-environment IAM roles via
-  GitHub OIDC, branch-locked (`main` → staging role, `production` → prod role).
+  GitHub OIDC, branch-locked (`production` → prod role; `main` deploys nothing).
 - ECS tasks use task roles (S3 access is via the task role, not static keys).
 - All secrets are injected from Secrets Manager at task start.
 - The frontends call the backend **server-side only** (BFF pattern with

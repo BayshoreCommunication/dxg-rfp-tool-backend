@@ -12,7 +12,7 @@ api
  ├── Purpose: HTTP API, Socket-based notifications, cron jobs
  ├── Command: node dist/server.js
  ├── Port: 8000 (only the ALB can reach it)
- ├── Size: 0.5 vCPU/1GB staging · 1 vCPU/2GB production
+ ├── Size: 1 vCPU/2GB
  ├── Count: exactly 1 — DO NOT SCALE (unlocked crons, process-local fan-out)
  ├── Deploys: stop-then-start (~30–60s downtime per deploy)
  ├── Env of note: CRON_ENABLED=true (only here), keepAliveTimeout 65s
@@ -28,7 +28,7 @@ worker
 │            candidate_application, proposal_draft_generate,
 │            vendor_response_analyze, conversation_chat
  ├── Command: node dist/scripts/startDurableWorker.js
- ├── Size: 1 vCPU/2GB · autoscales 1→2 (staging) / 1→4 (prod) at 70% CPU
+ ├── Size: 1 vCPU/2GB · autoscales 1→4 at 70% CPU
  ├── Shutdown: SIGTERM drains active jobs (120s stop timeout, 90s job leases)
  ├── Health: no port — watch RunningTaskCount alarm + job heartbeats
  │           (SELECT max(heartbeat_at) FROM rfpilot.job_attempts WHERE status='running')
@@ -71,7 +71,7 @@ migrate (not a service — a task definition)
 
 ```bash
 export AWS_PROFILE=rfpilot AWS_REGION=us-east-2
-ENV=production   # or staging
+ENV=production   # the only environment
 
 # Service status at a glance
 aws ecs describe-services --cluster rfpilot-$ENV \

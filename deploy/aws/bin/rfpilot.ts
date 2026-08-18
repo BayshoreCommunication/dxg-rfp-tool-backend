@@ -8,7 +8,9 @@ import { AppStack } from "../lib/app-stack";
 import { ObservabilityStack } from "../lib/observability-stack";
 import { CicdStack } from "../lib/cicd-stack";
 
-/* Stack layout (per environment, plus one shared CI/CD stack):
+/* Stack layout (per environment, plus one shared CI/CD stack).
+ * Production is currently the only environment — staging was removed 2026-08-18.
+ *
  *   Rfpilot-Cicd                      ECR + GitHub OIDC deploy roles
  *   Rfpilot-<env>-Network             VPC, subnets, security groups
  *   Rfpilot-<env>-Data                RDS, Redis, S3, KMS, secrets (stateful)
@@ -59,13 +61,6 @@ for (const config of Object.values(ENVIRONMENTS)) {
     { id: "AwsSolutions-CFR2", reason: "The CDN fronts read-only public static assets from a private bucket; the application's WAF sits on the ALB." },
     { id: "AwsSolutions-CFR3", reason: "CDN access logging deferred alongside S3 access logging." },
     { id: "AwsSolutions-CFR4", reason: "Distribution uses the default CloudFront certificate until a custom asset domain exists; minimumProtocolVersion is set for when one is attached." },
-    ...(config.envName === "staging"
-      ? [
-          { id: "AwsSolutions-RDS3", reason: "Staging runs single-AZ by design; production is Multi-AZ." },
-          { id: "AwsSolutions-RDS10", reason: "Staging allows deletion by design; production has deletion protection and termination protection." },
-          { id: "AwsSolutions-AEC4", reason: "Staging Redis runs a single node by design; production has a replica with automatic failover." },
-        ]
-      : []),
   ]);
   suppress(application, [
     { id: "AwsSolutions-IAM5", reason: "Wildcards are grant-generated object-level S3/KMS actions (bucket/*) from grantReadWrite on the task roles; buckets themselves are least-privilege per service." },
@@ -73,6 +68,11 @@ for (const config of Object.values(ENVIRONMENTS)) {
     { id: "AwsSolutions-EC23", reason: "Only the ALB accepts internet traffic; service security groups are source-scoped." },
     { id: "AwsSolutions-S1", reason: "The ALB access-log bucket cannot log to itself; it is private, SSE-S3 (ELB requirement), TLS-only, 90-day expiry." },
     { id: "AwsSolutions-ELB2", reason: "ALB access logs ARE enabled (logAccessLogs); rule fires on the log bucket's own delivery policy ordering." },
+    ...(config.containerInsights
+      ? []
+      : [
+          { id: "AwsSolutions-ECS4", reason: "Container Insights is deliberately off: ~158 custom metrics (~$47/month) for a six-service cluster. The signal it uniquely provided (RunningTaskCount) is replaced by a missing-data alarm on the standard AWS/ECS service metrics — see the tasks-low alarms in observability-stack.ts, which document the fidelity this trades away." },
+        ]),
   ]);
 }
 

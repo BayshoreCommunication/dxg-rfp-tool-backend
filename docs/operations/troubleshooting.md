@@ -57,8 +57,9 @@ api task** — there is no nginx or other reverse proxy.
    that section below. AI endpoints returning 503 with codes like
    `ORGANIZATION_NOT_READY` mean the Postgres data foundation is missing
    rows — run the backfill ([Environments](environments.md#bootstrapping-and-re-seeding-environment-data)).
-5. Reproduce on staging (`https://api-staging.dxg-agency.com` — same code
-   if `main` == `production`), fix, ship via the normal pipeline.
+5. Reproduce locally against a copy of the failing input — there is no
+   staging environment to reproduce on — then fix and ship via the normal
+   pipeline.
 
 ## Database problems
 
@@ -86,11 +87,11 @@ api task** — there is no nginx or other reverse proxy.
   is corrupt/placeholder — check the secret's version history
   ([Secrets](secrets.md#recovering-a-clobbered-secret)).
 - Server-selection timeouts = network: the **NAT EIP must be in the Atlas
-  Network Access allowlist** (staging `18.223.236.137`, production
+  Network Access allowlist** (production
   `13.58.171.171`). This breaks silently if the allowlist is edited or a
   NAT is recreated.
 - Wrong-database confusion: the cluster is shared; the env's database is
-  chosen by `MONGODB_DB_NAME` (`dxg_rfp_tool_staging` / `dxg_rfp_tool_prod`),
+  chosen by `MONGODB_DB_NAME` (`dxg_rfp_tool_prod`),
   not by the URL.
 
 ## Redis connection failure

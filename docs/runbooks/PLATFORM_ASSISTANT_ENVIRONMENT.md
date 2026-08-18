@@ -1,5 +1,11 @@
 # Platform Assistant Environment Setup
 
+> ⚠️ **Staging no longer exists** (removed 2026-08-18). Steps below that
+> require verifying in staging before a production change have no environment
+> to run in. Do not treat them as satisfied — either stand up a temporary
+> environment for the rehearsal, or record an explicit, signed-off exception
+> for that release. Weakening this gate silently is not an option.
+
 > Senior developer handoff. Keep every secret in the deployment platform's
 > encrypted secret store. Never commit a populated `.env` or `.env.local`.
 

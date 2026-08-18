@@ -1,10 +1,12 @@
 name: Deploy to AWS
 
-# main -> staging, production -> production. Authentication is GitHub OIDC
-# only (no long-lived AWS keys): each branch may assume exactly one deploy
-# role, created by the Rfpilot-Cicd stack. The deploy job is skipped until
-# the repository variable AWS_ACCOUNT_ID is set, so this workflow is inert
-# before the AWS account is bootstrapped.
+# production -> production. Production is the only environment; the staging
+# environment was removed on 2026-08-18, so `main` no longer deploys anything
+# and this workflow triggers on the `production` branch alone. Authentication
+# is GitHub OIDC only (no long-lived AWS keys): the branch may assume exactly
+# one deploy role, created by the Rfpilot-Cicd stack. The deploy job is
+# skipped until the repository variable AWS_ACCOUNT_ID is set, so this
+# workflow is inert before the AWS account is bootstrapped.
 #
 # Pipeline: quality gates -> image build -> vulnerability scan -> ECR push
 # (immutable sha-<commit> tag) -> one-off Postgres migration task -> CDK
@@ -13,13 +15,12 @@ name: Deploy to AWS
 on:
   push:
     branches:
-      - main
       - production
     paths-ignore:
       - "**.md"
       - "docs/**"
-  # Manual re-run against the branch it is dispatched from (main -> staging,
-  # production -> production) — e.g. after filling secrets or fixing infra.
+  # Manual re-run against the `production` branch — e.g. after filling
+  # secrets or fixing infrastructure.
   workflow_dispatch:
 
 permissions:
@@ -32,7 +33,7 @@ concurrency:
 
 env:
   AWS_REGION: us-east-2
-  ENV_NAME: ${{ github.ref_name == 'production' && 'production' || 'staging' }}
+  ENV_NAME: production
 
 jobs:
   quality:
@@ -59,15 +60,11 @@ jobs:
           npx cdk synth --strict -c nag=true --quiet
 
   deploy:
-    name: Build, migrate, deploy (${{ github.ref_name == 'production' && 'production' || 'staging' }})
+    name: Build, migrate, deploy (production)
     needs: validate-account
-    # STAGING_PAUSED=true (repository variable) skips staging deploys so a
-    # deliberately stopped staging environment is not woken up by pushes to
-    # main. Production deploys are unaffected. Delete the variable (or set it
-    # to anything but "true") to resume staging continuous delivery.
-    if: needs.validate-account.outputs.ready == 'true' && (github.ref_name == 'production' || vars.STAGING_PAUSED != 'true')
+    if: needs.validate-account.outputs.ready == 'true'
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name == 'production' && 'production' || 'staging' }}
+    environment: production
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -98,16 +95,17 @@ jobs:
 
       - name: Push immutable image
         run: |
-          # Promotion runs deploy a commit whose image an earlier branch's
-          # run already pushed; the tag is immutable, so reuse it rather
-          # than failing on the overwrite (same sha = same content).
+          # A re-run (or a workflow_dispatch of an already-deployed commit)
+          # deploys a commit whose image an earlier run already pushed; the
+          # tag is immutable, so reuse it rather than failing on the
+          # overwrite (same sha = same content).
           if aws ecr describe-images --repository-name rfpilot-backend \
                --image-ids imageTag="sha-${GITHUB_SHA}" > /dev/null 2>&1; then
             echo "Image sha-${GITHUB_SHA} already in ECR — reusing it."
           elif ! docker push "${{ steps.ecr.outputs.registry }}/rfpilot-backend:sha-${GITHUB_SHA}"; then
-            # A same-sha run on the other branch can push between our check
-            # and our push (main and production move together on promotion).
-            # If the tag exists now, that is the same content — reuse it.
+            # A concurrent run of the same commit can push between our check
+            # and our push. If the tag exists now, that is the same content
+            # — reuse it.
             aws ecr describe-images --repository-name rfpilot-backend \
               --image-ids imageTag="sha-${GITHUB_SHA}" > /dev/null
             echo "Concurrent run pushed sha-${GITHUB_SHA} first — reusing it."
