@@ -5,7 +5,7 @@
  * 9:15 AM CT keynote. Render the venue reading before it becomes evidence.
  */
 
-/** Venue & Schedule stores display labels, not IANA identifiers. */
+/** Legacy proposals store labels; new location selections store IANA identifiers. */
 const IANA_BY_LABEL: Record<string, string> = {
   "Eastern Time (ET)": "America/New_York",
   "Central Time (CT)": "America/Chicago",
@@ -28,7 +28,13 @@ const ABBREVIATION_BY_LABEL: Record<string, string> = {
 export const ianaZoneForLabel = (label: unknown): string | null => {
   if (typeof label !== "string" || !label.trim()) return null;
   const trimmed = label.trim();
-  return IANA_BY_LABEL[trimmed] ?? (/^[A-Za-z]+\/[A-Za-z_+-]+$/.test(trimmed) ? trimmed : null);
+  const candidate = IANA_BY_LABEL[trimmed] ?? trimmed;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: candidate });
+    return candidate;
+  } catch {
+    return null;
+  }
 };
 
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;

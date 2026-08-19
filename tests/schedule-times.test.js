@@ -32,6 +32,10 @@ test("an unknown zone or a non-instant leaves the value alone", () => {
   assert.equal(formatInstantInEventZone(1234, "Central Time (CT)"), null);
   assert.equal(ianaZoneForLabel("Other / International"), null);
   assert.equal(ianaZoneForLabel("Central Time (CT)"), "America/Chicago");
+  assert.equal(
+    ianaZoneForLabel("America/Argentina/Buenos_Aires"),
+    "America/Argentina/Buenos_Aires",
+  );
 });
 
 test("only schedule keys are rewritten, nested through rooms and functions", () => {

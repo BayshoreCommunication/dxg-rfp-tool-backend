@@ -221,24 +221,34 @@ test("city answers derive state and time zone without guessing ambiguous names",
   assert.deepEqual(resolveVenueLocation("Chicago"), {
     city: "Chicago",
     state: "IL",
-    timeZone: "Central Time (CT)",
+    timeZone: "America/Chicago",
   });
   assert.deepEqual(resolveVenueLocation("Portland, Oregon"), {
     city: "Portland",
     state: "OR",
-    timeZone: "Pacific Time (PT)",
+    timeZone: "America/Los_Angeles",
   });
   assert.deepEqual(resolveVenueLocation("Washington, DC"), {
     city: "Washington",
     state: "DC",
-    timeZone: "Eastern Time (ET)",
+    timeZone: "America/New_York",
+  });
+  assert.deepEqual(resolveVenueLocation("Pensacola, Florida"), {
+    city: "Pensacola",
+    state: "FL",
+    timeZone: "America/Chicago",
+  });
+  assert.deepEqual(resolveVenueLocation("Coeur d'Alene, Idaho"), {
+    city: "Coeur D'Alene",
+    state: "ID",
+    timeZone: "America/Los_Angeles",
   });
   assert.equal(resolveVenueLocation("Portland"), null);
   assert.equal(resolveVenueLocation("Springfield"), null);
   assert.deepEqual(resolveVenueLocation("Paris, France"), {
     city: "Paris",
     state: "OTHER",
-    timeZone: "Other / International",
+    timeZone: "Europe/Paris",
   });
   assert.equal(resolveVenueLocation("Chicago, ZZ"), null);
 });

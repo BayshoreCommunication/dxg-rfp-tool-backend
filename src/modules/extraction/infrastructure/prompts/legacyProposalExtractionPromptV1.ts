@@ -51,7 +51,7 @@ Schema:
     "strikeDate": "YYYY-MM-DD",
     "strikeTime": "HH:MM in 24-hour format",
     "numberOfEventRooms": "string — numeric count of rooms requiring AV",
-    "timeZone": "one of: Eastern Time (ET) | Central Time (CT) | Mountain Time (MT) | Pacific Time (PT) | Alaska Time (AKT) | Hawaii Time (HT) | Other / International"
+    "timeZone": "IANA time-zone identifier when the venue location makes it explicit (for example America/New_York, America/Chicago, Europe/Paris, Asia/Dhaka); otherwise Other / International"
   },
   "roomByRoom": {
     "roomFunction": "string — e.g. General Session, Breakout, VIP Lounge",

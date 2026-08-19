@@ -20,25 +20,49 @@ const STATE_NAMES: Record<string, string> = {
 };
 
 export const STATE_TIME_ZONES: Record<string, string> = {
-  AK: "Alaska Time (AKT)",
-  AL: "Central Time (CT)", AR: "Central Time (CT)", AZ: "Mountain Time (MT)",
-  CA: "Pacific Time (PT)", CO: "Mountain Time (MT)",
-  CT: "Eastern Time (ET)", DC: "Eastern Time (ET)", DE: "Eastern Time (ET)",
-  FL: "Eastern Time (ET)", GA: "Eastern Time (ET)", HI: "Hawaii Time (HT)",
-  ID: "Mountain Time (MT)", IL: "Central Time (CT)", IN: "Eastern Time (ET)",
-  IA: "Central Time (CT)", KS: "Central Time (CT)", KY: "Eastern Time (ET)",
-  LA: "Central Time (CT)", MA: "Eastern Time (ET)", MD: "Eastern Time (ET)",
-  ME: "Eastern Time (ET)", MI: "Eastern Time (ET)", MN: "Central Time (CT)",
-  MO: "Central Time (CT)", MS: "Central Time (CT)", MT: "Mountain Time (MT)",
-  NC: "Eastern Time (ET)", ND: "Central Time (CT)", NE: "Central Time (CT)",
-  NH: "Eastern Time (ET)", NJ: "Eastern Time (ET)", NM: "Mountain Time (MT)",
-  NV: "Pacific Time (PT)", NY: "Eastern Time (ET)", OH: "Eastern Time (ET)",
-  OK: "Central Time (CT)", OR: "Pacific Time (PT)", PA: "Eastern Time (ET)",
-  RI: "Eastern Time (ET)", SC: "Eastern Time (ET)", SD: "Central Time (CT)",
-  TN: "Central Time (CT)", TX: "Central Time (CT)", UT: "Mountain Time (MT)",
-  VA: "Eastern Time (ET)", VT: "Eastern Time (ET)", WA: "Pacific Time (PT)",
-  WI: "Central Time (CT)", WV: "Eastern Time (ET)", WY: "Mountain Time (MT)",
+  AK: "America/Anchorage",
+  AL: "America/Chicago", AR: "America/Chicago", AZ: "America/Phoenix",
+  CA: "America/Los_Angeles", CO: "America/Denver",
+  CT: "America/New_York", DC: "America/New_York", DE: "America/New_York",
+  FL: "America/New_York", GA: "America/New_York", HI: "Pacific/Honolulu",
+  IA: "America/Chicago", ID: "America/Boise", IL: "America/Chicago",
+  IN: "America/Indiana/Indianapolis", KS: "America/Chicago",
+  KY: "America/Kentucky/Louisville", LA: "America/Chicago",
+  MA: "America/New_York", MD: "America/New_York", ME: "America/New_York",
+  MI: "America/Detroit", MN: "America/Chicago", MO: "America/Chicago",
+  MS: "America/Chicago", MT: "America/Denver", NC: "America/New_York",
+  ND: "America/Chicago", NE: "America/Chicago", NH: "America/New_York",
+  NJ: "America/New_York", NM: "America/Denver", NV: "America/Los_Angeles",
+  NY: "America/New_York", OH: "America/New_York", OK: "America/Chicago",
+  OR: "America/Los_Angeles", PA: "America/New_York", RI: "America/New_York",
+  SC: "America/New_York", SD: "America/Chicago", TN: "America/Chicago",
+  TX: "America/Chicago", UT: "America/Denver", VA: "America/New_York",
+  VT: "America/New_York", WA: "America/Los_Angeles", WI: "America/Chicago",
+  WV: "America/New_York", WY: "America/Denver",
   OTHER: "Other / International",
+};
+
+const CITY_TIME_ZONES: Record<string, string> = {
+  "pensacola|FL": "America/Chicago", "panama city|FL": "America/Chicago",
+  "miami|FL": "America/New_York", "orlando|FL": "America/New_York",
+  "tampa|FL": "America/New_York", "knoxville|TN": "America/New_York",
+  "chattanooga|TN": "America/New_York", "el paso|TX": "America/Denver",
+  "boise|ID": "America/Boise", "coeur dalene|ID": "America/Los_Angeles",
+  "ontario|OR": "America/Boise", "portland|OR": "America/Los_Angeles",
+  "anchorage|AK": "America/Anchorage", "adak|AK": "America/Adak",
+  "honolulu|HI": "Pacific/Honolulu", "paris|OTHER": "Europe/Paris",
+  "london|OTHER": "Europe/London", "berlin|OTHER": "Europe/Berlin",
+  "amsterdam|OTHER": "Europe/Amsterdam", "madrid|OTHER": "Europe/Madrid",
+  "rome|OTHER": "Europe/Rome", "toronto|OTHER": "America/Toronto",
+  "montreal|OTHER": "America/Toronto", "vancouver|OTHER": "America/Vancouver",
+  "calgary|OTHER": "America/Edmonton", "mexico city|OTHER": "America/Mexico_City",
+  "sao paulo|OTHER": "America/Sao_Paulo",
+  "buenos aires|OTHER": "America/Argentina/Buenos_Aires",
+  "dubai|OTHER": "Asia/Dubai", "dhaka|OTHER": "Asia/Dhaka",
+  "new delhi|OTHER": "Asia/Kolkata", "delhi|OTHER": "Asia/Kolkata",
+  "mumbai|OTHER": "Asia/Kolkata", "singapore|OTHER": "Asia/Singapore",
+  "tokyo|OTHER": "Asia/Tokyo", "sydney|OTHER": "Australia/Sydney",
+  "melbourne|OTHER": "Australia/Melbourne",
 };
 
 // Unique, common event markets. Ambiguous names such as Portland and
@@ -60,7 +84,13 @@ const cleanCity = (value: string): string =>
   value.trim().replace(/\s+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 
 const key = (value: string): string =>
-  value.trim().toLowerCase().replace(/\./g, "").replace(/\s+/g, " ");
+  value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[.'’]/g, "")
+    .replace(/\s+/g, " ");
 
 export const resolveVenueLocation = (answer: string): ResolvedVenueLocation | null => {
   const parts = answer.split(",").map((part) => part.trim()).filter(Boolean);
@@ -72,11 +102,12 @@ export const resolveVenueLocation = (answer: string): ResolvedVenueLocation | nu
     if (supplied.length === 2) return supplied.toUpperCase();
     return STATE_NAMES[supplied] ?? "OTHER";
   })() : EVENT_MARKET_STATES[key(cityPart)] ?? "";
-  if (!STATE_TIME_ZONES[state]) return null;
+  const timeZone = CITY_TIME_ZONES[`${key(cityPart)}|${state}`] ?? STATE_TIME_ZONES[state];
+  if (!timeZone) return null;
 
   return {
     city: cleanCity(cityPart),
     state,
-    timeZone: STATE_TIME_ZONES[state],
+    timeZone,
   };
 };
