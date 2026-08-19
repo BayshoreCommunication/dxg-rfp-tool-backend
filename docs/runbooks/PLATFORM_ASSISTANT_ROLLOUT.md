@@ -1,5 +1,11 @@
 # Platform AI Assistant Rollout
 
+> ⚠️ **Staging no longer exists** (removed 2026-08-18). Steps below that
+> require verifying in staging before a production change have no environment
+> to run in. Do not treat them as satisfied — either stand up a temporary
+> environment for the rehearsal, or record an explicit, signed-off exception
+> for that release. Weakening this gate silently is not an option.
+
 > Production runbook. Last updated: 2026-07-29. Operational owner role: Platform Operations. Approval owner role: Product Owner.
 
 ## Safety position

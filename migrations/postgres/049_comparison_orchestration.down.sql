@@ -1,0 +1,14 @@
+DROP TRIGGER IF EXISTS comparison_operations_immutable ON rfpilot.comparison_operations;
+DROP TRIGGER IF EXISTS comparison_snapshots_immutable ON rfpilot.comparison_snapshots;
+DROP TRIGGER IF EXISTS comparison_participant_results_immutable ON rfpilot.comparison_participant_results;
+DROP TRIGGER IF EXISTS comparison_dependencies_immutable ON rfpilot.comparison_job_dependencies;
+DROP TRIGGER IF EXISTS comparison_manifests_immutable ON rfpilot.comparison_manifests;
+DROP FUNCTION IF EXISTS rfpilot.guard_comparison_immutable();
+DROP TABLE IF EXISTS rfpilot.comparison_operations;
+DROP TABLE IF EXISTS rfpilot.comparison_snapshots;
+DROP TABLE IF EXISTS rfpilot.comparison_participant_results;
+DROP TABLE IF EXISTS rfpilot.comparison_job_dependencies;
+DROP TABLE IF EXISTS rfpilot.comparison_job_nodes;
+DROP TABLE IF EXISTS rfpilot.comparison_participants;
+DROP TABLE IF EXISTS rfpilot.comparison_manifests;
+DROP TABLE IF EXISTS rfpilot.comparison_runs;

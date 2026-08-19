@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-08-10 · **Branch:** `main` (all three repos) · **Status:** audit roadmap M1–M6 complete, DXG pricing engine imported, conversational workspace shipped, governed cross-format proposal extraction hardened, and the read-only Platform AI Assistant integrated behind deny-by-default release gates.
+**Last updated:** 2026-08-12 · **Branch:** proposal-intelligence delivery branches · **Status:** audit roadmap M1–M6 complete, governed proposal creation and Platform Assistant shipped, and Proposal Intelligence Task 2 submission versioning implemented for review.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -117,11 +117,30 @@ is committed on `ai-agent`.
   rules with an approval workflow; a deterministic investment engine with
   provenance and explicit refusals; a vendor-response analysis durable job
   producing cited findings with human-escalation flags.
+- **Proposal Intelligence Task 3 — requirement registry (2026-08-12).** Migration 045 and the `requirementRegistry` module add tenant-isolated, idempotent requirement/evaluation versions derived from the complete safe proposal surface and accepted rendered narrative. Planner review is optimistic-lock protected; approval requires confirmed 100% weights and explicit mandatory/criterion/verification review. Approved rows are database-immutable, proposal version/checksum changes surface as stale, and supersession creates a linked new draft. The dashboard route is `/proposals/:id/intelligence/requirements`. Task 4 evidence extraction remains unstarted and requires confirmation.
 - **M6 — Hardening.** A real docker-compose integration suite (25 tests against
   live Postgres/Redis/Mongo), the gold evaluation harness as a release gate,
   cross-store purge propagation, `/api/v1/ai/usage-report`, PM2 config for all
   three processes, the production runbook, and an admin AI Operations page for
   runtime readiness, provider-attempt outcomes, token usage, and gateway runs.
+
+### Proposal Intelligence foundation (Task 2, 2026-08-12)
+
+Vendor responses now have a stable `VendorSubmission` identity and immutable
+`VendorSubmissionVersion` records. Every initial, revised, clarification, BAFO,
+or administrative version receives a parent pointer, monotonic version number,
+idempotency key, source manifest, SHA-256 checksum, and receipt metadata. The
+legacy `VendorResponse` remains a latest-version compatibility projection so
+the current inbox and vendor-analysis behavior continue during migration.
+
+New files retain private storage and fail-closed malware scanning, and are
+registered idempotently as `vendor_submission` sources in PostgreSQL when the
+data foundation is available. Migration 044 adds version/source linkage without
+attributing a public upload to a planner. The dry-run-first
+`backfillVendorSubmissionVersions.ts` projects legacy responses to version 1,
+reconciles eligible sources, and journals checksummed outcomes. Comparison,
+requirement mapping, extraction, evaluator scoring, and decision UX remain later
+explicitly approved tasks.
 
 ### The DXG pricing engine (client workbook)
 
@@ -300,6 +319,9 @@ entitlement or deployment allowlist exists.
   a small migration.
 - Vendor analysis has no attempt-ledger coverage; bid-vs-bid pricing comparison
   and exportable client-ready reports are unbuilt.
+- Existing vendor analysis still reads the latest `VendorResponse` compatibility
+  projection. Binding analysis to an explicitly selected immutable version is
+  part of the later comparison orchestration task.
 
 **Testing**
 - Unit suites are strong (backend 440, dashboard 332) and there is a real

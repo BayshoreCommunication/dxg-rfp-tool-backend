@@ -1,0 +1,12 @@
+DROP TRIGGER IF EXISTS clarification_questions_frozen ON rfpilot.comparison_clarification_questions;
+DROP FUNCTION IF EXISTS rfpilot.guard_clarification_question_mutation();
+DROP TRIGGER IF EXISTS comparison_report_exports_immutable ON rfpilot.comparison_report_exports;
+DROP TRIGGER IF EXISTS comparison_clarification_events_immutable ON rfpilot.comparison_clarification_events;
+DROP TRIGGER IF EXISTS proposal_intelligence_holds_immutable ON rfpilot.proposal_intelligence_legal_hold_events;
+DROP FUNCTION IF EXISTS rfpilot.guard_proposal_intelligence_event_immutable();
+DROP TABLE IF EXISTS rfpilot.comparison_report_exports;
+DROP TABLE IF EXISTS rfpilot.comparison_clarification_events;
+DROP TABLE IF EXISTS rfpilot.comparison_clarification_questions;
+DROP TABLE IF EXISTS rfpilot.comparison_clarification_sets;
+DROP TABLE IF EXISTS rfpilot.proposal_intelligence_legal_hold_events;
+DROP TABLE IF EXISTS rfpilot.proposal_intelligence_retention_policies;

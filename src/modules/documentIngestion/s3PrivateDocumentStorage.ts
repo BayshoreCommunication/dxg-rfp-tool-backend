@@ -1,5 +1,6 @@
 import { DeleteObjectCommand, GetObjectCommand, S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import fs from "node:fs/promises";
 import { DocumentIngestionError } from "./domain";
 import type { PrivateDocumentStorage } from "./ports";
 
@@ -35,6 +36,34 @@ const configuration = () => {
   };
 };
 
+export const uploadPrivateDocumentFile = async (input: {
+  localPath: string;
+  objectKey: string;
+}) => {
+  const { bucket, client } = configuration();
+  const bytes = await fs.readFile(input.localPath);
+  await client.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: input.objectKey,
+    Body: bytes,
+    ContentLength: bytes.length,
+    ContentType: "application/octet-stream",
+  }));
+  await fs.unlink(input.localPath).catch(() => undefined);
+};
+
+export const presignPrivateDocumentGetUrl = async (
+  objectKey: string,
+  expiresSeconds: number,
+) => {
+  const { bucket, client } = configuration();
+  return getSignedUrl(
+    client,
+    new GetObjectCommand({ Bucket: bucket, Key: objectKey }),
+    { expiresIn: expiresSeconds },
+  );
+};
+
 export const s3PrivateDocumentStorage: PrivateDocumentStorage = {
   async createUpload(input) {
     const { bucket, client } = configuration();
@@ -55,4 +84,3 @@ export const s3PrivateDocumentStorage: PrivateDocumentStorage = {
     await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }));
   },
 };
-

@@ -1,7 +1,7 @@
 # Monitoring & Observability
 
 > Everything is CloudWatch, region **us-east-2**. Replace `<env>` with
-> `staging` or `production` throughout.
+> `production` throughout (the only environment).
 
 ## Logs — where to look first
 
@@ -54,7 +54,7 @@ incidents). Console: **CloudWatch → All alarms → filter `rfpilot-<env>`**.
 
 ## Application health
 
-- `GET https://api.dxg-agency.com/health` (or `api-staging.`) returns
+- `GET https://api.dxg-agency.com/health` returns
   `{status:"OK", database:"connected", postgres:{ready,migrationVersion},
   queue:{ready}, environment}` — one call tells you Mongo, Postgres, and
   Redis connectivity plus the schema version.
@@ -88,7 +88,7 @@ incidents). Console: **CloudWatch → All alarms → filter `rfpilot-<env>`**.
 
 - **MongoDB Atlas**: Atlas console (cluster shared by both envs) — metrics,
   slow queries, and the **Network Access allowlist** (NAT EIPs
-  `18.223.236.137` staging / `13.58.171.171` production must stay listed).
+  `13.58.171.171` must stay listed).
 - **SES**: Console → SES (us-east-2) → Account dashboard: sending quota,
   bounce/complaint rates, suppression list. Sandbox status lives here too.
 - **OpenAI**: usage dashboard on platform.openai.com (one shared key —

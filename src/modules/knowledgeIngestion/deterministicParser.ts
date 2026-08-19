@@ -7,11 +7,30 @@ import { KnowledgeIngestionError } from "./domain";
 const mammoth = require("mammoth") as { extractRawText: (value: { buffer: Buffer }) => Promise<{ value: string }> };
 
 export type SourceFragment = { ordinal: number; content: string; coordinates: Record<string, string | number>; checksum: string };
-export type ParseResult = { parserKind: string; parserVersion: "deterministic-v1"; fragments: SourceFragment[] };
+export type SourceTableCell = {
+  row: number;
+  column: number;
+  content: string;
+  isHeader: boolean;
+  coordinates: Record<string, string | number>;
+  checksum: string;
+};
+export type SourceTable = {
+  key: string;
+  label: string;
+  ordinal: number;
+  rowCount: number;
+  columnCount: number;
+  coordinates: Record<string, string | number>;
+  checksum: string;
+  cells: SourceTableCell[];
+};
+export type ParseResult = { parserKind: string; parserVersion: "deterministic-v1"; fragments: SourceFragment[]; tables: SourceTable[] };
 
 const MAX_BYTES = 50 * 1024 * 1024;
 const MAX_FRAGMENTS = 5000;
 const MAX_CONTENT = 50_000;
+const MAX_TABLE_CELLS = 250_000;
 
 const clean = (value: string): string => value.split("\0").join("").replace(/\r\n/g, "\n").trim();
 const fragment = (ordinal: number, content: string, coordinates: SourceFragment["coordinates"]): SourceFragment => {
@@ -110,6 +129,38 @@ const tableFragments = (rows: string[][], coordinate: (row: number, columns: num
   return rows.map((row, index) => fragment(index, tableRowContent(row, headers, index, headerIndex), coordinate(index + 1, row.length)));
 };
 
+const tableFromRows = (
+  key: string,
+  label: string,
+  ordinal: number,
+  rows: string[][],
+  coordinates: Record<string, string | number>,
+): SourceTable => {
+  const headerIndex = headerRowIndex(rows);
+  const cells: SourceTableCell[] = [];
+  let columnCount = 0;
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    columnCount = Math.max(columnCount, rows[rowIndex].length);
+    for (let columnIndex = 0; columnIndex < rows[rowIndex].length; columnIndex += 1) {
+      const content = clean(rows[rowIndex][columnIndex]).slice(0, MAX_CONTENT);
+      if (!content) continue;
+      cells.push({
+        row: rowIndex + 1,
+        column: columnIndex + 1,
+        content,
+        isHeader: rowIndex === headerIndex,
+        coordinates: { ...coordinates, row: rowIndex + 1, column: columnIndex + 1 },
+        checksum: crypto.createHash("sha256").update(content.normalize("NFKC")).digest("hex"),
+      });
+      if (cells.length > MAX_TABLE_CELLS) throw new KnowledgeIngestionError("PARSER_LIMIT_EXCEEDED", "Table produces too many cells.", 413);
+    }
+  }
+  const checksum = crypto.createHash("sha256")
+    .update(cells.map((cell) => `${cell.row}:${cell.column}:${cell.checksum}`).join("\n"))
+    .digest("hex");
+  return { key, label, ordinal, rowCount: rows.length, columnCount, coordinates, checksum, cells };
+};
+
 // Each parser produces reviewable, checksum-bound fragments. Text headings and
 // schedule labels remain attached to the immediately following value block;
 // tabular rows carry their header labels so a model never sees anonymous cell
@@ -120,6 +171,7 @@ export const deterministicParser = {
     // eslint-disable-next-line no-useless-assignment
     let parserKind = "";
     let fragments: SourceFragment[] = [];
+    const tables: SourceTable[] = [];
     if (mimeType === "application/pdf") {
       parserKind = "pdf-native-text";
       const parser = new PDFParse({ data: bytes });
@@ -133,7 +185,9 @@ export const deterministicParser = {
       fragments = textBlocks(result.value).map((block, index) => fragment(index, block.content, { characterStart: block.start, characterEnd: block.end }));
     } else if (mimeType === "text/csv") {
       parserKind = "csv";
-      fragments = tableFragments(delimited(bytes.toString("utf8")), (row, columns) => ({ row, columnStart: 1, columnEnd: columns }));
+      const rows = delimited(bytes.toString("utf8"));
+      fragments = tableFragments(rows, (row, columns) => ({ row, columnStart: 1, columnEnd: columns }));
+      tables.push(tableFromRows("csv:1", "CSV data", 0, rows, { table: 1 }));
     } else if (mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") {
       parserKind = "xlsx";
       const workbook = new ExcelJS.Workbook();
@@ -148,6 +202,13 @@ export const deterministicParser = {
         });
         const headerIndex = headerRowIndex(rows.map((row) => row.values));
         const headers = rows[headerIndex]?.values ?? [];
+        tables.push(tableFromRows(
+          `sheet:${tables.length + 1}`,
+          sheet.name.slice(0, 255),
+          tables.length,
+          rows.map((row) => row.values),
+          { sheet: sheet.name.slice(0, 100) },
+        ));
         for (let index = 0; index < rows.length; index += 1) {
           const row = rows[index];
           fragments.push(fragment(ordinal, tableRowContent(row.values, headers, index, headerIndex), {
@@ -160,6 +221,6 @@ export const deterministicParser = {
       parserKind = "text";
       fragments = textBlocks(bytes.toString("utf8")).map((block, index) => fragment(index, block.content, { characterStart: block.start, characterEnd: block.end }));
     } else throw new KnowledgeIngestionError("UNSUPPORTED_PARSER", "No deterministic parser is approved for this file type.", 415);
-    return { parserKind, parserVersion: "deterministic-v1", fragments: ensure(bytes, fragments) };
+    return { parserKind, parserVersion: "deterministic-v1", fragments: ensure(bytes, fragments), tables };
   },
 };

@@ -16,7 +16,7 @@ to [Troubleshooting](troubleshooting.md) or [Incident Response](incident-respons
 |---|---|---|
 | 🏗 | [Architecture](architecture.md) | What is our production architecture? |
 | ☁️ | [AWS Infrastructure](aws-infrastructure.md) | What AWS services do we use, and what are they named? |
-| 🌎 | [Environments](environments.md) | What is staging vs production? |
+| 🌎 | [Environments](environments.md) | What does the production environment look like? |
 | 🚀 | [Deployment](deployment.md) | How does a change reach production? |
 | 🔄 | [CI/CD](cicd.md) | What exactly does the pipeline do, and where do I look when it fails? |
 | ⚙️ | [Services](services.md) | What processes run, on what ports, with what dependencies? |
@@ -33,15 +33,14 @@ to [Troubleshooting](troubleshooting.md) or [Incident Response](incident-respons
 The backend is a Node.js 20 / Express monolith compiled to one Docker image
 with multiple entrypoints (API, durable worker, outbox dispatcher, AI
 gateway). It runs on **ECS Fargate** in **us-east-2** (AWS account
-`295229565954`) behind an **ALB** with a **WAF**, in two fully separate
-environments — `staging` and `production` — each with its own VPC, RDS
-PostgreSQL 16, ElastiCache Redis, S3 buckets, CloudFront asset CDN, and
-Secrets Manager secret. MongoDB is external (Atlas, one shared cluster, one
-database per environment). Everything is **CDK TypeScript**
-(`deploy/aws/lib/`), and deployment is **GitHub Actions via OIDC**: push to
-`main` deploys staging, fast-forward `production` deploys production. Public
-entry points: `https://api.dxg-agency.com` (production) and
-`https://api-staging.dxg-agency.com` (staging).
+`295229565954`) behind an **ALB** with a **WAF**, in a single
+environment — `production` — with its own VPC, RDS PostgreSQL 16,
+ElastiCache Redis, S3 buckets, CloudFront asset CDN, and Secrets Manager
+secret. MongoDB is external (Atlas, database `dxg_rfp_tool_prod`). Everything
+is **CDK TypeScript** (`deploy/aws/lib/`), and deployment is **GitHub Actions
+via OIDC**: pushing the `production` branch deploys production, and `main`
+runs CI only. A separate `staging` environment existed until 2026-08-18.
+Public entry point: `https://api.dxg-agency.com`.
 
 ## Browsing these docs as a website
 

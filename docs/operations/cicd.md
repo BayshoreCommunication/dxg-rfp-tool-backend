@@ -7,12 +7,10 @@
 
 ### Deploy to AWS — [`.github/workflows/deploy-aws.yml`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/.github/workflows/deploy-aws.yml)
 
-- **Trigger:** push to `main` or `production` (doc-only paths ignored), or
-  manual `workflow_dispatch` against either branch.
-- **Source branch → target environment:** `main` → staging,
-  `production` → production (single workflow, `ENV_NAME` derived from the
-  branch; the deploy job binds to the matching GitHub *environment*, which
-  scopes its variables).
+- **Trigger:** push to `production` (doc-only paths ignored), or manual
+  `workflow_dispatch` against that branch. `main` runs CI only.
+- **Target environment:** `production` — the only one. The deploy job binds
+  to the `production` GitHub *environment*, which scopes its variables.
 - **Concurrency:** one run per branch at a time (`aws-deploy-${ref}`), new
   runs queue — they are never cancelled mid-deploy.
 - **Auth:** GitHub OIDC only. The job assumes
@@ -33,7 +31,7 @@
 3. **Trivy scan** — fails on **fixable HIGH/CRITICAL** findings
    (`ignore-unfixed: true`, exceptions in [`.trivyignore`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/.trivyignore)).
 4. **Push immutable image** `sha-<full-git-sha>` to ECR. Promotion-aware:
-   if the tag already exists (staging built the same commit), it is reused;
+   if the tag already exists (a re-run of the same commit), it is reused;
    a lost race against a concurrent same-sha push is also tolerated. The
    deploy role has `ecr:DescribeImages` specifically for this check.
 5. **Read stack outputs** (cluster, private subnets, migrate SG, ALB DNS)
@@ -72,7 +70,7 @@ retired. The droplet it targeted is being decommissioned. Do not use.
 
 1. `gh run view <run-id> --log-failed` (or the Actions UI) — which step?
 2. **Quality gates**: reproduce locally with `npm run ci`; infra synth
-   failures with `cd deploy/aws && npx cdk synth --strict -c nag=true -c env=staging`.
+   failures with `cd deploy/aws && npx cdk synth --strict -c nag=true -c env=production`.
 3. **Trivy**: the log names the CVE and package. If unfixable upstream, add
    it to `.trivyignore` with a comment; prefer upgrading the dependency.
 4. **Image push**: "tag already exists" on a *new* commit should be

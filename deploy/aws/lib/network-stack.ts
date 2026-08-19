@@ -45,12 +45,24 @@ export class NetworkStack extends cdk.Stack {
       trafficType: ec2.FlowLogTrafficType.REJECT,
     });
 
-    // Keep S3/ECR/Secrets/Logs traffic off the NAT gateway.
+    // Gateway endpoints are free and carry the bulk of the object traffic,
+    // so S3 is unconditional.
     this.vpc.addGatewayEndpoint("S3Endpoint", { service: ec2.GatewayVpcEndpointAwsService.S3 });
-    this.vpc.addInterfaceEndpoint("EcrApiEndpoint", { service: ec2.InterfaceVpcEndpointAwsService.ECR });
-    this.vpc.addInterfaceEndpoint("EcrDkrEndpoint", { service: ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER });
-    this.vpc.addInterfaceEndpoint("LogsEndpoint", { service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS });
-    this.vpc.addInterfaceEndpoint("SecretsEndpoint", { service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER });
+
+    // Interface endpoints keep ECR/Logs/Secrets traffic off the NAT gateway.
+    // They are billed per endpoint per AZ per hour whether or not they carry
+    // traffic: four endpoints across two subnets cost ~$58/month, while the
+    // traffic they divert measured ~1.3 GB/month — roughly $0.06 at NAT's
+    // per-GB rate. Since the tasks already sit behind a NAT gateway that
+    // reaches the same APIs, this is off by default and gated on config so
+    // an environment with a private-egress compliance requirement can turn
+    // it back on without rediscovering the trade-off.
+    if (config.privateAwsEndpoints) {
+      this.vpc.addInterfaceEndpoint("EcrApiEndpoint", { service: ec2.InterfaceVpcEndpointAwsService.ECR });
+      this.vpc.addInterfaceEndpoint("EcrDkrEndpoint", { service: ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER });
+      this.vpc.addInterfaceEndpoint("LogsEndpoint", { service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS });
+      this.vpc.addInterfaceEndpoint("SecretsEndpoint", { service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER });
+    }
 
     const sg = (name: string, description: string): ec2.SecurityGroup =>
       new ec2.SecurityGroup(this, name, { vpc: this.vpc, description, allowAllOutbound: true });

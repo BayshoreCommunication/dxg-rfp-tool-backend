@@ -1,0 +1,12 @@
+DROP TRIGGER IF EXISTS evaluation_matrix_versions_frozen ON rfpilot.evaluation_matrix_versions;
+DROP FUNCTION IF EXISTS rfpilot.guard_matrix_mutation();
+DROP TRIGGER IF EXISTS requirement_sets_frozen ON rfpilot.requirement_sets;
+DROP FUNCTION IF EXISTS rfpilot.guard_requirement_set_mutation();
+DROP TRIGGER IF EXISTS evaluation_criteria_frozen ON rfpilot.evaluation_criteria;
+DROP TRIGGER IF EXISTS requirements_frozen ON rfpilot.requirements;
+DROP FUNCTION IF EXISTS rfpilot.guard_requirement_registry_child_mutation();
+DROP TABLE IF EXISTS rfpilot.requirement_registry_operations;
+DROP TABLE IF EXISTS rfpilot.requirements;
+DROP TABLE IF EXISTS rfpilot.evaluation_criteria;
+DROP TABLE IF EXISTS rfpilot.evaluation_matrix_versions;
+DROP TABLE IF EXISTS rfpilot.requirement_sets;

@@ -18,6 +18,7 @@ The M1–M6 audit roadmap is implemented behind deny-by-default flags. The pinne
 | Room recommendations | Confirmed room/event facts plus approved knowledge fixtures | Deterministic, classified, review-gated suggestions; explicit selective application to a tiny allowlisted room-field set with version and room-identity checks. See [architecture/ROOM_RECOMMENDATIONS.md](architecture/ROOM_RECOMMENDATIONS.md). |
 | Investment guidance | Approved pricing corpus and factors | Deterministic estimate or explicit refusal; never invent a number. |
 | Vendor analysis | Clean vendor response sources | Cited findings and escalation flags; comparison/export remain gaps. |
+| Requirement registry | Current proposal plus accepted rendered-RFP paragraphs | Deterministic, versioned requirements and evaluation criteria; human review and approval required. No model call. |
 | Platform Assistant | Personal chat history, versioned platform facts, eligible approved operating guidance | Read-only, cited platform/workflow guidance streamed through product SSE; cannot mutate or send product data. |
 
 ## Pricing model

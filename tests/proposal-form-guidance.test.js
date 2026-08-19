@@ -16,11 +16,11 @@ const {
 } = require("../src/modules/platformAssistant/proposalFormGuidance");
 
 const EXPECTED_PROPOSAL_FORM_SCHEMA_DIGEST =
-  "e06e1868a515bbd542e6cb041c6e9687c6079da7ae72e4a1e8c988aeac5518e5";
+  "7c28af9a162898c84309e4fdf85cc63f7b04f3db0ffa14289133ae43f207ccfb";
 
 test("proposal field guidance covers the canonical form contract", () => {
   const coverage = proposalFormGuidanceCoverage();
-  assert.equal(coverage.schemaLeafCount, 263);
+  assert.equal(coverage.schemaLeafCount, 265);
   assert.equal(
     coverage.guidedFieldCount + coverage.excludedFieldCount,
     coverage.schemaLeafCount,

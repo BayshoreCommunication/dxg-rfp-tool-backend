@@ -10,6 +10,9 @@ export const issuePublicAccess = async (req: AuthRequest, res: Response): Promis
   if (!mongoose.isValidObjectId(resourceId) || !PUBLIC_GRANT_PURPOSES.includes(purpose as PublicGrantPurpose)) {
     res.status(400).json({ success: false, message: "Valid resourceId and purpose are required" }); return;
   }
+  if (purpose === "vendor:submit" && (typeof recipient !== "string" || !recipient.trim())) {
+    res.status(400).json({ success: false, message: "Recipient is required for vendor submission grants" }); return;
+  }
   const grant = await publicAccess.issue({ organizationId: req.user.organizationId, createdByUserId: req.user.userId, resourceId, purpose, expiresInHours, maxUses, recipient });
   res.status(201).json({ success: true, grant });
 };

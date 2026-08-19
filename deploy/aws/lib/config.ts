@@ -6,12 +6,21 @@
  */
 
 export interface EnvironmentConfig {
-  /** "staging" | "production" — used in stack and resource names. */
+  /** "production" — used in stack and resource names. */
   readonly envName: string;
   /** Git branch whose pushes may deploy this environment via OIDC. */
   readonly deployBranch: string;
   readonly vpcCidr: string;
   readonly natGateways: number;
+  /** Interface VPC endpoints for ECR/Logs/Secrets. They exist to keep that
+   *  traffic off the NAT gateway, but each endpoint bills per AZ per hour
+   *  (~$58/month for the four of them across two subnets) while the traffic
+   *  they divert measured ~1.3 GB/month — about $0.06 through NAT. Disabled
+   *  in production for that reason; set true where private-only egress to
+   *  AWS APIs is a compliance requirement rather than an optimisation.
+   *  The S3 *gateway* endpoint is always created — gateway endpoints are
+   *  free and carry the bulk of the object traffic. */
+  readonly privateAwsEndpoints: boolean;
   readonly rds: {
     readonly instanceClass: string; // e.g. "t4g.small"
     readonly multiAz: boolean;
@@ -30,6 +39,12 @@ export interface EnvironmentConfig {
     readonly clamav: TaskSize;
     readonly workerMaxCount: number;
   };
+  /** ECS Container Insights. Publishes ~158 custom metrics for this cluster
+   *  (~$47/month) and is the ONLY source of ECS/ContainerInsights
+   *  RunningTaskCount. When false, observability-stack.ts substitutes a
+   *  missing-data alarm on the standard AWS/ECS metrics — see the comment
+   *  there before changing this, because the two are not equivalent. */
+  readonly containerInsights: boolean;
   /** ALB idle timeout. The assistant SSE stream can be silent for up to
    *  120s before its first token; WebSocket clients get no server pings. */
   readonly albIdleTimeoutSeconds: number;
@@ -55,9 +70,9 @@ export interface TaskSize {
 }
 
 /* The governed AI surface, shared by every environment whose AI release has
- * been approved. Both environments deliberately run the same capability set;
- * only AI_ENVIRONMENT differs. One definition means a new flag cannot be
- * added to one environment and silently forgotten in the other.
+ * been approved. Kept as a separate constant rather than inlined: it is the
+ * single definition an environment opts into, so a flag cannot be added to
+ * one environment and silently forgotten in another.
  *
  * Enabling AI is still explicit per environment: an environment opts in by
  * spreading this base. Omitting it (or `{}`) keeps the platform's
@@ -110,54 +125,54 @@ const AI_RELEASE: Record<string, string> = {
   LIVE_AI_PROPOSAL_SOURCE_ENABLED: "true",
 };
 
+/* ⚠️ TEMPORARY PRE-LAUNCH COST POSTURE — set to false BEFORE real users.
+ *
+ * Production has no users yet (2026-08-18), so the redundancy that protects
+ * against an AZ failure protects nobody: a single-AZ database and a
+ * replica-less Redis save ~$61/month for a recovery window that currently
+ * costs nothing. Durability is NOT affected — 30-day automated backups and
+ * deletion protection both stay on. This trades AUTOMATIC failover for
+ * MANUAL restore.
+ *
+ * Setting this to false and redeploying the Data stack restores Multi-AZ RDS
+ * and the Redis replica. It is a LAUNCH BLOCKER, tracked in
+ * deploy/aws/STATE.md — do not put real users on this posture.
+ *
+ * Both changes apply in place, and each causes a brief interruption when
+ * applied AND again when reverted. Schedule them.
+ */
+export const PRE_LAUNCH_REDUCED_REDUNDANCY = true;
+
 export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
-  staging: {
-    envName: "staging",
-    deployBranch: "main",
-    vpcCidr: "10.40.0.0/16",
-    natGateways: 1,
-    rds: {
-      instanceClass: "t4g.small",
-      multiAz: false,
-      allocatedStorageGb: 20,
-      backupRetentionDays: 7,
-      deletionProtection: false,
-    },
-    redis: { nodeType: "cache.t4g.micro", replicas: 0 },
-    ecs: {
-      api: { cpu: 512, memoryMiB: 1024 },
-      worker: { cpu: 1024, memoryMiB: 2048 },
-      dispatcher: { cpu: 256, memoryMiB: 512 },
-      // clamd loads the full signature database into memory (~1.5–2.5 GiB).
-      clamav: { cpu: 1024, memoryMiB: 3072 },
-      workerMaxCount: 2,
-    },
-    albIdleTimeoutSeconds: 180,
-    mongoDbName: "dxg_rfp_tool_staging",
-    assetPublicUrlBase: "https://d3bje2jgtaou7s.cloudfront.net",
-    browserUploadOrigins: ["http://localhost:3001", "http://localhost:3000"],
-    aiEnvironment: { AI_ENVIRONMENT: "staging", ...AI_RELEASE },
-  },
   production: {
     envName: "production",
     deployBranch: "production",
     vpcCidr: "10.41.0.0/16",
     natGateways: 1,
+    privateAwsEndpoints: false,
     rds: {
       instanceClass: "t4g.medium",
-      multiAz: true,
+      multiAz: !PRE_LAUNCH_REDUCED_REDUNDANCY,
       allocatedStorageGb: 50,
       backupRetentionDays: 30,
       deletionProtection: true,
     },
-    redis: { nodeType: "cache.t4g.small", replicas: 1 },
+    redis: { nodeType: "cache.t4g.small", replicas: PRE_LAUNCH_REDUCED_REDUNDANCY ? 0 : 1 },
+    // CPU rightsized 2026-08-18 from 1024 on api/worker/clamav. Seven-day
+    // observed utilisation at the time: api 2.3% avg / 8.8% peak, worker
+    // 1.1% / 3.0%, clamav 1.1% / 1.8% — i.e. under a tenth of one vCPU.
+    // Memory is deliberately NOT reduced: it is the headroom that absorbs
+    // load, and clamd holds ~990 MiB of signature database. Revisit with
+    // real traffic; autoscaling (workerMaxCount) is the intended answer to
+    // load, not a larger steady-state task.
     ecs: {
-      api: { cpu: 1024, memoryMiB: 2048 },
-      worker: { cpu: 1024, memoryMiB: 2048 },
+      api: { cpu: 512, memoryMiB: 2048 },
+      worker: { cpu: 512, memoryMiB: 2048 },
       dispatcher: { cpu: 256, memoryMiB: 512 },
-      clamav: { cpu: 1024, memoryMiB: 3072 },
+      clamav: { cpu: 512, memoryMiB: 3072 },
       workerMaxCount: 4,
     },
+    containerInsights: false,
     albIdleTimeoutSeconds: 180,
     mongoDbName: "dxg_rfp_tool_prod",
     assetPublicUrlBase: "https://d1hn23mh1h53mx.cloudfront.net",

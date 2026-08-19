@@ -1,6 +1,8 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const VendorResponse = require("../modal/vendorResponseModel").default;
+const VendorSubmission = require("../modal/vendorSubmissionModel").default;
+const VendorSubmissionVersion = require("../modal/vendorSubmissionVersionModel").default;
 const {
   createCheckVendorResponse,
   createSubmitVendorResponse,
@@ -12,6 +14,16 @@ test("vendor responses persist the tenant organization field", () => {
   assert.equal(organizationPath.options.required[0], true);
 });
 
+test("submission and immutable version schemas enforce stable version identity", () => {
+  assert.ok(VendorSubmission.schema.path("currentVersionId"));
+  assert.equal(VendorSubmission.schema.path("organizationId").options.required, true);
+  assert.ok(VendorSubmissionVersion.schema.path("manifestChecksum"));
+  assert.ok(VendorSubmissionVersion.schema.indexes().some(([keys, options]) =>
+    keys.submissionId === 1 && keys.versionNumber === 1 && options.unique === true));
+  assert.ok(VendorSubmissionVersion.schema.indexes().some(([keys, options]) =>
+    keys.organizationId === 1 && keys.idempotencyKey === 1 && options.unique === true));
+});
+
 const dependencies = (capture = {}) => ({
   folderName: "/DXG/",
   now: () => 123456,
@@ -19,21 +31,49 @@ const dependencies = (capture = {}) => ({
     findExisting: async () => null,
     findByTrackingId: async () => null,
     findByProposalAndEmail: async () => null,
-    updateExisting: async (input) => {
-      capture.update = input;
-      return { _id: input.responseId, proposalTitle: "Summit" };
-    },
+    findVersionByIdempotencyKey: async () => null,
     findProposal: async (proposalId) => ({
       proposalId,
+      organizationId: "507f1f77bcf86cd799439011",
       ownerUserId: "planner-001",
       proposalTitle: "DXG Summit",
     }),
-    create: async (input) => {
-      capture.create = input;
-      return { _id: "response-001", ...input };
+    saveVersion: async (input) => {
+      capture.save = input;
+      const versionNumber = input.existingResponse ? 2 : 1;
+      const response = {
+        _id: input.existingResponse?._id || "response-001",
+        proposalTitle: input.proposalTitle,
+        currentVersionNumber: versionNumber,
+        ...input,
+      };
+      return {
+        created: true,
+        record: {
+          submissionId: "507f1f77bcf86cd799439012",
+          versionId: versionNumber === 1 ? "507f1f77bcf86cd799439013" : "507f1f77bcf86cd799439014",
+          versionNumber,
+          parentVersionId: versionNumber === 1 ? null : "507f1f77bcf86cd799439013",
+          reason: input.reason,
+          receivedAt: new Date(123456).toISOString(),
+          manifestChecksum: "a".repeat(64),
+          proposalId: input.proposalId,
+          organizationId: input.organizationId,
+          ownerUserId: input.ownerUserId,
+          proposalTitle: input.proposalTitle,
+          vendorName: input.vendorName,
+          submittedBy: input.submittedBy,
+          email: input.email,
+          message: input.message,
+          documents: input.newDocuments,
+          response,
+        },
+      };
     },
+    getReceipt: async () => null,
   },
   storage: {
+    inspect: async () => ({ sizeBytes: 1234, sha256: "b".repeat(64) }),
     upload: async (input) => {
       capture.upload = input;
       return `https://storage.example/${input.objectKey}`;
@@ -50,6 +90,12 @@ const dependencies = (capture = {}) => ({
   confirmation: {
     send: async (input) => {
       capture.confirmation = input;
+    },
+  },
+  sourceRegistry: {
+    register: async (record) => {
+      capture.sourceRecord = record;
+      return { registered: record.documents.length, pending: 0 };
     },
   },
 });
@@ -91,7 +137,7 @@ test("invalid public submission stops before storage or persistence", async () =
 
   assert.deepEqual(result, { kind: "invalid", field: "vendorName" });
   assert.equal(capture.upload, undefined);
-  assert.equal(capture.create, undefined);
+  assert.equal(capture.save, undefined);
 });
 
 test("new submission normalizes data, scopes storage, and notifies planner", async () => {
@@ -109,17 +155,20 @@ test("new submission normalizes data, scopes storage, and notifies planner", asy
   });
 
   assert.equal(result.kind, "created");
-  assert.deepEqual(capture.upload, {
-    localPath: "/tmp/quote",
-    objectKey:
-      "DXG/vendor-responses-private/proposal-001/123456-0-quote__final_.pdf",
-  });
-  assert.equal(capture.create.email, "sales@av.example");
-  assert.equal(capture.create.vendorName, "AV Partners");
-  assert.equal(capture.create.trackingId, "tracking-001");
-  assert.equal(capture.create.documents.length, 1);
+  assert.equal(capture.upload.localPath, "/tmp/quote");
+  assert.equal(
+    capture.upload.objectKey,
+    `DXG/vendor-responses-private/proposal-001/sources/${capture.save.newDocuments[0].sourceId}-0-quote__final_.pdf`,
+  );
+  assert.equal(capture.save.email, "sales@av.example");
+  assert.equal(capture.save.vendorName, "AV Partners");
+  assert.equal(capture.save.trackingId, "tracking-001");
+  assert.equal(capture.save.newDocuments.length, 1);
+  assert.equal(capture.save.newDocuments[0].sha256, "b".repeat(64));
+  assert.match(capture.save.newDocuments[0].sourceId, /^[0-9a-f-]{36}$/);
   assert.deepEqual(capture.notification, {
     proposalId: "proposal-001",
+    organizationId: "507f1f77bcf86cd799439011",
     ownerUserId: "planner-001",
     proposalTitle: "DXG Summit",
     responseId: "response-001",
@@ -130,12 +179,14 @@ test("new submission normalizes data, scopes storage, and notifies planner", asy
   assert.equal(capture.confirmation.isUpdate, false);
 });
 
-test("existing submission updates without creating planner notification", async () => {
+test("existing submission creates an immutable next version without creating planner notification", async () => {
   const capture = {};
   const deps = dependencies(capture);
   deps.repository.findExisting = async () => ({
     _id: "response-existing",
     proposalTitle: "Original Summit",
+    currentVersionId: "507f1f77bcf86cd799439013",
+    currentVersionNumber: 1,
   });
   const submit = createSubmitVendorResponse(deps);
 
@@ -149,12 +200,13 @@ test("existing submission updates without creating planner notification", async 
     files: [],
   });
 
-  assert.equal(result.kind, "updated");
-  assert.equal(capture.update.responseId, "response-existing");
-  assert.equal(capture.update.trackingId, "new-campaign");
+  assert.equal(result.kind, "version_created");
+  assert.equal(result.submission.versionNumber, 2);
+  assert.equal(capture.save.existingResponse._id, "response-existing");
+  assert.equal(capture.save.trackingId, "new-campaign");
   assert.equal(capture.notification, undefined);
   assert.equal(capture.confirmation.isUpdate, true);
-  assert.equal(capture.confirmation.proposalTitle, "Original Summit");
+  assert.equal(capture.confirmation.proposalTitle, "DXG Summit");
 });
 
 test("infected upload rejects the submission before storage or persistence", async () => {
@@ -182,7 +234,7 @@ test("infected upload rejects the submission before storage or persistence", asy
   assert.deepEqual(result, { kind: "infected", fileName: "payload.pdf" });
   assert.deepEqual(cleaned.sort(), ["/tmp/clean-quote", "/tmp/malware"]);
   assert.equal(capture.upload, undefined);
-  assert.equal(capture.create, undefined);
+  assert.equal(capture.save, undefined);
   assert.equal(capture.notification, undefined);
 });
 
@@ -210,7 +262,7 @@ test("unscannable upload rejects the submission before storage or persistence", 
   assert.deepEqual(result, { kind: "scan_unavailable" });
   assert.deepEqual(cleaned, ["/tmp/clean-quote"]);
   assert.equal(capture.upload, undefined);
-  assert.equal(capture.create, undefined);
+  assert.equal(capture.save, undefined);
   assert.equal(capture.notification, undefined);
 });
 
@@ -229,7 +281,7 @@ test("clean scan outcome lets the submission proceed to storage", async () => {
   });
 
   assert.equal(result.kind, "created");
-  assert.equal(capture.create.documents.length, 1);
+  assert.equal(capture.save.newDocuments.length, 1);
 });
 
 test("failed attachment upload is cleaned up and submission can continue", async () => {
@@ -250,5 +302,51 @@ test("failed attachment upload is cleaned up and submission can continue", async
 
   assert.equal(result.kind, "created");
   assert.equal(capture.cleanup, "/tmp/failed-upload");
-  assert.deepEqual(capture.create.documents, []);
+  assert.deepEqual(capture.save.newDocuments, []);
+});
+
+test("idempotent replay returns the original version before scanning or uploading", async () => {
+  const capture = {};
+  const deps = dependencies(capture);
+  deps.malwareScan = async () => {
+    capture.scanned = true;
+    return "clean";
+  };
+  deps.repository.findVersionByIdempotencyKey = async () => ({
+    submissionId: "507f1f77bcf86cd799439012",
+    versionId: "507f1f77bcf86cd799439013",
+    versionNumber: 1,
+    parentVersionId: null,
+    reason: "initial",
+    receivedAt: new Date(123456).toISOString(),
+    manifestChecksum: "a".repeat(64),
+    proposalId: "proposal-001",
+    organizationId: "507f1f77bcf86cd799439011",
+    ownerUserId: "planner-001",
+    proposalTitle: "DXG Summit",
+    vendorName: "AV Partners",
+    submittedBy: "Avery",
+    email: "vendor@example.com",
+    message: "Attached",
+    documents: [],
+    response: { _id: "response-001", currentVersionNumber: 1 },
+  });
+  const submit = createSubmitVendorResponse(deps);
+
+  const result = await submit({
+    proposalId: "proposal-001",
+    vendorName: "AV Partners",
+    submittedBy: "Avery",
+    email: "vendor@example.com",
+    message: "Attached",
+    idempotencyKey: "retry-key",
+    files: [{ originalname: "quote.pdf", path: "/tmp/retry", size: 1234 }],
+  });
+
+  assert.equal(result.kind, "duplicate");
+  assert.equal(result.submission.versionId, "507f1f77bcf86cd799439013");
+  assert.equal(capture.cleanup, "/tmp/retry");
+  assert.equal(capture.scanned, undefined);
+  assert.equal(capture.upload, undefined);
+  assert.equal(capture.save, undefined);
 });
