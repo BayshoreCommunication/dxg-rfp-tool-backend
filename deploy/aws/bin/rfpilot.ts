@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import * as cdk from "aws-cdk-lib";
 import { AwsSolutionsChecks, NagSuppressions } from "cdk-nag";
-import { ENVIRONMENTS } from "../lib/config";
+import { ENVIRONMENTS, PRE_LAUNCH_REDUCED_REDUNDANCY } from "../lib/config";
 import { NetworkStack } from "../lib/network-stack";
 import { DataStack } from "../lib/data-stack";
 import { AppStack } from "../lib/app-stack";
@@ -61,6 +61,12 @@ for (const config of Object.values(ENVIRONMENTS)) {
     { id: "AwsSolutions-CFR2", reason: "The CDN fronts read-only public static assets from a private bucket; the application's WAF sits on the ALB." },
     { id: "AwsSolutions-CFR3", reason: "CDN access logging deferred alongside S3 access logging." },
     { id: "AwsSolutions-CFR4", reason: "Distribution uses the default CloudFront certificate until a custom asset domain exists; minimumProtocolVersion is set for when one is attached." },
+    ...(PRE_LAUNCH_REDUCED_REDUNDANCY
+      ? [
+          { id: "AwsSolutions-RDS3", reason: "TEMPORARY pre-launch posture: single-AZ while production has no users. Durability is unchanged (30-day automated backups, deletion protection); this trades automatic failover for manual restore. Multi-AZ is restored by setting PRE_LAUNCH_REDUCED_REDUNDANCY to false — a launch blocker tracked in STATE.md." },
+          { id: "AwsSolutions-AEC4", reason: "TEMPORARY pre-launch posture: Redis runs a single node while production has no users. Redis is transport-only with no snapshots by design and the outbox reconciles after a failure. The replica is restored with PRE_LAUNCH_REDUCED_REDUNDANCY." },
+        ]
+      : []),
   ]);
   suppress(application, [
     { id: "AwsSolutions-IAM5", reason: "Wildcards are grant-generated object-level S3/KMS actions (bucket/*) from grantReadWrite on the task roles; buckets themselves are least-privilege per service." },
