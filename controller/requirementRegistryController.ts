@@ -79,6 +79,14 @@ export const updateRequirement = async (req: AuthRequest, res: Response) => {
     }) });
   } catch (error) { handle(res, error); }
 };
+export const prepareRequirementSet = async (req: AuthRequest, res: Response) => {
+  try {
+    res.json({ data: await requirementRegistryRepository.prepare({
+      ...context(req), setId: uuid(req.params.setId),
+      idempotencyKey: idempotencyKey(req), expectedVersion: expectedVersion(req),
+    }) });
+  } catch (error) { handle(res, error); }
+};
 export const approveRequirementSet = async (req: AuthRequest, res: Response) => {
   try {
     res.json({ data: await requirementRegistryRepository.approve({
