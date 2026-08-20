@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { generateCriteria, generateRequirements } = require("../src/modules/requirementRegistry/generator");
-const { validateForApproval, parseRequirementUpdate } = require("../src/modules/requirementRegistry/domain");
+const { duplicateRequirementIds, normalizeCriterionWeights, suggestedMandatoryStatus, suggestedVerificationMethod, validateForApproval, parseRequirementUpdate } = require("../src/modules/requirementRegistry/domain");
 
 const read = (relative) => fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
 
@@ -64,6 +64,13 @@ test("evaluation criteria preserve confirmed proposal weights", () => {
   assert.ok(criteria.every((criterion) => /^[a-z][a-z0-9_]{0,79}$/.test(criterion.key)), "generated keys satisfy the persisted database contract");
   assert.ok(criteria.every((criterion) => criterion.rubric.maximum === 5 && criterion.rubric.anchors.length === 6));
   assert.equal(criteria[0].rubric.anchors.find((anchor) => anchor.score === 3).label, "Meets");
+});
+
+test("evaluation criteria provide a complete 100 percent fallback matrix", () => {
+  const criteria = generateCriteria({});
+  assert.equal(criteria.length, 7);
+  assert.equal(criteria.reduce((sum, criterion) => sum + criterion.weight, 0), 100);
+  assert.equal(criteria.find((criterion) => criterion.key === "technical_approach").weight, 30);
 });
 
 test("approval validation blocks unreviewed requirements and invalid weights", () => {
@@ -147,6 +154,30 @@ test("requirement edits accept bounded review fields and reject unsafe values", 
   assert.throws(() => parseRequirementUpdate({}), (error) => error.code === "INVALID_REQUIREMENT_UPDATE");
 });
 
+test("automatic preparation balances weights and applies deterministic review defaults", () => {
+  const weights = normalizeCriterionWeights([
+    { id: "technical", weight: 31, ordinal: 0 },
+    { id: "crew", weight: 25, ordinal: 1 },
+    { id: "hybrid", weight: 20, ordinal: 2 },
+    { id: "pricing", weight: 19, ordinal: 3 },
+    { id: "creative", weight: 13, ordinal: 4 },
+    { id: "response", weight: 9, ordinal: 5 },
+    { id: "dei", weight: 3, ordinal: 6 },
+  ]);
+  assert.equal(weights.reduce((sum, criterion) => sum + criterion.weight, 0), 100);
+  assert.equal(suggestedMandatoryStatus("technical", "Vendor must provide redundant streaming."), "mandatory");
+  assert.equal(suggestedMandatoryStatus("technical", "Attendees: 100"), "not_mandatory");
+  assert.equal(suggestedVerificationMethod("commercial"), "commercial");
+});
+
+test("automatic preparation keeps canonical facts and excludes repeated narrative", () => {
+  const duplicates = duplicateRequirementIds([
+    { id: "canonical", kind: "technical", normalized_text: "Vendor must provide a complete technical staffing plan.", source_kind: "canonical_proposal", group_key: "production", ordinal: 4 },
+    { id: "narrative", kind: "narrative", normalized_text: "Provide a complete technical staffing plan", source_kind: "rendered_rfp", group_key: "production", ordinal: 20 },
+  ]);
+  assert.deepEqual([...duplicates], ["narrative"]);
+});
+
 test("migration enforces tenant isolation, versioning, and approved-row immutability", () => {
   const migration = read("migrations/postgres/045_requirement_registry.up.sql");
   for (const table of ["requirement_sets", "evaluation_matrix_versions", "evaluation_criteria", "requirements", "requirement_registry_operations"])
@@ -165,6 +196,7 @@ test("requirement registry routes are available by default and separate reads fr
   const controller = read("controller/requirementRegistryController.ts");
   assert.match(routes, /\/proposals\/:proposalId\/intelligence/);
   assert.match(routes, /requirement-sets\/:setId\/requirements\/:requirementId/);
+  assert.match(routes, /requirement-sets\/:setId\/prepare/);
   assert.match(routes, /authorizeAction\("proposal:read"\)/);
   assert.match(routes, /authorizeAction\("proposal:write"\)/);
   assert.match(controller, /idempotency-key/);

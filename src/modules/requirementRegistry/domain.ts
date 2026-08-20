@@ -113,6 +113,84 @@ export type RequirementUpdate = {
   inclusionReviewed?: boolean;
 };
 
+type ReviewRequirement = {
+  id: string;
+  kind: RequirementKind;
+  normalized_text: string;
+  source_kind: "canonical_proposal" | "rendered_rfp";
+  group_key: string;
+  ordinal: number;
+};
+
+const requirementTokens = (value: string) => new Set(
+  value.toLocaleLowerCase().normalize("NFKC").match(/[a-z0-9]{3,}/g) ?? [],
+);
+
+const duplicatePairs = <T extends { normalized_text: string }>(requirements: T[]) => {
+  const normalized = requirements.map((item) => requirementTokens(item.normalized_text));
+  const pairs: Array<[number, number]> = [];
+  for (let left = 0; left < normalized.length; left += 1) {
+    for (let right = left + 1; right < normalized.length; right += 1) {
+      const a = normalized[left], b = normalized[right];
+      if (!a.size || !b.size) continue;
+      const overlap = [...a].filter((token) => b.has(token)).length;
+      const union = new Set([...a, ...b]).size;
+      const shorter = Math.min(a.size, b.size);
+      if (shorter >= 4 && (overlap / union >= 0.85 || overlap / shorter >= 0.9)) pairs.push([left, right]);
+    }
+  }
+  return pairs;
+};
+
+export const normalizeCriterionWeights = <T extends { id: string; weight: number; ordinal?: number }>(criteria: T[]) => {
+  if (!criteria.length) return [];
+  const safeWeights = criteria.map((item) => Math.max(0, Number(item.weight) || 0));
+  const total = safeWeights.reduce((sum, weight) => sum + weight, 0);
+  const rawBasisPoints = safeWeights.map((weight) => total > 0 ? (weight / total) * 10_000 : 10_000 / criteria.length);
+  const basisPoints = rawBasisPoints.map(Math.floor);
+  let remainder = 10_000 - basisPoints.reduce((sum, weight) => sum + weight, 0);
+  const distribution = rawBasisPoints
+    .map((weight, index) => ({ index, fraction: weight - basisPoints[index], ordinal: criteria[index].ordinal ?? index }))
+    .sort((left, right) => right.fraction - left.fraction || left.ordinal - right.ordinal);
+  for (let index = 0; index < distribution.length && remainder > 0; index += 1, remainder -= 1)
+    basisPoints[distribution[index].index] += 1;
+  return criteria.map((item, index) => ({ id: item.id, weight: basisPoints[index] / 100 }));
+};
+
+export const suggestedMandatoryStatus = (kind: RequirementKind, value: string): MandatoryStatus =>
+  kind === "mandatory" || /\b(must|required|shall|non[- ]?negotiable)\b/i.test(value) ? "mandatory" : "not_mandatory";
+
+export const suggestedVerificationMethod = (kind: RequirementKind): VerificationMethod => {
+  if (kind === "commercial") return "commercial";
+  if (kind === "references") return "reference";
+  if (kind === "submission" || kind === "legal_policy") return "administrative";
+  if (kind === "narrative" || kind === "sustainability_dei") return "narrative";
+  return "document";
+};
+
+export const suggestedCriterionKey = (requirement: Pick<ReviewRequirement, "kind" | "group_key" | "normalized_text">) => {
+  const context = `${requirement.group_key} ${requirement.normalized_text}`.toLowerCase();
+  if (requirement.kind === "commercial") return "pricing";
+  if (requirement.kind === "staffing" || requirement.kind === "references") return "crew_experience";
+  if (requirement.kind === "sustainability_dei") return "sustainability_dei";
+  if (/hybrid|virtual|stream|remote/.test(context)) return "hybrid_virtual";
+  if (/creative|scenic|brand|content/.test(context)) return "creative_scenic";
+  if (requirement.kind === "submission" || requirement.kind === "legal_policy") return "responsiveness";
+  return "technical_approach";
+};
+
+export const duplicateRequirementIds = (requirements: ReviewRequirement[]) => {
+  const duplicates = new Set<string>();
+  for (const [leftIndex, rightIndex] of duplicatePairs(requirements)) {
+    const left = requirements[leftIndex], right = requirements[rightIndex];
+    const keepLeft = left.source_kind !== right.source_kind
+      ? left.source_kind === "canonical_proposal"
+      : left.ordinal <= right.ordinal;
+    duplicates.add(keepLeft ? right.id : left.id);
+  }
+  return duplicates;
+};
+
 export const parseRequirementUpdate = (value: unknown): RequirementUpdate => {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new RequirementRegistryError("INVALID_REQUIREMENT_UPDATE", "A requirement update is required.", 400);
@@ -190,16 +268,7 @@ export const validateForApproval = (input: {
     blocking.push({ code: "VERIFICATION_REVIEW_REQUIRED", count: verificationPending, message: `${verificationPending} requirements need a verification method.` });
   if (sourceMissing)
     blocking.push({ code: "MANDATORY_SOURCE_REQUIRED", count: sourceMissing, message: `${sourceMissing} mandatory requirements are missing a source.` });
-  const normalized = included.map((item) => new Set(item.normalized_text.toLocaleLowerCase().normalize("NFKC").match(/[a-z0-9]{3,}/g) ?? []));
-  let duplicates = 0;
-  for (let left = 0; left < normalized.length; left += 1) for (let right = left + 1; right < normalized.length; right += 1) {
-    const a = normalized[left], b = normalized[right];
-    if (!a.size || !b.size) continue;
-    const overlap = [...a].filter((token) => b.has(token)).length;
-    const union = new Set([...a, ...b]).size;
-    const shorter = Math.min(a.size, b.size);
-    if (shorter >= 4 && (overlap / union >= 0.85 || overlap / shorter >= 0.9)) duplicates += 1;
-  }
+  const duplicates = duplicatePairs(included).length;
   if (duplicates)
     blocking.push({ code: "DUPLICATE_REQUIREMENTS", count: duplicates, message: `${duplicates} included requirement pairs appear duplicative. Exclude or rewrite duplicates before approval.` });
   return { blocking, warnings };

@@ -5,7 +5,12 @@ import { withPostgresTransaction } from "../../../config/postgres";
 import Proposal from "../../../modal/proposalsModel";
 import {
   checksum,
+  duplicateRequirementIds,
+  normalizeCriterionWeights,
   RequirementRegistryError,
+  suggestedCriterionKey,
+  suggestedMandatoryStatus,
+  suggestedVerificationMethod,
   validateForApproval,
 } from "./domain";
 import type { RequirementUpdate } from "./domain";
@@ -338,6 +343,93 @@ export const requirementRegistryRepository = {
         [uuidv7(), organizationId, input.idempotencyKey, input.setId, input.expectedVersion + 1],
       );
       await audit(client, input, organizationId, "requirement.updated", input.setId, { requirementId: input.requirementId, changedFields: Object.keys(input.update), lockVersion: input.expectedVersion + 1 });
+      return view(client, input.setId, current);
+    });
+  },
+
+  async prepare(input: Context & { setId: string; idempotencyKey: string; expectedVersion: number }) {
+    const current = await loadProposal(input);
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await tenant(client, input.organizationMongoId);
+      const proposalReferenceId = await owned(client, input.proposalMongoId, input.actorUserMongoId);
+      const replay = await operation(client, organizationId, input.idempotencyKey);
+      if (replay) return view(client, replay.requirement_set_id, current);
+      const setResult = await client.query<any>("SELECT * FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2 FOR UPDATE", [input.setId, proposalReferenceId]);
+      const set = setResult.rows[0];
+      if (!set) throw new RequirementRegistryError("REQUIREMENT_SET_NOT_FOUND", "Requirement set was not found.", 404);
+      if (!["draft", "in_review"].includes(set.status)) throw new RequirementRegistryError("REQUIREMENT_SET_IMMUTABLE", "Approved requirement sets cannot be edited.", 409);
+      if (set.lock_version !== input.expectedVersion) throw new RequirementRegistryError("REQUIREMENT_SET_VERSION_CONFLICT", "The requirement set changed. Refresh and try again.", 409);
+      if (set.proposal_version !== current.version || set.proposal_checksum !== current.checksum) throw new RequirementRegistryError("REQUIREMENT_SET_STALE", "The proposal changed. Supersede this set before editing.", 409);
+
+      const [requirements, initialCriteria] = await Promise.all([
+        requirementRows(client, input.setId),
+        criterionRows(client, input.setId),
+      ]);
+      let criteria = initialCriteria;
+      if (!criteria.rows.length) {
+        const matrix = await client.query<any>("SELECT id FROM rfpilot.evaluation_matrix_versions WHERE requirement_set_id=$1", [input.setId]);
+        if (!matrix.rows[0]) throw new RequirementRegistryError("CRITERIA_REQUIRED", "The evaluation matrix could not be prepared.", 409);
+        const generatedCriteria = generateCriteria(current.proposal);
+        for (const criterion of generatedCriteria) {
+          await client.query(
+            `INSERT INTO rfpilot.evaluation_criteria(
+              id,organization_id,matrix_version_id,criterion_key,name,description,weight,rubric,ordinal
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)`,
+            [uuidv7(), organizationId, matrix.rows[0].id, criterion.key, criterion.name, criterion.description, criterion.weight, JSON.stringify(criterion.rubric), criterion.ordinal],
+          );
+        }
+        criteria = await criterionRows(client, input.setId);
+      }
+
+      const normalizedWeights = normalizeCriterionWeights(criteria.rows.map((item) => ({ id: item.id, weight: Number(item.weight), ordinal: Number(item.ordinal) })));
+      for (const criterion of normalizedWeights)
+        await client.query("UPDATE rfpilot.evaluation_criteria SET weight=$2,updated_at=now() WHERE id=$1", [criterion.id, criterion.weight]);
+      await client.query(
+        "UPDATE rfpilot.evaluation_matrix_versions SET weights_confirmed=true,total_weight=100 WHERE requirement_set_id=$1",
+        [input.setId],
+      );
+
+      const criterionIds = new Map(criteria.rows.map((item) => [item.criterion_key, item.id]));
+      const duplicateIds = duplicateRequirementIds(requirements.rows.map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        normalized_text: item.normalized_text,
+        source_kind: item.source_kind,
+        group_key: item.group_key,
+        ordinal: Number(item.ordinal),
+      })));
+      for (const requirement of requirements.rows) {
+        const included = !duplicateIds.has(requirement.id);
+        const criterionId = requirement.criterion_id ?? criterionIds.get(suggestedCriterionKey(requirement)) ?? null;
+        await client.query(
+          `UPDATE rfpilot.requirements SET included=$2,inclusion_reviewed=true,
+             mandatory_status=$3,mandatory_reviewed=true,criterion_id=$4,criterion_reviewed=$5,
+             verification_method=$6,updated_by_external_user_id=$7,updated_at=now()
+           WHERE id=$1`,
+          [
+            requirement.id,
+            included,
+            suggestedMandatoryStatus(requirement.kind, requirement.normalized_text),
+            criterionId,
+            criterionId !== null,
+            suggestedVerificationMethod(requirement.kind),
+            input.actorUserMongoId,
+          ],
+        );
+      }
+
+      await client.query("UPDATE rfpilot.requirement_sets SET status='in_review',lock_version=lock_version+1,updated_at=now() WHERE id=$1", [input.setId]);
+      const refreshed = await refreshValidationAndChecksum(client, input.setId);
+      await client.query(
+        "INSERT INTO rfpilot.requirement_registry_operations(id,organization_id,idempotency_key,operation,requirement_set_id,result_lock_version) VALUES($1,$2,$3,'edit',$4,$5)",
+        [uuidv7(), organizationId, input.idempotencyKey, input.setId, input.expectedVersion + 1],
+      );
+      await audit(client, input, organizationId, "requirement_set.prepared", input.setId, {
+        normalizedCriterionCount: normalizedWeights.length,
+        reviewedRequirementCount: requirements.rows.length,
+        excludedDuplicateCount: duplicateIds.size,
+        remainingBlockerCount: refreshed.validation.blocking.length,
+      });
       return view(client, input.setId, current);
     });
   },

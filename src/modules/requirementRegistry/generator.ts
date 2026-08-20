@@ -69,6 +69,15 @@ const CRITERIA: Record<string, { proposalKey: string; name: string; description:
   responsiveness: { proposalKey: "responsiveness", name: "Responsiveness & Communication", description: "Submission quality, response completeness, communication, and project management." },
   sustainability_dei: { proposalKey: "sustainabilityDei", name: "Sustainability & DEI Practices", description: "Sustainability, accessibility, diversity, equity, and inclusion practices." },
 };
+const DEFAULT_CRITERION_WEIGHTS: Record<string, number> = {
+  technical_approach: 30,
+  crew_experience: 20,
+  hybrid_virtual: 10,
+  pricing: 20,
+  creative_scenic: 8,
+  responsiveness: 8,
+  sustainability_dei: 4,
+};
 
 const words = (value: string) => value
   .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -128,9 +137,8 @@ export const generateCriteria = (proposal: Record<string, unknown>): GeneratedCr
   const matrix = budget.evaluationMatrix && typeof budget.evaluationMatrix === "object" ? budget.evaluationMatrix as Record<string, unknown> : {};
   return Object.entries(CRITERIA).flatMap(([key, presentation], ordinal) => {
     const weight = Number(matrix[presentation.proposalKey]);
-    return Number.isFinite(weight) && weight >= 0 && weight <= 100
-      ? [{ key, name: presentation.name, description: presentation.description, weight, ordinal, rubric: rubric(presentation.name) }]
-      : [];
+    const resolvedWeight = Number.isFinite(weight) && weight >= 0 && weight <= 100 ? weight : DEFAULT_CRITERION_WEIGHTS[key];
+    return [{ key, name: presentation.name, description: presentation.description, weight: resolvedWeight, ordinal, rubric: rubric(presentation.name) }];
   });
 };
 
