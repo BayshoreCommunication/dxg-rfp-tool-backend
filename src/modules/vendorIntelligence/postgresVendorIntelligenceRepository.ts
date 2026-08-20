@@ -162,10 +162,68 @@ export const vendorIntelligenceRepository = {
       });
       const stableKey = `vendor-intelligence:${input.versionMongoId}:${set.id}:${inputChecksum}`;
       const old = await client.query<any>(
-        "SELECT * FROM rfpilot.vendor_intelligence_runs WHERE organization_id=$1 AND idempotency_key=$2",
+        `SELECT r.*,j.status job_status
+         FROM rfpilot.vendor_intelligence_runs r
+         JOIN rfpilot.ai_jobs j ON j.id=r.job_id
+         WHERE r.organization_id=$1 AND r.idempotency_key=$2
+         FOR UPDATE OF r,j`,
         [organizationId, stableKey],
       );
-      if (old.rows[0]) return { run: runView(old.rows[0]), created: false };
+      if (old.rows[0]) {
+        const prior = old.rows[0];
+        const retryable = prior.status === "failed" && ["failed", "dead_letter"].includes(prior.job_status);
+        if (!retryable) return { run: runView(prior), created: false };
+
+        await client.query(
+          `UPDATE rfpilot.ai_jobs SET
+             status='queued',attempt_count=0,available_at=now(),error_code=NULL,
+             cancellation_requested_at=NULL,cancelled_by_external_user_id=NULL,
+             started_at=NULL,completed_at=NULL,lease_owner=NULL,lease_expires_at=NULL,
+             progress=0,progress_stage='queued',result_reference=NULL,updated_at=now()
+           WHERE id=$1`,
+          [prior.job_id],
+        );
+        await client.query(
+          `UPDATE rfpilot.job_dead_letters SET
+             operator_status='requeued',recovered_by_external_user_id=$2,
+             recovery_reason='Retry requested from vendor preparation',recovered_at=now()
+           WHERE job_id=$1 AND operator_status='open'`,
+          [prior.job_id, input.actorUserMongoId],
+        );
+        const requeued = await client.query<any>(
+          `UPDATE rfpilot.vendor_intelligence_runs SET
+             status='queued',provider=NULL,model=NULL,requirement_count=0,
+             mapped_requirement_count=0,fact_count=0,contradiction_count=0,
+             safe_error_code=NULL,output_checksum=NULL,started_at=NULL,
+             completed_at=NULL,correlation_id=$2,actor_external_user_id=$3,updated_at=now()
+           WHERE id=$1 RETURNING *`,
+          [prior.id, input.correlationId, input.actorUserMongoId],
+        );
+        const payload = {
+          jobId: prior.job_id,
+          organizationMongoId: input.organizationMongoId,
+          actorUserMongoId: input.actorUserMongoId,
+          jobType: "vendor_requirement_facts",
+          inputReference: prior.id,
+          inputVersion: FACT_VERSION,
+          correlationId: input.correlationId,
+        };
+        await client.query(
+          `INSERT INTO rfpilot.outbox_events(
+             id,organization_id,aggregate_type,aggregate_id,event_type,idempotency_key,payload
+           ) VALUES($1,$2,'ai_job',$3,'job.queued',$4,$5::jsonb)
+           ON CONFLICT(organization_id,idempotency_key) DO NOTHING`,
+          [uuidv7(), organizationId, prior.job_id,
+            `vendor-intelligence.requeued:${prior.job_id}:${input.idempotencyKey}`,
+            JSON.stringify(payload)],
+        );
+        await audit(client, input, organizationId, "vendor_intelligence.requeued", prior.id, {
+          requirementSetId: set.id,
+          vendorSubmissionVersionId: input.versionMongoId,
+          previousErrorCode: prior.safe_error_code,
+        });
+        return { run: runView(requeued.rows[0]), created: true };
+      }
       const runId = uuidv7(), jobId = uuidv7();
       await client.query(
         `INSERT INTO rfpilot.ai_jobs(
