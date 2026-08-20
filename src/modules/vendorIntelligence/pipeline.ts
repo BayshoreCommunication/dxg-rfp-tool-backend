@@ -25,6 +25,41 @@ const chunks = <T>(items: T[], size: number): T[][] => {
   return output;
 };
 
+const groundedFacts = (facts: ValidatedFact[], evidence: IntelligenceEvidence[]) => {
+  const content = new Map(evidence.map((item) => [item.id, item.content]));
+  return facts.flatMap((fact) => {
+    try {
+      return validateGroundedFacts([fact], content);
+    } catch (error) {
+      if ((error as { code?: string }).code === "CITATION_GROUNDING_FAILED") return [];
+      throw error;
+    }
+  });
+};
+
+const completeMissingMappings = (
+  requirements: IntelligenceRequirement[],
+  mappings: Array<{
+    requirementId: string;
+    relationship: "supports" | "partially_supports" | "contradicts" | "context_only" | "none";
+    confidence: number;
+    candidateFragmentIds: string[];
+    ambiguityReasons: string[];
+  }>,
+) => {
+  const returned = new Set(mappings.map((mapping) => mapping.requirementId));
+  return [
+    ...mappings,
+    ...requirements.flatMap((requirement) => returned.has(requirement.id) ? [] : [{
+      requirementId: requirement.id,
+      relationship: "none" as const,
+      confidence: 0,
+      candidateFragmentIds: [],
+      ambiguityReasons: ["No supported evidence mapping was returned; treated as not evidenced."],
+    }]),
+  ];
+};
+
 export const selectMappingEvidence = (
   requirements: IntelligenceRequirement[],
   evidence: IntelligenceEvidence[],
@@ -91,9 +126,9 @@ export const runVendorFactMappingPipeline = async (input: {
       phase: `facts:${index + 1}`,
     });
     model = result.model;
-    facts.push(...validateGroundedFacts(
+    facts.push(...groundedFacts(
       validateFacts(result.output, new Set(evidenceChunk.map((item) => item.id))),
-      new Map(evidenceChunk.map((item) => [item.id, item.content])),
+      evidenceChunk,
     ));
   }
   const uniqueFacts = new Map<string, ValidatedFact>();
@@ -113,7 +148,7 @@ export const runVendorFactMappingPipeline = async (input: {
     });
     model = result.model;
     mappings.push(...validateMappings(
-      result.output,
+      { mappings: completeMissingMappings(requirementChunk, result.output.mappings) },
       new Set(requirementChunk.map((item) => item.id)),
       new Set(selectedEvidence.map((item) => item.id)),
     ));

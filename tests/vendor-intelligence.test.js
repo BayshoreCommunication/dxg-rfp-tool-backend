@@ -145,6 +145,40 @@ test("pipeline sends only the supplied vendor evidence and ledgers stable phases
   assert.ok(seen.every((call) => call.ledger.runId === "run-a"));
 });
 
+test("pipeline safely drops an ungrounded fact and completes omitted mappings as not evidenced", async () => {
+  const provider = {
+    extractFacts: async () => ({
+      model: "fixture-model",
+      output: {
+        facts: [
+          fact(),
+          fact({
+            factKey: "commercial.unrelated_total",
+            statement: "The unrelated total is USD 99,999.",
+            value: { ...fact().value, number: 99999 },
+          }),
+        ],
+      },
+    }),
+    mapRequirements: async () => ({ model: "fixture-model", output: { mappings: [] } }),
+  };
+  const output = await runVendorFactMappingPipeline({
+    requirements: [{ id: requirement, title: "Pricing", text: "Provide total price", kind: "commercial", mandatory: true }],
+    evidence: [{ id: fragmentA, content: "The all-inclusive total is USD 148,500.", sourceLabel: "Vendor A.pdf", locator: { page: 2 }, trustClass: "untrusted_vendor_content" }],
+    provider,
+    ledger: { runType: "vendor_requirement_facts", runId: "run-recovery", organizationId: "org-a" },
+  });
+  assert.equal(output.facts.length, 1);
+  assert.equal(output.facts[0].normalizedValue, "USD 148500");
+  assert.deepEqual(output.mappings, [{
+    requirementId: requirement,
+    relationship: "none",
+    confidence: 0,
+    candidateFragmentIds: [],
+    ambiguityReasons: ["No supported evidence mapping was returned; treated as not evidenced."],
+  }]);
+});
+
 test("pipeline bounds fact extraction chunks to fit the structured-output ceiling", async () => {
   const evidence = Array.from({ length: 21 }, (_, index) => ({
     id: `00000000-0000-4000-8000-${String(index + 300).padStart(12, "0")}`,
@@ -184,6 +218,14 @@ test("human mapping corrections can cite only the current extraction attempt", (
   const reviewBoundary = repository.slice(repository.indexOf("async review("));
   assert.match(reviewBoundary, /DISTINCT ON \(source_kind,coalesce\(vendor_document_id::text,'cover_message'\)\)/);
   assert.match(reviewBoundary, /current_sources s ON s\.effective_id=f\.extraction_run_id/);
+});
+
+test("failed vendor intelligence creation requeues its durable job instead of returning a cached failure", () => {
+  const repository = fs.readFileSync(path.join(__dirname, "../src/modules/vendorIntelligence/postgresVendorIntelligenceRepository.ts"), "utf8");
+  assert.match(repository, /prior\.status === "failed"/);
+  assert.match(repository, /status='queued',attempt_count=0/);
+  assert.match(repository, /vendor-intelligence\.requeued:/);
+  assert.match(repository, /vendor_intelligence\.requeued/);
 });
 
 test("migration enforces tenant isolation, immutable outputs, and append-only review", () => {
