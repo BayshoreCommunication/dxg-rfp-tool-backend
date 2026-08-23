@@ -49,7 +49,7 @@ export const freezeScoreInput = (rows: Array<{
   );
   const reasons = uniqueReasons([
     ...(eligible.length === 0 ? ["evaluator_missing"] : []),
-    ...(eligible.some((row) => row.conflictStatus !== "clear") ? ["conflict_unresolved"] : []),
+    ...(eligible.some((row) => !["clear", "not_applicable"].includes(row.conflictStatus)) ? ["conflict_unresolved"] : []),
     ...(eligible.some((row) => !row.criterionId) ? ["criteria_missing"] : []),
     ...(eligible.some((row) => !["submitted", "superseded"].includes(String(row.eventType))) ? ["score_missing"] : []),
   ]);
@@ -134,7 +134,7 @@ export const buildVendorRecommendation = (input: {
     margin,
     rationale: close
       ? `The leading eligible vendors are within ${CLOSE_CALL_MARGIN} weighted points; no sole strongest response is declared.`
-      : `${leader.vendorLabel} has the highest completed human rubric score among vendors that pass all planner-designated eligibility requirements.`,
+      : `${leader.vendorLabel} has the highest completed rubric score among vendors that pass all planner-designated eligibility requirements.`,
     ranking,
   };
 };

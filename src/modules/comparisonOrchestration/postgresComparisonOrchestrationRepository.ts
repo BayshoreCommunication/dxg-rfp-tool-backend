@@ -409,7 +409,7 @@ const intelligenceProjection = async (client: PoolClient, run: any, priceVisibil
     client.query<any>(
       `SELECT p.id participant_id,p.vendor_label,coalesce(pr.result->'evaluation','{}'::jsonb) score_summary,
               (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id AND a.role<>'observer') evaluator_count,
-              (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id AND a.role<>'observer' AND a.status='complete' AND a.conflict_status='clear') completed_evaluator_count,
+              (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id AND a.role<>'observer' AND a.status='complete' AND a.conflict_status IN('clear','not_applicable')) completed_evaluator_count,
               (SELECT count(*)::int FROM rfpilot.evaluation_assignments a WHERE a.evaluation_run_id=p.evaluation_run_id AND a.role<>'observer' AND a.conflict_status='conflict') conflict_count
        FROM rfpilot.comparison_participants p
        LEFT JOIN rfpilot.comparison_participant_results pr ON pr.participant_id=p.id
@@ -644,7 +644,7 @@ export const comparisonOrchestrationRepository = {
           ORDER BY s.assignment_id,s.criterion_id,s.created_at DESC,s.id DESC
         ), eligible AS (
           SELECT l.* FROM latest l JOIN rfpilot.evaluation_assignments a ON a.id=l.assignment_id
-          WHERE a.role<>'observer' AND a.conflict_status='clear' AND l.event_type IN('submitted','superseded')
+          WHERE a.role<>'observer' AND a.conflict_status IN('clear','not_applicable') AND l.event_type IN('submitted','superseded')
         ), criterion_means AS (
           SELECT e.criterion_id,c.name,avg(e.score) mean_score,avg(e.weighted_contribution) mean_contribution,
                  max(e.score)-min(e.score) score_spread,max(e.rubric_maximum) rubric_maximum,
