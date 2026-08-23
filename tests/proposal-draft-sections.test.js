@@ -121,7 +121,7 @@ test("draft section keys stay in sync across code, model schema, and database CH
   assert.ok(down.includes("UPDATE rfpilot.proposal_draft_runs SET section_scope=NULL"));
 });
 
-test("draft generation reads every RFP-content proposal section", () => {
+test("draft generation reads every active RFP-content proposal section", () => {
   // The draft used to select only event and venueSchedule, so a "full proposal
   // draft" was built from 2 of 12 content sections and could not describe
   // production, rooms, venue technical needs, budget, or procurement dates.
@@ -129,10 +129,11 @@ test("draft generation reads every RFP-content proposal section", () => {
   const select = repository.match(/\.select\(\s*"([^"]+)"/)?.[1] ?? "";
   for (const section of [
     "event", "venueSchedule", "roomByRoom", "production", "hybridVirtual",
-    "contentCreative", "videoRecordingStep", "venue", "uploads", "budget",
+    "contentCreative", "venue", "uploads", "budget",
   ]) {
     assert.ok(select.split(/\s+/).includes(section), `draft evidence includes ${section}`);
   }
+  assert.ok(!select.split(/\s+/).includes("videoRecordingStep"), "standalone recording stays out of draft evidence");
   // Contact details are personal data the draft prose never needs; keeping them
   // out of the projection keeps them out of the provider payload.
   for (const excluded of ["contact", "additionalContacts"]) {
@@ -145,4 +146,16 @@ test("draft worker marks the domain run failed when execution fails", () => {
   assert.ok(handler.includes("catch (error)"));
   assert.ok(handler.includes("proposalDraftRepository.fail"));
   assert.ok(handler.includes('status: "failed"'));
+});
+
+test("draft persistence exposes only the current clean input epoch", () => {
+  const repository = readFile("src/modules/proposalDraft/postgresProposalDraftRepository.ts");
+  const registry = readFile("src/modules/requirementRegistry/postgresRequirementRegistryRepository.ts");
+  assert.ok(repository.includes("PROPOSAL_DRAFT_INPUT_VERSION"));
+  assert.ok(repository.includes("proposal_draft:${PROPOSAL_DRAFT_INPUT_VERSION}:"));
+  assert.doesNotMatch(repository, /inputVersion:\s*"proposal-draft\.v1"/);
+  assert.match(repository, /j\.input_version=\$2|j\.input_version=\$3/);
+  assert.match(repository, /FOR UPDATE OF r/);
+  assert.ok(registry.includes("PROPOSAL_DRAFT_INPUT_VERSION"));
+  assert.match(registry, /j\.input_version=\$2/);
 });

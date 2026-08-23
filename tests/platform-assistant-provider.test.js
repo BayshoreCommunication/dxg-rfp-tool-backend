@@ -107,7 +107,7 @@ const withEnabledAssistant = async (work) => {
 };
 
 test("platform map is versioned, bounded, and contains internal routes only", () => {
-  assert.equal(PLATFORM_KNOWLEDGE_VERSION, "rfpilot-platform-map.v6");
+  assert.equal(PLATFORM_KNOWLEDGE_VERSION, "rfpilot-platform-map.v7");
   assert.ok(PLATFORM_FACTS.length >= 8);
   assert.equal(new Set(PLATFORM_FACTS.map((fact) => fact.id)).size, PLATFORM_FACTS.length);
   for (const fact of PLATFORM_FACTS) {
@@ -994,6 +994,8 @@ test("deterministic fallback explains the guided intake and safe manual action p
   );
   assert.equal(createResponse.kind, "answer");
   assert.match(createResponse.content, /Event Overview/);
+  assert.match(createResponse.content, /Room Specifications;/);
+  assert.doesNotMatch(createResponse.content, /Content & Creative; Video Recording;/);
   assert.match(createResponse.content, /Contact & Submit/);
   assert.match(createResponse.content, /\/proposals\/add-new-proposal/);
 

@@ -30,7 +30,6 @@ const SAFE_PROPOSAL_FIELDS = [
   "production",
   "hybridVirtual",
   "contentCreative",
-  "videoRecordingStep",
   "venue",
   "budget",
 ].join(" ");

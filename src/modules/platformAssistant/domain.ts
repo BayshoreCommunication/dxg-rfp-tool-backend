@@ -8,6 +8,7 @@ import type {
   AssistantIntentClassification,
   AssistantIntentSource,
 } from "./intentRouter";
+import { proposalWorkflowSectionEnabled } from "../proposals/domain/workflowSections";
 
 export const ASSISTANT_THREAD_TITLE_MAX_LENGTH = 200;
 export const ASSISTANT_MESSAGE_MAX_LENGTH = 8_000;
@@ -621,6 +622,10 @@ export const parseAssistantUiContext = (
       : oneOf(value.sectionId, ASSISTANT_FORM_SECTION_IDS)
         ? value.sectionId
         : null;
+  const retiredSectionContext =
+    sectionId === "video_recording" &&
+    !proposalWorkflowSectionEnabled("video_recording");
+  const activeSectionId = retiredSectionContext ? undefined : sectionId;
   const eventFormat =
     value.eventFormat === undefined
       ? undefined
@@ -660,7 +665,9 @@ export const parseAssistantUiContext = (
   }
 
   const suppliedFieldKey =
-    typeof value.fieldKey === "string" ? value.fieldKey.trim() : "";
+    !retiredSectionContext && typeof value.fieldKey === "string"
+      ? value.fieldKey.trim()
+      : "";
   let fieldKey: string | undefined;
   let fieldKeyStatus: AssistantUiContext["fieldKeyStatus"] = "not_provided";
   if (suppliedFieldKey) {
@@ -676,12 +683,12 @@ export const parseAssistantUiContext = (
     schemaVersion: "assistant-ui-context.v1",
     routeCategory: value.routeCategory,
     ...(workflow ? { workflow } : {}),
-    ...(sectionId ? { sectionId } : {}),
+    ...(activeSectionId ? { sectionId: activeSectionId } : {}),
     ...(fieldKey ? { fieldKey } : {}),
     fieldKeyStatus,
     ...(eventFormat ? { eventFormat } : {}),
-    ...(roomIdentifier ? { roomIdentifier } : {}),
-    ...(fieldControl ? { fieldControl } : {}),
+    ...(!retiredSectionContext && roomIdentifier ? { roomIdentifier } : {}),
+    ...(!retiredSectionContext && fieldControl ? { fieldControl } : {}),
   };
 };
 

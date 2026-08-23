@@ -1,5 +1,5 @@
 const fs = require("node:fs"), path = require("node:path");
-const test=require("node:test"),assert=require("node:assert/strict");const{normalizeCandidate,approvedCandidatePaths,extractionPathEnum}=require("../src/modules/candidateApplication/canonicalMapping");const{parseReview,parseApplication,CandidateApplicationError,candidateApplicationEnabled}=require("../src/modules/candidateApplication/domain");
+const test=require("node:test"),assert=require("node:assert/strict");const{normalizeCandidate,approvedCandidatePaths,activeCandidatePaths,extractionPathEnum}=require("../src/modules/candidateApplication/canonicalMapping");const{parseReview,parseApplication,CandidateApplicationError,candidateApplicationEnabled}=require("../src/modules/candidateApplication/domain");
 const {requiresOverwriteConfirmation}=require("../src/modules/candidateApplication/postgresCandidateApplicationRepository");
 test("legacy-shaped fixture candidates normalize to canonical and allowlisted Mongo paths",()=>{assert.deepEqual(normalizeCandidate("/content/event/eventName"," Test "),{sourcePath:"/content/event/eventName",canonicalPath:"/content/event/name",mongoPath:"event.eventName",canonicalValue:"Test",mongoValue:"Test"});assert.equal(normalizeCandidate("/content/event/eventFormat","Hybrid").canonicalValue,"hybrid");assert.equal(normalizeCandidate("/content/venueSchedule/numberOfEventRooms","6").canonicalValue,6);for(const path of["/content/event/eventName","/content/event/eventFormat","/content/event/eventObjectives","/content/venueSchedule/numberOfEventRooms"])assert.ok(approvedCandidatePaths.includes(path));});
 test("unapproved, operator and prototype paths fail closed",()=>{for(const path of["/content/event/theme","/content/$where","/content/__proto__/x","event.eventName"])assert.throws(()=>normalizeCandidate(path,"x"),CandidateApplicationError);});
@@ -86,7 +86,9 @@ test("prototype-pollution and operator guards still fail closed on the expanded 
 test("expanded allowlist covers the full scalar contract without duplicates",()=>{
  assert.ok(approvedCandidatePaths.length>=100,`expected >=100 paths, found ${approvedCandidatePaths.length}`);
  assert.equal(new Set(approvedCandidatePaths).size,approvedCandidatePaths.length);
- assert.deepEqual(extractionPathEnum,approvedCandidatePaths);
+ assert.deepEqual(extractionPathEnum,activeCandidatePaths);
+ assert.ok(approvedCandidatePaths.includes("/content/videoRecordingStep/videoRecordingRequired"),"dormant compatibility mapping remains");
+ assert.ok(!extractionPathEnum.some((path)=>path.startsWith("/content/videoRecordingStep")),"active extraction cannot target the retired root");
  for(const path of approvedCandidatePaths)assert.match(path,/^\/content(?:\/[A-Za-z0-9_~-]+)+$/);
 });
 test("every mapping normalizes at least one valid sample end to end",()=>{

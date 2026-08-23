@@ -20,6 +20,15 @@ import {
   REQUIREMENT_GENERATOR_VERSION,
 } from "./generator";
 import type { RenderedParagraph } from "./generator";
+import {
+  activeProposalWorkflowContent,
+  activeProposalWorkflowFingerprintContent,
+  CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
+  LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,
+  LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+  proposalWorkflowSectionEnabled,
+} from "../proposals/domain/workflowSections";
+import { PROPOSAL_DRAFT_INPUT_VERSION } from "../proposalDraft/domain";
 
 type Context = {
   organizationMongoId: string;
@@ -60,20 +69,30 @@ const loadProposal = async (input: Context) => {
   }).lean<any>();
   if (!proposal)
     throw new RequirementRegistryError("PROPOSAL_NOT_FOUND", "Proposal was not found.", 404);
+  const activeProposal = activeProposalWorkflowContent(
+    proposal as Record<string, unknown>,
+  );
+  const fingerprint = checksum(
+    activeProposalWorkflowFingerprintContent(
+      proposal as Record<string, unknown>,
+    ),
+  );
   return {
-    proposal: proposal as Record<string, unknown>,
-    version: String(proposal.__v ?? 0),
-    checksum: checksum(proposal),
+    proposal: activeProposal,
+    version: fingerprint,
+    checksum: fingerprint,
   };
 };
 
 const renderedParagraphs = async (client: PoolClient, proposalReferenceId: string) => {
   const run = await client.query<any>(
     `SELECT r.id,r.output_checksum FROM rfpilot.proposal_draft_runs r
+     JOIN rfpilot.ai_jobs j
+       ON j.id=r.job_id AND j.input_version=$2
      WHERE r.proposal_reference_id=$1 AND r.status='succeeded' AND r.section_scope IS NULL
        AND r.retention_until>now()
      ORDER BY r.created_at DESC LIMIT 1`,
-    [proposalReferenceId],
+    [proposalReferenceId, PROPOSAL_DRAFT_INPUT_VERSION],
   );
   if (!run.rows[0]) return { run: null, paragraphs: [] as RenderedParagraph[] };
   const rows = await client.query<any>(
@@ -82,8 +101,21 @@ const renderedParagraphs = async (client: PoolClient, proposalReferenceId: strin
      JOIN rfpilot.proposal_draft_paragraphs p ON p.section_id=s.id
      JOIN rfpilot.proposal_draft_section_decisions d
        ON d.run_id=s.run_id AND d.section_key=s.key AND d.decision='accepted'
-     WHERE s.run_id=$1 ORDER BY s.ordinal,p.ordinal`,
-    [run.rows[0].id],
+     WHERE s.run_id=$1
+       AND NOT EXISTS(
+         SELECT 1 FROM rfpilot.proposal_draft_citations retired
+          WHERE retired.paragraph_id=p.id
+            AND (retired.canonical_path=$2
+              OR retired.canonical_path LIKE $2||'/%'
+              OR retired.canonical_path=$3
+              OR retired.canonical_path LIKE $3||'/%')
+       )
+     ORDER BY s.ordinal,p.ordinal`,
+    [
+      run.rows[0].id,
+      LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,
+      CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
+    ],
   );
   return {
     run: run.rows[0] as { id: string; output_checksum: string | null },
@@ -103,8 +135,14 @@ const requirementRows = (client: PoolClient, setId: string) =>
     `SELECT r.*,c.criterion_key,c.name criterion_name
      FROM rfpilot.requirements r
      LEFT JOIN rfpilot.evaluation_criteria c ON c.id=r.criterion_id
-     WHERE r.requirement_set_id=$1 ORDER BY r.ordinal`,
-    [setId],
+     WHERE r.requirement_set_id=$1
+       AND ($2::boolean OR r.group_key IS DISTINCT FROM $3)
+     ORDER BY r.ordinal`,
+    [
+      setId,
+      proposalWorkflowSectionEnabled("video_recording"),
+      LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+    ],
   );
 const criterionRows = (client: PoolClient, setId: string) =>
   client.query<any>(
@@ -115,20 +153,29 @@ const criterionRows = (client: PoolClient, setId: string) =>
     [setId],
   );
 
+const validationForRows = (requirements: any[], criteria: any[]) =>
+  validateForApproval({
+    weightsConfirmed: criteria[0]?.weights_confirmed === true,
+    criteria: criteria.map((item) => ({
+      id: item.id,
+      weight: Number(item.weight),
+    })),
+    requirements,
+  });
+
+const contentChecksumForRows = (requirements: any[], criteria: any[]) =>
+  checksum({
+    criteria: criteria.map(({ id, criterion_key, name, description, weight, rubric, price_visibility, human_only, ordinal }) => ({ id, criterion_key, name, description, weight: Number(weight), rubric, price_visibility, human_only, ordinal })),
+    requirements: requirements.map(({ id, requirement_key, kind, title, normalized_text, mandatory_status, mandatory_reviewed, eligibility, source_kind, source_locator, criterion_id, criterion_reviewed, importance, verification_method, included, inclusion_reviewed, group_key, parent_requirement_id, ordinal, provenance }) => ({ id, requirement_key, kind, title, normalized_text, mandatory_status, mandatory_reviewed, eligibility, source_kind, source_locator, criterion_id, criterion_reviewed, importance, verification_method, included, inclusion_reviewed, group_key, parent_requirement_id, ordinal, provenance })),
+  });
+
 const refreshValidationAndChecksum = async (client: PoolClient, setId: string) => {
   const [requirements, criteria] = await Promise.all([
     requirementRows(client, setId),
     criterionRows(client, setId),
   ]);
-  const validation = validateForApproval({
-    weightsConfirmed: criteria.rows[0]?.weights_confirmed === true,
-    criteria: criteria.rows.map((item) => ({ id: item.id, weight: Number(item.weight) })),
-    requirements: requirements.rows,
-  });
-  const contentChecksum = checksum({
-    criteria: criteria.rows.map(({ id, criterion_key, name, description, weight, rubric, price_visibility, human_only, ordinal }) => ({ id, criterion_key, name, description, weight: Number(weight), rubric, price_visibility, human_only, ordinal })),
-    requirements: requirements.rows.map(({ id, requirement_key, kind, title, normalized_text, mandatory_status, mandatory_reviewed, eligibility, source_kind, source_locator, criterion_id, criterion_reviewed, importance, verification_method, included, inclusion_reviewed, group_key, parent_requirement_id, ordinal, provenance }) => ({ id, requirement_key, kind, title, normalized_text, mandatory_status, mandatory_reviewed, eligibility, source_kind, source_locator, criterion_id, criterion_reviewed, importance, verification_method, included, inclusion_reviewed, group_key, parent_requirement_id, ordinal, provenance })),
-  });
+  const validation = validationForRows(requirements.rows, criteria.rows);
+  const contentChecksum = contentChecksumForRows(requirements.rows, criteria.rows);
   await client.query(
     "UPDATE rfpilot.requirement_sets SET validation=$2::jsonb,content_checksum=$3,updated_at=now() WHERE id=$1",
     [setId, JSON.stringify(validation), contentChecksum],
@@ -137,12 +184,19 @@ const refreshValidationAndChecksum = async (client: PoolClient, setId: string) =
 };
 
 const operation = async (client: PoolClient, organizationId: string, idempotencyKey: string) => {
+  const epochKey = `requirement-registry:${REQUIREMENT_GENERATOR_VERSION}:${checksum(idempotencyKey)}`;
   const result = await client.query<any>(
-    "SELECT * FROM rfpilot.requirement_registry_operations WHERE organization_id=$1 AND idempotency_key=$2",
-    [organizationId, idempotencyKey],
+    `SELECT o.* FROM rfpilot.requirement_registry_operations o
+     JOIN rfpilot.requirement_sets s
+       ON s.id=o.requirement_set_id AND s.generator_version=$3
+     WHERE o.organization_id=$1 AND o.idempotency_key=$2`,
+    [organizationId, epochKey, REQUIREMENT_GENERATOR_VERSION],
   );
   return result.rows[0] ?? null;
 };
+
+const registryEpochKey = (idempotencyKey: string) =>
+  `requirement-registry:${REQUIREMENT_GENERATOR_VERSION}:${checksum(idempotencyKey)}`;
 
 const audit = (
   client: PoolClient,
@@ -178,8 +232,15 @@ const view = async (
   if (String(set.proposal_version) !== current.version) staleReasons.push("proposal_version_changed");
   if (String(set.proposal_checksum) !== current.checksum) staleReasons.push("proposal_content_changed");
   if (String(set.generator_version) !== REQUIREMENT_GENERATOR_VERSION) staleReasons.push("requirement_policy_changed");
+  const validation = validationForRows(requirements.rows, criteria.rows);
+  const contentChecksum = contentChecksumForRows(requirements.rows, criteria.rows);
   return {
-    set,
+    set: {
+      ...set,
+      validation,
+      content_checksum: contentChecksum,
+      requirement_count: requirements.rows.length,
+    },
     matrix: criteria.rows.length ? {
       id: criteria.rows[0].matrix_version_id,
       status: criteria.rows[0].matrix_status,
@@ -198,10 +259,11 @@ export const requirementRegistryRepository = {
     return withPostgresTransaction(async (client) => {
       const organizationId = await tenant(client, input.organizationMongoId);
       const proposalReferenceId = await owned(client, input.proposalMongoId, input.actorUserMongoId);
+      const epochIdempotencyKey = registryEpochKey(input.idempotencyKey);
       await client.query("SELECT id FROM rfpilot.proposal_references WHERE id=$1 FOR UPDATE", [proposalReferenceId]);
       const old = await client.query<any>(
-        "SELECT id FROM rfpilot.requirement_sets WHERE organization_id=$1 AND idempotency_key=$2",
-        [organizationId, input.idempotencyKey],
+        "SELECT id FROM rfpilot.requirement_sets WHERE organization_id=$1 AND idempotency_key=$2 AND generator_version=$3",
+        [organizationId, epochIdempotencyKey, REQUIREMENT_GENERATOR_VERSION],
       );
       if (old.rows[0]) return { data: await view(client, old.rows[0].id, current), created: false };
       const rendered = await renderedParagraphs(client, proposalReferenceId);
@@ -227,7 +289,7 @@ export const requirementRegistryRepository = {
           id,organization_id,proposal_reference_id,version,proposal_version,proposal_checksum,
           rendered_rfp_run_id,rendered_rfp_checksum,generator_version,validation,content_checksum,idempotency_key,created_by_external_user_id
          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)`,
-        [setId, organizationId, proposalReferenceId, version, current.version, current.checksum, rendered.run?.id ?? null, rendered.run?.output_checksum ?? null, REQUIREMENT_GENERATOR_VERSION, JSON.stringify(initialValidation), checksum({ criteria, requirements }), input.idempotencyKey, input.actorUserMongoId],
+        [setId, organizationId, proposalReferenceId, version, current.version, current.checksum, rendered.run?.id ?? null, rendered.run?.output_checksum ?? null, REQUIREMENT_GENERATOR_VERSION, JSON.stringify(initialValidation), checksum({ criteria, requirements }), epochIdempotencyKey, input.actorUserMongoId],
       );
       const totalWeight = criteria.reduce((sum, item) => sum + item.weight, 0);
       await client.query(
@@ -256,7 +318,7 @@ export const requirementRegistryRepository = {
       }
       await client.query(
         "INSERT INTO rfpilot.requirement_registry_operations(id,organization_id,idempotency_key,operation,requirement_set_id,result_lock_version) VALUES($1,$2,$3,'generate',$4,1)",
-        [uuidv7(), organizationId, input.idempotencyKey, setId],
+        [uuidv7(), organizationId, epochIdempotencyKey, setId],
       );
       await audit(client, input, organizationId, "requirement_set.generated", setId, { version, requirementCount: requirements.length, criterionCount: criteria.length, renderedParagraphCount: rendered.paragraphs.length });
       return { data: await view(client, setId, current), created: true };
@@ -269,20 +331,38 @@ export const requirementRegistryRepository = {
       await tenant(client, input.organizationMongoId);
       const proposalReferenceId = await owned(client, input.proposalMongoId, input.actorUserMongoId);
       const result = await client.query<any>(
-        `SELECT s.*,(SELECT count(*)::int FROM rfpilot.requirements r WHERE r.requirement_set_id=s.id) requirement_count
-         FROM rfpilot.requirement_sets s WHERE s.proposal_reference_id=$1 ORDER BY s.version DESC`,
-        [proposalReferenceId],
+        `SELECT s.*,(SELECT count(*)::int FROM rfpilot.requirements r
+                     WHERE r.requirement_set_id=s.id
+                       AND ($2::boolean OR r.group_key IS DISTINCT FROM $3)) requirement_count
+         FROM rfpilot.requirement_sets s
+         WHERE s.proposal_reference_id=$1 AND s.generator_version=$4
+         ORDER BY s.version DESC`,
+        [
+          proposalReferenceId,
+          proposalWorkflowSectionEnabled("video_recording"),
+          LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+          REQUIREMENT_GENERATOR_VERSION,
+        ],
       );
-      return result.rows.map((set) => ({
-        ...set,
-        freshness: {
-          stale: String(set.proposal_version) !== current.version || String(set.proposal_checksum) !== current.checksum || String(set.generator_version) !== REQUIREMENT_GENERATOR_VERSION,
-          reasons: [
-            ...(String(set.proposal_version) !== current.version ? ["proposal_version_changed"] : []),
-            ...(String(set.proposal_checksum) !== current.checksum ? ["proposal_content_changed"] : []),
-            ...(String(set.generator_version) !== REQUIREMENT_GENERATOR_VERSION ? ["requirement_policy_changed"] : []),
-          ],
-        },
+      return Promise.all(result.rows.map(async (set) => {
+        const [requirements, criteria] = await Promise.all([
+          requirementRows(client, set.id),
+          criterionRows(client, set.id),
+        ]);
+        return {
+          ...set,
+          requirement_count: requirements.rows.length,
+          validation: validationForRows(requirements.rows, criteria.rows),
+          content_checksum: contentChecksumForRows(requirements.rows, criteria.rows),
+          freshness: {
+            stale: String(set.proposal_version) !== current.version || String(set.proposal_checksum) !== current.checksum || String(set.generator_version) !== REQUIREMENT_GENERATOR_VERSION,
+            reasons: [
+              ...(String(set.proposal_version) !== current.version ? ["proposal_version_changed"] : []),
+              ...(String(set.proposal_checksum) !== current.checksum ? ["proposal_content_changed"] : []),
+              ...(String(set.generator_version) !== REQUIREMENT_GENERATOR_VERSION ? ["requirement_policy_changed"] : []),
+            ],
+          },
+        };
       }));
     });
   },
@@ -292,7 +372,7 @@ export const requirementRegistryRepository = {
     return withPostgresTransaction(async (client) => {
       await tenant(client, input.organizationMongoId);
       const proposalReferenceId = await owned(client, input.proposalMongoId, input.actorUserMongoId);
-      const belongs = await client.query("SELECT id FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2", [input.setId, proposalReferenceId]);
+      const belongs = await client.query("SELECT id FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2 AND generator_version=$3", [input.setId, proposalReferenceId, REQUIREMENT_GENERATOR_VERSION]);
       if (!belongs.rows[0]) throw new RequirementRegistryError("REQUIREMENT_SET_NOT_FOUND", "Requirement set was not found.", 404);
       return view(client, input.setId, current);
     });
@@ -305,7 +385,7 @@ export const requirementRegistryRepository = {
       const proposalReferenceId = await owned(client, input.proposalMongoId, input.actorUserMongoId);
       const replay = await operation(client, organizationId, input.idempotencyKey);
       if (replay) return view(client, replay.requirement_set_id, current);
-      const setResult = await client.query<any>("SELECT * FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2 FOR UPDATE", [input.setId, proposalReferenceId]);
+      const setResult = await client.query<any>("SELECT * FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2 AND generator_version=$3 FOR UPDATE", [input.setId, proposalReferenceId, REQUIREMENT_GENERATOR_VERSION]);
       const set = setResult.rows[0];
       if (!set) throw new RequirementRegistryError("REQUIREMENT_SET_NOT_FOUND", "Requirement set was not found.", 404);
       if (!['draft','in_review'].includes(set.status)) throw new RequirementRegistryError("REQUIREMENT_SET_IMMUTABLE", "Approved requirement sets cannot be edited.", 409);
@@ -332,15 +412,18 @@ export const requirementRegistryRepository = {
       const assignments = columns.map(([column], index) => `${column}=$${index + 4}`).join(",");
       const updated = await client.query(
         `UPDATE rfpilot.requirements SET ${assignments},updated_by_external_user_id=$${values.length + 4},updated_at=now()
-         WHERE id=$1 AND requirement_set_id=$2 AND organization_id=$3 RETURNING id`,
-        [input.requirementId, input.setId, organizationId, ...values, input.actorUserMongoId],
+         WHERE id=$1 AND requirement_set_id=$2 AND organization_id=$3
+           AND ($${values.length + 5}::boolean OR group_key IS DISTINCT FROM $${values.length + 6})
+         RETURNING id`,
+        [input.requirementId, input.setId, organizationId, ...values, input.actorUserMongoId,
+          proposalWorkflowSectionEnabled("video_recording"), LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY],
       );
       if (!updated.rows[0]) throw new RequirementRegistryError("REQUIREMENT_NOT_FOUND", "Requirement was not found.", 404);
       await client.query("UPDATE rfpilot.requirement_sets SET status='in_review',lock_version=lock_version+1,updated_at=now() WHERE id=$1", [input.setId]);
       await refreshValidationAndChecksum(client, input.setId);
       await client.query(
         "INSERT INTO rfpilot.requirement_registry_operations(id,organization_id,idempotency_key,operation,requirement_set_id,result_lock_version) VALUES($1,$2,$3,'edit',$4,$5)",
-        [uuidv7(), organizationId, input.idempotencyKey, input.setId, input.expectedVersion + 1],
+        [uuidv7(), organizationId, registryEpochKey(input.idempotencyKey), input.setId, input.expectedVersion + 1],
       );
       await audit(client, input, organizationId, "requirement.updated", input.setId, { requirementId: input.requirementId, changedFields: Object.keys(input.update), lockVersion: input.expectedVersion + 1 });
       return view(client, input.setId, current);
@@ -354,7 +437,7 @@ export const requirementRegistryRepository = {
       const proposalReferenceId = await owned(client, input.proposalMongoId, input.actorUserMongoId);
       const replay = await operation(client, organizationId, input.idempotencyKey);
       if (replay) return view(client, replay.requirement_set_id, current);
-      const setResult = await client.query<any>("SELECT * FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2 FOR UPDATE", [input.setId, proposalReferenceId]);
+      const setResult = await client.query<any>("SELECT * FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2 AND generator_version=$3 FOR UPDATE", [input.setId, proposalReferenceId, REQUIREMENT_GENERATOR_VERSION]);
       const set = setResult.rows[0];
       if (!set) throw new RequirementRegistryError("REQUIREMENT_SET_NOT_FOUND", "Requirement set was not found.", 404);
       if (!["draft", "in_review"].includes(set.status)) throw new RequirementRegistryError("REQUIREMENT_SET_IMMUTABLE", "Approved requirement sets cannot be edited.", 409);
@@ -422,7 +505,7 @@ export const requirementRegistryRepository = {
       const refreshed = await refreshValidationAndChecksum(client, input.setId);
       await client.query(
         "INSERT INTO rfpilot.requirement_registry_operations(id,organization_id,idempotency_key,operation,requirement_set_id,result_lock_version) VALUES($1,$2,$3,'edit',$4,$5)",
-        [uuidv7(), organizationId, input.idempotencyKey, input.setId, input.expectedVersion + 1],
+        [uuidv7(), organizationId, registryEpochKey(input.idempotencyKey), input.setId, input.expectedVersion + 1],
       );
       await audit(client, input, organizationId, "requirement_set.prepared", input.setId, {
         normalizedCriterionCount: normalizedWeights.length,
@@ -441,7 +524,7 @@ export const requirementRegistryRepository = {
       const proposalReferenceId = await owned(client, input.proposalMongoId, input.actorUserMongoId);
       const replay = await operation(client, organizationId, input.idempotencyKey);
       if (replay) return view(client, replay.requirement_set_id, current);
-      const result = await client.query<any>("SELECT * FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2 FOR UPDATE", [input.setId, proposalReferenceId]);
+      const result = await client.query<any>("SELECT * FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2 AND generator_version=$3 FOR UPDATE", [input.setId, proposalReferenceId, REQUIREMENT_GENERATOR_VERSION]);
       const set = result.rows[0];
       if (!set) throw new RequirementRegistryError("REQUIREMENT_SET_NOT_FOUND", "Requirement set was not found.", 404);
       if (!['draft','in_review'].includes(set.status)) throw new RequirementRegistryError("REQUIREMENT_SET_IMMUTABLE", "This requirement set is already frozen.", 409);
@@ -458,7 +541,7 @@ export const requirementRegistryRepository = {
       );
       await client.query(
         "INSERT INTO rfpilot.requirement_registry_operations(id,organization_id,idempotency_key,operation,requirement_set_id,result_lock_version) VALUES($1,$2,$3,'approve',$4,$5)",
-        [uuidv7(), organizationId, input.idempotencyKey, input.setId, input.expectedVersion + 1],
+        [uuidv7(), organizationId, registryEpochKey(input.idempotencyKey), input.setId, input.expectedVersion + 1],
       );
       await audit(client, input, organizationId, "requirement_set.approved", input.setId, { version: set.version, requirementCount: refreshed.requirements.length, criterionCount: refreshed.criteria.length, contentChecksum: refreshed.contentChecksum });
       return view(client, input.setId, current);
@@ -484,7 +567,7 @@ export const requirementRegistryRepository = {
       );
       await client.query(
         "INSERT INTO rfpilot.requirement_registry_operations(id,organization_id,idempotency_key,operation,requirement_set_id,result_lock_version) VALUES($1,$2,$3,'supersede',$4,$5)",
-        [uuidv7(), organizationId, input.idempotencyKey, input.setId, existing.set.lock_version],
+        [uuidv7(), organizationId, registryEpochKey(input.idempotencyKey), input.setId, existing.set.lock_version],
       );
       await audit(client, input, organizationId, "requirement_set.superseded", input.setId, { supersededById: nextId });
     });

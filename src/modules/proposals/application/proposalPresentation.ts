@@ -1,3 +1,5 @@
+import { activeProposalWorkflowContent } from "../domain/workflowSections";
+
 export type LegacyProposalSettings = {
   branding?: {
     brandName?: string;
@@ -75,7 +77,9 @@ export const withLiveSettings = <T extends LegacyProposalRecord>(
   proposal: T,
   settings: LegacyProposalSettings | null,
 ): T & { proposalSetting: ReturnType<typeof buildProposalSettingSnapshot> } => ({
-  ...proposal,
+  ...activeProposalWorkflowContent(
+    proposal as T & Record<string, unknown>,
+  ),
   proposalSetting: buildProposalSettingSnapshot(settings),
 });
 

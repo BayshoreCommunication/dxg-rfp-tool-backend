@@ -4,6 +4,7 @@ import type {
   ExtractionOutputValidator,
   ExtractionPromptRegistry,
 } from "../domain/ports/extractionPromptRegistry";
+import { activeProposalWorkflowContent } from "../../proposals/domain/workflowSections";
 
 const TEXT_LIMIT = 40_000;
 
@@ -48,7 +49,7 @@ export const createExtractProposalDocument = (dependencies: {
   }
   return {
     kind: "extracted" as const,
-    data: validation.data,
+    data: activeProposalWorkflowContent(validation.data),
     promptVersion: prompt.id,
     schemaId: prompt.outputSchemaId,
   };

@@ -103,3 +103,19 @@ test("response receives a stable settings snapshot", async () => {
   );
   assert.equal(result.proposal.proposalSetting.proposals.contacts.email.enabled, false);
 });
+
+test("owned detail hides dormant recording data while preserving room fields and storage", async () => {
+  const stored = {
+    _id: "proposal-001",
+    videoRecordingStep: { videoRecordingRequired: "YES" },
+    roomByRoom: [{ videoRecording: "Yes", camerasQty: "2" }],
+  };
+  const getOwnedProposal = createGetOwnedProposal(createDependencies({
+    proposals: { findOwnedById: async () => stored },
+  }));
+  const result = await getOwnedProposal({ proposalId: "proposal-001", ownerUserId: "user-001" });
+  assert.equal(result.kind, "found");
+  assert.equal("videoRecordingStep" in result.proposal, false);
+  assert.deepEqual(result.proposal.roomByRoom, stored.roomByRoom);
+  assert.equal(stored.videoRecordingStep.videoRecordingRequired, "YES");
+});

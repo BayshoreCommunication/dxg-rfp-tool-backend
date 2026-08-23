@@ -1,6 +1,6 @@
 export type ExtractionPrompt = {
-  id: "legacy-proposal-extraction.v1";
-  version: 1;
+  id: "legacy-proposal-extraction.v1" | "active-proposal-extraction.v2";
+  version: 1 | 2;
   content: string;
   outputSchemaId: "legacy-proposal-extraction-result.v1";
 };

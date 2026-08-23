@@ -7,7 +7,10 @@ const {
   ROOM_SCHEDULE_ANALYSIS_VERSION,
   computeRoomScheduleAnalysis,
 } = require("../src/modules/guidance/roomScheduleAnalysis");
-const { computeGuidance } = require("../src/modules/guidance/domain");
+const {
+  computeGuidance,
+  PROPOSAL_ANALYSIS_VERSION,
+} = require("../src/modules/guidance/domain");
 
 const room = (overrides = {}) => ({
   _id: "room-a",
@@ -151,7 +154,7 @@ test("proposal guidance preserves room analysis and maps its findings", () => {
       }),
     ],
   });
-  assert.equal(result.analysisVersion, "proposal-analysis.v3");
+  assert.equal(result.analysisVersion, PROPOSAL_ANALYSIS_VERSION);
   assert.equal(result.roomSchedule.version, ROOM_SCHEDULE_ANALYSIS_VERSION);
   const finding = result.findings.find(
     (item) => item.code === "ROOM_SHOW_WINDOW_REVERSED",

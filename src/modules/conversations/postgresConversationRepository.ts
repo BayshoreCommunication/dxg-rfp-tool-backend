@@ -5,6 +5,14 @@ import { withPostgresTransaction } from "../../../config/postgres";
 import { safeLog } from "../../shared/observability/safeTelemetry";
 import { syncFieldGapQuestions } from "./fieldGapQuestions";
 import {
+  CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
+  isRetiredProposalWorkflowPath,
+  LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,
+  proposalWorkflowSectionEnabled,
+} from "../proposals/domain/workflowSections";
+import { PROPOSAL_CONTEXT_INPUT_VERSION } from "../proposalContext/domain";
+import { PROPOSAL_DRAFT_INPUT_VERSION } from "../proposalDraft/domain";
+import {
   ConversationError,
   IMPORTANT_FIELD_QUESTIONS,
   MAX_OPEN_FIELD_QUESTIONS,
@@ -77,7 +85,17 @@ const materializeRuns = async (c: PoolClient, conversationId: string) => {
   );
   for (const message of pending.rows) {
     const table = message.run_type === "proposal_context" ? "proposal_context_runs" : "proposal_draft_runs";
-    const run = await c.query<{ status: string }>(`SELECT status FROM rfpilot.${table} WHERE id=$1`, [message.run_id]);
+    const inputVersion =
+      message.run_type === "proposal_context"
+        ? PROPOSAL_CONTEXT_INPUT_VERSION
+        : PROPOSAL_DRAFT_INPUT_VERSION;
+    const run = await c.query<{ status: string }>(
+      `SELECT r.status
+         FROM rfpilot.${table} r
+         JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$2
+        WHERE r.id=$1`,
+      [message.run_id, inputVersion],
+    );
     const status = run.rows[0]?.status;
     if (!status || ["queued", "running"].includes(status)) continue;
     const messageStatus = status === "succeeded" ? "complete" : "failed";
@@ -113,15 +131,131 @@ const materializeChatJobs = async (c: PoolClient, conversationId: string) => {
 
 const latestSucceededContextRun = async (c: PoolClient, proposalRefId: string) => {
   const r = await c.query<{ id: string }>(
-    "SELECT id FROM rfpilot.proposal_context_runs WHERE proposal_reference_id=$1 AND status='succeeded' ORDER BY created_at DESC LIMIT 1",
-    [proposalRefId],
+    `SELECT r.id
+       FROM rfpilot.proposal_context_runs r
+       JOIN rfpilot.ai_jobs j
+         ON j.id=r.job_id AND j.input_version=$2
+      WHERE r.proposal_reference_id=$1 AND r.status='succeeded'
+      ORDER BY r.created_at DESC LIMIT 1`,
+    [proposalRefId, PROPOSAL_CONTEXT_INPUT_VERSION],
   );
   return r.rows[0]?.id ?? null;
+};
+
+const activeQuestionCount = async (
+  c: PoolClient,
+  proposalRefId: string,
+  status: "open" | "answered",
+) => {
+  const result = await c.query<{ n: number }>(
+    `SELECT count(*)::int n
+       FROM rfpilot.clarification_questions q
+       LEFT JOIN rfpilot.proposal_context_runs cr ON cr.id=q.context_run_id
+       LEFT JOIN rfpilot.ai_jobs cj
+         ON cj.id=cr.job_id AND cj.input_version=$3
+      WHERE q.proposal_reference_id=$1 AND q.status=$2
+        AND (q.context_run_id IS NULL OR cj.id IS NOT NULL)
+        AND ($4::boolean OR NOT EXISTS(
+          SELECT 1
+            FROM jsonb_array_elements_text(coalesce(q.canonical_paths,'[]'::jsonb)) retired(path)
+           WHERE retired.path=$5 OR retired.path LIKE $5||'/%'
+              OR retired.path=$6 OR retired.path LIKE $6||'/%'
+        ))`,
+    [
+      proposalRefId,
+      status,
+      PROPOSAL_CONTEXT_INPUT_VERSION,
+      proposalWorkflowSectionEnabled("video_recording"),
+      LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,
+      CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
+    ],
+  );
+  return Number(result.rows[0]?.n ?? 0);
+};
+
+const activeMessageCount = async (
+  c: PoolClient,
+  conversationId: string,
+  pendingOnly = false,
+) => {
+  const result = await c.query<{ n: number }>(
+    `SELECT count(*)::int n FROM rfpilot.conversation_messages m
+      WHERE m.conversation_id=$1 ${pendingOnly ? "AND m.status='pending'" : ""}
+        AND NOT(
+          m.run_type='proposal_context' AND m.run_id IS NOT NULL AND NOT EXISTS(
+            SELECT 1 FROM rfpilot.proposal_context_runs r
+            JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$2
+            WHERE r.id=m.run_id
+          )
+        )
+        AND NOT(
+          m.run_type='proposal_draft' AND m.run_id IS NOT NULL AND NOT EXISTS(
+            SELECT 1 FROM rfpilot.proposal_draft_runs r
+            JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$3
+            WHERE r.id=m.run_id
+          )
+        )
+        AND NOT EXISTS(
+          SELECT 1 FROM rfpilot.clarification_questions q
+          LEFT JOIN rfpilot.proposal_context_runs cr ON cr.id=q.context_run_id
+          LEFT JOIN rfpilot.ai_jobs cj ON cj.id=cr.job_id AND cj.input_version=$2
+          WHERE q.answered_message_id=m.id AND (
+            (q.context_run_id IS NOT NULL AND cj.id IS NULL) OR
+            ($4::boolean=false AND EXISTS(
+              SELECT 1 FROM jsonb_array_elements_text(coalesce(q.canonical_paths,'[]'::jsonb)) retired(path)
+              WHERE retired.path=$5 OR retired.path LIKE $5||'/%'
+                 OR retired.path=$6 OR retired.path LIKE $6||'/%'
+            ))
+          )
+        )`,
+    [
+      conversationId,
+      PROPOSAL_CONTEXT_INPUT_VERSION,
+      PROPOSAL_DRAFT_INPUT_VERSION,
+      proposalWorkflowSectionEnabled("video_recording"),
+      LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,
+      CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
+    ],
+  );
+  return Number(result.rows[0]?.n ?? 0);
+};
+
+// Retired-field questions remain useful audit history after they are answered,
+// but an unanswered card must not point a planner at a section that no longer
+// exists. Superseding is reversible and keeps every original row intact.
+const supersedeRetiredOpenQuestions = async (
+  c: PoolClient,
+  proposalRefId: string,
+) => {
+  const open = await c.query<{ id: string; canonical_paths: unknown }>(
+    `SELECT id,canonical_paths
+       FROM rfpilot.clarification_questions
+      WHERE proposal_reference_id=$1 AND status='open'`,
+    [proposalRefId],
+  );
+  const retiredIds = open.rows
+    .filter((row) => {
+      const paths = Array.isArray(row.canonical_paths)
+        ? row.canonical_paths.filter(
+            (path): path is string => typeof path === "string",
+          )
+        : [];
+      return paths.some(isRetiredProposalWorkflowPath);
+    })
+    .map((row) => row.id);
+  if (!retiredIds.length) return;
+  await c.query(
+    `UPDATE rfpilot.clarification_questions
+        SET status='superseded',updated_at=now()
+      WHERE id=ANY($1::uuid[])`,
+    [retiredIds],
+  );
 };
 
 // Promote extraction issues from the latest succeeded run into clarification
 // questions with a lifecycle; questions from older runs are superseded.
 const syncQuestions = async (c: PoolClient, org: string, proposalRefId: string, conversationId: string) => {
+  await supersedeRetiredOpenQuestions(c, proposalRefId);
   const runId = await latestSucceededContextRun(c, proposalRefId);
   if (!runId) return;
   // Only field-gap questions are superseded by a newer run. A stale "what is
@@ -156,6 +290,7 @@ const syncQuestions = async (c: PoolClient, org: string, proposalRefId: string, 
   for (const issue of issues.rows) {
     if (questionBudget <= 0) break;
     const paths = issue.paths || [];
+    if (!paths.length || paths.some(isRetiredProposalWorkflowPath)) continue;
     const compositeField = IMPORTANT_FIELD_QUESTIONS.find((field) =>
       field.answerType === "date_time" && importantFieldPaths(field).some((path) => paths.includes(path)));
     if (compositeField) {
@@ -223,11 +358,69 @@ export const conversationRepository = {
         proposalMongoId: ctx.proposalMongoId,
       });
       const limit = Math.min(Math.max(ctx.limit ?? 200, 1), 500);
+      const questions = await c.query<any>(
+        `SELECT q.id,q.issue_code,q.severity,q.canonical_paths,q.prompt,q.status,
+                q.answered_message_id,q.context_run_id,q.created_at,
+                (q.context_run_id IS NULL OR EXISTS(
+                  SELECT 1 FROM rfpilot.proposal_context_runs r
+                  JOIN rfpilot.ai_jobs j
+                    ON j.id=r.job_id AND j.input_version=$2
+                  WHERE r.id=q.context_run_id
+                )) current_context
+           FROM rfpilot.clarification_questions q
+          WHERE q.proposal_reference_id=$1 AND q.status IN('open','answered')
+          ORDER BY q.created_at`,
+        [proposalRefId, PROPOSAL_CONTEXT_INPUT_VERSION],
+      );
+      const activeQuestions = questions.rows.filter((question) => {
+        const paths = Array.isArray(question.canonical_paths)
+          ? question.canonical_paths
+          : [];
+        return question.current_context === true &&
+          !paths.some(isRetiredProposalWorkflowPath);
+      });
+      const retiredAnswerMessageIds = questions.rows
+        .filter((question) => !activeQuestions.includes(question))
+        .map((question) => question.answered_message_id)
+        .filter((id): id is string => typeof id === "string");
+      const staleRunMessages = await c.query<{ id: string }>(
+        `SELECT m.id FROM rfpilot.conversation_messages m
+          WHERE m.conversation_id=$1 AND m.run_id IS NOT NULL AND (
+            (m.run_type='proposal_context' AND NOT EXISTS(
+              SELECT 1 FROM rfpilot.proposal_context_runs r
+              JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$2
+              WHERE r.id=m.run_id
+            )) OR
+            (m.run_type='proposal_draft' AND NOT EXISTS(
+              SELECT 1 FROM rfpilot.proposal_draft_runs r
+              JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$3
+              WHERE r.id=m.run_id
+            ))
+          )`,
+        [
+          conversation.id,
+          PROPOSAL_CONTEXT_INPUT_VERSION,
+          PROPOSAL_DRAFT_INPUT_VERSION,
+        ],
+      );
+      const excludedMessageIds = [
+        ...new Set([
+          ...retiredAnswerMessageIds,
+          ...staleRunMessages.rows.map((row) => row.id),
+        ]),
+      ];
       const messages = await c.query<any>(
-        "SELECT * FROM rfpilot.conversation_messages WHERE conversation_id=$1 ORDER BY ordinal DESC LIMIT $2",
-        [conversation.id, limit],
+        `SELECT * FROM rfpilot.conversation_messages
+          WHERE conversation_id=$1 AND id<>ALL($3::uuid[])
+          ORDER BY ordinal DESC LIMIT $2`,
+        [conversation.id, limit, excludedMessageIds],
       );
       const rows = messages.rows.reverse();
+      const activeMessageCount = await c.query<{ n: number }>(
+        `SELECT count(*)::int n FROM rfpilot.conversation_messages
+          WHERE conversation_id=$1 AND id<>ALL($2::uuid[])`,
+        [conversation.id, excludedMessageIds],
+      );
       const attachments = rows.length
         ? (await c.query<any>(
             `SELECT a.message_id,a.source_id,a.role,o.safe_filename,s.status source_status
@@ -238,15 +431,11 @@ export const conversationRepository = {
             [rows.map((row) => row.id)],
           )).rows
         : [];
-      const questions = await c.query<any>(
-        "SELECT id,issue_code,severity,canonical_paths,prompt,status,answered_message_id,context_run_id,created_at FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND status IN('open','answered') ORDER BY created_at",
-        [proposalRefId],
-      );
       // A conflict question asks "which value is correct?" — so it should offer
       // the values that actually disagreed, not a free-text box the planner has
       // to retype into. The candidates are already persisted per run, so this
       // needs no new storage.
-      const conflicts = questions.rows.filter(
+      const conflicts = activeQuestions.filter(
         (q) => q.issue_code === "CROSS_SOURCE_CONFLICT" && q.context_run_id && (q.canonical_paths || []).length === 1,
       );
       const conflictOptions = new Map<string, string[]>();
@@ -273,7 +462,7 @@ export const conversationRepository = {
       // are excluded: their whole point is that the candidates disagree.
       const suggestions = new Map<string, unknown>();
       const openFieldPaths = [...new Set(
-        questions.rows
+        activeQuestions
           .filter((q) => q.status === "open" && q.issue_code !== "CROSS_SOURCE_CONFLICT" && (q.canonical_paths || []).length === 1)
           .map((q) => q.canonical_paths[0] as string),
       )];
@@ -291,9 +480,9 @@ export const conversationRepository = {
         }
       }
       return {
-        conversation: { id: conversation.id, title: conversation.title, status: conversation.status, messageCount: conversation.message_count, updatedAt: conversation.updated_at },
+        conversation: { id: conversation.id, title: conversation.title, status: conversation.status, messageCount: Number(activeMessageCount.rows[0]?.n ?? 0), updatedAt: conversation.updated_at },
         messages: rows.map((row) => messagePayload(row, attachments)),
-        questions: questions.rows.map((q) => {
+        questions: activeQuestions.map((q) => {
           const paths: string[] = Array.isArray(q.canonical_paths) ? q.canonical_paths : [];
           const conflicting = conflictOptions.get(`${q.context_run_id}|${paths[0]}`) ?? [];
           const { answerType, options } =
@@ -602,11 +791,8 @@ export const conversationRepository = {
       const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
       const conversation = await getOrCreateConversation(c, org, proposalRefId, ctx.actorUserMongoId);
       await c.query("SELECT id FROM rfpilot.conversations WHERE id=$1 FOR UPDATE", [conversation.id]);
-      const open = await c.query<{ n: number }>(
-        "SELECT count(*)::int n FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND status='open'",
-        [proposalRefId],
-      );
-      if (Number(open.rows[0]?.n ?? 0) > 0) return { created: false, reason: "questions_open" };
+      const open = await activeQuestionCount(c, proposalRefId, "open");
+      if (open > 0) return { created: false, reason: "questions_open" };
       const existing = await c.query<{ id: string }>(
         `SELECT id FROM rfpilot.conversation_messages
           WHERE conversation_id=$1 AND actions @> '["download_room_schedule_template"]'::jsonb
@@ -634,12 +820,20 @@ export const conversationRepository = {
       await tenant(c, ctx.organizationMongoId);
       const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
       const question = await c.query<{ id: string; issue_code: string; canonical_paths: string[]; status: string }>(
-        "SELECT id,issue_code,canonical_paths,status FROM rfpilot.clarification_questions WHERE id=$1 AND proposal_reference_id=$2",
-        [ctx.questionId, proposalRefId],
+        `SELECT q.id,q.issue_code,q.canonical_paths,q.status
+           FROM rfpilot.clarification_questions q
+           LEFT JOIN rfpilot.proposal_context_runs cr ON cr.id=q.context_run_id
+           LEFT JOIN rfpilot.ai_jobs cj ON cj.id=cr.job_id AND cj.input_version=$3
+          WHERE q.id=$1 AND q.proposal_reference_id=$2
+            AND (q.context_run_id IS NULL OR cj.id IS NOT NULL)`,
+        [ctx.questionId, proposalRefId, PROPOSAL_CONTEXT_INPUT_VERSION],
       );
       if (!question.rows[0]) throw new ConversationError("QUESTION_NOT_FOUND", "Clarification question was not found.", 404);
       const row = question.rows[0];
-      return { id: row.id, code: row.issue_code, paths: Array.isArray(row.canonical_paths) ? row.canonical_paths : [], status: row.status };
+      const paths = Array.isArray(row.canonical_paths) ? row.canonical_paths : [];
+      if (paths.some(isRetiredProposalWorkflowPath))
+        throw new ConversationError("QUESTION_NOT_FOUND", "Clarification question was not found.", 404);
+      return { id: row.id, code: row.issue_code, paths, status: row.status };
     });
   },
 
@@ -648,11 +842,19 @@ export const conversationRepository = {
       const org = await tenant(c, ctx.organizationMongoId);
       const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
       const question = await c.query<any>(
-        "SELECT * FROM rfpilot.clarification_questions WHERE id=$1 AND proposal_reference_id=$2 FOR UPDATE",
-        [ctx.questionId, proposalRefId],
+        `SELECT q.* FROM rfpilot.clarification_questions q
+           LEFT JOIN rfpilot.proposal_context_runs cr ON cr.id=q.context_run_id
+           LEFT JOIN rfpilot.ai_jobs cj ON cj.id=cr.job_id AND cj.input_version=$3
+          WHERE q.id=$1 AND q.proposal_reference_id=$2
+            AND (q.context_run_id IS NULL OR cj.id IS NOT NULL)
+          FOR UPDATE OF q`,
+        [ctx.questionId, proposalRefId, PROPOSAL_CONTEXT_INPUT_VERSION],
       );
       if (!question.rows[0]) throw new ConversationError("QUESTION_NOT_FOUND", "Clarification question was not found.", 404);
       const row = question.rows[0];
+      const questionPaths = Array.isArray(row.canonical_paths) ? row.canonical_paths : [];
+      if (questionPaths.some(isRetiredProposalWorkflowPath))
+        throw new ConversationError("QUESTION_NOT_FOUND", "Clarification question was not found.", 404);
       // A single-field answer is written to Mongo immediately before this
       // transaction. The live snapshot synchronizer can observe that value and
       // mark the question superseded in the narrow gap between those writes.
@@ -662,8 +864,7 @@ export const conversationRepository = {
       const supersededByThisAnswer = row.status === "superseded"
         && ctx.status === "answered"
         && appliedPaths.length > 0
-        && Array.isArray(row.canonical_paths)
-        && appliedPaths.every((path) => row.canonical_paths.includes(path));
+        && appliedPaths.every((path) => questionPaths.includes(path));
       if (row.status !== "open" && !supersededByThisAnswer)
         throw new ConversationError("QUESTION_NOT_OPEN", "This question has already been resolved.", 409);
       let answeredMessageId: string | null = null;
@@ -706,23 +907,20 @@ export const conversationRepository = {
         actorUserMongoId: ctx.actorUserMongoId,
         proposalMongoId: ctx.proposalMongoId,
       });
-      const pending = await c.query<{ n: number }>(
-        "SELECT count(*)::int n FROM rfpilot.conversation_messages WHERE conversation_id=$1 AND status='pending'",
-        [conversation.id],
-      );
-      const open = await c.query<{ n: number }>(
-        "SELECT count(*)::int n FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND status='open'",
-        [proposalRefId],
-      );
+      const [pending, open, messageCount] = await Promise.all([
+        activeMessageCount(c, conversation.id, true),
+        activeQuestionCount(c, proposalRefId, "open"),
+        activeMessageCount(c, conversation.id),
+      ]);
       const count = await c.query<{ n: number; updated_at: string }>(
         "SELECT message_count n,updated_at FROM rfpilot.conversations WHERE id=$1",
         [conversation.id],
       );
       return {
         conversationId: conversation.id,
-        messageCount: Number(count.rows[0]?.n ?? 0),
-        pendingMessages: Number(pending.rows[0]?.n ?? 0),
-        openQuestions: Number(open.rows[0]?.n ?? 0),
+        messageCount,
+        pendingMessages: pending,
+        openQuestions: open,
         updatedAt: count.rows[0]?.updated_at ?? null,
       };
     });

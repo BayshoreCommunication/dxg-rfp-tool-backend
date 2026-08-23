@@ -17,6 +17,11 @@ import {
 import { openAiVendorFactMappingProvider } from "./openAiVendorFactMappingProvider";
 import { runVendorFactMappingPipeline } from "./pipeline";
 import type { IntelligenceEvidence, IntelligenceRequirement } from "./ports";
+import { REQUIREMENT_GENERATOR_VERSION } from "../requirementRegistry/generator";
+import {
+  LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+  proposalWorkflowSectionEnabled,
+} from "../proposals/domain/workflowSections";
 
 type Context = {
   organizationMongoId: string;
@@ -69,12 +74,12 @@ const loadVersion = async (input: Context) => {
 const approvedRequirementSet = async (client: PoolClient, proposalReferenceId: string, requirementSetId?: string | null) => {
   const result = requirementSetId
     ? await client.query<any>(
-      "SELECT * FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2 AND status='approved'",
-      [requirementSetId, proposalReferenceId],
+      "SELECT * FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2 AND status='approved' AND generator_version=$3",
+      [requirementSetId, proposalReferenceId, REQUIREMENT_GENERATOR_VERSION],
     )
     : await client.query<any>(
-      "SELECT * FROM rfpilot.requirement_sets WHERE proposal_reference_id=$1 AND status='approved' ORDER BY version DESC LIMIT 1",
-      [proposalReferenceId],
+      "SELECT * FROM rfpilot.requirement_sets WHERE proposal_reference_id=$1 AND status='approved' AND generator_version=$2 ORDER BY version DESC LIMIT 1",
+      [proposalReferenceId, REQUIREMENT_GENERATOR_VERSION],
     );
   if (!result.rows[0]) throw new VendorIntelligenceError("REQUIREMENT_SET_NOT_APPROVED", "An approved requirement set is required.", 409);
   return result.rows[0];
@@ -275,22 +280,31 @@ export const vendorIntelligenceRepository = {
     const loaded = await withPostgresTransaction(async (client) => {
       const organizationId = await tenant(client, input.organizationMongoId);
       const result = await client.query<any>(
-        "SELECT * FROM rfpilot.vendor_intelligence_runs WHERE id=$1 FOR UPDATE",
-        [input.runId],
+        `SELECT r.* FROM rfpilot.vendor_intelligence_runs r
+         JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$2
+         WHERE r.id=$1 FOR UPDATE OF r`,
+        [input.runId, REQUIREMENT_GENERATOR_VERSION],
       );
       const run = result.rows[0];
       if (!run) throw new VendorIntelligenceError("INTELLIGENCE_RUN_NOT_FOUND", "Vendor intelligence run was not found.", 404);
       if (run.status === "succeeded") return { run, organizationId, requirements: [], evidence: [], warnings: [] };
       const set = await client.query<any>(
-        "SELECT id,status FROM rfpilot.requirement_sets WHERE id=$1",
-        [run.requirement_set_id],
+        "SELECT id,status FROM rfpilot.requirement_sets WHERE id=$1 AND generator_version=$2",
+        [run.requirement_set_id, REQUIREMENT_GENERATOR_VERSION],
       );
       if (set.rows[0]?.status !== "approved")
         throw new VendorIntelligenceError("REQUIREMENT_SET_NOT_APPROVED", "The requirement set is no longer approved.", 409);
       const requirements = await client.query<any>(
         `SELECT id,title,normalized_text,kind,mandatory_status
-         FROM rfpilot.requirements WHERE requirement_set_id=$1 AND included=true ORDER BY ordinal`,
-        [run.requirement_set_id],
+         FROM rfpilot.requirements
+         WHERE requirement_set_id=$1 AND included=true
+           AND ($2::boolean OR group_key IS DISTINCT FROM $3)
+         ORDER BY ordinal`,
+        [
+          run.requirement_set_id,
+          proposalWorkflowSectionEnabled("video_recording"),
+          LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+        ],
       );
       const sourceRuns = await extractionInput(client, run.vendor_submission_version_mongo_id);
       const available = await client.query<{ count: number }>(
@@ -450,16 +464,22 @@ export const vendorIntelligenceRepository = {
       const proposalReferenceId = await ownedProposal(client, input.proposalMongoId, input.actorUserMongoId);
       const runResult = input.runId
         ? await client.query<any>(
-          "SELECT * FROM rfpilot.vendor_intelligence_runs WHERE id=$1 AND proposal_reference_id=$2 AND vendor_submission_version_mongo_id=$3",
-          [input.runId, proposalReferenceId, input.versionMongoId],
+          `SELECT r.* FROM rfpilot.vendor_intelligence_runs r
+           JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$4
+           WHERE r.id=$1 AND r.proposal_reference_id=$2 AND r.vendor_submission_version_mongo_id=$3`,
+          [input.runId, proposalReferenceId, input.versionMongoId, REQUIREMENT_GENERATOR_VERSION],
         )
         : await client.query<any>(
-          "SELECT * FROM rfpilot.vendor_intelligence_runs WHERE proposal_reference_id=$1 AND vendor_submission_version_mongo_id=$2 ORDER BY created_at DESC LIMIT 1",
-          [proposalReferenceId, input.versionMongoId],
+          `SELECT r.* FROM rfpilot.vendor_intelligence_runs r
+           JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$3
+           WHERE r.proposal_reference_id=$1 AND r.vendor_submission_version_mongo_id=$2
+           ORDER BY r.created_at DESC LIMIT 1`,
+          [proposalReferenceId, input.versionMongoId, REQUIREMENT_GENERATOR_VERSION],
         );
       const run = runResult.rows[0];
       if (!run) throw new VendorIntelligenceError("INTELLIGENCE_RUN_NOT_FOUND", "Vendor intelligence has not been generated.", 404);
-      const mappings = await client.query<any>(
+      const [mappings, activeRequirementCount] = await Promise.all([
+        client.query<any>(
         `SELECT m.id,m.requirement_id,r.title,r.kind,r.mandatory_status,m.relationship,m.confidence,
                 m.ambiguity_reasons,m.evidence_fragment_id,f.content,f.locator,s.source_label
          FROM rfpilot.requirement_evidence_mappings m
@@ -472,9 +492,27 @@ export const vendorIntelligenceRepository = {
              AND coalesce(current_source.reused_from_run_id,current_source.id)=f.extraction_run_id
            ORDER BY current_source.created_at,current_source.id LIMIT 1
          ) s ON true
-         WHERE m.intelligence_run_id=$1 ORDER BY r.ordinal,m.ordinal`,
-        [run.id, run.vendor_submission_version_mongo_id],
-      );
+         WHERE m.intelligence_run_id=$1
+           AND ($3::boolean OR r.group_key IS DISTINCT FROM $4)
+         ORDER BY r.ordinal,m.ordinal`,
+        [
+          run.id,
+          run.vendor_submission_version_mongo_id,
+          proposalWorkflowSectionEnabled("video_recording"),
+          LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+        ],
+        ),
+        client.query<{ count: number }>(
+          `SELECT count(*)::int count FROM rfpilot.requirements
+            WHERE requirement_set_id=$1 AND included=true
+              AND ($2::boolean OR group_key IS DISTINCT FROM $3)`,
+          [
+            run.requirement_set_id,
+            proposalWorkflowSectionEnabled("video_recording"),
+            LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+          ],
+        ),
+      ]);
       const facts = await client.query<any>(
         `SELECT f.*,
           coalesce((SELECT jsonb_agg(jsonb_build_object(
@@ -511,8 +549,18 @@ export const vendorIntelligenceRepository = {
         });
         grouped.set(row.requirement_id, current);
       }
+      const visibleMappingIds = new Set(
+        mappings.rows.map((mapping) => String(mapping.id)),
+      );
+      const visibleFactIds = new Set(
+        facts.rows.map((fact) => String(fact.id)),
+      );
       return {
-        run: runView(run),
+        run: {
+          ...runView(run),
+          requirementCount: Number(activeRequirementCount.rows[0]?.count ?? 0),
+          mappedRequirementCount: grouped.size,
+        },
         mappings: [...grouped.values()],
         facts: facts.rows.map((fact) => ({
           factId: fact.id, factKey: fact.fact_key, family: fact.family, factType: fact.fact_type,
@@ -522,7 +570,11 @@ export const vendorIntelligenceRepository = {
           confidence: Number(fact.confidence), contradictionGroup: fact.contradiction_group,
           citations: fact.citations,
         })),
-        reviews: reviews.rows.map((review) => ({
+        reviews: reviews.rows.filter((review) =>
+          review.target_type === "mapping"
+            ? visibleMappingIds.has(String(review.target_id))
+            : visibleFactIds.has(String(review.target_id)),
+        ).map((review) => ({
           reviewId: review.id, targetType: review.target_type, targetId: review.target_id,
           decision: review.decision, reasonCode: review.reason_code, note: review.note,
           correctedPayload: review.corrected_payload, actorUserId: review.actor_external_user_id,
@@ -554,16 +606,30 @@ export const vendorIntelligenceRepository = {
       const organizationId = await tenant(client, input.organizationMongoId);
       const proposalReferenceId = await ownedProposal(client, input.proposalMongoId, input.actorUserMongoId);
       const run = await client.query<any>(
-        "SELECT * FROM rfpilot.vendor_intelligence_runs WHERE id=$1 AND proposal_reference_id=$2 AND vendor_submission_version_mongo_id=$3",
-        [input.runId, proposalReferenceId, input.versionMongoId],
+        `SELECT r.* FROM rfpilot.vendor_intelligence_runs r
+         JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$4
+         WHERE r.id=$1 AND r.proposal_reference_id=$2 AND r.vendor_submission_version_mongo_id=$3`,
+        [input.runId, proposalReferenceId, input.versionMongoId, REQUIREMENT_GENERATOR_VERSION],
       );
       if (run.rows[0]?.status !== "succeeded")
         throw new VendorIntelligenceError("INTELLIGENCE_RUN_NOT_READY", "Vendor intelligence is not ready for review.", 409);
-      const targetTable = input.targetType === "fact" ? "extracted_facts" : "requirement_evidence_mappings";
-      const target = await client.query<{ id: string; value_kind?: string }>(
-        `SELECT id${input.targetType === "fact" ? ",value_kind" : ""} FROM rfpilot.${targetTable} WHERE id=$1 AND intelligence_run_id=$2`,
-        [input.targetId, input.runId],
-      );
+      const target = input.targetType === "fact"
+        ? await client.query<{ id: string; value_kind?: string }>(
+          "SELECT id,value_kind FROM rfpilot.extracted_facts WHERE id=$1 AND intelligence_run_id=$2",
+          [input.targetId, input.runId],
+        )
+        : await client.query<{ id: string; value_kind?: string }>(
+          `SELECT m.id FROM rfpilot.requirement_evidence_mappings m
+             JOIN rfpilot.requirements r ON r.id=m.requirement_id
+            WHERE m.id=$1 AND m.intelligence_run_id=$2
+              AND ($3::boolean OR r.group_key IS DISTINCT FROM $4)`,
+          [
+            input.targetId,
+            input.runId,
+            proposalWorkflowSectionEnabled("video_recording"),
+            LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+          ],
+        );
       if (!target.rows[0]) throw new VendorIntelligenceError("REVIEW_TARGET_NOT_FOUND", "Review target was not found.", 404);
       if (input.decision === "corrected" && input.targetType === "mapping") {
         const relationship = String(input.correctedPayload?.relationship ?? "");

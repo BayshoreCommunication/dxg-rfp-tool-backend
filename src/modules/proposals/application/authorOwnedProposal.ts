@@ -2,6 +2,7 @@ import type { ProposalSettingsRepository } from "../domain/ports/proposalSetting
 import type { ProposalWriteRepository } from "../domain/ports/proposalWriteRepository";
 import type { ProposalReferenceSynchronizer } from "../domain/ports/proposalReferenceSynchronizer";
 import { withLiveSettings } from "./proposalPresentation";
+import { activeProposalWorkflowContent } from "../domain/workflowSections";
 
 type AuthorDependencies = {
   proposals: ProposalWriteRepository;
@@ -30,7 +31,9 @@ export const createCreateOwnedProposal = (dependencies: AuthorDependencies) =>
     ownerUserId: string;
     proposal: Record<string, unknown>;
   }) => {
-    const proposalData = removeSystemFields(input.proposal);
+    const proposalData = activeProposalWorkflowContent(
+      removeSystemFields(input.proposal),
+    );
     if (typeof proposalData.isDraft !== "boolean") {
       proposalData.isDraft =
         !proposalData.status ||
@@ -55,7 +58,12 @@ export const createUpdateOwnedProposal = (dependencies: AuthorDependencies) =>
     ownerUserId: string;
     updates: Record<string, unknown>;
   }) => {
-    const updates = removeSystemFields(input.updates);
+    // Omit the dormant root from $set. Existing stored data is deliberately
+    // left in place for a future flag restoration, while disabled clients
+    // cannot create or replace it.
+    const updates = activeProposalWorkflowContent(
+      removeSystemFields(input.updates),
+    );
     delete updates.isCopy;
     if (updates.status === "unsubmitted") {
       updates.isDraft = true;
@@ -100,7 +108,9 @@ export const createCopyOwnedProposal = (dependencies: AuthorDependencies) =>
       ownerUserId: input.ownerUserId,
     });
     if (!source) return { kind: "not_found" as const };
-    const sourceData = removeSystemFields(source as Record<string, unknown>);
+    const sourceData = activeProposalWorkflowContent(
+      removeSystemFields(source as Record<string, unknown>),
+    );
     const copyData: Record<string, unknown> = {
       ...sourceData,
       status: "unsubmitted",

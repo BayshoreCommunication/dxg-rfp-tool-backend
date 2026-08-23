@@ -7,6 +7,11 @@ import { withPostgresTransaction } from "../../../config/postgres";
 import { AUTO_APPLY_MIN_CONFIDENCE, CandidateApplicationError, type ReviewDecision } from "./domain";
 import { normalizeCandidate } from "./canonicalMapping";
 import { mongoProposalCandidateMutation } from "./mongoProposalCandidateMutation";
+import {
+  isRetiredCanonicalProposalWorkflowPath,
+  isRetiredProposalWorkflowPath,
+} from "../proposals/domain/workflowSections";
+import { PROPOSAL_CONTEXT_INPUT_VERSION } from "../proposalContext/domain";
 
 export const requiresOverwriteConfirmation = (
   current: unknown,
@@ -54,8 +59,10 @@ const owned = async (c: PoolClient, proposalId: string, actor: string) => {
 };
 const run = async (c: PoolClient, id: string, proposalRef: string) => {
   const r = await c.query<any>(
-    "SELECT * FROM rfpilot.proposal_context_runs WHERE id=$1 AND proposal_reference_id=$2 AND status='succeeded'",
-    [id, proposalRef],
+    `SELECT r.* FROM rfpilot.proposal_context_runs r
+     JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$3
+     WHERE r.id=$1 AND r.proposal_reference_id=$2 AND r.status='succeeded'`,
+    [id, proposalRef, PROPOSAL_CONTEXT_INPUT_VERSION],
   );
   if (!r.rows[0])
     throw new CandidateApplicationError(
@@ -131,6 +138,12 @@ export const candidateApplicationRepository = {
             "INVALID_REVIEW_DECISION",
             "Candidate does not belong to this run.",
           );
+        if (isRetiredProposalWorkflowPath(op.rows[0].path))
+          throw new CandidateApplicationError(
+            "CANDIDATE_PATH_RETIRED",
+            "This candidate belongs to a retired proposal section.",
+            409,
+          );
         if (d.decision === "modified")
           normalizeCandidate(op.rows[0].path, d.value);
         await c.query(
@@ -179,7 +192,10 @@ export const candidateApplicationRepository = {
       return {
         reviewId: review.rows[0]?.id ?? null,
         revision: review.rows[0]?.revision ?? 0,
-        operations: operations.rows,
+        operations: operations.rows.filter(
+          (operation: { path: string }) =>
+            !isRetiredProposalWorkflowPath(operation.path),
+        ),
       };
     });
   },
@@ -203,7 +219,7 @@ export const candidateApplicationRepository = {
           input.actorUserMongoId,
         );
       await run(c, input.runId, proposalRef);
-      const key = `candidate_application:${input.idempotencyKey}`,
+      const key = `candidate_application:${PROPOSAL_CONTEXT_INPUT_VERSION}:${input.idempotencyKey}`,
         existing = await c.query<any>(
           "SELECT a.*,j.status job_status FROM rfpilot.candidate_applications a JOIN rfpilot.ai_jobs j ON j.id=a.job_id WHERE a.organization_id=$1 AND a.idempotency_key=$2",
           [org, key],
@@ -233,6 +249,16 @@ export const candidateApplicationRepository = {
         throw new CandidateApplicationError(
           "INVALID_APPLICATION_SELECTION",
           "Only accepted or modified candidates may be applied.",
+        );
+      if (
+        selected.rows.some((item: { path: string }) =>
+          isRetiredProposalWorkflowPath(item.path),
+        )
+      )
+        throw new CandidateApplicationError(
+          "CANDIDATE_PATH_RETIRED",
+          "Candidates from retired proposal sections cannot be applied.",
+          409,
         );
       if (
         new Set(selected.rows.map((x: any) => x.path)).size !==
@@ -342,8 +368,14 @@ export const candidateApplicationRepository = {
     const prepared = await withPostgresTransaction(async (c) => {
       await tenant(c, input.organizationMongoId);
       const a = await c.query<any>(
-        `SELECT a.*,p.external_mongo_id proposal_mongo_id FROM rfpilot.candidate_applications a JOIN rfpilot.proposal_references p ON p.id=a.proposal_reference_id WHERE a.id=$1 FOR UPDATE`,
-        [input.applicationId],
+        `SELECT a.*,p.external_mongo_id proposal_mongo_id
+           FROM rfpilot.candidate_applications a
+           JOIN rfpilot.proposal_context_runs cr ON cr.id=a.run_id
+           JOIN rfpilot.ai_jobs cj
+             ON cj.id=cr.job_id AND cj.input_version=$2
+           JOIN rfpilot.proposal_references p ON p.id=a.proposal_reference_id
+          WHERE a.id=$1 FOR UPDATE OF a`,
+        [input.applicationId, PROPOSAL_CONTEXT_INPUT_VERSION],
       );
       if (!a.rows[0])
         throw new CandidateApplicationError(
@@ -364,6 +396,22 @@ export const candidateApplicationRepository = {
       return { done: false, application: a.rows[0], rows: rows.rows };
     });
     if (prepared.done) return { resultReference: input.applicationId };
+    if (
+      prepared.rows!.some((item: { path: string }) =>
+        isRetiredProposalWorkflowPath(item.path),
+      )
+    ) {
+      await this.markConflict({
+        organizationMongoId: input.organizationMongoId,
+        applicationId: input.applicationId,
+        code: "CANDIDATE_PATH_RETIRED",
+      });
+      throw new CandidateApplicationError(
+        "CANDIDATE_PATH_RETIRED",
+        "Candidates from retired proposal sections cannot be applied.",
+        409,
+      );
+    }
     const normalized = prepared.rows!.map((x: any) => ({
         ...normalizeCandidate(
           x.path,
@@ -478,8 +526,13 @@ export const candidateApplicationRepository = {
         correlation_id: string;
         status: string;
       }>(
-        "SELECT proposal_reference_id,actor_external_user_id,expected_proposal_version,selected_count,correlation_id,status FROM rfpilot.candidate_applications WHERE id=$1 FOR UPDATE",
-        [input.applicationId],
+        `SELECT a.proposal_reference_id,a.actor_external_user_id,
+                a.expected_proposal_version,a.selected_count,a.correlation_id,a.status
+           FROM rfpilot.candidate_applications a
+           JOIN rfpilot.proposal_context_runs cr ON cr.id=a.run_id
+           JOIN rfpilot.ai_jobs cj ON cj.id=cr.job_id AND cj.input_version=$2
+          WHERE a.id=$1 FOR UPDATE OF a`,
+        [input.applicationId, PROPOSAL_CONTEXT_INPUT_VERSION],
       );
       if (!application.rows[0])
         throw new CandidateApplicationError(
@@ -529,8 +582,14 @@ export const candidateApplicationRepository = {
     return withPostgresTransaction(async (c) => {
       await tenant(c, input.organizationMongoId);
       await c.query(
-        "UPDATE rfpilot.candidate_applications SET status='conflict',safe_error_code=$2,completed_at=now(),updated_at=now() WHERE id=$1",
-        [input.applicationId, input.code],
+        `UPDATE rfpilot.candidate_applications a
+            SET status='conflict',safe_error_code=$2,completed_at=now(),updated_at=now()
+          WHERE a.id=$1 AND EXISTS(
+            SELECT 1 FROM rfpilot.proposal_context_runs cr
+            JOIN rfpilot.ai_jobs cj ON cj.id=cr.job_id AND cj.input_version=$3
+            WHERE cr.id=a.run_id
+          )`,
+        [input.applicationId, input.code, PROPOSAL_CONTEXT_INPUT_VERSION],
       );
     });
   },
@@ -548,8 +607,13 @@ export const candidateApplicationRepository = {
         input.actorUserMongoId,
       );
       const a = await c.query<any>(
-        "SELECT id,status,expected_proposal_version,resulting_proposal_version,selected_count,safe_error_code,job_id,created_at,completed_at FROM rfpilot.candidate_applications WHERE id=$1 AND proposal_reference_id=$2",
-        [input.applicationId, proposalRef],
+        `SELECT a.id,a.status,a.expected_proposal_version,a.resulting_proposal_version,
+                a.selected_count,a.safe_error_code,a.job_id,a.created_at,a.completed_at
+           FROM rfpilot.candidate_applications a
+           JOIN rfpilot.proposal_context_runs cr ON cr.id=a.run_id
+           JOIN rfpilot.ai_jobs cj ON cj.id=cr.job_id AND cj.input_version=$3
+          WHERE a.id=$1 AND a.proposal_reference_id=$2`,
+        [input.applicationId, proposalRef, PROPOSAL_CONTEXT_INPUT_VERSION],
       );
       if (!a.rows[0])
         throw new CandidateApplicationError(
@@ -561,9 +625,14 @@ export const candidateApplicationRepository = {
         "SELECT canonical_path,outcome,safe_error_code FROM rfpilot.candidate_application_items WHERE application_id=$1 ORDER BY ordinal",
         [input.applicationId],
       );
+      const visibleItems = items.rows.filter(
+        (item: { canonical_path: string }) =>
+          !isRetiredCanonicalProposalWorkflowPath(item.canonical_path),
+      );
       return {
         ...a.rows[0],
-        items: items.rows,
+        selected_count: visibleItems.length,
+        items: visibleItems,
         recovery: {
           mode: "manual_restore",
           fromProposalVersion: Number(a.rows[0].expected_proposal_version),

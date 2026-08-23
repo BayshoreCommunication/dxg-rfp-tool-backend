@@ -278,6 +278,23 @@ test("assistant UI context is bounded, allowlisted, and safe for stale field key
     parseAssistantUiContext({
       schemaVersion: "assistant-ui-context.v1",
       routeCategory: "proposal_creation",
+      workflow: "proposal_intake",
+      sectionId: "video_recording",
+      fieldKey: "/content/videoRecording/required",
+      roomIdentifier: "room:2",
+      fieldControl: { label: "Video recording", helperText: "Retired", controlType: "radio" },
+    }),
+    {
+      schemaVersion: "assistant-ui-context.v1",
+      routeCategory: "proposal_creation",
+      workflow: "proposal_intake",
+      fieldKeyStatus: "not_provided",
+    },
+  );
+  assert.deepEqual(
+    parseAssistantUiContext({
+      schemaVersion: "assistant-ui-context.v1",
+      routeCategory: "proposal_creation",
       fieldKey: "/content/event/renamedField",
     }),
     {

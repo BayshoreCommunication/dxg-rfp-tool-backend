@@ -10,7 +10,7 @@ import {
 
 type Ctx = { organizationMongoId: string; actorUserMongoId: string; correlationId: string };
 
-const ENGINE_VERSION = "dxg-av-pricing-engine.v3";
+export const INVESTMENT_ENGINE_VERSION = "dxg-av-pricing-engine.v4";
 
 const tenant = async (c: PoolClient, external: string) => {
   await c.query("SELECT set_config('app.organization_mongo_id',$1,true)", [external]);
@@ -181,7 +181,7 @@ export const investmentRepository = {
         `INSERT INTO rfpilot.investment_guidance_reports(id,organization_id,proposal_reference_id,actor_external_user_id,proposal_version,engine_version,calculation_version,pricing_release_version,rule_release_version,currency,total_low_minor,total_mid_minor,total_high_minor,line_items,refusals,ancillary,recommendations,budget_analysis,correlation_id)
          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb,$19) RETURNING *`,
         [
-          uuidv7(), org, p, ctx.actorUserMongoId, Number(proposal.version || 1), ENGINE_VERSION,
+          uuidv7(), org, p, ctx.actorUserMongoId, Number(proposal.version || 1), INVESTMENT_ENGINE_VERSION,
           result.budgetAnalysis.calculationVersion,
           result.budgetAnalysis.pricingReleaseVersion,
           result.budgetAnalysis.ruleReleaseVersion,
@@ -207,8 +207,8 @@ export const investmentRepository = {
       await tenant(c, ctx.organizationMongoId);
       const p = await proposalRef(c, ctx.proposalMongoId, ctx.actorUserMongoId);
       const row = await c.query<any>(
-        "SELECT * FROM rfpilot.investment_guidance_reports WHERE proposal_reference_id=$1 ORDER BY created_at DESC LIMIT 1",
-        [p],
+        "SELECT * FROM rfpilot.investment_guidance_reports WHERE proposal_reference_id=$1 AND engine_version=$2 ORDER BY created_at DESC LIMIT 1",
+        [p, INVESTMENT_ENGINE_VERSION],
       );
       if (!row.rows[0]) throw new InvestmentError("INVESTMENT_GUIDANCE_NOT_FOUND", "No investment guidance exists for this proposal yet.", 404);
       return present(row.rows[0]);

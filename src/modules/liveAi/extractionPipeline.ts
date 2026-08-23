@@ -485,9 +485,11 @@ export const normalizeAndDeduplicateExtractionCandidates = (
   evidence: PreparedExtractionEvidence[],
 ): { candidates: ExtractionCandidate[]; issues: ExtractionIssue[] } => {
   const evidenceById = new Map(evidence.map((item) => [item.id, item]));
+  const active = new Set(extractionPathEnum);
   const byIdentity = new Map<string, { candidate: ExtractionCandidate; canonicalValue: unknown }>();
   const invalidPaths = new Set<string>();
   for (const candidate of candidates) {
+    if (!active.has(candidate.path)) continue;
     try {
       const prepared = candidateValue(candidate, evidenceById);
       const normalized = normalizeCandidate(candidate.path, prepared);
@@ -546,9 +548,13 @@ export const identifyGapRecoveryPaths = (
   candidates: ExtractionCandidate[],
 ): string[] => {
   const present = new Set(candidates.map((candidate) => candidate.path));
+  const active = new Set(extractionPathEnum);
   const text = evidence.map((item) => item.text).join("\n");
   return Object.entries(RECOVERY_SIGNALS)
-    .filter(([path, signal]) => !present.has(path) && signal.test(text))
+    .filter(
+      ([path, signal]) =>
+        active.has(path) && !present.has(path) && signal.test(text),
+    )
     .map(([path]) => path);
 };
 
@@ -570,12 +576,15 @@ const recoverySchema = (paths: string[]) => ({
   },
 });
 
-const sanitizeIssues = (issues: ExtractionIssue[]): ExtractionIssue[] => {
+export const sanitizeExtractionIssues = (issues: ExtractionIssue[]): ExtractionIssue[] => {
   const allowed = new Set(extractionPathEnum);
   const seen = new Set<string>();
   const result: ExtractionIssue[] = [];
   for (const issue of issues) {
-    const normalized = { ...issue, code: issue.code.slice(0, 100), paths: issue.paths.filter((path) => allowed.has(path)).slice(0, 20) };
+    // Keep an issue atomic. Projecting a mixed retired/active assertion onto
+    // only its active path would still let hidden evidence create a question.
+    if (!issue.paths.length || issue.paths.some((path) => !allowed.has(path))) continue;
+    const normalized = { ...issue, code: issue.code.slice(0, 100), paths: issue.paths.slice(0, 20) };
     const key = `${normalized.code}\u0000${normalized.severity}\u0000${normalized.paths.join("|")}`;
     if (!seen.has(key)) { seen.add(key); result.push(normalized); }
   }
@@ -670,14 +679,14 @@ export const extractRequirementCandidates = async (input: {
     ...broad.output.candidates,
     ...(recovery?.output.candidates ?? []),
   ]), input.evidence);
-  const issues = sanitizeIssues(reconcileResolvedIssues([
+  const issues = reconcileResolvedIssues(sanitizeExtractionIssues([
     ...broad.output.issues,
     ...(recovery?.output.issues ?? []),
     ...first.issues,
     ...final.issues,
     ...recoveryFailure,
     ...extractionConflictIssues(final.candidates),
-  ], final.candidates));
+  ]), final.candidates);
   return {
     candidates: final.candidates,
     issues,

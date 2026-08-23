@@ -3,6 +3,8 @@
 // terms of the legacy field names the questionnaire actually writes (the same
 // names contracts/proposal/v1/legacyAdapter.ts maps to the canonical schema).
 
+import { activeProposalWorkflowContent } from "../proposals/domain/workflowSections";
+
 export type UnknownRecord = Record<string, unknown>;
 
 export const valueAt = (proposal: UnknownRecord, path: string): unknown =>
@@ -109,13 +111,13 @@ const stageArea = (value: unknown): number | null => {
 };
 
 export const readFacts = (proposal: UnknownRecord): ProposalFacts => {
-  const event = asRecord(proposal.event);
-  const venueSchedule = asRecord(proposal.venueSchedule);
-  const venue = asRecord(proposal.venue);
-  const hybrid = asRecord(proposal.hybridVirtual);
+  const activeProposal = activeProposalWorkflowContent(proposal);
+  const event = asRecord(activeProposal.event);
+  const venueSchedule = asRecord(activeProposal.venueSchedule);
+  const venue = asRecord(activeProposal.venue);
+  const hybrid = asRecord(activeProposal.hybridVirtual);
   const captions = asRecord(hybrid.closedCaptions);
-  const videoRecording = asRecord(proposal.videoRecordingStep);
-  const rooms = asRecords(proposal.roomByRoom);
+  const rooms = asRecords(activeProposal.roomByRoom);
 
   const declaredRoomCount = positive(venueSchedule.numberOfEventRooms);
   const namedBreakouts = rooms.filter((room) => !GENERAL_SESSION_ROOM.test(text(room.roomFunction))).length;
@@ -142,8 +144,9 @@ export const readFacts = (proposal: UnknownRecord): ProposalFacts => {
   };
 
   const wirelessChannels = firstPositive(roomValue(["wirelessMics", "wirelessMicsQty"]));
-  const cameraCount = rooms.map(cameraCountForRoom).find((value): value is number => value !== null)
-    ?? positive(videoRecording.numberOfCameras);
+  const cameraCount = rooms
+    .map(cameraCountForRoom)
+    .find((value): value is number => value !== null) ?? null;
   const ledWallRequested = rooms.some((room) => isYes(room.ledWall));
   const ledWallsForRoom = (room: UnknownRecord): UnknownRecord[] => {
     if (Array.isArray(room.ledWalls) && room.ledWalls.length > 0) {
@@ -202,7 +205,7 @@ export const readFacts = (proposal: UnknownRecord): ProposalFacts => {
   const streamingScopeStated = filled(hybrid.streamingPlatform) || filled(hybrid.streamingPlatformOther);
 
   return {
-    days: eventDays(proposal),
+    days: eventDays(activeProposal),
     rehearsalDays: rehearsalDates.size,
     datesStated: filled(event.startDate) && filled(event.endDate),
     rooms,
@@ -223,8 +226,10 @@ export const readFacts = (proposal: UnknownRecord): ProposalFacts => {
     marketText: [venueSchedule.venueCity, venueSchedule.venueState, venueSchedule.venueName].map(text).filter(Boolean).join(" "),
     hybridRequested: /hybrid|virtual/i.test(format) || streamingScopeStated || (positive(hybrid.virtualAttendeeEstimate) ?? 0) > 0,
     streamingScopeStated,
-    recordingRequested: isYes(videoRecording.videoRecordingRequired)
-      || rooms.some((room) => isYes(asRecord(room.videoRecording).videoRecording) || isYes(asRecord(room.cameras).cameras)),
+    recordingRequested: rooms.some((room) =>
+      isYes(asRecord(room.videoRecording).videoRecording) ||
+      isYes(asRecord(room.cameras).cameras),
+    ),
     cameraCount,
     wirelessChannels,
     ledWallRequested,

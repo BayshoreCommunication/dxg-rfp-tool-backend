@@ -8,6 +8,7 @@ import Organization from "../modal/organizationModel";
 import User from "../modal/userModel";
 import Proposal from "../modal/proposalsModel";
 import { synchronizeProposalReference } from "../src/modules/dataFoundation/composition";
+import { activeProposalWorkflowFingerprintContent } from "../src/modules/proposals/domain/workflowSections";
 
 const args = new Set(process.argv.slice(2));
 const value = (name: string) => process.argv.slice(2).find((arg) => arg.startsWith(`--${name}=`))?.split("=").slice(1).join("=");
@@ -111,20 +112,24 @@ const main = async () => {
   const createdReferences: Array<{ id: string; sourceChecksum: string }> = [];
   const createdOutboxIds: string[] = [];
   for (const proposal of proposals) {
+    const activeChecksum = checksum(
+      activeProposalWorkflowFingerprintContent(
+        proposal as unknown as Record<string, unknown>,
+      ),
+    );
     const result = await synchronizeProposalReference({
       organizationMongoId,
       ownerUserMongoId: String(proposal.userId),
       proposalMongoId: String(proposal._id),
-      sourceVersion: String(proposal.__v ?? 0),
-      sourceChecksum: checksum(proposal),
-      sourceUpdatedAt: proposal.updatedAt,
+      sourceVersion: activeChecksum,
+      sourceChecksum: activeChecksum,
       correlationId: runId,
       eventType: "proposal.reference.backfilled",
     });
     if (result.kind !== "synchronized") throw new Error(`Failed to synchronize proposal ${proposal._id}`);
     if (result.referenceCreated) {
       createdReferenceIds.push(result.proposalReferenceId);
-      createdReferences.push({ id: result.proposalReferenceId, sourceChecksum: checksum(proposal) });
+      createdReferences.push({ id: result.proposalReferenceId, sourceChecksum: activeChecksum });
     }
     if (result.outboxCreated) createdOutboxIds.push(result.outboxEventId);
   }

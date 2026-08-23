@@ -10,6 +10,7 @@ const {
   runStatusMessage,
   conversationsEnabled,
   ConversationError,
+  ALL_IMPORTANT_FIELD_QUESTIONS,
   IMPORTANT_FIELD_QUESTIONS,
   MAX_ADAPTIVE_VENUE_QUESTIONS,
   MAX_OPEN_FIELD_QUESTIONS,
@@ -173,6 +174,18 @@ test("important-field whitelist only contains approved candidate paths with plai
     "/content/venue/powerDropsRequired",
   ])
     assert.ok(seen.has(path), path);
+  assert.equal(
+    seen.has("/content/videoRecordingStep/videoRecordingRequired"),
+    false,
+    "the retired standalone section is not asked proactively",
+  );
+  assert.ok(
+    ALL_IMPORTANT_FIELD_QUESTIONS.some(
+      (field) =>
+        field.path === "/content/videoRecordingStep/videoRecordingRequired",
+    ),
+    "the dormant question remains available for restoration",
+  );
 });
 
 test("the opening question set covers attendance, the biggest cost driver", () => {
@@ -326,7 +339,7 @@ test("every whitelisted question declares an answer control, and only choices ca
   assert.equal(byPath["/content/event/attendees"], "number");
   assert.equal(byPath["/content/venueSchedule/isUnionVenue"], "choice");
   assert.equal(byPath["/content/venue/inHouseAvRequired"], "choice");
-  assert.equal(byPath["/content/videoRecordingStep/videoRecordingRequired"], "choice");
+  assert.equal(byPath["/content/videoRecordingStep/videoRecordingRequired"], undefined);
   assert.equal(byPath["/content/venue/riggingRequired"], "choice");
   assert.equal(byPath["/content/venue/powerDropsRequired"], "choice");
   assert.equal(byPath["/content/hybridVirtual/streamingPlatform"], "choice");
@@ -393,6 +406,9 @@ test("the conversation read payload carries the answer control alongside the imp
   // The answer message pairing lets the thread show the question above the answer.
   assert.ok(repository.includes("answeredMessageId: q.answered_message_id ?? null"), "read must expose answeredMessageId");
   assert.ok(/SELECT[^;]*answered_message_id[^;]*FROM rfpilot\.clarification_questions/.test(repository), "the column must be selected");
+  assert.ok(repository.includes("supersedeRetiredOpenQuestions"));
+  assert.ok(repository.includes("isRetiredProposalWorkflowPath"));
+  assert.ok(repository.includes("if (!paths.length || paths.some(isRetiredProposalWorkflowPath)) continue"));
 });
 
 test("reading an existing conversation does not advance its updated timestamp", () => {
@@ -440,7 +456,7 @@ test("catch-all explosion and answer field writing are wired into repository and
     assert.ok(writer.includes(guard), guard);
   for (const locationBehavior of ["resolveVenueLocation", "venueSchedule.venueState", "venueSchedule.timeZone", "...derivedSet"])
     assert.ok(writer.includes(locationBehavior), locationBehavior);
-  for (const recoveryGuard of ["supersededByThisAnswer", "appliedPaths.every((path) => row.canonical_paths.includes(path))"])
+  for (const recoveryGuard of ["supersededByThisAnswer", "appliedPaths.every((path) => questionPaths.includes(path))"])
     assert.ok(repository.includes(recoveryGuard), recoveryGuard);
   for (const compositeGuard of ["applyAnswersToProposalFields", "questionAnswerText", "appliedFields"])
     assert.ok(controller.includes(compositeGuard), compositeGuard);
@@ -473,6 +489,28 @@ test("rich chat extraction uses the document pipeline and only fills empty propo
   assert.ok(writer.includes("input.onlyIfEmpty"));
   assert.ok(writer.includes("untitled proposal"));
   assert.ok(repository.includes("conversation-auto-apply:${ctx.runId}"));
+});
+
+test("retired and old-epoch questions cannot leak through history, direct answers, or counts", () => {
+  const repository = fs.readFileSync(path.join(root, "src/modules/conversations/postgresConversationRepository.ts"), "utf8");
+  const fieldGaps = fs.readFileSync(path.join(root, "src/modules/conversations/fieldGapQuestions.ts"), "utf8");
+  const writer = fs.readFileSync(path.join(root, "src/modules/conversations/answerFieldWriter.ts"), "utf8");
+  for (const token of [
+    "PROPOSAL_CONTEXT_INPUT_VERSION",
+    "PROPOSAL_DRAFT_INPUT_VERSION",
+    "retiredAnswerMessageIds",
+    "staleRunMessages",
+    "excludedMessageIds",
+    "activeQuestionCount",
+    "activeMessageCount",
+    "q.context_run_id IS NULL OR cj.id IS NOT NULL",
+  ]) assert.ok(repository.includes(token), token);
+  assert.match(repository, /readQuestion[\s\S]*?paths\.some\(isRetiredProposalWorkflowPath\)/);
+  assert.match(repository, /updateQuestion[\s\S]*?questionPaths\.some\(isRetiredProposalWorkflowPath\)/);
+  assert.ok(writer.includes("isRetiredProposalWorkflowPath"));
+  assert.ok(fieldGaps.includes("jsonb_array_elements_text"));
+  assert.ok(fieldGaps.includes("LEGACY_STANDALONE_VIDEO_RECORDING_ROOT"));
+  assert.ok(fieldGaps.includes("CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT"));
 });
 
 test("run status narration covers every lifecycle state", () => {

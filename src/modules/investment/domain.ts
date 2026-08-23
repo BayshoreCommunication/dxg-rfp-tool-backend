@@ -11,6 +11,10 @@ import {
   buildBudgetAnalysis,
   type BudgetAnalysis,
 } from "./budgetAnalysis";
+import {
+  activeProposalWorkflowContent,
+  isRetiredProposalWorkflowPath,
+} from "../proposals/domain/workflowSections";
 
 export { evaluateCondition } from "./proposalAccess";
 export type { AppliedFactor, Confidence, ConfidenceRule, PricingModifier, RegionalFactor } from "./factors";
@@ -309,8 +313,15 @@ export const computeInvestmentGuidance = (
   modifiers: PricingModifier[] = [],
   confidenceRules: ConfidenceRule[] = [],
 ): InvestmentResult => {
-  const facts = readFacts(proposal);
-  const matchedRules = rules.filter((rule) => (rule.conditions ?? []).every((condition) => evaluateCondition(proposal, condition)));
+  const activeProposal = activeProposalWorkflowContent(proposal);
+  const facts = readFacts(activeProposal);
+  const activeRules = rules.filter(
+    (rule) =>
+      !(rule.conditions ?? []).some((condition) =>
+        isRetiredProposalWorkflowPath(condition.path),
+      ),
+  );
+  const matchedRules = activeRules.filter((rule) => (rule.conditions ?? []).every((condition) => evaluateCondition(activeProposal, condition)));
   const { drivers, assumptions: driverAssumptions } = deriveDrivers(facts);
 
   const currencyVotes = new Map<string, number>();
@@ -486,7 +497,7 @@ export const computeInvestmentGuidance = (
   return {
     ...resultWithoutAnalysis,
     budgetAnalysis: buildBudgetAnalysis({
-      proposal,
+      proposal: activeProposal,
       currency: resultWithoutAnalysis.currency,
       totalLowMinor: resultWithoutAnalysis.totalLowMinor,
       totalMidMinor: resultWithoutAnalysis.totalMidMinor,
@@ -497,7 +508,7 @@ export const computeInvestmentGuidance = (
       assumptions,
       recommendations,
       pricingRecords: records,
-      rules,
+      rules: activeRules,
       regionalFactors,
       modifiers,
       confidenceRules,

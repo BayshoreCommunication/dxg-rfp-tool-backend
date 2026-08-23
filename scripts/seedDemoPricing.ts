@@ -1,6 +1,7 @@
 import "../config/env";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../config/postgres";
+import { proposalWorkflowSectionEnabled } from "../src/modules/proposals/domain/workflowSections";
 
 // One-off demo seeder: loads approved demo pricing records and active expert
 // rules for the first active organization so the investment engine has a
@@ -30,7 +31,7 @@ const records: Array<[string, string, string, number, number, number, string | n
   ["insurance", "COI / event liability rider", "per_event", 350, 500, 900, null],
 ];
 
-const rules: Array<{ key: string; title: string; explanation: string; conditions: object[]; effect: object }> = [
+const ALL_RULES: Array<{ key: string; title: string; explanation: string; conditions: object[]; effect: object }> = [
   {
     key: "union_labor_uplift",
     title: "Union venue labor uplift",
@@ -60,6 +61,11 @@ const rules: Array<{ key: string; title: string; explanation: string; conditions
     effect: { kind: "recommendation", category: null, guidanceText: "Confirm who owns post-event editing and turnaround - raw-footage-only turnover is significantly cheaper than edited deliverables." },
   },
 ];
+const rules = ALL_RULES.filter(
+  (rule) =>
+    rule.key !== "recording_deliverable_owner" ||
+    proposalWorkflowSectionEnabled("video_recording"),
+);
 
 async function main() {
   await withPostgresTransaction(async (c) => {

@@ -4,12 +4,20 @@ import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
 import Proposal from "../../../modal/proposalsModel";
-import { ProposalDraftError } from "./domain";
+import {
+  ProposalDraftError,
+  PROPOSAL_DRAFT_INPUT_VERSION,
+} from "./domain";
 import { deterministicProposalDraft } from "./deterministicDraftProvider";
 import { liveProposalDraft } from "../liveAi/operations";
 import { LIVE_AI_MODEL } from "../liveAi/openAiProvider";
 import { knowledgeRetrievalRepository } from "../knowledgeRetrieval/postgresKnowledgeRetrievalRepository";
 import { retrievalEnabled } from "../knowledgeRetrieval/domain";
+import {
+  CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
+  isRetiredProposalWorkflowPath,
+  LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,
+} from "../proposals/domain/workflowSections";
 const tenant = async (c: PoolClient, x: string) => {
     await c.query("SELECT set_config('app.organization_mongo_id',$1,true)", [
       x,
@@ -60,22 +68,23 @@ export const proposalDraftRepository = {
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, input.organizationMongoId),
         p = await owned(c, input.proposalMongoId, input.actorUserMongoId),
-        key = `proposal_draft:${input.live ? "live:" : ""}${input.idempotencyKey}`,
+        key = `proposal_draft:${PROPOSAL_DRAFT_INPUT_VERSION}:${input.live ? "live:" : ""}${input.idempotencyKey}`,
         old = await c.query<any>(
-          "SELECT r.*,j.status job_status FROM rfpilot.proposal_draft_runs r JOIN rfpilot.ai_jobs j ON j.id=r.job_id WHERE r.organization_id=$1 AND r.idempotency_key=$2",
-          [org, key],
+          "SELECT r.*,j.status job_status FROM rfpilot.proposal_draft_runs r JOIN rfpilot.ai_jobs j ON j.id=r.job_id WHERE r.organization_id=$1 AND r.idempotency_key=$2 AND j.input_version=$3",
+          [org, key, PROPOSAL_DRAFT_INPUT_VERSION],
         );
       if (old.rows[0]) return { run: old.rows[0], created: false };
       const runId = uuidv7(),
         jobId = uuidv7();
       await c.query(
-        "INSERT INTO rfpilot.ai_jobs(id,organization_id,proposal_reference_id,job_type,status,idempotency_key,input_reference,input_version,max_attempts,correlation_id,initiator_external_user_id) VALUES($1,$2,$3,'proposal_draft_generate','queued',$4,$5,'proposal-draft.v1',2,$6,$7)",
+        "INSERT INTO rfpilot.ai_jobs(id,organization_id,proposal_reference_id,job_type,status,idempotency_key,input_reference,input_version,max_attempts,correlation_id,initiator_external_user_id) VALUES($1,$2,$3,'proposal_draft_generate','queued',$4,$5,$6,2,$7,$8)",
         [
           jobId,
           org,
           p,
           key,
           runId,
+          PROPOSAL_DRAFT_INPUT_VERSION,
           input.correlationId,
           input.actorUserMongoId,
         ],
@@ -104,7 +113,7 @@ export const proposalDraftRepository = {
         actorUserMongoId: input.actorUserMongoId,
         jobType: "proposal_draft_generate",
         inputReference: runId,
-        inputVersion: "proposal-draft.v1",
+        inputVersion: PROPOSAL_DRAFT_INPUT_VERSION,
         correlationId: input.correlationId,
       };
       await c.query(
@@ -131,8 +140,12 @@ export const proposalDraftRepository = {
     const meta = await withPostgresTransaction(async (c) => {
       await tenant(c, input.organizationMongoId);
       const r = await c.query<any>(
-        `SELECT r.*,p.external_mongo_id proposal FROM rfpilot.proposal_draft_runs r JOIN rfpilot.proposal_references p ON p.id=r.proposal_reference_id WHERE r.id=$1 FOR UPDATE`,
-        [input.runId],
+        `SELECT r.*,p.external_mongo_id proposal
+           FROM rfpilot.proposal_draft_runs r
+           JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$2
+           JOIN rfpilot.proposal_references p ON p.id=r.proposal_reference_id
+          WHERE r.id=$1 FOR UPDATE OF r`,
+        [input.runId, PROPOSAL_DRAFT_INPUT_VERSION],
       );
       if (!r.rows[0])
         throw new ProposalDraftError(
@@ -161,7 +174,7 @@ export const proposalDraftRepository = {
       // additionalContacts stay excluded: they are personal data the draft
       // prose never needs, and the provider payload stays minimized.
       .select(
-        "version status isDraft isArchived event venueSchedule roomByRoom production hybridVirtual contentCreative videoRecordingStep venue uploads budget",
+        "version status isDraft isArchived event venueSchedule roomByRoom production hybridVirtual contentCreative venue uploads budget",
       )
       .lean<any>();
     const version = Number(proposal?.version || 1);
@@ -291,8 +304,11 @@ export const proposalDraftRepository = {
     return withPostgresTransaction(async (c) => {
       await tenant(c, input.organizationMongoId);
       await c.query(
-        "UPDATE rfpilot.proposal_draft_runs SET status=$2,safe_error_code=$3,completed_at=now(),updated_at=now() WHERE id=$1",
-        [input.runId, input.status, input.code],
+        `UPDATE rfpilot.proposal_draft_runs r
+            SET status=$2,safe_error_code=$3,completed_at=now(),updated_at=now()
+          WHERE r.id=$1
+            AND EXISTS(SELECT 1 FROM rfpilot.ai_jobs j WHERE j.id=r.job_id AND j.input_version=$4)`,
+        [input.runId, input.status, input.code, PROPOSAL_DRAFT_INPUT_VERSION],
       );
     });
   },
@@ -304,11 +320,18 @@ export const proposalDraftRepository = {
   }) {
     return withPostgresTransaction(async (c) => {
       await tenant(c, input.organizationMongoId);
-      const p = await owned(c, input.proposalMongoId, input.actorUserMongoId),
-        run = await c.query<any>(
-          `SELECT * FROM rfpilot.proposal_draft_runs WHERE proposal_reference_id=$1 ${input.runId ? "AND id=$2" : "AND status='succeeded' AND section_scope IS NULL AND retention_until>now() ORDER BY created_at DESC LIMIT 1"}`,
-          [p, ...(input.runId ? [input.runId] : [])],
-        );
+      const p = await owned(c, input.proposalMongoId, input.actorUserMongoId);
+      const run = await c.query<any>(
+        `SELECT r.* FROM rfpilot.proposal_draft_runs r
+         JOIN rfpilot.ai_jobs j
+           ON j.id=r.job_id AND j.input_version=$2
+         WHERE r.proposal_reference_id=$1 ${input.runId ? "AND r.id=$3" : "AND r.status='succeeded' AND r.section_scope IS NULL AND r.retention_until>now() ORDER BY r.created_at DESC LIMIT 1"}`,
+        [
+          p,
+          PROPOSAL_DRAFT_INPUT_VERSION,
+          ...(input.runId ? [input.runId] : []),
+        ],
+      );
       if (!run.rows[0])
         throw new ProposalDraftError(
           "DRAFT_RUN_NOT_FOUND",
@@ -316,8 +339,31 @@ export const proposalDraftRepository = {
           404,
         );
       const sections = await c.query<any>(
-          `SELECT s.id,s.key,s.heading,s.ordinal,coalesce(json_agg(json_build_object('text',p.text,'citations',(SELECT json_agg(c.canonical_path ORDER BY c.canonical_path) FROM rfpilot.proposal_draft_citations c WHERE c.paragraph_id=p.id)) ORDER BY p.ordinal) FILTER(WHERE p.id IS NOT NULL),'[]') paragraphs FROM rfpilot.proposal_draft_sections s LEFT JOIN rfpilot.proposal_draft_paragraphs p ON p.section_id=s.id WHERE s.run_id=$1 GROUP BY s.id ORDER BY s.ordinal`,
-          [run.rows[0].id],
+          `SELECT s.id,s.key,s.heading,s.ordinal,
+                  coalesce(json_agg(json_build_object(
+                    'text',p.text,
+                    'citations',(SELECT json_agg(c.canonical_path ORDER BY c.canonical_path)
+                                   FROM rfpilot.proposal_draft_citations c
+                                  WHERE c.paragraph_id=p.id)
+                  ) ORDER BY p.ordinal) FILTER(WHERE p.id IS NOT NULL),'[]') paragraphs
+             FROM rfpilot.proposal_draft_sections s
+             LEFT JOIN rfpilot.proposal_draft_paragraphs p
+               ON p.section_id=s.id
+              AND NOT EXISTS(
+                SELECT 1 FROM rfpilot.proposal_draft_citations retired
+                 WHERE retired.paragraph_id=p.id
+                   AND (retired.canonical_path=$2
+                     OR retired.canonical_path LIKE $2||'/%'
+                     OR retired.canonical_path=$3
+                     OR retired.canonical_path LIKE $3||'/%')
+              )
+            WHERE s.run_id=$1
+            GROUP BY s.id ORDER BY s.ordinal`,
+          [
+            run.rows[0].id,
+            LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,
+            CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
+          ],
         ),
         gaps = await c.query<any>(
           "SELECT code,paths,ordinal FROM rfpilot.proposal_draft_gaps WHERE run_id=$1 ORDER BY ordinal",
@@ -328,18 +374,53 @@ export const proposalDraftRepository = {
           [run.rows[0].id],
         ),
         regenerations = await c.query<any>(
-          "SELECT id,section_scope,status,created_at FROM rfpilot.proposal_draft_runs WHERE parent_run_id=$1 ORDER BY created_at DESC",
-          [run.rows[0].id],
+          `SELECT child.id,child.section_scope,child.status,child.created_at
+             FROM rfpilot.proposal_draft_runs child
+             JOIN rfpilot.ai_jobs j
+               ON j.id=child.job_id AND j.input_version=$2
+            WHERE child.parent_run_id=$1 ORDER BY child.created_at DESC`,
+          [run.rows[0].id, PROPOSAL_DRAFT_INPUT_VERSION],
         );
       const decisionBySection = new Map<string, any>(decisions.rows.map((d: any) => [d.section_key, d]));
+      const visibleSections = sections.rows.filter(
+        (section: { paragraphs: unknown[] }) => section.paragraphs.length > 0,
+      );
+      const visibleGaps = gaps.rows.filter(
+        (gap: { paths: unknown }) =>
+          !Array.isArray(gap.paths) ||
+          !gap.paths.some(
+            (path: unknown) =>
+              typeof path === "string" &&
+              isRetiredProposalWorkflowPath(path),
+          ),
+      );
+      const paragraphCount = visibleSections.reduce(
+        (total: number, section: { paragraphs: unknown[] }) =>
+          total + section.paragraphs.length,
+        0,
+      );
+      const citationCount = visibleSections.reduce(
+        (total: number, section: { paragraphs: Array<{ citations?: unknown[] }> }) =>
+          total + section.paragraphs.reduce(
+            (count, paragraph) => count + (paragraph.citations?.length ?? 0),
+            0,
+          ),
+        0,
+      );
       return {
-        run: run.rows[0],
-        sections: sections.rows.map((section: any) => ({
+        run: {
+          ...run.rows[0],
+          section_count: visibleSections.length,
+          paragraph_count: paragraphCount,
+          citation_count: citationCount,
+          gap_count: visibleGaps.length,
+        },
+        sections: visibleSections.map((section: any) => ({
           ...section,
           decision: decisionBySection.get(section.key)?.decision ?? null,
           decisionReason: decisionBySection.get(section.key)?.reason ?? null,
         })),
-        gaps: gaps.rows,
+        gaps: visibleGaps,
         regenerations: regenerations.rows,
         proposalMutation: false,
       };
@@ -374,15 +455,36 @@ export const proposalDraftRepository = {
       const org = await tenant(c, input.organizationMongoId);
       const p = await owned(c, input.proposalMongoId, input.actorUserMongoId);
       const run = await c.query<any>(
-        "SELECT id,status FROM rfpilot.proposal_draft_runs WHERE id=$1 AND proposal_reference_id=$2 FOR UPDATE",
-        [input.runId, p],
+        `SELECT r.id,r.status
+           FROM rfpilot.proposal_draft_runs r
+           JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$3
+          WHERE r.id=$1 AND r.proposal_reference_id=$2 FOR UPDATE OF r`,
+        [input.runId, p, PROPOSAL_DRAFT_INPUT_VERSION],
       );
       if (!run.rows[0]) throw new ProposalDraftError("DRAFT_RUN_NOT_FOUND", "Draft run was not found.", 404);
       if (run.rows[0].status !== "succeeded")
         throw new ProposalDraftError("DRAFT_RUN_NOT_REVIEWABLE", "Only completed drafts can be reviewed.", 409);
       const section = await c.query<any>(
-        "SELECT id FROM rfpilot.proposal_draft_sections WHERE run_id=$1 AND key=$2",
-        [input.runId, input.sectionKey],
+        `SELECT s.id FROM rfpilot.proposal_draft_sections s
+          WHERE s.run_id=$1 AND s.key=$2
+            AND EXISTS(
+              SELECT 1 FROM rfpilot.proposal_draft_paragraphs paragraph
+               WHERE paragraph.section_id=s.id
+                 AND NOT EXISTS(
+                   SELECT 1 FROM rfpilot.proposal_draft_citations retired
+                    WHERE retired.paragraph_id=paragraph.id
+                      AND (retired.canonical_path=$3
+                        OR retired.canonical_path LIKE $3||'/%'
+                        OR retired.canonical_path=$4
+                        OR retired.canonical_path LIKE $4||'/%')
+                 )
+            )`,
+        [
+          input.runId,
+          input.sectionKey,
+          LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,
+          CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
+        ],
       );
       if (!section.rows[0]) throw new ProposalDraftError("INVALID_SECTION_KEY", "Draft section was not found.", 404);
       const result = await c.query<any>(

@@ -481,7 +481,7 @@ export class DeterministicAssistantProvider implements AssistantResponseProvider
     ) {
       return result(
         "answer",
-        "Before sending, verify the event, venue, schedule, room and production scope, conditional hybrid/creative/recording needs, technical and insurance requirements, budget and deadlines, uploads or co-vendor responsibilities, and contact/recipient details. Review the generated RFP for gaps, then use its send action from [Proposals](/proposals).",
+        "Before sending, verify the event, venue, schedule, room and production scope, conditional hybrid and creative needs, technical and insurance requirements, budget and deadlines, uploads or co-vendor responsibilities, and contact/recipient details. Review the generated RFP for gaps, then use its send action from [Proposals](/proposals).",
         idsPresent(input.evidence, [
           "platform:proposal:pre-send-checklist",
           "platform:navigation:proposals",
@@ -496,7 +496,7 @@ export class DeterministicAssistantProvider implements AssistantResponseProvider
     ) {
       return result(
         "answer",
-        "Open [Create a proposal](/proposals/add-new-proposal). If the guided form is enabled, optionally upload a source file or continue without one, then complete: Event Overview; Venue & Schedule; Room Specifications; Hybrid & Virtual when applicable; Content & Creative; Video Recording; Venue & Technical; Investment & Evaluation; Uploads & Co-Vendors; and Contact & Submit. Save a draft or explicitly generate/update the RFP at the end. The separate optional proposal-assistant experience uses five phases.",
+        "Open [Create a proposal](/proposals/add-new-proposal). If the guided form is enabled, optionally upload a source file or continue without one, then complete: Event Overview; Venue & Schedule; Room Specifications; Hybrid & Virtual when applicable; Content & Creative; Venue & Technical; Investment & Evaluation; Uploads & Co-Vendors; and Contact & Submit. Save a draft or explicitly generate/update the RFP at the end. The separate optional proposal-assistant experience uses five phases.",
         idsPresent(input.evidence, [
           "platform:navigation:create-proposal",
           "platform:proposal:guided-intake",

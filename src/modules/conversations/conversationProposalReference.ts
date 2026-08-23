@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import Proposal from "../../../modal/proposalsModel";
 import { synchronizeProposalReference } from "../dataFoundation/composition";
+import { activeProposalWorkflowFingerprintContent } from "../proposals/domain/workflowSections";
 import { ConversationError } from "./domain";
 
 type ConversationContext = {
@@ -9,11 +10,8 @@ type ConversationContext = {
   correlationId: string;
 };
 
-type ProposalReferenceRecord = {
+type ProposalReferenceRecord = Record<string, unknown> & {
   _id?: unknown;
-  __v?: unknown;
-  version?: unknown;
-  updatedAt?: unknown;
 };
 
 type Dependencies = {
@@ -38,24 +36,24 @@ const proposalNotFound = () =>
     404,
   );
 
-const metadataChecksum = (
-  ctx: ConversationContext,
-  proposalMongoId: string,
-  proposal: ProposalReferenceRecord,
-) =>
+const canonical = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => [key, canonical(item)]),
+    );
+  return value;
+};
+
+const activeChecksum = (proposal: ProposalReferenceRecord) =>
   crypto
     .createHash("sha256")
     .update(
-      JSON.stringify({
-        organizationMongoId: ctx.organizationMongoId,
-        ownerUserMongoId: ctx.actorUserMongoId,
-        proposalMongoId,
-        sourceVersion: proposal.version ?? proposal.__v ?? 0,
-        sourceUpdatedAt:
-          proposal.updatedAt instanceof Date
-            ? proposal.updatedAt.toISOString()
-            : null,
-      }),
+      JSON.stringify(
+        canonical(activeProposalWorkflowFingerprintContent(proposal)),
+      ),
     )
     .digest("hex");
 
@@ -71,16 +69,13 @@ export const createEnsureConversationProposalReference =
     );
     if (!proposal) throw proposalNotFound();
     try {
+      const checksum = activeChecksum(proposal);
       const result = await dependencies.synchronize({
         organizationMongoId: ctx.organizationMongoId,
         ownerUserMongoId: ctx.actorUserMongoId,
         proposalMongoId,
-        sourceVersion: String(proposal.version ?? proposal.__v ?? 0),
-        sourceChecksum: metadataChecksum(ctx, proposalMongoId, proposal),
-        sourceUpdatedAt:
-          proposal.updatedAt instanceof Date
-            ? proposal.updatedAt
-            : undefined,
+        sourceVersion: checksum,
+        sourceChecksum: checksum,
         correlationId: ctx.correlationId,
         eventType: "proposal.reference.backfilled",
       });
@@ -103,9 +98,7 @@ export const ensureConversationProposalReference =
           { organizationId: { $exists: false } },
           { organizationId: null },
         ],
-      })
-        .select("_id __v version updatedAt")
-        .lean<ProposalReferenceRecord>(),
+      }).lean<ProposalReferenceRecord>(),
     synchronize: synchronizeProposalReference,
   });
 

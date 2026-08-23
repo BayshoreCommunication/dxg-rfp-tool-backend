@@ -5,6 +5,7 @@ const test = require("node:test"),
 const {
   contextEnabled,
   contextInput,
+  PROPOSAL_CONTEXT_INPUT_VERSION,
   ProposalContextError,
 } = require("../src/modules/proposalContext/domain");
 const {
@@ -15,6 +16,7 @@ const {
 } = require("../contracts/proposal/v1/validators");
 
 test("proposal context accepts only fixed synthetic fixtures", () => {
+  assert.equal(PROPOSAL_CONTEXT_INPUT_VERSION, "proposal-context.v2");
   const input = contextInput({ fixture: "synthetic-conference-simple" });
   assert.match(input.inputChecksum, /^[0-9a-f]{64}$/);
   assert.throws(
@@ -29,6 +31,19 @@ test("proposal context accepts only fixed synthetic fixtures", () => {
       }),
     /not authorized/,
   );
+});
+
+test("only the current context epoch can be created, executed, read, or applied", () => {
+  const root = path.resolve(__dirname, "..");
+  const repository = fs.readFileSync(path.join(root, "src/modules/proposalContext/postgresProposalContextRepository.ts"), "utf8");
+  const latest = fs.readFileSync(path.join(root, "src/modules/proposalContext/latestProposalContext.ts"), "utf8");
+  const candidates = fs.readFileSync(path.join(root, "src/modules/candidateApplication/postgresCandidateApplicationRepository.ts"), "utf8");
+  for (const source of [repository, latest, candidates])
+    assert.ok(source.includes("PROPOSAL_CONTEXT_INPUT_VERSION"));
+  assert.doesNotMatch(repository, /inputVersion:\s*"proposal-context\.v1"/);
+  assert.match(repository, /j\.input_version=\$2|j\.input_version=\$3/);
+  assert.match(candidates, /j\.input_version=\$3/);
+  assert.ok(candidates.includes("candidate_application:${PROPOSAL_CONTEXT_INPUT_VERSION}:"));
 });
 test("deterministic proposal context emits canonical cited patches", () => {
   const result = deterministicContextCandidate(

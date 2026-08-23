@@ -132,3 +132,35 @@ test("the Mongo publish read does not delay the Postgres work",()=>{
  // the dual write is off.
  assert.match(source,/Proposal\.findOne\(\{_id:proposalMongoId,userId:actorUserMongoId\}\)\.select\("status"\)/);
 });
+
+test("workflow facts ignore retired-section aggregates while preserving current workflow data",()=>{
+ const source=require("node:fs").readFileSync(
+  require("node:path").join(__dirname,"..","src/modules/proposalWorkflow/postgresProposalWorkflowRepository.ts"),"utf8");
+
+ // Old persisted runs stay in their audit tables, but only the current clean
+ // epochs may drive workflow status or readiness.
+ assert.match(source,/j\.input_version=\$3/);
+ assert.match(source,/j\.input_version=\$4/);
+ assert.match(source,/r\.engine_version=\$5/);
+ assert.match(source,/PROPOSAL_CONTEXT_INPUT_VERSION/);
+ assert.match(source,/PROPOSAL_DRAFT_INPUT_VERSION/);
+ assert.match(source,/PROPOSAL_ANALYSIS_VERSION/);
+
+ // Every path-bearing aggregate rejects a whole mixed retired issue/gap and
+ // draft decisions count only when the current draft has visible paragraphs.
+ assert.match(source,/proposal_context_operations o ON o\.id=d\.operation_id/);
+ assert.match(source,/proposal_context_operations o ON o\.id=i\.operation_id/);
+ assert.match(source,/proposal_context_runs cr ON cr\.id=v\.run_id/);
+ assert.match(source,/proposal_context_runs cr ON cr\.id=a\.run_id/);
+ assert.match(source,/LEFT JOIN rfpilot\.proposal_context_runs cr ON cr\.id=q\.context_run_id/);
+ assert.match(source,/q\.context_run_id IS NULL OR cj\.id IS NOT NULL/);
+ assert.match(source,/unnest\(g\.paths\)/);
+ assert.match(source,/jsonb_array_elements_text\(q\.canonical_paths\)/);
+ assert.match(source,/g\.run_id=\(SELECT id FROM latest_draft WHERE status='succeeded'\)/);
+ assert.match(source,/d\.run_id=\(SELECT id FROM latest_draft WHERE status='succeeded'\)/);
+ assert.doesNotMatch(source,/latest_succeeded_draft/);
+ assert.match(source,/proposal_draft_paragraphs p ON p\.section_id=s\.id/);
+ assert.match(source,/proposal_draft_citations citation/);
+ assert.match(source,/LEGACY_STANDALONE_VIDEO_RECORDING_ROOT/);
+ assert.match(source,/CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT/);
+});

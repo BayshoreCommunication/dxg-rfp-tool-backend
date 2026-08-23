@@ -6,7 +6,7 @@ import {
 import type { AssistantUiContext } from "./domain";
 import { normalizeCommonAssistantTypos } from "./queryNormalization";
 
-export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v6";
+export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v7";
 
 type PlatformFact = Omit<AssistantPromptEvidence, "sourceType" | "trust" | "releaseId"> & {
   keywords: readonly string[];
@@ -130,7 +130,7 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = Object.freeze([
     id: "platform:proposal:guided-intake",
     title: "Guided proposal intake",
     content:
-      "The guided proposal intake has ten sections. Its displayed badges are: 1 Event Overview; 2 Venue & Schedule; 2B Room Specifications; 3 Hybrid & Virtual (conditional and hidden for in-person-only events); 4 Content & Creative; 5 Video Recording; 6 Venue & Technical; 7 Investment & Evaluation; 8 Uploads & Co-Vendors; and 9 Contact & Submit. Users move through the form and explicitly save a draft or generate/update the RFP at the end.",
+      "The guided proposal intake has nine active sections: Event Overview; Venue & Schedule; Room Specifications; Hybrid & Virtual when applicable; Content & Creative; Venue & Technical; Investment & Evaluation; Uploads & Co-Vendors; and Contact & Submit. Users move through the form and explicitly save a draft or generate/update the RFP at the end.",
     href: "/proposals/add-new-proposal",
     keywords: [
       "proposal steps",
@@ -182,9 +182,9 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = Object.freeze([
   },
   {
     id: "platform:proposal:hybrid-media-fields",
-    title: "Hybrid, creative, and recording fields",
+    title: "Hybrid and creative fields",
     content:
-      "Hybrid & Virtual collects virtual attendance, streaming platform and AV integration, stream ownership, remote speakers, rehearsal owner, virtual Q&A/breakouts, virtual producer, captions, on-demand recording, sponsor overlays, and networking. Content & Creative assigns ownership for templates, slides, graphics, recap and social content. Video Recording covers cameras, IMAG, ISO/program recordings, operators, resolution, edited deliverables, turnaround, raw footage, format, and delivery.",
+      "Hybrid & Virtual collects virtual attendance, streaming platform and AV integration, stream ownership, remote speakers, rehearsal owner, virtual Q&A/breakouts, virtual producer, captions, on-demand recording, sponsor overlays, and networking. Content & Creative assigns ownership for templates, slides, graphics, recap and social content.",
     href: "/proposals/add-new-proposal",
     keywords: [
       "hybrid virtual",

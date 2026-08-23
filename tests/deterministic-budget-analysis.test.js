@@ -324,5 +324,5 @@ test("budget analysis persistence has version columns and a JSON object", () => 
   ])
     assert.ok(migration.includes(column), column);
   assert.ok(repository.includes("JSON.stringify(result.budgetAnalysis)"));
-  assert.ok(repository.includes("dxg-av-pricing-engine.v3"));
+  assert.ok(repository.includes("dxg-av-pricing-engine.v4"));
 });

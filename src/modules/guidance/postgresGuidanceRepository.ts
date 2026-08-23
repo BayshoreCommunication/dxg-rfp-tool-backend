@@ -34,7 +34,9 @@ const present = (row: any, currentProposalVersion = Number(row.proposal_version)
   id: row.id,
   proposalVersion: row.proposal_version,
   currentProposalVersion,
-  stale: Number(row.proposal_version) !== currentProposalVersion,
+  stale:
+    Number(row.proposal_version) !== currentProposalVersion ||
+    row.engine_version !== PROPOSAL_ANALYSIS_VERSION,
   analysisVersion: row.engine_version,
   engineVersion: row.engine_version,
   summary: row.summary ?? {},
@@ -91,8 +93,8 @@ export const guidanceRepository = {
       await tenant(c, ctx.organizationMongoId);
       const p = await proposalRef(c, ctx.proposalMongoId, ctx.actorUserMongoId);
       const row = await c.query<any>(
-        "SELECT * FROM rfpilot.guidance_reports WHERE proposal_reference_id=$1 ORDER BY created_at DESC LIMIT 1",
-        [p],
+        "SELECT * FROM rfpilot.guidance_reports WHERE proposal_reference_id=$1 AND engine_version=$2 ORDER BY created_at DESC LIMIT 1",
+        [p, PROPOSAL_ANALYSIS_VERSION],
       );
       if (!row.rows[0]) throw new GuidanceError("GUIDANCE_NOT_FOUND", "No guidance report exists for this proposal yet.", 404);
       return present(row.rows[0], currentProposalVersion);
