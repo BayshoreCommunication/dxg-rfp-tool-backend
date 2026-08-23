@@ -584,6 +584,63 @@ export const vendorIntelligenceRepository = {
     });
   },
 
+  async reviewAutomatically(input: Context & { runId: string; correlationId: string }) {
+    await loadVersion(input);
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await tenant(client, input.organizationMongoId);
+      const proposalReferenceId = await ownedProposal(client, input.proposalMongoId, input.actorUserMongoId);
+      const run = await client.query<any>(
+        `SELECT * FROM rfpilot.vendor_intelligence_runs
+         WHERE id=$1 AND proposal_reference_id=$2 AND vendor_submission_version_mongo_id=$3 AND status='succeeded'`,
+        [input.runId, proposalReferenceId, input.versionMongoId],
+      );
+      if (!run.rows[0]) throw new VendorIntelligenceError("INTELLIGENCE_RUN_NOT_READY", "Vendor intelligence is not ready for automatic review.", 409);
+      const targets = await client.query<{ target_type: "mapping" | "fact"; target_id: string }>(
+        `SELECT 'mapping'::text target_type,m.id target_id
+         FROM rfpilot.requirement_evidence_mappings m
+         WHERE m.intelligence_run_id=$1 AND NOT EXISTS (
+           SELECT 1 FROM LATERAL (
+             SELECT h.decision FROM rfpilot.human_review_events h
+             WHERE h.intelligence_run_id=$1 AND h.target_type='mapping' AND h.target_id=m.id
+             ORDER BY h.created_at DESC,h.id DESC LIMIT 1
+           ) latest WHERE latest.decision IN ('accepted','rejected','corrected')
+         )
+         UNION ALL
+         SELECT 'fact'::text target_type,f.id target_id
+         FROM rfpilot.extracted_facts f
+         WHERE f.intelligence_run_id=$1 AND f.contradiction_group IS NOT NULL AND NOT EXISTS (
+           SELECT 1 FROM LATERAL (
+             SELECT h.decision FROM rfpilot.human_review_events h
+             WHERE h.intelligence_run_id=$1 AND h.target_type='fact' AND h.target_id=f.id
+             ORDER BY h.created_at DESC,h.id DESC LIMIT 1
+           ) latest WHERE latest.decision IN ('accepted','rejected','corrected')
+         ) ORDER BY target_type,target_id`,
+        [input.runId],
+      );
+      let createdCount = 0;
+      for (const target of targets.rows) {
+        const idempotencyKey = `automatic-review:${input.runId}:${target.target_type}:${target.target_id}`;
+        const old = await client.query<{ id: string }>(
+          "SELECT id FROM rfpilot.human_review_events WHERE organization_id=$1 AND idempotency_key=$2",
+          [organizationId, idempotencyKey],
+        );
+        if (old.rows[0]) continue;
+        await client.query(
+          `INSERT INTO rfpilot.human_review_events(
+             id,organization_id,intelligence_run_id,target_type,target_id,decision,reason_code,note,
+             corrected_payload,actor_external_user_id,idempotency_key
+           ) VALUES($1,$2,$3,$4,$5,'accepted','automatic_evidence_acknowledgement',$6,NULL,$7,$8)`,
+          [uuidv7(), organizationId, input.runId, target.target_type, target.target_id,
+            "Automatically acknowledged as the current evidence-derived baseline. The underlying evidence and risks remain visible for optional reviewer correction.",
+            input.actorUserMongoId, idempotencyKey],
+        );
+        createdCount += 1;
+      }
+      if (createdCount > 0) await audit(client, input, organizationId, "vendor_intelligence.automatically_reviewed", input.runId, { createdReviewCount: createdCount });
+      return { runId: input.runId, createdReviewCount: createdCount, created: createdCount > 0 };
+    });
+  },
+
   async review(input: Context & {
     runId: string;
     targetType: "fact" | "mapping";

@@ -5,6 +5,7 @@ export const ASSESSMENT_VERSION = "vendor-assessment.v3";
 export const RISK_POLICY_VERSION = "evaluation-risk.v1";
 export const COMMERCIAL_POLICY_VERSION = "commercial-normalization.v1";
 export const SCORING_POLICY_VERSION = "confirmed-rubric-score.v2";
+export const AUTOMATED_SCORING_POLICY_VERSION = "evidence-derived-rubric-score.v1";
 
 export class EvaluationEngineError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 422) { super(message); }
@@ -234,6 +235,49 @@ export const calculateContribution = (input: { score: unknown; rubricMaximum: nu
   return Math.round(((score / input.rubricMaximum) * input.weight) * 10_000) / 10_000;
 };
 
+export type AutomatedCriterionAssessment = {
+  verdict: string;
+  mandatory: boolean;
+  eligibility: boolean;
+  evidenceFragmentIds: string[];
+};
+
+const automatedVerdictRatio: Record<string, number> = {
+  addressed: 1,
+  partially_addressed: 0.65,
+  not_applicable: 0.5,
+  not_assessable: 0.35,
+  contradictory: 0,
+  missing: 0,
+};
+
+export const deriveAutomatedCriterionScore = (input: {
+  criterionName: string;
+  rubricMaximum: number;
+  assessments: AutomatedCriterionAssessment[];
+}) => {
+  if (!Number.isFinite(input.rubricMaximum) || input.rubricMaximum <= 0)
+    throw new EvaluationEngineError("SCORING_MATRIX_INVALID", "The frozen rubric maximum is invalid.", 409);
+  const denominator = input.assessments.reduce((sum, assessment) => sum + (assessment.mandatory || assessment.eligibility ? 2 : 1), 0);
+  const numerator = input.assessments.reduce((sum, assessment) => {
+    const importance = assessment.mandatory || assessment.eligibility ? 2 : 1;
+    return sum + ((automatedVerdictRatio[assessment.verdict] ?? 0) * importance);
+  }, 0);
+  const ratio = denominator === 0 ? 0 : numerator / denominator;
+  const score = Math.round((ratio * input.rubricMaximum) * 1000) / 1000;
+  const counts = input.assessments.reduce<Record<string, number>>((current, assessment) => {
+    current[assessment.verdict] = (current[assessment.verdict] ?? 0) + 1;
+    return current;
+  }, {});
+  const summary = Object.entries(counts).sort(([left], [right]) => left.localeCompare(right))
+    .map(([verdict, count]) => `${count} ${verdict.replace(/_/g, " ")}`).join(", ");
+  return {
+    score,
+    evidenceFragmentIds: [...new Set(input.assessments.flatMap((assessment) => assessment.evidenceFragmentIds))].slice(0, 20),
+    rationale: `Automated evidence-derived score for ${input.criterionName}: ${summary || "no mapped requirements"}. This is a transparent system baseline, not a human reviewer opinion.`,
+  };
+};
+
 export const aggregateCriterionScores = (input: {
   criterionIds: string[];
   assignments: Array<{
@@ -251,7 +295,7 @@ export const aggregateCriterionScores = (input: {
   }>;
 }) => {
   const eligible = input.assignments.filter((assignment) =>
-    assignment.role !== "observer" && assignment.conflictStatus === "clear",
+    assignment.role !== "observer" && ["clear", "not_applicable"].includes(assignment.conflictStatus),
   );
   const eligibleIds = new Set(eligible.map((assignment) => assignment.assignmentId));
   return input.criterionIds.map((criterionId) => {

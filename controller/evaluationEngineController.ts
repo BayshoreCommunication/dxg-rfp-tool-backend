@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Response } from "express";
 import type { AuthRequest } from "../middleware/auth";
 import { EvaluationEngineError } from "../src/modules/evaluationEngine/domain";
+import { prepareAutomaticEvaluation } from "../src/modules/evaluationEngine/automaticEvaluation";
 import { evaluationEngineRepository } from "../src/modules/evaluationEngine/postgresEvaluationEngineRepository";
 
 const mongoId = (value: unknown, code: string, message: string) => { const id = String(value ?? ""); if (!/^[0-9a-f]{24}$/i.test(id)) throw new EvaluationEngineError(code, message, 404); return id; };
@@ -17,6 +18,9 @@ export const createEvaluation = async (req: AuthRequest, res: Response) => { try
   const body = (req.body ?? {}) as Record<string, unknown>;
   const result = await evaluationEngineRepository.create({ ...context(req), intelligenceRunId: body.intelligenceRunId ? uuid(body.intelligenceRunId, "INTELLIGENCE_RUN_NOT_FOUND") : null, sealedPrice: body.sealedPrice === true, idempotencyKey: key(req) });
   res.status(result.created ? 201 : 200).json({ data: result });
+} catch (error) { handle(res, error); } };
+export const createAutomaticEvaluation = async (req: AuthRequest, res: Response) => { try {
+  res.json({ data: await prepareAutomaticEvaluation(context(req)) });
 } catch (error) { handle(res, error); } };
 export const readLatestEvaluation = async (req: AuthRequest, res: Response) => { try { res.json({ data: await evaluationEngineRepository.read(context(req)) }); } catch (error) { handle(res, error); } };
 export const readEvaluation = async (req: AuthRequest, res: Response) => { try { res.json({ data: await evaluationEngineRepository.read({ ...context(req), runId: uuid(req.params.runId) }) }); } catch (error) { handle(res, error); } };

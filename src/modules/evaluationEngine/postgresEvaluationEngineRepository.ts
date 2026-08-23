@@ -5,7 +5,7 @@ import { withPostgresTransaction } from "../../../config/postgres";
 import VendorSubmission from "../../../modal/vendorSubmissionModel";
 import VendorSubmissionVersion from "../../../modal/vendorSubmissionVersionModel";
 import {
-  aggregateCriterionScores, applyHumanReviews, ASSESSMENT_VERSION, buildAssessments, buildRisks, calculateContribution, checksum, coverageEligibility,
+  aggregateCriterionScores, applyHumanReviews, ASSESSMENT_VERSION, AUTOMATED_SCORING_POLICY_VERSION, buildAssessments, buildRisks, calculateContribution, checksum, coverageEligibility, deriveAutomatedCriterionScore,
   COMMERCIAL_POLICY_VERSION, EvaluationEngineError, normalizeCommercial, RISK_POLICY_VERSION,
   rubricAnchors, rubricMaximum, SCORING_POLICY_VERSION, type FactInput, type MappingInput,
 } from "./domain";
@@ -295,15 +295,98 @@ export const evaluationEngineRepository = {
       return {
         run: { runId: run.id, status: run.status, sealedPrice: run.sealed_price, assessmentCount: assessments.rows.length, riskCount: risks.rows.length, questionCount: risks.rows.filter((row) => Boolean(row.question)).length, scoringPolicyVersion: run.scoring_policy_version, createdAt: run.created_at },
         permission: { owner: permission.owner, assigned: Boolean(assignment), canViewCommercial },
-        assignment: assignment ? (() => { const criterionIds = assignments.rows.find((row) => row.id === assignment.id)?.criterion_ids ?? []; const currentScores = scores.rows.filter((row) => row.assignment_id === assignment.id && ["submitted", "superseded"].includes(row.event_type)); const complete = assignment.role !== "observer" && assignment.conflict_status === "clear" && currentScores.length === criterionIds.length; return { assignmentId: assignment.id, role: assignment.role, conflictStatus: assignment.conflict_status, conflictNote: assignment.conflict_note, status: assignment.status, version: assignment.version, criterionIds, complete, overallScore: complete ? currentScores.reduce((sum, row) => sum + Number(row.weighted_contribution), 0) : null }; })() : null,
+        assignment: assignment ? (() => { const criterionIds = assignments.rows.find((row) => row.id === assignment.id)?.criterion_ids ?? []; const currentScores = scores.rows.filter((row) => row.assignment_id === assignment.id && ["submitted", "superseded"].includes(row.event_type)); const complete = assignment.role !== "observer" && ["clear", "not_applicable"].includes(assignment.conflict_status) && currentScores.length === criterionIds.length; return { assignmentId: assignment.id, role: assignment.role, conflictStatus: assignment.conflict_status, conflictNote: assignment.conflict_note, status: assignment.status, version: assignment.version, criterionIds, complete, overallScore: complete ? currentScores.reduce((sum, row) => sum + Number(row.weighted_contribution), 0) : null }; })() : null,
         criteria: criteria.rows.map((row) => ({ criterionId: row.id, key: row.criterion_key, name: row.name, description: row.description, weight: Number(row.weight), rubricMaximum: rubricMaximum(row.rubric), rubricAnchors: rubricAnchors(row.rubric), priceVisibility: row.price_visibility, humanOnly: row.human_only, requirementIds: row.requirement_ids })),
         assessments: assessments.rows.map((row) => ({ assessmentId: row.id, requirementId: row.requirement_id, requirementTitle: row.requirement_title, mandatory: row.mandatory_status === "mandatory", eligibility: row.eligibility, verdict: row.verdict, rationale: row.rationale, confidence: Number(row.confidence), needsHumanReview: row.needs_human_review, reviewReasons: row.review_reasons, evidence: row.evidence })),
         risks: risks.rows.map((row) => ({ riskId: row.id, category: row.category, severity: row.severity, title: row.title, basis: row.basis, question: row.question, evidence: row.evidence })),
         commercial: commercial.rows[0] ? { submittedTotal: commercial.rows[0].submitted_total === null ? null : Number(commercial.rows[0].submitted_total), submittedCurrency: commercial.rows[0].submitted_currency, comparable: commercial.rows[0].comparable, normalizedTotal: commercial.rows[0].normalized_total === null ? null : Number(commercial.rows[0].normalized_total), normalizedCurrency: commercial.rows[0].normalized_currency, arithmeticStatus: commercial.rows[0].arithmetic_status, assumptions: commercial.rows[0].assumptions, refusalCodes: commercial.rows[0].refusal_codes, policyVersion: commercial.rows[0].policy_version, lineItems: commercial.rows[0].line_items } : null,
         scores: scores.rows.filter((row) => permission.owner || row.assignment_id === assignment?.id).map((row) => ({ eventId: row.id, assignmentId: row.assignment_id, criterionId: row.criterion_id, eventType: row.event_type, score: row.score === null ? null : Number(row.score), rubricMaximum: Number(row.rubric_maximum), criterionWeight: Number(row.criterion_weight), weightedContribution: row.weighted_contribution === null ? null : Number(row.weighted_contribution), rationale: row.rationale, evidenceFragmentIds: row.evidence_fragment_ids, createdAt: row.created_at })),
         aggregates: permission.owner ? criterionAggregates : [],
-        assignments: permission.owner ? assignments.rows.map((row) => { const currentScores = scores.rows.filter((score) => score.assignment_id === row.id && ["submitted", "superseded"].includes(score.event_type)); const complete = row.role !== "observer" && row.conflict_status === "clear" && currentScores.length === row.criterion_ids.length; return { assignmentId: row.id, evaluatorUserId: row.evaluator_external_user_id, role: row.role, conflictStatus: row.conflict_status, status: row.status, criterionIds: row.criterion_ids, commercialAccess: row.commercial_access, complete, overallScore: complete ? currentScores.reduce((sum, score) => sum + Number(score.weighted_contribution), 0) : null }; }) : [],
+        assignments: permission.owner ? assignments.rows.map((row) => { const currentScores = scores.rows.filter((score) => score.assignment_id === row.id && ["submitted", "superseded"].includes(score.event_type)); const complete = row.role !== "observer" && ["clear", "not_applicable"].includes(row.conflict_status) && currentScores.length === row.criterion_ids.length; return { assignmentId: row.id, evaluatorUserId: row.evaluator_external_user_id, role: row.role, conflictStatus: row.conflict_status, status: row.status, criterionIds: row.criterion_ids, commercialAccess: row.commercial_access, complete, overallScore: complete ? currentScores.reduce((sum, score) => sum + Number(score.weighted_contribution), 0) : null }; }) : [],
       };
+    });
+  },
+
+  async completeAutomatically(input: Context & { runId: string }) {
+    await loadVersion(input, true);
+    return withPostgresTransaction(async (client) => {
+      const organizationId = await tenant(client, input.organizationMongoId);
+      const proposalRow = await proposal(client, input.proposalMongoId);
+      if (proposalRow.owner_external_user_id !== input.actorUserMongoId)
+        throw new EvaluationEngineError("EVALUATION_ACCESS_DENIED", "Only the proposal owner can prepare an automatic evaluation.", 403);
+      const run = await latestRun(client, proposalRow.id, input.versionMongoId, input.runId);
+      const assignmentResult = await client.query<any>(
+        "SELECT * FROM rfpilot.evaluation_assignments WHERE evaluation_run_id=$1 AND evaluator_external_user_id=$2 FOR UPDATE",
+        [run.id, input.actorUserMongoId],
+      );
+      const assignment = assignmentResult.rows[0];
+      if (!assignment) throw new EvaluationEngineError("ASSIGNMENT_NOT_FOUND", "The proposal-owner evaluation assignment was not found.", 404);
+      if (assignment.conflict_status === "conflict")
+        throw new EvaluationEngineError("AUTOMATED_EVALUATION_CONFLICT", "A declared conflict must be resolved before automatic evaluation.", 409);
+      const criteria = await client.query<any>(
+        `SELECT c.* FROM rfpilot.evaluation_criteria c
+         JOIN rfpilot.evaluation_assignment_criteria ac ON ac.criterion_id=c.id
+         WHERE ac.assignment_id=$1 AND c.matrix_version_id=$2 ORDER BY c.ordinal`,
+        [assignment.id, run.matrix_version_id],
+      );
+      const assessments = await client.query<any>(
+        `SELECT a.id,a.verdict,r.criterion_id,r.mandatory_status,r.eligibility,
+                coalesce((SELECT jsonb_agg(e.evidence_fragment_id ORDER BY e.ordinal) FROM rfpilot.assessment_evidence e WHERE e.assessment_id=a.id),'[]') fragment_ids
+         FROM rfpilot.ai_assessments a JOIN rfpilot.requirements r ON r.id=a.requirement_id
+         WHERE a.evaluation_run_id=$1 ORDER BY a.ordinal`,
+        [run.id],
+      );
+      const latestScores = await client.query<any>(
+        `SELECT DISTINCT ON(criterion_id) * FROM rfpilot.evaluator_score_events
+         WHERE assignment_id=$1 ORDER BY criterion_id,created_at DESC,id DESC`,
+        [assignment.id],
+      );
+      const submitted = new Set(latestScores.rows.filter((row) => ["submitted", "superseded"].includes(row.event_type)).map((row) => String(row.criterion_id)));
+      const hasHumanSubmittedScore = latestScores.rows.some((row) =>
+        ["submitted", "superseded"].includes(row.event_type)
+        && row.scoring_policy_version !== AUTOMATED_SCORING_POLICY_VERSION);
+      let createdCount = 0;
+      for (const criterion of criteria.rows) {
+        if (submitted.has(String(criterion.id))) continue;
+        const derived = deriveAutomatedCriterionScore({
+          criterionName: String(criterion.name),
+          rubricMaximum: rubricMaximum(criterion.rubric),
+          assessments: assessments.rows.filter((assessment) => assessment.criterion_id === criterion.id).map((assessment) => ({
+            verdict: String(assessment.verdict),
+            mandatory: assessment.mandatory_status === "mandatory",
+            eligibility: assessment.eligibility === true,
+            evidenceFragmentIds: Array.isArray(assessment.fragment_ids) ? assessment.fragment_ids.map(String) : [],
+          })),
+        });
+        const maximum = rubricMaximum(criterion.rubric), weight = Number(criterion.weight);
+        const idempotencyKey = `automatic-score:${run.id}:${assignment.id}:${criterion.id}:${AUTOMATED_SCORING_POLICY_VERSION}`;
+        const old = await client.query<{ id: string }>("SELECT id FROM rfpilot.evaluator_score_events WHERE organization_id=$1 AND idempotency_key=$2", [organizationId, idempotencyKey]);
+        if (old.rows[0]) continue;
+        await client.query(
+          `INSERT INTO rfpilot.evaluator_score_events(id,organization_id,evaluation_run_id,assignment_id,criterion_id,event_type,score,rubric_maximum,criterion_weight,weighted_contribution,rationale,evidence_fragment_ids,scoring_policy_version,actor_external_user_id,idempotency_key)
+           VALUES($1,$2,$3,$4,$5,'submitted',$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14)`,
+          [uuidv7(), organizationId, run.id, assignment.id, criterion.id, derived.score, maximum, weight,
+            calculateContribution({ score: derived.score, rubricMaximum: maximum, weight }), derived.rationale,
+            JSON.stringify(derived.evidenceFragmentIds), AUTOMATED_SCORING_POLICY_VERSION, input.actorUserMongoId, idempotencyKey],
+        );
+        createdCount += 1;
+      }
+      const targetConflictStatus = hasHumanSubmittedScore ? assignment.conflict_status : "not_applicable";
+      const assignmentUpdated = assignment.conflict_status !== targetConflictStatus || assignment.status !== "complete";
+      if (assignmentUpdated) await client.query(
+        `UPDATE rfpilot.evaluation_assignments SET conflict_status=$2,
+           conflict_note=CASE WHEN $2='not_applicable'
+             THEN 'Automated evidence-derived evaluation; reviewer conflict declaration is not applicable.'
+             ELSE conflict_note END,
+           status='complete',version=version+1,updated_at=now() WHERE id=$1`,
+        [assignment.id, targetConflictStatus],
+      );
+      if (createdCount > 0 || assignmentUpdated) await audit(client, input, organizationId, "vendor_evaluation.automatically_completed", run.id, {
+        assignmentId: assignment.id,
+        createdScoreCount: createdCount,
+        scoringPolicyVersion: AUTOMATED_SCORING_POLICY_VERSION,
+      });
+      return { runId: run.id, assignmentId: assignment.id, createdScoreCount: createdCount, created: createdCount > 0 || assignmentUpdated };
     });
   },
 
@@ -349,7 +432,7 @@ export const evaluationEngineRepository = {
       const assignment = await client.query<any>("SELECT * FROM rfpilot.evaluation_assignments WHERE evaluation_run_id=$1 AND evaluator_external_user_id=$2 FOR UPDATE", [run.id, input.actorUserMongoId]);
       if (!assignment.rows[0]) throw new EvaluationEngineError("EVALUATION_ACCESS_DENIED", "You are not assigned to score this evaluation.", 403);
       if (assignment.rows[0].role === "observer") throw new EvaluationEngineError("OBSERVER_SCORING_FORBIDDEN", "Observer assignments are read-only.", 403);
-      if (input.eventType === "submitted" && assignment.rows[0].conflict_status !== "clear") throw new EvaluationEngineError("CONFLICT_DECLARATION_REQUIRED", "Declare your conflict-of-interest status before submitting.", 409);
+      if (input.eventType === "submitted" && !["clear", "not_applicable"].includes(assignment.rows[0].conflict_status)) throw new EvaluationEngineError("CONFLICT_DECLARATION_REQUIRED", "Declare your conflict-of-interest status before submitting.", 409);
       if (input.eventType !== "draft" && !input.rationale.trim()) throw new EvaluationEngineError("SCORE_RATIONALE_REQUIRED", "Submitted scores require a rationale.");
       const criterion = await client.query<any>(
         `SELECT c.* FROM rfpilot.evaluation_criteria c JOIN rfpilot.evaluation_assignment_criteria a ON a.criterion_id=c.id
