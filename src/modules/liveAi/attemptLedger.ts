@@ -24,6 +24,12 @@ export const beginProviderAttempt = async (
 ): Promise<ProviderAttempt> =>
   withPostgresTransaction(async (c) => {
     await tenant(c, ctx.organizationId);
+    // One intelligence run may issue several provider calls concurrently. The
+    // attempt number is allocated from the rows already stored for that run,
+    // so serialize only this short allocation transaction to prevent two
+    // callers from choosing the same number (and tripping the unique index).
+    // Provider requests still run concurrently after this transaction commits.
+    await c.query("SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))", [ctx.runType, ctx.runId]);
     await c.query(
       "UPDATE rfpilot.ai_provider_attempts SET state='orphaned',updated_at=now() WHERE run_type=$1 AND run_id=$2 AND state='pending_call'",
       [ctx.runType, ctx.runId],
