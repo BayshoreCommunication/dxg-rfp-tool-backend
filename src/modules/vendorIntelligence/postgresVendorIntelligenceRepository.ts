@@ -266,7 +266,12 @@ export const vendorIntelligenceRepository = {
     });
   },
 
-  async execute(input: { organizationMongoId: string; actorUserMongoId: string; runId: string }) {
+  async execute(input: {
+    organizationMongoId: string;
+    actorUserMongoId: string;
+    runId: string;
+    onProgress?: (progress: number, stage: string) => Promise<void> | void;
+  }) {
     const loaded = await withPostgresTransaction(async (client) => {
       const organizationId = await tenant(client, input.organizationMongoId);
       const result = await client.query<any>(
@@ -352,7 +357,9 @@ export const vendorIntelligenceRepository = {
       evidence: loaded.evidence,
       provider: openAiVendorFactMappingProvider,
       ledger: { runType: "vendor_requirement_facts", runId: input.runId, organizationId: loaded.organizationId },
+      onProgress: input.onProgress,
     });
+    await input.onProgress?.(95, "persisting_vendor_intelligence");
     await withPostgresTransaction(async (client) => {
       const organizationId = await tenant(client, input.organizationMongoId);
       let mappingOrdinal = 0;

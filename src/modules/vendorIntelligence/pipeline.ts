@@ -12,6 +12,7 @@ import type { IntelligenceEvidence, IntelligenceRequirement, VendorFactMappingPr
 
 const FACT_CHUNK = 10;
 const REQUIREMENT_CHUNK = 20;
+const PROVIDER_CONCURRENCY = 3;
 const MAX_MAPPING_EVIDENCE = 70;
 const GUARANTEED_EVIDENCE_PER_REQUIREMENT = 3;
 const SOURCE_BASELINE_LIMIT = 10;
@@ -22,6 +23,23 @@ const tokens = (value: string): string[] => [...new Set(value.toLocaleLowerCase(
 const chunks = <T>(items: T[], size: number): T[][] => {
   const output: T[][] = [];
   for (let index = 0; index < items.length; index += size) output.push(items.slice(index, index + size));
+  return output;
+};
+
+const mapConcurrent = async <T, R>(
+  items: T[],
+  concurrency: number,
+  work: (item: T, index: number) => Promise<R>,
+): Promise<R[]> => {
+  const output = new Array<R>(items.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      output[index] = await work(items[index], index);
+    }
+  }));
   return output;
 };
 
@@ -116,15 +134,29 @@ export const runVendorFactMappingPipeline = async (input: {
   evidence: IntelligenceEvidence[];
   provider: VendorFactMappingProvider;
   ledger: ProviderAttemptContext;
+  onProgress?: (progress: number, stage: string) => Promise<void> | void;
 }) => {
+  const evidenceChunks = chunks(input.evidence, FACT_CHUNK);
+  const requirementChunks = chunks(input.requirements, REQUIREMENT_CHUNK);
+  const operationCount = evidenceChunks.length + requirementChunks.length;
+  let completedOperations = 0;
+  const report = async (stage: string) => {
+    completedOperations += 1;
+    const progress = 10 + Math.round((completedOperations / Math.max(1, operationCount)) * 80);
+    await input.onProgress?.(progress, stage);
+  };
   const facts: ValidatedFact[] = [];
   let model = "";
-  for (const [index, evidenceChunk] of chunks(input.evidence, FACT_CHUNK).entries()) {
+  const factResults = await mapConcurrent(evidenceChunks, PROVIDER_CONCURRENCY, async (evidenceChunk, index) => {
     const result = await input.provider.extractFacts({
       evidence: evidenceChunk,
       ledger: input.ledger,
       phase: `facts:${index + 1}`,
     });
+    await report("extracting_vendor_facts");
+    return { result, evidenceChunk };
+  });
+  for (const { result, evidenceChunk } of factResults) {
     model = result.model;
     facts.push(...groundedFacts(
       validateFacts(result.output, new Set(evidenceChunk.map((item) => item.id))),
@@ -138,7 +170,7 @@ export const runVendorFactMappingPipeline = async (input: {
     citations: fact.citations.map((item) => [item.fragmentId, item.role]).sort(),
   }), fact));
   const mappings: ProviderMapping[] = [];
-  for (const [index, requirementChunk] of chunks(input.requirements, REQUIREMENT_CHUNK).entries()) {
+  const mappingResults = await mapConcurrent(requirementChunks, PROVIDER_CONCURRENCY, async (requirementChunk, index) => {
     const selectedEvidence = selectMappingEvidence(requirementChunk, input.evidence);
     const result = await input.provider.mapRequirements({
       requirements: requirementChunk,
@@ -146,6 +178,10 @@ export const runVendorFactMappingPipeline = async (input: {
       ledger: input.ledger,
       phase: `mappings:${index + 1}`,
     });
+    await report("mapping_requirements");
+    return { result, requirementChunk, selectedEvidence };
+  });
+  for (const { result, requirementChunk, selectedEvidence } of mappingResults) {
     model = result.model;
     mappings.push(...validateMappings(
       { mappings: completeMissingMappings(requirementChunk, result.output.mappings) },

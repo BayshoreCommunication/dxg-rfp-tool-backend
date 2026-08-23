@@ -702,6 +702,13 @@ export const postgresJobRepository: JobRepository = {
            WHERE id=$1`,
           [row.id, status],
         );
+        if (exhausted && row.job_type === "vendor_requirement_facts")
+          await c.query(
+            `UPDATE rfpilot.vendor_intelligence_runs
+                SET status='failed',safe_error_code='LEASE_EXPIRED',completed_at=now(),updated_at=now()
+              WHERE job_id=$1 AND status<>'succeeded'`,
+            [row.id],
+          );
         if (exhausted)
           await c.query(
             `INSERT INTO rfpilot.job_dead_letters(id,organization_id,job_id,reason_code,last_diagnostic_code)

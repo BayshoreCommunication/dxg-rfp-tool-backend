@@ -17,6 +17,7 @@ import { handleComparisonAggregate, handleComparisonParticipant } from "./compar
 import { handleConversationChat } from "./conversationChatHandler";
 import { conversationRepository } from "../conversations/postgresConversationRepository";
 import { comparisonOrchestrationRepository } from "../comparisonOrchestration/postgresComparisonOrchestrationRepository";
+import { vendorIntelligenceRepository } from "../vendorIntelligence/postgresVendorIntelligenceRepository";
 
 const stageFor = (type: QueueMessage["jobType"]) => ({
   knowledge_parse: "deterministic_parse",
@@ -34,7 +35,10 @@ const stageFor = (type: QueueMessage["jobType"]) => ({
   ai_gateway_test: "unsupported",
 })[type] ?? "unsupported";
 
-const execute = (message: QueueMessage) => {
+const execute = (
+  message: QueueMessage,
+  onProgress?: (progress: number, stage: string) => Promise<void> | void,
+) => {
   const vendorAnalysisJob = message.jobType==="vendor_response_analyze";
   if (message.jobType === "knowledge_parse") return handleKnowledgeParse(message);
   if (message.jobType === "knowledge_index_release") return handleKnowledgeIndex(message);
@@ -43,13 +47,16 @@ const execute = (message: QueueMessage) => {
   if (message.jobType === "proposal_draft_generate") return handleProposalDraft(message);
   if (vendorAnalysisJob) return handleVendorAnalysis(message);
   if (message.jobType === "vendor_source_extract") return handleEvidenceExtraction(message);
-  if (message.jobType === "vendor_requirement_facts") return handleVendorIntelligence(message);
+  if (message.jobType === "vendor_requirement_facts") return handleVendorIntelligence(message, onProgress);
   if (message.jobType === "comparison_participant_snapshot") return handleComparisonParticipant(message);
   if (message.jobType === "comparison_aggregate") return handleComparisonAggregate(message);
   if (message.jobType === "conversation_chat") return handleConversationChat(message);
   if (message.jobType === "source_security_scan") return handleSourceSecurity(message);
   return Promise.reject(Object.assign(new Error("Unsupported durable job type"), { code: "UNSUPPORTED_JOB_TYPE", retryable: false }));
 };
+
+export const leaseHeartbeatIntervalMs = (leaseSeconds: number) =>
+  Math.max(1_000, Math.floor(leaseSeconds * 1_000 / 3));
 
 const settleComparison = (message: QueueMessage) => comparisonOrchestrationRepository.onJobSettled({
   organizationMongoId: message.organizationMongoId,
@@ -67,15 +74,63 @@ export const createSourceSecurityWorker = (repository: JobRepository) => {
     if (claimed.cancelled) return { cancelled: true };
     const alive = await repository.heartbeat({ message: job.data, workerId, leaseSeconds, progress: 10, stage: stageFor(job.data.jobType) });
     if (!alive) return { cancelled: true };
+    let progress = 10;
+    let stage = stageFor(job.data.jobType);
+    let renewal: Promise<void> | null = null;
+    let leaseFailure: unknown = null;
+    const renewLease = async (nextProgress = progress, nextStage = stage) => {
+      progress = Math.max(progress, nextProgress);
+      stage = nextStage;
+      if (renewal) return renewal;
+      renewal = (async () => {
+        try {
+          const renewed = await repository.heartbeat({
+            message: job.data,
+            workerId,
+            leaseSeconds,
+            progress,
+            stage,
+          });
+          if (!renewed) leaseFailure = Object.assign(new Error("Worker no longer owns this job."), {
+            code: "JOB_LEASE_LOST",
+            retryable: true,
+          });
+        } catch (error) {
+          leaseFailure = Object.assign(new Error("Job lease renewal failed."), {
+            code: "JOB_HEARTBEAT_FAILED",
+            retryable: true,
+            cause: error,
+          });
+        } finally {
+          renewal = null;
+        }
+      })();
+      return renewal;
+    };
+    const heartbeatTimer = setInterval(() => { void renewLease(); }, leaseHeartbeatIntervalMs(leaseSeconds));
     try {
-      const result = await execute(job.data);
+      const result = await execute(job.data, async (nextProgress, nextStage) => {
+        await renewLease(nextProgress, nextStage);
+        if (leaseFailure) throw leaseFailure;
+      });
+      clearInterval(heartbeatTimer);
+      if (renewal) await renewal;
+      if (leaseFailure) throw leaseFailure;
       await repository.complete({ message: job.data, workerId, attempt, resultReference: result.resultReference });
       await settleComparison(job.data);
       return result;
     } catch (error) {
+      clearInterval(heartbeatTimer);
+      if (renewal) await renewal;
       const retryable = Boolean((error as { retryable?: boolean }).retryable);
       const code = String((error as { code?: string }).code || "JOB_HANDLER_FAILED");
       const failed = await repository.fail({ message: job.data, workerId, attempt, diagnosticCode: code, retryable, maxAttempts });
+      if (job.data.jobType === "vendor_requirement_facts" && ["failed", "dead_letter"].includes(failed.status))
+        await vendorIntelligenceRepository.fail({
+          organizationMongoId: job.data.organizationMongoId,
+          runId: job.data.inputReference,
+          code,
+        });
       await settleComparison(job.data);
       if (job.data.jobType === "conversation_chat" && ["failed", "dead_letter", "cancelled"].includes(failed.status))
         await conversationRepository.failChatJob({ organizationMongoId: job.data.organizationMongoId, actorUserMongoId: job.data.actorUserMongoId, correlationId: job.data.correlationId, jobId: job.data.jobId, errorCode: code }).catch(() => undefined);
