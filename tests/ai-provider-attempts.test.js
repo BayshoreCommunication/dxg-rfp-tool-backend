@@ -28,4 +28,7 @@ test("live provider commits a ledger attempt before invocation and uses a stable
   assert.ok(ledger.includes("state='orphaned'"), "stale pending attempts must be marked orphaned");
   assert.match(ledger, /call\.idempotencyPhase \?\? call\.operation/, "provider idempotency must be stable across worker retries");
   assert.match(ledger, /attemptNumber/, "each retry must still receive its own auditable attempt row");
+  const lockIndex = ledger.indexOf("pg_advisory_xact_lock");
+  const countIndex = ledger.indexOf("SELECT count(*)::int n");
+  assert.ok(lockIndex > -1 && lockIndex < countIndex, "concurrent calls must serialize attempt-number allocation before counting");
 });
