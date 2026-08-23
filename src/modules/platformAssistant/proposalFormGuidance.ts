@@ -1,8 +1,12 @@
 import proposalSchema from "../../../contracts/proposal/v1/proposal.v1.schema.json";
 import proposalFormUi from "../../../contracts/proposal/v1/proposal-form-ui.v1.json";
+import {
+  isRetiredCanonicalProposalWorkflowPath,
+  proposalWorkflowSectionEnabled,
+} from "../proposals/domain/workflowSections";
 import type { AssistantPromptEvidence } from "./domain";
 
-export const PROPOSAL_FORM_GUIDANCE_VERSION = "proposal-form-guidance.v3";
+export const PROPOSAL_FORM_GUIDANCE_VERSION = "proposal-form-guidance.v4";
 export const PROPOSAL_FORM_SCHEMA_VERSION = "proposal.v1";
 export const PROPOSAL_FORM_GUIDANCE_OWNER = "Product Operations";
 export const PROPOSAL_FORM_GUIDANCE_REVIEW_DATE = "2026-10-29";
@@ -124,7 +128,7 @@ const schema = proposalSchema as unknown as JsonSchema & {
   $defs: Record<string, JsonSchema>;
 };
 
-export const PROPOSAL_FORM_SECTIONS: readonly ProposalFormSection[] =
+export const ALL_PROPOSAL_FORM_SECTIONS: readonly ProposalFormSection[] =
   Object.freeze([
     {
       id: "event_overview",
@@ -229,6 +233,13 @@ export const PROPOSAL_FORM_SECTIONS: readonly ProposalFormSection[] =
     },
   ]);
 
+export const PROPOSAL_FORM_SECTIONS: readonly ProposalFormSection[] =
+  Object.freeze(
+    ALL_PROPOSAL_FORM_SECTIONS.filter((section) =>
+      proposalWorkflowSectionEnabled(section.id),
+    ),
+  );
+
 const UI_EXCLUSIONS = new Map<string, string>([
   ["/content/rooms/*/id", "Generated room identity, not a user-entered field."],
   ["/content/sourceReferences/*/sourceId", "Generated source identity."],
@@ -245,6 +256,9 @@ const UI_EXCLUSIONS = new Map<string, string>([
 
 export const PROPOSAL_FORM_UI_EXCLUSIONS: ReadonlyMap<string, string> =
   UI_EXCLUSIONS;
+
+const proposalFormPathExcluded = (path: string): boolean =>
+  UI_EXCLUSIONS.has(path) || isRetiredCanonicalProposalWorkflowPath(path);
 
 const LABEL_OVERRIDES: Readonly<Record<string, string>> = Object.freeze({
   "/content/event/name": "Event Name",
@@ -563,7 +577,7 @@ const selectionInstruction = (
 };
 
 const buildFieldGuidance = (leaf: SchemaLeaf): ProposalFormFieldGuidance | null => {
-  if (UI_EXCLUSIONS.has(leaf.canonicalPath)) return null;
+  if (proposalFormPathExcluded(leaf.canonicalPath)) return null;
   const section = sectionForPath(leaf.canonicalPath);
   if (!section) return null;
   const uiField = proposalFormUiFields[leaf.canonicalPath];
@@ -744,12 +758,15 @@ export const proposalFormGuidanceCoverage = (): {
 } => {
   const covered = new Set(PROPOSAL_FORM_FIELD_GUIDANCE.map((field) => field.canonicalPath));
   const uncoveredPaths = PROPOSAL_FORM_SCHEMA_LEAF_PATHS.filter(
-    (path) => !covered.has(path) && !UI_EXCLUSIONS.has(path),
+    (path) => !covered.has(path) && !proposalFormPathExcluded(path),
   );
+  const excludedFieldCount = PROPOSAL_FORM_SCHEMA_LEAF_PATHS.filter(
+    proposalFormPathExcluded,
+  ).length;
   return {
     schemaLeafCount: PROPOSAL_FORM_SCHEMA_LEAF_PATHS.length,
     guidedFieldCount: PROPOSAL_FORM_FIELD_GUIDANCE.length,
-    excludedFieldCount: UI_EXCLUSIONS.size,
+    excludedFieldCount,
     uncoveredPaths,
   };
 };

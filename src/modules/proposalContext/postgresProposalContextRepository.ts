@@ -8,12 +8,23 @@ import {
   formatContractErrors,
 } from "../../../contracts/proposal/v1/validators";
 import { proposalContextModel } from "./composition";
-import { ProposalContextError, type ContextFixture } from "./domain";
+import {
+  ProposalContextError,
+  PROPOSAL_CONTEXT_INPUT_VERSION,
+  type ContextFixture,
+} from "./domain";
 import { liveRequirementExtraction, liveMultiSourceRequirementExtraction } from "../liveAi/operations";
 import { LIVE_AI_MODEL } from "../liveAi/openAiProvider";
 import { postgresDocumentRepository } from "../documentIngestion/postgresDocumentRepository";
 import { s3PrivateDocumentStorage } from "../documentIngestion/s3PrivateDocumentStorage";
 import { deterministicParser } from "../knowledgeIngestion/deterministicParser";
+import { isRetiredProposalWorkflowPath } from "../proposals/domain/workflowSections";
+
+const activeIssues = <T extends { paths: string[] }>(issues: T[]): T[] =>
+  issues.filter(
+    (issue) => !issue.paths.some(isRetiredProposalWorkflowPath),
+  );
+
 const tenant = async (c: PoolClient, external: string) => {
   await c.query("SELECT set_config('app.organization_mongo_id',$1,true)", [
     external,
@@ -84,14 +95,14 @@ export const proposalContextRepository = {
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, input.organizationMongoId),
         p = await proposal(c, input.proposalMongoId, input.actorUserMongoId),
-        key = `proposal_context_extract:${input.sourceIds ? "sources:" : input.live ? "live:" : ""}${input.idempotencyKey}`;
+        key = `proposal_context_extract:${PROPOSAL_CONTEXT_INPUT_VERSION}:${input.sourceIds ? "sources:" : input.live ? "live:" : ""}${input.idempotencyKey}`;
       if(input.sourceIds){
         const sources=await c.query<{id:string}>("SELECT id FROM rfpilot.document_sources WHERE id=ANY($1::uuid[]) AND organization_id=$2 AND proposal_reference_id=$3 AND status='ready' AND confidentiality='non_confidential' AND deleted_at IS NULL",[input.sourceIds,org,p.id]);
         if(sources.rowCount!==input.sourceIds.length)throw new ProposalContextError("SOURCE_NOT_ELIGIBLE","Only ready, explicitly non-confidential sources for this proposal may be processed.",409);
       }
       const existing = await c.query<any>(
-        `SELECT j.*,r.id run_id FROM rfpilot.ai_jobs j JOIN rfpilot.proposal_context_runs r ON r.job_id=j.id WHERE j.organization_id=$1 AND j.idempotency_key=$2`,
-        [org, key],
+        `SELECT j.*,r.id run_id FROM rfpilot.ai_jobs j JOIN rfpilot.proposal_context_runs r ON r.job_id=j.id WHERE j.organization_id=$1 AND j.idempotency_key=$2 AND j.input_version=$3`,
+        [org, key, PROPOSAL_CONTEXT_INPUT_VERSION],
       );
       if (existing.rows[0]) {
         if (existing.rows[0].proposal_reference_id !== p.id)
@@ -109,13 +120,14 @@ export const proposalContextRepository = {
       const jobId = uuidv7(),
         runId = uuidv7();
       const job = await c.query<any>(
-        "INSERT INTO rfpilot.ai_jobs(id,organization_id,proposal_reference_id,job_type,status,idempotency_key,input_reference,input_version,input_checksum,max_attempts,correlation_id,initiator_external_user_id) VALUES($1,$2,$3,'proposal_context_extract','queued',$4,$5,'proposal-context.v1',$6,2,$7,$8) RETURNING *",
+        "INSERT INTO rfpilot.ai_jobs(id,organization_id,proposal_reference_id,job_type,status,idempotency_key,input_reference,input_version,input_checksum,max_attempts,correlation_id,initiator_external_user_id) VALUES($1,$2,$3,'proposal_context_extract','queued',$4,$5,$6,$7,2,$8,$9) RETURNING *",
         [
           jobId,
           org,
           p.id,
           key,
           runId,
+          PROPOSAL_CONTEXT_INPUT_VERSION,
           input.inputChecksum,
           input.correlationId,
           input.actorUserMongoId,
@@ -145,7 +157,7 @@ export const proposalContextRepository = {
         actorUserMongoId: input.actorUserMongoId,
         jobType: "proposal_context_extract",
         inputReference: runId,
-        inputVersion: "proposal-context.v1",
+        inputVersion: PROPOSAL_CONTEXT_INPUT_VERSION,
         correlationId: input.correlationId,
       };
       await c.query(
@@ -178,8 +190,12 @@ export const proposalContextRepository = {
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, input.organizationMongoId);
       const r = await c.query<any>(
-        `SELECT r.*,p.external_mongo_id proposal_mongo_id FROM rfpilot.proposal_context_runs r JOIN rfpilot.proposal_references p ON p.id=r.proposal_reference_id WHERE r.id=$1 FOR UPDATE`,
-        [input.runId],
+        `SELECT r.*,p.external_mongo_id proposal_mongo_id
+           FROM rfpilot.proposal_context_runs r
+           JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$2
+           JOIN rfpilot.proposal_references p ON p.id=r.proposal_reference_id
+          WHERE r.id=$1 FOR UPDATE OF r`,
+        [input.runId, PROPOSAL_CONTEXT_INPUT_VERSION],
       );
       const run = r.rows[0];
       if (!run)
@@ -208,13 +224,23 @@ export const proposalContextRepository = {
         for(const sourceId of sourceIds){const source=await postgresDocumentRepository.get(input.organizationMongoId,sourceId);if(source.proposalMongoId!==run.proposal_mongo_id||source.status!=="ready"||source.confidentiality!=="non_confidential")throw new ProposalContextError("SOURCE_NOT_ELIGIBLE","A selected source is no longer eligible for live AI processing.",409);const object=await s3PrivateDocumentStorage.read({objectKey:source.objectKey,maxBytes:Number(process.env.DOCUMENT_MAX_FILE_BYTES||50*1024*1024)}),parsed=await deterministicParser.parse(object.bytes,source.mimeType);sources.push({sourceId,fragments:parsed.fragments});}
         live=await liveMultiSourceRequirementExtraction(run.proposal_mongo_id,sources,{runType:"proposal_context",runId:run.id,organizationId:run.organization_id});
       }else if(run.provider==="openai")live=await liveRequirementExtraction(run.proposal_mongo_id,run.fixture,{runType:"proposal_context",runId:run.id,organizationId:run.organization_id});
-      const candidate = live?.candidate ?? proposalContextModel.extract(run.proposal_mongo_id, run.fixture);
-      if ("invalid" in candidate)
+      const extracted = live?.candidate ?? proposalContextModel.extract(run.proposal_mongo_id, run.fixture);
+      if ("invalid" in extracted)
         throw new ProposalContextError(
           "INVALID_CANDIDATE_PATCH",
           "Mock candidate is intentionally invalid.",
           422,
         );
+      const candidate = {
+        ...extracted,
+        patch: {
+          ...extracted.patch,
+          candidates: extracted.patch.candidates.filter(
+            (item) => !isRetiredProposalWorkflowPath(item.path),
+          ),
+        },
+        issues: activeIssues(extracted.issues),
+      };
       if (!validateProposalExtractionPatchV1(candidate.patch))
         throw new ProposalContextError(
           "INVALID_CANDIDATE_PATCH",
@@ -317,8 +343,11 @@ export const proposalContextRepository = {
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, input.organizationMongoId);
       await c.query(
-        "UPDATE rfpilot.proposal_context_runs SET status='failed',safe_error_code=$2,completed_at=now(),updated_at=now() WHERE id=$1 AND status<>'succeeded'",
-        [input.runId, input.code],
+        `UPDATE rfpilot.proposal_context_runs r
+            SET status='failed',safe_error_code=$2,completed_at=now(),updated_at=now()
+          WHERE r.id=$1 AND r.status<>'succeeded'
+            AND EXISTS(SELECT 1 FROM rfpilot.ai_jobs j WHERE j.id=r.job_id AND j.input_version=$3)`,
+        [input.runId, input.code, PROPOSAL_CONTEXT_INPUT_VERSION],
       );
       await audit(c, {
         org,
@@ -344,8 +373,10 @@ export const proposalContextRepository = {
         input.actorUserMongoId,
       );
       const run = await c.query<any>(
-        "SELECT * FROM rfpilot.proposal_context_runs WHERE id=$1 AND proposal_reference_id=$2",
-        [input.runId, p.id],
+        `SELECT r.* FROM rfpilot.proposal_context_runs r
+         JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$3
+         WHERE r.id=$1 AND r.proposal_reference_id=$2`,
+        [input.runId, p.id, PROPOSAL_CONTEXT_INPUT_VERSION],
       );
       if (!run.rows[0])
         throw new ProposalContextError(
@@ -365,11 +396,20 @@ export const proposalContextRepository = {
           "SELECT code,severity,paths,ordinal FROM rfpilot.proposal_context_issues WHERE run_id=$1 ORDER BY ordinal",
           [input.runId],
         );
+      const visibleOperations = operations.rows.filter(
+        (operation: { path: string }) =>
+          !isRetiredProposalWorkflowPath(operation.path),
+      );
+      const visibleIssues = activeIssues(issues.rows);
       return {
-        run: run.rows[0],
-        operations: operations.rows,
+        run: {
+          ...run.rows[0],
+          operation_count: visibleOperations.length,
+          issue_count: visibleIssues.length,
+        },
+        operations: visibleOperations,
         evidence: evidence.rows,
-        issues: issues.rows,
+        issues: visibleIssues,
         proposalMutation: false,
       };
     });

@@ -1,5 +1,6 @@
 import { aiRuntimeAuthorized } from "../../../config/aiEnvironment";
-import { approvedCandidatePaths } from "../candidateApplication/canonicalMapping";
+import { activeCandidatePaths } from "../candidateApplication/canonicalMapping";
+import { activeProposalWorkflowContent } from "../proposals/domain/workflowSections";
 import {
   computeRoomScheduleAnalysis,
   type RoomScheduleAnalysis,
@@ -17,7 +18,7 @@ export class GuidanceError extends Error {
 
 export const guidanceEnabled = () => aiRuntimeAuthorized() && process.env.GUIDANCE_ENABLED === "true";
 
-export const PROPOSAL_ANALYSIS_VERSION = "proposal-analysis.v3";
+export const PROPOSAL_ANALYSIS_VERSION = "proposal-analysis.v4";
 
 export type GuidanceEvidence = {
   path: string;
@@ -96,11 +97,13 @@ const ESSENTIAL_PATHS = new Set([
   "/content/venueSchedule/showStartDate",
   "/content/venueSchedule/showEndDate",
   "/content/venue/inHouseAvRequired",
-  "/content/videoRecordingStep/videoRecordingRequired",
   "/content/budget/estimatedAvBudget",
   "/content/budget/proposalSubmissionDueDate",
 ]);
 
+// Candidate normalization remains backward compatible for old clients and
+// pending applications. Readiness, however, must only score fields a planner
+// can still reach in the active workflow.
 const SECTION_LABELS: Record<string, string> = {
   event: "Event overview",
   venueSchedule: "Venue & schedule",
@@ -151,16 +154,17 @@ export const computeGuidance = (
   proposal: Record<string, unknown>,
   options: { proposalVersion?: number } = {},
 ): GuidanceResult => {
+  const activeProposal = activeProposalWorkflowContent(proposal);
   const proposalVersion = Math.max(
     1,
-    Math.floor(options.proposalVersion ?? (Number(proposal.version) || 1)),
+    Math.floor(options.proposalVersion ?? (Number(activeProposal.version) || 1)),
   );
   const bySection = new Map<string, { filled: number; total: number; weightFilled: number; weightTotal: number; essentialMissing: string[] }>();
-  for (const path of approvedCandidatePaths) {
+  for (const path of activeCandidatePaths) {
     const section = path.split("/")[2];
     const bucket = bySection.get(section) ?? { filled: 0, total: 0, weightFilled: 0, weightTotal: 0, essentialMissing: [] };
     const weight = ESSENTIAL_PATHS.has(path) ? ESSENTIAL_WEIGHT : 1;
-    const isFilled = filled(valueAt(proposal, path));
+    const isFilled = filled(valueAt(activeProposal, path));
     bucket.total += 1;
     bucket.weightTotal += weight;
     if (isFilled) { bucket.filled += 1; bucket.weightFilled += weight; }
@@ -179,7 +183,7 @@ export const computeGuidance = (
   const overall = totals.total ? Number((totals.filled / totals.total).toFixed(4)) : 0;
 
   const findings: GuidanceFinding[] = [];
-  const v = (path: string) => valueAt(proposal, path);
+  const v = (path: string) => valueAt(activeProposal, path);
   const flag = (
     finding: Pick<GuidanceFinding, "code" | "severity" | "category" | "message" | "paths"> & {
       suggestedNextStep?: string;
@@ -243,7 +247,7 @@ export const computeGuidance = (
     flag({ code: "STRIKE_BEFORE_SHOW_END", severity: "warning", category: "schedule", message: "Strike is scheduled before the show ends.", paths: ["/content/venueSchedule/strikeDate", "/content/venueSchedule/showEndDate"], conflictingPaths: ["/content/venueSchedule/strikeDate", "/content/venueSchedule/showEndDate"], suggestedNextStep: "Schedule strike after the final session and confirm venue access." });
 
   const roomCount = asCount(v("/content/venueSchedule/numberOfEventRooms"));
-  const rooms = Array.isArray((proposal as { roomByRoom?: unknown[] }).roomByRoom) ? (proposal as { roomByRoom: unknown[] }).roomByRoom.length : 0;
+  const rooms = Array.isArray((activeProposal as { roomByRoom?: unknown[] }).roomByRoom) ? (activeProposal as { roomByRoom: unknown[] }).roomByRoom.length : 0;
   if (roomCount === null)
     flag({ code: "ROOM_COUNT_MISSING", severity: "warning", category: "completeness", message: "The proposal does not state how many event rooms are required.", paths: ["/content/venueSchedule/numberOfEventRooms"], suggestedNextStep: "Add the expected room count, even if the venue is not final." });
   if (roomCount !== null && rooms > 0 && roomCount !== rooms)
@@ -255,7 +259,7 @@ export const computeGuidance = (
   if ((format.includes("hybrid") || format.includes("virtual")) && !filled(v("/content/hybridVirtual/streamingPlatform")))
     flag({ code: "STREAMING_PLATFORM_MISSING", severity: "warning", category: "production", message: "The event is hybrid or virtual but no streaming platform is specified.", paths: ["/content/hybridVirtual/streamingPlatform"] });
 
-  if (isYes(v("/content/venueSchedule/isUnionVenue")) && !filled(v("/content/venueSchedule/unionJurisdictionOther")) && !(Array.isArray((proposal as { venueSchedule?: { unionJurisdictions?: unknown[] } }).venueSchedule?.unionJurisdictions) && (proposal as { venueSchedule: { unionJurisdictions: unknown[] } }).venueSchedule.unionJurisdictions.length))
+  if (isYes(v("/content/venueSchedule/isUnionVenue")) && !filled(v("/content/venueSchedule/unionJurisdictionOther")) && !(Array.isArray((activeProposal as { venueSchedule?: { unionJurisdictions?: unknown[] } }).venueSchedule?.unionJurisdictions) && (activeProposal as { venueSchedule: { unionJurisdictions: unknown[] } }).venueSchedule.unionJurisdictions.length))
     flag({ code: "UNION_JURISDICTIONS_MISSING", severity: "warning", category: "risk", message: "This is a union venue but no jurisdictions are listed. Union labor rules materially change cost.", paths: ["/content/venueSchedule/isUnionVenue"] });
 
   if (isYes(v("/content/venue/powerDropsRequired")) && (asCount(v("/content/venue/numberOfPowerDrops")) ?? 0) === 0)
@@ -292,7 +296,7 @@ export const computeGuidance = (
           severity === "review_recommended"
         ? "warning"
         : "info";
-  for (const scopeFinding of computeScopeGuidance(proposal)) {
+  for (const scopeFinding of computeScopeGuidance(activeProposal)) {
     findings.push({
       id: scopeFinding.id,
       code: scopeFinding.ruleId,
@@ -321,7 +325,7 @@ export const computeGuidance = (
     });
   }
 
-  const roomSchedule = computeRoomScheduleAnalysis(proposal);
+  const roomSchedule = computeRoomScheduleAnalysis(activeProposal);
   for (const roomFinding of roomSchedule.findings) {
     findings.push({
       id: roomFinding.id,

@@ -9,6 +9,11 @@ import {
   COMMERCIAL_POLICY_VERSION, EvaluationEngineError, normalizeCommercial, RISK_POLICY_VERSION,
   rubricAnchors, rubricMaximum, SCORING_POLICY_VERSION, type FactInput, type MappingInput,
 } from "./domain";
+import {
+  LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+  proposalWorkflowSectionEnabled,
+} from "../proposals/domain/workflowSections";
+import { REQUIREMENT_GENERATOR_VERSION } from "../requirementRegistry/generator";
 
 type Context = { organizationMongoId: string; actorUserMongoId: string; proposalMongoId: string; submissionMongoId: string; versionMongoId: string; correlationId: string };
 const tenant = async (client: PoolClient, organizationMongoId: string) => {
@@ -49,8 +54,17 @@ const access = async (client: PoolClient, runId: string, actor: string, owner: s
 };
 const latestRun = async (client: PoolClient, proposalReferenceId: string, versionMongoId: string, runId?: string | null) => {
   const result = runId
-    ? await client.query<any>("SELECT * FROM rfpilot.vendor_evaluation_runs WHERE id=$1 AND proposal_reference_id=$2 AND vendor_submission_version_mongo_id=$3", [runId, proposalReferenceId, versionMongoId])
-    : await client.query<any>("SELECT * FROM rfpilot.vendor_evaluation_runs WHERE proposal_reference_id=$1 AND vendor_submission_version_mongo_id=$2 ORDER BY created_at DESC LIMIT 1", [proposalReferenceId, versionMongoId]);
+    ? await client.query<any>(`SELECT e.* FROM rfpilot.vendor_evaluation_runs e
+       JOIN rfpilot.requirement_sets s ON s.id=e.requirement_set_id AND s.generator_version=$4
+       WHERE e.id=$1 AND e.proposal_reference_id=$2 AND e.vendor_submission_version_mongo_id=$3
+         AND e.assessment_version=$5 AND e.risk_policy_version=$6
+         AND e.commercial_policy_version=$7 AND e.scoring_policy_version=$8`, [runId, proposalReferenceId, versionMongoId, REQUIREMENT_GENERATOR_VERSION, ASSESSMENT_VERSION, RISK_POLICY_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION])
+    : await client.query<any>(`SELECT e.* FROM rfpilot.vendor_evaluation_runs e
+       JOIN rfpilot.requirement_sets s ON s.id=e.requirement_set_id AND s.generator_version=$3
+       WHERE e.proposal_reference_id=$1 AND e.vendor_submission_version_mongo_id=$2
+         AND e.assessment_version=$4 AND e.risk_policy_version=$5
+         AND e.commercial_policy_version=$6 AND e.scoring_policy_version=$7
+       ORDER BY e.created_at DESC LIMIT 1`, [proposalReferenceId, versionMongoId, REQUIREMENT_GENERATOR_VERSION, ASSESSMENT_VERSION, RISK_POLICY_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION]);
   if (!result.rows[0]) throw new EvaluationEngineError("EVALUATION_RUN_NOT_FOUND", "Vendor evaluation has not been generated.", 404);
   return result.rows[0];
 };
@@ -62,15 +76,21 @@ export const evaluationEngineRepository = {
       const proposalRow = await proposal(client, input.proposalMongoId);
       if (proposalRow.owner_external_user_id !== input.actorUserMongoId) throw new EvaluationEngineError("EVALUATION_ACCESS_DENIED", "Only the proposal owner can create an evaluation.", 403);
       const intelligenceResult = input.intelligenceRunId
-        ? await client.query<any>("SELECT * FROM rfpilot.vendor_intelligence_runs WHERE id=$1 AND proposal_reference_id=$2 AND vendor_submission_version_mongo_id=$3 AND status='succeeded'", [input.intelligenceRunId, proposalRow.id, input.versionMongoId])
-        : await client.query<any>("SELECT * FROM rfpilot.vendor_intelligence_runs WHERE proposal_reference_id=$1 AND vendor_submission_version_mongo_id=$2 AND status='succeeded' ORDER BY created_at DESC LIMIT 1", [proposalRow.id, input.versionMongoId]);
+        ? await client.query<any>(`SELECT i.* FROM rfpilot.vendor_intelligence_runs i
+           JOIN rfpilot.requirement_sets s ON s.id=i.requirement_set_id AND s.generator_version=$4
+           WHERE i.id=$1 AND i.proposal_reference_id=$2 AND i.vendor_submission_version_mongo_id=$3 AND i.status='succeeded'`, [input.intelligenceRunId, proposalRow.id, input.versionMongoId, REQUIREMENT_GENERATOR_VERSION])
+        : await client.query<any>(`SELECT i.* FROM rfpilot.vendor_intelligence_runs i
+           JOIN rfpilot.requirement_sets s ON s.id=i.requirement_set_id AND s.generator_version=$3
+           WHERE i.proposal_reference_id=$1 AND i.vendor_submission_version_mongo_id=$2 AND i.status='succeeded'
+           ORDER BY i.created_at DESC LIMIT 1`, [proposalRow.id, input.versionMongoId, REQUIREMENT_GENERATOR_VERSION]);
       const intelligence = intelligenceResult.rows[0];
       if (!intelligence) throw new EvaluationEngineError("INTELLIGENCE_RUN_NOT_READY", "Generate and review proposal intelligence before evaluation.", 409);
       const coverage = coverageEligibility(Array.isArray(intelligence.warnings) ? intelligence.warnings : []);
       if (!coverage.eligible) throw new EvaluationEngineError("INTELLIGENCE_COVERAGE_INCOMPLETE", `Resolve source coverage before evaluation: ${coverage.blockingCodes.join(", ")}.`, 409);
       const matrixResult = await client.query<any>(
         `SELECT m.* FROM rfpilot.evaluation_matrix_versions m JOIN rfpilot.requirement_sets s ON s.id=m.requirement_set_id
-         WHERE m.requirement_set_id=$1 AND m.status='approved' AND m.weights_confirmed=true AND m.total_weight=100 AND s.status='approved'`, [intelligence.requirement_set_id],
+         WHERE m.requirement_set_id=$1 AND m.status='approved' AND m.weights_confirmed=true AND m.total_weight=100
+           AND s.status='approved' AND s.generator_version=$2`, [intelligence.requirement_set_id, REQUIREMENT_GENERATOR_VERSION],
       );
       const matrix = matrixResult.rows[0];
       if (!matrix) throw new EvaluationEngineError("SCORING_MATRIX_NOT_CONFIRMED", "A confirmed 100% evaluation matrix is required.", 409);
@@ -80,7 +100,13 @@ export const evaluationEngineRepository = {
                 jsonb_agg(m.id ORDER BY m.ordinal) mapping_ids,
                 coalesce(jsonb_agg(m.evidence_fragment_id) FILTER(WHERE m.evidence_fragment_id IS NOT NULL),'[]') fragment_ids
          FROM rfpilot.requirement_evidence_mappings m JOIN rfpilot.requirements r ON r.id=m.requirement_id
-         WHERE m.intelligence_run_id=$1 GROUP BY m.requirement_id,r.title,r.mandatory_status,r.eligibility,r.ordinal ORDER BY r.ordinal`, [intelligence.id],
+         WHERE m.intelligence_run_id=$1
+           AND ($2::boolean OR r.group_key IS DISTINCT FROM $3)
+         GROUP BY m.requirement_id,r.title,r.mandatory_status,r.eligibility,r.ordinal ORDER BY r.ordinal`, [
+          intelligence.id,
+          proposalWorkflowSectionEnabled("video_recording"),
+          LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+        ],
       );
       const factRows = await client.query<any>(
         `SELECT f.*,coalesce((SELECT jsonb_agg(e.evidence_fragment_id ORDER BY e.ordinal) FROM rfpilot.extracted_fact_evidence e WHERE e.fact_id=f.id),'[]') fragment_ids
@@ -99,11 +125,17 @@ export const evaluationEngineRepository = {
         correctedPayload: row.corrected_payload,
       })));
       const existingRun = await client.query<any>(
-        "SELECT * FROM rfpilot.vendor_evaluation_runs WHERE intelligence_run_id=$1 AND review_input_checksum=$2 AND scoring_policy_version=$3 ORDER BY created_at DESC LIMIT 1",
-        [intelligence.id, reviewInputChecksum, SCORING_POLICY_VERSION],
+        `SELECT * FROM rfpilot.vendor_evaluation_runs
+          WHERE intelligence_run_id=$1 AND matrix_version_id=$2 AND sealed_price=$3
+            AND review_input_checksum=$4 AND assessment_version=$5
+            AND risk_policy_version=$6 AND commercial_policy_version=$7
+            AND scoring_policy_version=$8
+          ORDER BY created_at DESC LIMIT 1`,
+        [intelligence.id, matrix.id, input.sealedPrice, reviewInputChecksum, ASSESSMENT_VERSION, RISK_POLICY_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION],
       );
       if (existingRun.rows[0]) return { runId: existingRun.rows[0].id, created: false };
-      const stableKey = `vendor-evaluation:${intelligence.id}:${matrix.id}:${input.sealedPrice}:${reviewInputChecksum}:${SCORING_POLICY_VERSION}`;
+      const policyEpoch = checksum([ASSESSMENT_VERSION, RISK_POLICY_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION]);
+      const stableKey = `vendor-evaluation:${intelligence.id}:${matrix.id}:${input.sealedPrice}:${reviewInputChecksum}:${policyEpoch}`;
       const old = await client.query<any>("SELECT * FROM rfpilot.vendor_evaluation_runs WHERE organization_id=$1 AND idempotency_key=$2", [organizationId, stableKey]);
       if (old.rows[0]) return { runId: old.rows[0].id, created: false };
       const rawMappings: MappingInput[] = mappingRows.rows.map((row) => ({ mappingId: row.mapping_id, mappingTargetIds: row.mapping_ids, requirementId: row.requirement_id, title: row.title, mandatory: row.mandatory_status === "mandatory", eligibility: row.eligibility === true, relationship: row.relationship, confidence: Number(row.confidence), fragmentIds: row.fragment_ids }));
@@ -191,10 +223,17 @@ export const evaluationEngineRepository = {
       const canViewCommercial = !run.sealed_price || priceEvent.rows[0]?.decision === "granted";
       const scopedAssignmentId = permission.owner ? null : assignment?.id ?? null;
       const criteria = await client.query<any>(
-        `SELECT c.*,coalesce((SELECT jsonb_agg(r.id ORDER BY r.ordinal) FROM rfpilot.requirements r WHERE r.criterion_id=c.id AND r.included=true),'[]') requirement_ids
+        `SELECT c.*,coalesce((SELECT jsonb_agg(r.id ORDER BY r.ordinal) FROM rfpilot.requirements r
+                              WHERE r.criterion_id=c.id AND r.included=true
+                                AND ($3::boolean OR r.group_key IS DISTINCT FROM $4)),'[]') requirement_ids
          FROM rfpilot.evaluation_criteria c WHERE c.matrix_version_id=$1
            AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM rfpilot.evaluation_assignment_criteria ac WHERE ac.assignment_id=$2 AND ac.criterion_id=c.id))
-         ORDER BY c.ordinal`, [run.matrix_version_id, scopedAssignmentId],
+         ORDER BY c.ordinal`, [
+          run.matrix_version_id,
+          scopedAssignmentId,
+          proposalWorkflowSectionEnabled("video_recording"),
+          LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+        ],
       );
       const assessments = await client.query<any>(
         `SELECT a.*,r.title requirement_title,r.mandatory_status,r.eligibility,
@@ -204,17 +243,35 @@ export const evaluationEngineRepository = {
             WHERE e.assessment_id=a.id),'[]') evidence
          FROM rfpilot.ai_assessments a JOIN rfpilot.requirements r ON r.id=a.requirement_id WHERE a.evaluation_run_id=$1
            AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM rfpilot.evaluation_assignment_criteria ac WHERE ac.assignment_id=$3 AND ac.criterion_id=r.criterion_id))
-         ORDER BY a.ordinal`, [run.id, input.versionMongoId, scopedAssignmentId],
+           AND ($4::boolean OR r.group_key IS DISTINCT FROM $5)
+         ORDER BY a.ordinal`, [
+          run.id,
+          input.versionMongoId,
+          scopedAssignmentId,
+          proposalWorkflowSectionEnabled("video_recording"),
+          LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+        ],
       );
       const risks = await client.query<any>(
         `SELECT x.*,coalesce((SELECT jsonb_agg(jsonb_build_object('fragmentId',e.evidence_fragment_id,'sourceLabel',s.source_label,'locator',f.locator,'content',left(f.content,1200)) ORDER BY e.ordinal)
           FROM rfpilot.risk_evidence e JOIN rfpilot.evidence_fragments f ON f.id=e.evidence_fragment_id
           LEFT JOIN LATERAL (SELECT q.source_label FROM rfpilot.source_extraction_runs q WHERE q.vendor_submission_version_mongo_id=$2 AND coalesce(q.reused_from_run_id,q.id)=f.extraction_run_id ORDER BY q.created_at LIMIT 1) s ON true WHERE e.risk_id=x.id),'[]') evidence,
           q.question FROM rfpilot.evaluation_risks x LEFT JOIN rfpilot.clarification_candidates q ON q.risk_id=x.id
-         WHERE x.evaluation_run_id=$1 AND ($3::uuid IS NULL OR
+         WHERE x.evaluation_run_id=$1 AND (($3::uuid IS NULL OR
            (x.requirement_id IS NOT NULL AND EXISTS(SELECT 1 FROM rfpilot.requirements r JOIN rfpilot.evaluation_assignment_criteria ac ON ac.criterion_id=r.criterion_id WHERE r.id=x.requirement_id AND ac.assignment_id=$3)) OR
-           ($4::boolean=true AND x.category IN('commercial_exception','commercial_non_comparable')))
-         ORDER BY CASE x.severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,x.ordinal`, [run.id, input.versionMongoId, scopedAssignmentId, canViewCommercial],
+           ($4::boolean=true AND x.category IN('commercial_exception','commercial_non_comparable'))))
+           AND ($5::boolean OR x.requirement_id IS NULL OR NOT EXISTS(
+             SELECT 1 FROM rfpilot.requirements retired
+              WHERE retired.id=x.requirement_id AND retired.group_key=$6
+           ))
+         ORDER BY CASE x.severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,x.ordinal`, [
+          run.id,
+          input.versionMongoId,
+          scopedAssignmentId,
+          canViewCommercial,
+          proposalWorkflowSectionEnabled("video_recording"),
+          LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+        ],
       );
       const assignments = await client.query<any>(
         `SELECT a.*,coalesce((SELECT jsonb_agg(c.criterion_id ORDER BY c.criterion_id) FROM rfpilot.evaluation_assignment_criteria c WHERE c.assignment_id=a.id),'[]') criterion_ids,
@@ -236,7 +293,7 @@ export const evaluationEngineRepository = {
          FROM rfpilot.commercial_submissions s JOIN rfpilot.commercial_normalizations n ON n.commercial_submission_id=s.id WHERE s.evaluation_run_id=$1`, [run.id],
       ) : { rows: [] };
       return {
-        run: { runId: run.id, status: run.status, sealedPrice: run.sealed_price, assessmentCount: run.assessment_count, riskCount: run.risk_count, questionCount: run.question_count, scoringPolicyVersion: run.scoring_policy_version, createdAt: run.created_at },
+        run: { runId: run.id, status: run.status, sealedPrice: run.sealed_price, assessmentCount: assessments.rows.length, riskCount: risks.rows.length, questionCount: risks.rows.filter((row) => Boolean(row.question)).length, scoringPolicyVersion: run.scoring_policy_version, createdAt: run.created_at },
         permission: { owner: permission.owner, assigned: Boolean(assignment), canViewCommercial },
         assignment: assignment ? (() => { const criterionIds = assignments.rows.find((row) => row.id === assignment.id)?.criterion_ids ?? []; const currentScores = scores.rows.filter((row) => row.assignment_id === assignment.id && ["submitted", "superseded"].includes(row.event_type)); const complete = assignment.role !== "observer" && assignment.conflict_status === "clear" && currentScores.length === criterionIds.length; return { assignmentId: assignment.id, role: assignment.role, conflictStatus: assignment.conflict_status, conflictNote: assignment.conflict_note, status: assignment.status, version: assignment.version, criterionIds, complete, overallScore: complete ? currentScores.reduce((sum, row) => sum + Number(row.weighted_contribution), 0) : null }; })() : null,
         criteria: criteria.rows.map((row) => ({ criterionId: row.id, key: row.criterion_key, name: row.name, description: row.description, weight: Number(row.weight), rubricMaximum: rubricMaximum(row.rubric), rubricAnchors: rubricAnchors(row.rubric), priceVisibility: row.price_visibility, humanOnly: row.human_only, requirementIds: row.requirement_ids })),
@@ -315,7 +372,14 @@ export const evaluationEngineRepository = {
          JOIN rfpilot.assessment_evidence ae ON ae.evidence_fragment_id=f.id
          JOIN rfpilot.ai_assessments a ON a.id=ae.assessment_id
          JOIN rfpilot.requirements r ON r.id=a.requirement_id
-         WHERE f.id=ANY($1::uuid[]) AND a.evaluation_run_id=$2 AND r.criterion_id=$3`, [input.evidenceFragmentIds, run.id, input.criterionId],
+         WHERE f.id=ANY($1::uuid[]) AND a.evaluation_run_id=$2 AND r.criterion_id=$3
+           AND ($4::boolean OR r.group_key IS DISTINCT FROM $5)`, [
+          input.evidenceFragmentIds,
+          run.id,
+          input.criterionId,
+          proposalWorkflowSectionEnabled("video_recording"),
+          LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+        ],
       );
       if (allowedEvidence.rows.length !== new Set(input.evidenceFragmentIds).size) throw new EvaluationEngineError("SCORE_CITATION_INVALID", "A score citation is outside this vendor response.");
       const eventId = uuidv7();

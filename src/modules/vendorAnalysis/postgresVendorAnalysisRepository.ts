@@ -11,8 +11,10 @@ import {deterministicParser} from "../knowledgeIngestion/deterministicParser";
 import {liveVendorResponseAnalysis} from "../liveAi/operations";
 import {LIVE_AI_MODEL} from "../liveAi/openAiProvider";
 import {buildRequirements,VendorAnalysisError} from "./domain";
+import {isRetiredProposalWorkflowPath} from "../proposals/domain/workflowSections";
 
 const MAX_EVIDENCE=100,MAX_DOCUMENT_BYTES=20*1024*1024,MAX_FINDINGS=200;
+export const VENDOR_ANALYSIS_INPUT_VERSION="vendor-analysis.v2";
 const PRIVATE_PREFIX="vendor-responses-private/";
 const MIME_BY_EXTENSION:Record<string,string>={
  pdf:"application/pdf",
@@ -64,16 +66,16 @@ export const vendorAnalysisRepository={
   return withPostgresTransaction(async(c)=>{
    const org=await tenant(c,input.organizationMongoId),
     p=await owned(c,input.proposalMongoId,input.actorUserMongoId),
-    key=`vendor_analysis:${input.idempotencyKey}`,
+    key=`vendor_analysis:${VENDOR_ANALYSIS_INPUT_VERSION}:${input.idempotencyKey}`,
     old=await c.query<any>(
-     "SELECT r.*,j.status job_status FROM rfpilot.vendor_analysis_runs r JOIN rfpilot.ai_jobs j ON j.id=r.job_id WHERE r.organization_id=$1 AND r.idempotency_key=$2",
-     [org,key],
+     "SELECT r.*,j.status job_status FROM rfpilot.vendor_analysis_runs r JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$3 WHERE r.organization_id=$1 AND r.idempotency_key=$2",
+     [org,key,VENDOR_ANALYSIS_INPUT_VERSION],
     );
    if(old.rows[0])return{run:old.rows[0],created:false};
    const runId=uuidv7(),jobId=uuidv7();
    await c.query(
-    "INSERT INTO rfpilot.ai_jobs(id,organization_id,proposal_reference_id,job_type,status,idempotency_key,input_reference,input_version,max_attempts,correlation_id,initiator_external_user_id) VALUES($1,$2,$3,'vendor_response_analyze','queued',$4,$5,'vendor-analysis.v1',2,$6,$7)",
-    [jobId,org,p,key,runId,input.correlationId,input.actorUserMongoId],
+    "INSERT INTO rfpilot.ai_jobs(id,organization_id,proposal_reference_id,job_type,status,idempotency_key,input_reference,input_version,max_attempts,correlation_id,initiator_external_user_id) VALUES($1,$2,$3,'vendor_response_analyze','queued',$4,$5,$6,2,$7,$8)",
+    [jobId,org,p,key,runId,VENDOR_ANALYSIS_INPUT_VERSION,input.correlationId,input.actorUserMongoId],
    );
    const run=await c.query<any>(
     "INSERT INTO rfpilot.vendor_analysis_runs(id,organization_id,proposal_reference_id,vendor_response_mongo_id,job_id,actor_external_user_id,status,provider,model,idempotency_key,correlation_id,retention_until) VALUES($1,$2,$3,$4,$5,$6,'queued','openai',$7,$8,$9,now()+interval '30 days') RETURNING *",
@@ -85,7 +87,7 @@ export const vendorAnalysisRepository={
     actorUserMongoId:input.actorUserMongoId,
     jobType:"vendor_response_analyze",
     inputReference:runId,
-    inputVersion:"vendor-analysis.v1",
+    inputVersion:VENDOR_ANALYSIS_INPUT_VERSION,
     correlationId:input.correlationId,
    };
    await c.query(
@@ -99,8 +101,11 @@ export const vendorAnalysisRepository={
   const meta=await withPostgresTransaction(async(c)=>{
    await tenant(c,input.organizationMongoId);
    const r=await c.query<any>(
-    "SELECT r.*,p.external_mongo_id proposal FROM rfpilot.vendor_analysis_runs r JOIN rfpilot.proposal_references p ON p.id=r.proposal_reference_id WHERE r.id=$1 FOR UPDATE",
-    [input.runId],
+    `SELECT r.*,p.external_mongo_id proposal FROM rfpilot.vendor_analysis_runs r
+     JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$2
+     JOIN rfpilot.proposal_references p ON p.id=r.proposal_reference_id
+     WHERE r.id=$1 FOR UPDATE OF r`,
+    [input.runId,VENDOR_ANALYSIS_INPUT_VERSION],
    );
    if(!r.rows[0])throw new VendorAnalysisError("ANALYSIS_RUN_NOT_FOUND","Vendor analysis run was not found.",404);
    if(r.rows[0].status==="succeeded")return r.rows[0];
@@ -231,19 +236,28 @@ export const vendorAnalysisRepository={
    );
   });
  },
- read(input:{
+ async read(input:{
   organizationMongoId:string;
   actorUserMongoId:string;
   proposalMongoId:string;
   vendorResponseMongoId:string;
   runId?:string;
  }){
+  const proposal=await Proposal.findOne({
+   _id:input.proposalMongoId,
+   userId:input.actorUserMongoId,
+   organizationId:input.organizationMongoId,
+  }).lean<any>();
+  if(!proposal)throw new VendorAnalysisError("PROPOSAL_NOT_FOUND","Proposal was not found.",404);
+  const activeRequirementCount=buildRequirements(proposal).length;
   return withPostgresTransaction(async(c)=>{
    await tenant(c,input.organizationMongoId);
    const p=await owned(c,input.proposalMongoId,input.actorUserMongoId),
     run=await c.query<any>(
-     `SELECT * FROM rfpilot.vendor_analysis_runs WHERE proposal_reference_id=$1 AND vendor_response_mongo_id=$2 ${input.runId?"AND id=$3":"AND retention_until>now() ORDER BY created_at DESC LIMIT 1"}`,
-     [p,input.vendorResponseMongoId,...(input.runId?[input.runId]:[])],
+     `SELECT r.* FROM rfpilot.vendor_analysis_runs r
+       JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=${input.runId?"$4":"$3"}
+       WHERE r.proposal_reference_id=$1 AND r.vendor_response_mongo_id=$2 ${input.runId?"AND r.id=$3":"AND r.retention_until>now() ORDER BY r.created_at DESC LIMIT 1"}`,
+     [p,input.vendorResponseMongoId,...(input.runId?[input.runId,VENDOR_ANALYSIS_INPUT_VERSION]:[VENDOR_ANALYSIS_INPUT_VERSION])],
     );
    if(!run.rows[0])throw new VendorAnalysisError("ANALYSIS_RUN_NOT_FOUND","Vendor analysis run was not found.",404);
    const findings=await c.query<any>(
@@ -260,8 +274,15 @@ export const vendorAnalysisRepository={
      )
     :{rows:[]};
    const r=run.rows[0];
+   if(r.status==="succeeded"&&Number(r.requirement_count)!==activeRequirementCount)
+    throw new VendorAnalysisError("ANALYSIS_RUN_NOT_FOUND","Vendor analysis has not been generated for the active proposal requirements.",404);
+   const visibleFindings=findings.rows.filter((finding:any)=>
+    !finding.requirement_path||!isRetiredProposalWorkflowPath(finding.requirement_path));
+   const visibleCitationIds=new Set(visibleFindings.flatMap((finding:any)=>
+    Array.isArray(finding.citations)?finding.citations:[]));
+   const visibleEvidence=evidence.rows.filter((row:any)=>visibleCitationIds.has(row.fragment_id));
    return{
-    evidence:evidence.rows.map((row:any)=>({
+    evidence:visibleEvidence.map((row:any)=>({
      fragmentId:row.fragment_id,
      origin:row.origin,
      locator:row.locator,
@@ -275,14 +296,14 @@ export const vendorAnalysisRepository={
      status:r.status,
      provider:r.provider,
      model:r.model,
-     requirementCount:r.requirement_count,
-     findingCount:r.finding_count,
-     escalationCount:r.escalation_count,
+     requirementCount:activeRequirementCount,
+     findingCount:visibleFindings.length,
+     escalationCount:visibleFindings.filter((finding:any)=>finding.needs_human_review).length,
      safeErrorCode:r.safe_error_code,
      createdAt:r.created_at,
      completedAt:r.completed_at,
     },
-    findings:findings.rows.map((finding:any)=>({
+    findings:visibleFindings.map((finding:any)=>({
      ordinal:finding.ordinal,
      kind:finding.kind,
      requirementPath:finding.requirement_path,

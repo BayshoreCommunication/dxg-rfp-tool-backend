@@ -1,4 +1,8 @@
 import type{PoolClient}from"pg";import{v7 as uuidv7}from"uuid";import{withPostgresTransaction}from"../../../config/postgres";import{deriveWorkflowState,ProposalWorkflowError,readiness,type WorkflowFacts,type WorkflowStep}from"./domain";import Proposal from"../../../modal/proposalsModel";
+import{PROPOSAL_CONTEXT_INPUT_VERSION}from"../proposalContext/domain";
+import{PROPOSAL_DRAFT_INPUT_VERSION}from"../proposalDraft/domain";
+import{PROPOSAL_ANALYSIS_VERSION}from"../guidance/domain";
+import{CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,proposalWorkflowSectionEnabled}from"../proposals/domain/workflowSections";
 // Whether the RFP has gone out lives in Mongo with the rest of the proposal,
 // not in the AI domain, so the Publish step could never read as done from
 // Postgres alone. Read here rather than in the SQL facts for that reason.
@@ -9,20 +13,103 @@ const publishStatus=async(proposalMongoId:string,actorUserMongoId:string):Promis
 type WorkflowRow={id:string;status:string;current_step:WorkflowStep;updated_at:Date};type FactsRow={source_count:number;ready_source_count:number;context_status:string|null;reviewed_count:number;applied_count:number;draft_status:string|null;gap_count:number|null;guidance_count:number|null;guidance_blocking_count:number|null;open_question_count:number;answered_question_count:number;accepted_section_count:number;rejected_section_count:number};
 const tenant=async(c:PoolClient,mongoId:string)=>{await c.query("SELECT set_config('app.organization_mongo_id',$1,true)",[mongoId]);const o=await c.query<{id:string}>("SELECT id FROM rfpilot.organizations WHERE external_mongo_id=$1 AND status='active'",[mongoId]);if(!o.rows[0])throw new ProposalWorkflowError("ORGANIZATION_NOT_READY","Organization data foundation is unavailable.",503);await c.query("SELECT set_config('app.organization_id',$1,true)",[o.rows[0].id]);return o.rows[0].id;};
 const proposal=async(c:PoolClient,org:string,proposalMongoId:string,owner:string)=>{const p=await c.query<{id:string}>(`SELECT p.id FROM rfpilot.proposal_references p JOIN rfpilot.users u ON u.id=p.owner_user_id WHERE p.organization_id=$1 AND p.external_mongo_id=$2 AND u.external_mongo_id=$3`,[org,proposalMongoId,owner]);if(!p.rows[0])throw new ProposalWorkflowError("PROPOSAL_NOT_FOUND","Proposal was not found.",404);return p.rows[0].id;};
-const facts=async(c:PoolClient,org:string,pid:string)=>{const r=await c.query<FactsRow>(`SELECT
- (SELECT count(*)::int FROM rfpilot.document_sources WHERE organization_id=$1 AND proposal_reference_id=$2 AND status<>'deleted') source_count,
- (SELECT count(*)::int FROM rfpilot.document_sources WHERE organization_id=$1 AND proposal_reference_id=$2 AND status='ready') ready_source_count,
- (SELECT status FROM rfpilot.proposal_context_runs WHERE organization_id=$1 AND proposal_reference_id=$2 ORDER BY created_at DESC LIMIT 1) context_status,
- (SELECT count(*)::int FROM rfpilot.candidate_review_decisions d JOIN rfpilot.candidate_review_sets v ON v.id=d.review_set_id WHERE v.organization_id=$1 AND v.proposal_reference_id=$2 AND d.decision<>'pending') reviewed_count,
- (SELECT count(*)::int FROM rfpilot.candidate_application_items i JOIN rfpilot.candidate_applications a ON a.id=i.application_id WHERE a.organization_id=$1 AND a.proposal_reference_id=$2 AND a.status='applied') applied_count,
- (SELECT status FROM rfpilot.proposal_draft_runs WHERE organization_id=$1 AND proposal_reference_id=$2 ORDER BY created_at DESC LIMIT 1) draft_status,
- (SELECT gap_count::int FROM rfpilot.proposal_draft_runs WHERE organization_id=$1 AND proposal_reference_id=$2 AND status='succeeded' ORDER BY created_at DESC LIMIT 1) gap_count,
- (SELECT count(*)::int FROM rfpilot.guidance_reports WHERE organization_id=$1 AND proposal_reference_id=$2) guidance_count,
- (SELECT blocking_count::int FROM rfpilot.guidance_reports WHERE organization_id=$1 AND proposal_reference_id=$2 ORDER BY created_at DESC LIMIT 1) guidance_blocking_count,
- (SELECT count(*)::int FROM rfpilot.clarification_questions WHERE organization_id=$1 AND proposal_reference_id=$2 AND status='open') open_question_count,
- (SELECT count(*)::int FROM rfpilot.clarification_questions WHERE organization_id=$1 AND proposal_reference_id=$2 AND status='answered') answered_question_count,
- (SELECT count(*)::int FROM rfpilot.proposal_draft_section_decisions d JOIN rfpilot.proposal_draft_runs dr ON dr.id=d.run_id WHERE dr.organization_id=$1 AND dr.proposal_reference_id=$2 AND d.decision='accepted') accepted_section_count,
- (SELECT count(*)::int FROM rfpilot.proposal_draft_section_decisions d JOIN rfpilot.proposal_draft_runs dr ON dr.id=d.run_id WHERE dr.organization_id=$1 AND dr.proposal_reference_id=$2 AND d.decision='rejected') rejected_section_count`,[org,pid]);const x=r.rows[0]??{};return{sourceCount:x.source_count??0,readySourceCount:x.ready_source_count??0,contextStatus:x.context_status??null,reviewedCount:x.reviewed_count??0,appliedCount:x.applied_count??0,draftStatus:x.draft_status??null,gapCount:x.gap_count??0,guidanceCount:x.guidance_count??0,guidanceBlockingCount:x.guidance_blocking_count??0,openQuestionCount:x.open_question_count??0,answeredQuestionCount:x.answered_question_count??0,acceptedSectionCount:x.accepted_section_count??0,rejectedSectionCount:x.rejected_section_count??0};};
+const facts=async(c:PoolClient,org:string,pid:string)=>{
+ const r=await c.query<FactsRow>(`WITH latest_context AS (
+  SELECT r.id,r.status FROM rfpilot.proposal_context_runs r
+  JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$3
+  WHERE r.organization_id=$1 AND r.proposal_reference_id=$2
+  ORDER BY r.created_at DESC,r.id DESC LIMIT 1
+ ), latest_draft AS (
+  SELECT r.id,r.status FROM rfpilot.proposal_draft_runs r
+  JOIN rfpilot.ai_jobs j ON j.id=r.job_id AND j.input_version=$4
+  WHERE r.organization_id=$1 AND r.proposal_reference_id=$2 AND r.section_scope IS NULL
+  ORDER BY r.created_at DESC,r.id DESC LIMIT 1
+ ), latest_guidance AS (
+  SELECT r.blocking_count FROM rfpilot.guidance_reports r
+  WHERE r.organization_id=$1 AND r.proposal_reference_id=$2 AND r.engine_version=$5
+  ORDER BY r.created_at DESC,r.id DESC LIMIT 1
+ ) SELECT
+  (SELECT count(*)::int FROM rfpilot.document_sources WHERE organization_id=$1 AND proposal_reference_id=$2 AND status<>'deleted') source_count,
+  (SELECT count(*)::int FROM rfpilot.document_sources WHERE organization_id=$1 AND proposal_reference_id=$2 AND status='ready') ready_source_count,
+  (SELECT status FROM latest_context) context_status,
+  (SELECT count(*)::int FROM rfpilot.candidate_review_decisions d
+    JOIN rfpilot.candidate_review_sets v ON v.id=d.review_set_id
+    JOIN rfpilot.proposal_context_runs cr ON cr.id=v.run_id
+    JOIN rfpilot.ai_jobs cj ON cj.id=cr.job_id AND cj.input_version=$3
+    JOIN rfpilot.proposal_context_operations o ON o.id=d.operation_id
+   WHERE v.organization_id=$1 AND v.proposal_reference_id=$2 AND d.decision<>'pending'
+     AND ($6::boolean OR NOT(o.path=$7 OR o.path LIKE $7||'/%' OR o.path=$8 OR o.path LIKE $8||'/%'))) reviewed_count,
+  (SELECT count(*)::int FROM rfpilot.candidate_application_items i
+    JOIN rfpilot.candidate_applications a ON a.id=i.application_id
+    JOIN rfpilot.proposal_context_runs cr ON cr.id=a.run_id
+    JOIN rfpilot.ai_jobs cj ON cj.id=cr.job_id AND cj.input_version=$3
+    JOIN rfpilot.proposal_context_operations o ON o.id=i.operation_id
+   WHERE a.organization_id=$1 AND a.proposal_reference_id=$2 AND a.status='applied'
+     AND ($6::boolean OR NOT(o.path=$7 OR o.path LIKE $7||'/%' OR o.path=$8 OR o.path LIKE $8||'/%'))) applied_count,
+  (SELECT status FROM latest_draft) draft_status,
+  (SELECT count(*)::int FROM rfpilot.proposal_draft_gaps g
+   WHERE g.run_id=(SELECT id FROM latest_draft WHERE status='succeeded')
+     AND ($6::boolean OR NOT EXISTS(
+       SELECT 1 FROM unnest(g.paths) retired(path)
+       WHERE retired.path=$7 OR retired.path LIKE $7||'/%'
+         OR retired.path=$8 OR retired.path LIKE $8||'/%'
+     ))) gap_count,
+  (SELECT count(*)::int FROM rfpilot.guidance_reports
+   WHERE organization_id=$1 AND proposal_reference_id=$2 AND engine_version=$5) guidance_count,
+  (SELECT blocking_count::int FROM latest_guidance) guidance_blocking_count,
+  (SELECT count(*)::int FROM rfpilot.clarification_questions q
+   LEFT JOIN rfpilot.proposal_context_runs cr ON cr.id=q.context_run_id
+   LEFT JOIN rfpilot.ai_jobs cj ON cj.id=cr.job_id AND cj.input_version=$3
+   WHERE q.organization_id=$1 AND q.proposal_reference_id=$2 AND q.status='open'
+     AND (q.context_run_id IS NULL OR cj.id IS NOT NULL)
+     AND ($6::boolean OR NOT EXISTS(
+       SELECT 1 FROM jsonb_array_elements_text(q.canonical_paths) retired(path)
+       WHERE retired.path=$7 OR retired.path LIKE $7||'/%'
+         OR retired.path=$8 OR retired.path LIKE $8||'/%'
+     ))) open_question_count,
+  (SELECT count(*)::int FROM rfpilot.clarification_questions q
+   LEFT JOIN rfpilot.proposal_context_runs cr ON cr.id=q.context_run_id
+   LEFT JOIN rfpilot.ai_jobs cj ON cj.id=cr.job_id AND cj.input_version=$3
+   WHERE q.organization_id=$1 AND q.proposal_reference_id=$2 AND q.status='answered'
+     AND (q.context_run_id IS NULL OR cj.id IS NOT NULL)
+     AND ($6::boolean OR NOT EXISTS(
+       SELECT 1 FROM jsonb_array_elements_text(q.canonical_paths) retired(path)
+       WHERE retired.path=$7 OR retired.path LIKE $7||'/%'
+         OR retired.path=$8 OR retired.path LIKE $8||'/%'
+     ))) answered_question_count,
+  (SELECT count(*)::int FROM rfpilot.proposal_draft_section_decisions d
+   WHERE d.run_id=(SELECT id FROM latest_draft WHERE status='succeeded') AND d.decision='accepted'
+     AND EXISTS(
+       SELECT 1 FROM rfpilot.proposal_draft_sections s
+       JOIN rfpilot.proposal_draft_paragraphs p ON p.section_id=s.id
+       WHERE s.run_id=d.run_id AND s.key=d.section_key
+         AND ($6::boolean OR NOT EXISTS(
+           SELECT 1 FROM rfpilot.proposal_draft_citations citation
+           WHERE citation.paragraph_id=p.id
+             AND (citation.canonical_path=$7 OR citation.canonical_path LIKE $7||'/%'
+               OR citation.canonical_path=$8 OR citation.canonical_path LIKE $8||'/%')
+         ))
+     )) accepted_section_count,
+  (SELECT count(*)::int FROM rfpilot.proposal_draft_section_decisions d
+   WHERE d.run_id=(SELECT id FROM latest_draft WHERE status='succeeded') AND d.decision='rejected'
+     AND EXISTS(
+       SELECT 1 FROM rfpilot.proposal_draft_sections s
+       JOIN rfpilot.proposal_draft_paragraphs p ON p.section_id=s.id
+       WHERE s.run_id=d.run_id AND s.key=d.section_key
+         AND ($6::boolean OR NOT EXISTS(
+           SELECT 1 FROM rfpilot.proposal_draft_citations citation
+           WHERE citation.paragraph_id=p.id
+             AND (citation.canonical_path=$7 OR citation.canonical_path LIKE $7||'/%'
+               OR citation.canonical_path=$8 OR citation.canonical_path LIKE $8||'/%')
+         ))
+     )) rejected_section_count`,[
+  org,pid,PROPOSAL_CONTEXT_INPUT_VERSION,PROPOSAL_DRAFT_INPUT_VERSION,
+  PROPOSAL_ANALYSIS_VERSION,proposalWorkflowSectionEnabled("video_recording"),
+  LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
+ ]);
+ const x=r.rows[0]??{};
+ return{sourceCount:x.source_count??0,readySourceCount:x.ready_source_count??0,contextStatus:x.context_status??null,reviewedCount:x.reviewed_count??0,appliedCount:x.applied_count??0,draftStatus:x.draft_status??null,gapCount:x.gap_count??0,guidanceCount:x.guidance_count??0,guidanceBlockingCount:x.guidance_blocking_count??0,openQuestionCount:x.open_question_count??0,answeredQuestionCount:x.answered_question_count??0,acceptedSectionCount:x.accepted_section_count??0,rejectedSectionCount:x.rejected_section_count??0};
+};
 // Presentation is built here rather than inside the transaction: it is pure,
 // and holding a Postgres connection open while deriving labels is wasteful.
 const present=(row:WorkflowRow,postgresFacts:Omit<WorkflowFacts,"publishStatus">,publish:string|null)=>{

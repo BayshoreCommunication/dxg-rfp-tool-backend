@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 const { proposalDraftEvidence, supplementExplicitAttendanceCounts, supplementExplicitDateRanges, supplementExplicitEventFormat, supplementExplicitPrimaryContact, validateDraftOutput } = require("../src/modules/liveAi/operations");
 const {
   identifyGapRecoveryPaths,
+  sanitizeExtractionIssues,
   extractionConflictIssues,
   normalizeAndDeduplicateExtractionCandidates,
   normalizeExplicitCalendarDate,
@@ -12,7 +13,7 @@ const {
   prepareSourceExtractionEvidence,
   SOURCE_EXTRACTION_INSTRUCTIONS,
 } = require("../src/modules/liveAi/extractionPipeline");
-const { approvedCandidatePaths, candidateFieldMetadata } = require("../src/modules/candidateApplication/canonicalMapping");
+const { approvedCandidatePaths, activeCandidatePaths, candidateFieldMetadata } = require("../src/modules/candidateApplication/canonicalMapping");
 
 test("explicit attendance counts supplement omitted model fields without overriding them", () => {
   const evidence = [{
@@ -267,12 +268,13 @@ test("equivalent candidates deduplicate with merged citations while genuine disa
 
 test("every approved field receives representation guidance from the canonical mapping", () => {
   assert.deepEqual(Object.keys(candidateFieldMetadata).sort(), [...approvedCandidatePaths].sort());
-  for (const path of approvedCandidatePaths) {
+  for (const path of activeCandidatePaths) {
     assert.ok(SOURCE_EXTRACTION_INSTRUCTIONS.includes(path), path);
     assert.ok(candidateFieldMetadata[path].valueKind, path);
   }
-  for (const phrase of ["physical attendance", "live remote audience", "load-in", "proposal/response submission deadline", "camera-operator count"])
+  for (const phrase of ["physical attendance", "live remote audience", "load-in", "proposal/response submission deadline"])
     assert.match(SOURCE_EXTRACTION_INSTRUCTIONS, new RegExp(phrase.replace(/[/-]/g, "[ /-]"), "i"));
+  assert.equal(SOURCE_EXTRACTION_INSTRUCTIONS.includes("/content/videoRecordingStep"), false);
 });
 
 test("gap recovery is one field-aware batch and only targets relevant absent high-value fields", () => {
@@ -280,7 +282,15 @@ test("gap recovery is one field-aware batch and only targets relevant absent hig
   const paths = identifyGapRecoveryPaths(evidence, [{ path: "/content/venueSchedule/venueName", value: "Lakeside Grand Chicago", confidence: 0.9, citations: ["e"] }]);
   assert.ok(!paths.includes("/content/venueSchedule/venueName"));
   assert.ok(paths.includes("/content/budget/proposalSubmissionDueDate"));
-  assert.ok(paths.includes("/content/videoRecordingStep/videoRecordingRequired"));
+  assert.ok(!paths.some((path) => path.startsWith("/content/videoRecordingStep")));
+});
+
+test("extraction suppresses whole issues touched by the retired root", () => {
+  assert.deepEqual(sanitizeExtractionIssues([
+    { code: "MIXED", severity: "question", paths: ["/content/event/eventName", "/content/videoRecordingStep/videoRecordingRequired"] },
+    { code: "ACTIVE", severity: "question", paths: ["/content/event/eventName"] },
+    { code: "EMPTY", severity: "info", paths: [] },
+  ]), [{ code: "ACTIVE", severity: "question", paths: ["/content/event/eventName"] }]);
 });
 
 test("resolved missing-field issues are reconciled before they can create redundant questions", () => {
@@ -315,6 +325,7 @@ test("proposal draft evidence includes every structured proposal section and nes
     venueSchedule: { venueName: "Hyatt Regency Chicago" },
     hybridVirtual: { virtualAttendeeEstimate: "1200", closedCaptions: { closedCaptions: "YES" } },
     videoRecordingStep: { numberOfCameras: "3" },
+    roomByRoom: [{ roomFunction: "General Session", videoRecording: { videoRecording: "Yes" }, cameras: { camerasQty: "2" } }],
     budget: { proposalSubmissionDueDate: "2027-02-12", estimatedAvBudget: "250k-500k" },
     contactInfo: { primaryContactName: "Avery Morgan" },
     _id: "mongo-id",
@@ -326,7 +337,12 @@ test("proposal draft evidence includes every structured proposal section and nes
   assert.equal(byId.get("/content/event/attendees"), "650");
   assert.equal(byId.get("/content/hybridVirtual/virtualAttendeeEstimate"), "1200");
   assert.equal(byId.get("/content/hybridVirtual/closedCaptions/closedCaptions"), "YES");
-  assert.equal(byId.get("/content/videoRecordingStep/numberOfCameras"), "3");
+  assert.equal(byId.has("/content/videoRecordingStep/numberOfCameras"), false);
+  assert.deepEqual(byId.get("/content/roomByRoom"), [{
+    roomFunction: "General Session",
+    videoRecording: { videoRecording: "Yes" },
+    cameras: { camerasQty: "2" },
+  }]);
   assert.equal(byId.get("/content/budget/proposalSubmissionDueDate"), "2027-02-12");
   assert.equal(byId.get("/content/contactInfo/primaryContactName"), "Avery Morgan");
   assert.equal(byId.has("/content/_id"), false);

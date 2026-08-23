@@ -1,7 +1,7 @@
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), path = require("node:path");
 const { vendorAnalysisEnabled, buildRequirements, VendorAnalysisError } = require("../src/modules/vendorAnalysis/domain");
-const { approvedCandidatePaths } = require("../src/modules/candidateApplication/canonicalMapping");
+const { approvedCandidatePaths, activeCandidatePaths } = require("../src/modules/candidateApplication/canonicalMapping");
 
 const read = (relative) => fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
 const withEnv = (patch, fn) => {
@@ -40,10 +40,11 @@ test("buildRequirements caps path-derived requirements at 80 preferring priority
   assert.ok(approvedCandidatePaths.length > 80, "whitelist is large enough to exercise the cap");
   const requirements = buildRequirements(proposal);
   assert.equal(requirements.length, 80);
-  const priority = new Set(["event", "venueSchedule", "videoRecordingStep", "venue", "hybridVirtual"]);
-  const prioritized = approvedCandidatePaths.filter((candidatePath) => priority.has(candidatePath.replace(/^\/content\//, "").split("/")[0]));
+  const priority = new Set(["event", "venueSchedule", "venue", "hybridVirtual"]);
+  const prioritized = activeCandidatePaths.filter((candidatePath) => priority.has(candidatePath.replace(/^\/content\//, "").split("/")[0]));
   const kept = new Set(requirements.map((item) => item.path));
   for (const candidatePath of prioritized) assert.ok(kept.has(candidatePath), `priority path survives the cap: ${candidatePath}`);
+  assert.ok(!requirements.some((item) => item.path.startsWith("/content/videoRecordingStep")));
 });
 
 test("buildRequirements appends one requirement per roomByRoom entry", () => {

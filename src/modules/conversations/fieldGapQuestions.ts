@@ -11,6 +11,10 @@ import {
   importantFieldPaths,
   venueNeedsOperationalFollowUp,
 } from "./domain";
+import {
+  CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
+  LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,
+} from "../proposals/domain/workflowSections";
 
 /*
  * Questions used to originate only from an extraction run, so a proposal
@@ -72,8 +76,22 @@ export const syncFieldGapQuestions = async (
   }
 
   const asked = await c.query<{ n: number }>(
-    "SELECT count(*)::int n FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND status<>'superseded' AND issue_code LIKE 'MISSING_FIELD:%'",
-    [proposalReferenceId],
+    `SELECT count(*)::int n
+       FROM rfpilot.clarification_questions q
+      WHERE q.proposal_reference_id=$1
+        AND q.status<>'superseded'
+        AND q.issue_code LIKE 'MISSING_FIELD:%'
+        AND NOT EXISTS(
+          SELECT 1
+            FROM jsonb_array_elements_text(coalesce(q.canonical_paths,'[]'::jsonb)) path
+           WHERE path.value=$2 OR path.value LIKE $2||'/%'
+              OR path.value=$3 OR path.value LIKE $3||'/%'
+        )`,
+    [
+      proposalReferenceId,
+      LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,
+      CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
+    ],
   );
   // The beginner intake has a lifetime question budget, not a moving
   // "currently open" budget. Otherwise every answer frees a slot and the

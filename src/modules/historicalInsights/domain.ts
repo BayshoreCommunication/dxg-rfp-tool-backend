@@ -1,6 +1,7 @@
 import { aiRuntimeAuthorized } from "../../../config/aiEnvironment";
+import { proposalWorkflowSectionEnabled } from "../proposals/domain/workflowSections";
 
-export const HISTORICAL_INSIGHTS_VERSION = "historical-insights.v1";
+export const HISTORICAL_INSIGHTS_VERSION = "historical-insights.v2";
 export const MAX_HISTORICAL_REFERENCES = 5;
 
 export class HistoricalInsightsError extends Error {
@@ -82,7 +83,7 @@ type SectionDefinition = {
 
 // Only structural presence is compared. Contact data, client identity, free-form
 // private notes, uploads, exact values, and every budget amount are excluded.
-const SECTIONS: readonly SectionDefinition[] = [
+const ALL_SECTIONS: readonly SectionDefinition[] = [
   {
     key: "event",
     label: "Event overview",
@@ -159,7 +160,13 @@ const SECTIONS: readonly SectionDefinition[] = [
     category: "evaluation_criteria",
     question: "Should evaluation criteria and commercial milestones be clarified?",
   },
-] as const;
+];
+
+const SECTIONS: readonly SectionDefinition[] = ALL_SECTIONS.filter(
+  (section) =>
+    section.key !== "videoRecordingStep" ||
+    proposalWorkflowSectionEnabled("video_recording"),
+);
 
 const record = (value: unknown): ProposalRecord =>
   value && typeof value === "object" && !Array.isArray(value)

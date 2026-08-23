@@ -164,13 +164,24 @@ test("worker completion advances the PostgreSQL graph and job types are durable"
 
 test("retry, cancellation, request idempotency, and precise stale reasons are explicit", () => {
   const repository = read("src/modules/comparisonOrchestration/postgresComparisonOrchestrationRepository.ts");
-  for (const reason of ["proposal_version_changed", "requirement_set_superseded", "evaluation_matrix_superseded", "submission_version_available", "source_replaced", "evidence_review_changed", "evaluator_scores_changed", "evaluation_incomplete", "extraction_policy_changed", "assessment_schema_changed", "scoring_policy_changed", "commercial_policy_changed", "recommendation_policy_changed"])
+  for (const reason of ["proposal_version_changed", "requirement_set_superseded", "evaluation_matrix_superseded", "submission_version_available", "source_replaced", "evidence_review_changed", "evaluator_scores_changed", "evaluation_incomplete", "extraction_policy_changed", "assessment_schema_changed", "risk_policy_changed", "scoring_policy_changed", "commercial_policy_changed", "comparison_schema_changed", "recommendation_policy_changed"])
     assert.match(repository, new RegExp(reason));
   assert.match(repository, /cancellation_requested_at/);
   assert.match(repository, /comparison\.retry:/);
   assert.match(repository, /attempt_count=0/);
   assert.match(repository, /comparison-request:/);
+  assert.match(repository, /comparisonChecksum\(input\.idempotencyKey\)/);
+  assert.match(repository, /REQUIREMENT_GENERATOR_VERSION/);
   assert.match(repository, /IDEMPOTENCY_CONFLICT/);
+});
+
+test("comparison identity ignores dormant roots and bookkeeping but preserves room recording", () => {
+  const { activeProposalWorkflowFingerprintContent } = require("../src/modules/proposals/domain/workflowSections");
+  const base = { __v: 1, version: 4, updatedAt: "old", event: { eventName: "Summit" }, roomByRoom: [{ videoRecording: { videoRecording: "No" } }], videoRecordingStep: { numberOfCameras: "2" } };
+  const hiddenOnly = { ...base, __v: 2, version: 5, updatedAt: "new", candidateApplicationIds: ["legacy"], videoRecordingStep: { numberOfCameras: "99" } };
+  assert.equal(comparisonChecksum(activeProposalWorkflowFingerprintContent(base)), comparisonChecksum(activeProposalWorkflowFingerprintContent(hiddenOnly)));
+  const roomChanged = { ...hiddenOnly, roomByRoom: [{ videoRecording: { videoRecording: "Yes" } }] };
+  assert.notEqual(comparisonChecksum(activeProposalWorkflowFingerprintContent(base)), comparisonChecksum(activeProposalWorkflowFingerprintContent(roomChanged)));
 });
 
 test("comparison APIs expose persisted projections and never accept an AI winner", () => {

@@ -10,11 +10,12 @@ const {
 
 test("versioned extraction registry binds immutable prompt and output schema identifiers", () => {
   const prompt = versionedExtractionPromptRegistry.current();
-  assert.equal(prompt.id, "legacy-proposal-extraction.v1");
-  assert.equal(prompt.version, 1);
+  assert.equal(prompt.id, "active-proposal-extraction.v2");
+  assert.equal(prompt.version, 2);
   assert.equal(prompt.outputSchemaId, "legacy-proposal-extraction-result.v1");
   assert.match(prompt.content, /Do NOT invent or guess values/);
   assert.match(prompt.content, /"contact"/);
+  assert.doesNotMatch(prompt.content, /"videoRecordingStep"/);
 });
 
 test("legacy extraction validator accepts supported partial proposal sections", () => {

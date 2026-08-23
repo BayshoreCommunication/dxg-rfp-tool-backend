@@ -70,7 +70,7 @@ test("non-reference errors are returned without a repair or retry", async () => 
   assert.equal(repairs, 0);
 });
 
-test("reference repair revalidates ownership before synchronizing metadata", async () => {
+test("reference repair revalidates ownership and synchronizes the active fingerprint", async () => {
   let synchronized;
   const updatedAt = new Date("2026-07-29T10:00:00.000Z");
   const ensure = createEnsureConversationProposalReference({
@@ -95,12 +95,56 @@ test("reference repair revalidates ownership before synchronizing metadata", asy
   assert.equal(synchronized.organizationMongoId, ctx.organizationMongoId);
   assert.equal(synchronized.ownerUserMongoId, ctx.actorUserMongoId);
   assert.equal(synchronized.proposalMongoId, id);
-  assert.equal(synchronized.sourceVersion, "9");
+  assert.equal(synchronized.sourceVersion, synchronized.sourceChecksum);
   assert.match(synchronized.sourceChecksum, /^[0-9a-f]{64}$/);
-  assert.equal(synchronized.sourceUpdatedAt, updatedAt);
+  assert.equal(synchronized.sourceUpdatedAt, undefined);
   assert.equal(synchronized.correlationId, ctx.correlationId);
   assert.equal(synchronized.eventType, "proposal.reference.backfilled");
   assert.equal(JSON.stringify(synchronized).includes("proposal content"), false);
+});
+
+test("reference repair ignores dormant writes but detects room recording changes", async () => {
+  let proposal = {
+    _id: id,
+    __v: 1,
+    updatedAt: new Date("2026-01-01"),
+    status: "unsubmitted",
+    event: { eventName: "Summit" },
+    videoRecordingStep: { numberOfCameras: "3" },
+    roomByRoom: [{ videoRecording: { videoRecording: "No" } }],
+  };
+  const synchronized = [];
+  const ensure = createEnsureConversationProposalReference({
+    findOwnedProposal: async () => proposal,
+    synchronize: async input => {
+      synchronized.push(input);
+      return {
+        kind: "synchronized",
+        proposalReferenceId: "reference",
+        outboxEventId: "event",
+        referenceCreated: false,
+        outboxCreated: false,
+      };
+    },
+  });
+
+  await ensure(ctx, id);
+  proposal = {
+    ...proposal,
+    __v: 2,
+    updatedAt: new Date("2026-02-01"),
+    videoRecordingStep: { numberOfCameras: "99" },
+  };
+  await ensure(ctx, id);
+  proposal = {
+    ...proposal,
+    roomByRoom: [{ videoRecording: { videoRecording: "Yes" } }],
+  };
+  await ensure(ctx, id);
+
+  assert.equal(synchronized[0].sourceChecksum, synchronized[1].sourceChecksum);
+  assert.notEqual(synchronized[1].sourceChecksum, synchronized[2].sourceChecksum);
+  assert.equal(synchronized.every(input => input.sourceVersion === input.sourceChecksum), true);
 });
 
 test("missing or differently owned Mongo proposal remains not found", async () => {
@@ -144,7 +188,7 @@ test("conversation endpoints use the lazy repair wrapper", () => {
     "userId: ctx.actorUserMongoId",
     "organizationId: ctx.organizationMongoId",
     "isArchived: { $ne: true }",
-    '.select("_id __v version updatedAt")',
+    "activeProposalWorkflowFingerprintContent(proposal)",
   ])
     assert.ok(repair.includes(guard), guard);
   assert.equal(
@@ -152,15 +196,7 @@ test("conversation endpoints use the lazy repair wrapper", () => {
     false,
     "unsubmitted offline drafts must remain available to their owner",
   );
-  for (const forbidden of [
-    " event ",
-    " contact ",
-    " uploads ",
-    " roomByRoom ",
-  ])
-    assert.equal(
-      repair.includes(`.select("_id __v version updatedAt${forbidden}`),
-      false,
-      forbidden,
-    );
+  assert.equal(repair.includes("sourceVersion: checksum"), true);
+  assert.equal(repair.includes("sourceChecksum: checksum"), true);
+  assert.equal(repair.includes("sourceUpdatedAt:"), false);
 });

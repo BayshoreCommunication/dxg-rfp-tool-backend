@@ -1,9 +1,14 @@
 import { checksum } from "./domain";
 import type { GeneratedCriterion, GeneratedRequirement, RequirementKind } from "./domain";
+import {
+  activeProposalWorkflowContent,
+  LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+  proposalWorkflowSectionEnabled,
+} from "../proposals/domain/workflowSections";
 
-export const REQUIREMENT_GENERATOR_VERSION = "requirement-registry.v2";
+export const REQUIREMENT_GENERATOR_VERSION = "requirement-registry.v3";
 
-const VENDOR_SCOPE_ROOTS = [
+const ALL_VENDOR_SCOPE_ROOTS = [
   "venueSchedule",
   "roomByRoom",
   "production",
@@ -12,6 +17,11 @@ const VENDOR_SCOPE_ROOTS = [
   "videoRecordingStep",
   "venue",
 ] as const;
+const VENDOR_SCOPE_ROOTS = ALL_VENDOR_SCOPE_ROOTS.filter(
+  (root) =>
+    root !== LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY ||
+    proposalWorkflowSectionEnabled("video_recording"),
+);
 const EVENT_REQUIREMENT_FIELDS = new Set([
   "attendees",
   "attendeeCount",
@@ -148,6 +158,7 @@ export const generateRequirements = (
   proposal: Record<string, unknown>,
   rendered: RenderedParagraph[] = [],
 ): GeneratedRequirement[] => {
+  const activeProposal = activeProposalWorkflowContent(proposal);
   const output: GeneratedRequirement[] = [];
   const visit = (value: unknown, segments: string[]) => {
     const leaf = segments.at(-1) ?? "";
@@ -201,12 +212,12 @@ export const generateRequirements = (
       ordinal: output.length,
     });
   };
-  const event = proposal.event && typeof proposal.event === "object" ? proposal.event as Record<string, unknown> : {};
+  const event = activeProposal.event && typeof activeProposal.event === "object" ? activeProposal.event as Record<string, unknown> : {};
   [...EVENT_REQUIREMENT_FIELDS].sort().forEach((field) => visit(event[field], ["event", field]));
-  VENDOR_SCOPE_ROOTS.forEach((root) => visit(proposal[root], [root]));
-  const budget = proposal.budget && typeof proposal.budget === "object" ? proposal.budget as Record<string, unknown> : {};
+  VENDOR_SCOPE_ROOTS.forEach((root) => visit(activeProposal[root], [root]));
+  const budget = activeProposal.budget && typeof activeProposal.budget === "object" ? activeProposal.budget as Record<string, unknown> : {};
   [...BUDGET_REQUIREMENT_FIELDS].sort().forEach((field) => visit(budget[field], ["budget", field]));
-  const uploads = proposal.uploads && typeof proposal.uploads === "object" ? proposal.uploads as Record<string, unknown> : {};
+  const uploads = activeProposal.uploads && typeof activeProposal.uploads === "object" ? activeProposal.uploads as Record<string, unknown> : {};
   [...CONFIDENTIALITY_REQUIREMENT_FIELDS].sort().forEach((field) => visit(uploads[field], ["uploads", field]));
   for (const paragraph of rendered) {
     const normalized = paragraph.text.trim();

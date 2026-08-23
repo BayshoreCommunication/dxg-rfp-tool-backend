@@ -3,6 +3,7 @@ import {executeOpenAiJson} from "./openAiProvider";
 import type {ProviderAttemptContext} from "./attemptLedger";
 import {DRAFT_SECTION_KEYS,type DraftSectionKey} from "../proposalDraft/domain";
 import {withEventZoneScheduleTimes} from "./scheduleTimes";
+import {activeProposalWorkflowContent} from "../proposals/domain/workflowSections";
 import {
  extractRequirementCandidates,
  prepareFixtureExtractionEvidence,
@@ -112,11 +113,12 @@ const withheldUnconfirmedWeightings=(proposal:Record<string,unknown>):Record<str
 };
 
 export const proposalDraftEvidence=(proposal:Record<string,unknown>)=>{
+ const activeProposal=activeProposalWorkflowContent(proposal);
  // Schedule fields are stored as UTC instants. Presented raw, the model prints
  // the UTC clock face and labels it with the event's zone, so the RFP quotes
  // vendors the wrong show times. Convert to the venue reading first.
- const timeZone=(proposal.venueSchedule as Record<string,unknown>|undefined)?.timeZone;
- return Object.entries(withheldUnconfirmedWeightings(proposal))
+ const timeZone=(activeProposal.venueSchedule as Record<string,unknown>|undefined)?.timeZone;
+ return Object.entries(withheldUnconfirmedWeightings(activeProposal))
   .filter(([section])=>!section.startsWith("_")&&!["userId","organizationId","status","createdAt","updatedAt","version"].includes(section))
   .flatMap(([section,value])=>flattenProposalEvidence(withEventZoneScheduleTimes(value,timeZone),`/content/${section}`));
 };

@@ -48,7 +48,7 @@ test("selected proposal knowledge exposes only bounded planning sections", () =>
   assert.equal(snapshot.sections.production.audio, "Line array");
   assert.equal(snapshot.sections.hybridVirtual.streamingPlatform, "Zoom Webinar");
   assert.equal(snapshot.sections.contentCreative.presentationManagement, "Required");
-  assert.equal(snapshot.sections.videoRecordingStep.videoRecordingRequired, "YES");
+  assert.equal("videoRecordingStep" in snapshot.sections, false);
   assert.equal(snapshot.sections.venue.riggingRequired, "YES");
   assert.equal(snapshot.sections.budget.budgetTier, "$250k-$500k");
   assert.equal("contact" in snapshot.sections, false);
@@ -162,11 +162,11 @@ test("proposal chat revalidates ownership and tenant before selecting only appro
     "production",
     "hybridVirtual",
     "contentCreative",
-    "videoRecordingStep",
     "venue",
     "budget",
   ])
     assert.equal(selected.has(field), true, field);
+  assert.equal(selected.has("videoRecordingStep"), false, "retired standalone section is not loaded for chat");
   for (const forbidden of [
     "contact",
     "uploads",

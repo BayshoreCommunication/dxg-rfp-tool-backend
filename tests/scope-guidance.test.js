@@ -52,7 +52,7 @@ test("missing room dependencies generate bounded questions", () => {
   }
 });
 
-test("recording quantity and delivery mismatches remain deterministic", () => {
+test("standalone recording rules remain registered but inactive", () => {
   const findings = computeScopeGuidance({
     videoRecordingStep: {
       videoRecordingRequired: "YES",
@@ -60,18 +60,17 @@ test("recording quantity and delivery mismatches remain deterministic", () => {
       cameraOperators: "1",
     },
   });
-  const operators = byRule(findings, "CAMERA_OPERATOR_CAPACITY")[0];
-  assert.equal(operators.category, "quantity_mismatch");
-  assert.equal(operators.severity, "high_confidence_gap");
-  assert.deepEqual(
-    operators.evidence.map((item) => item.value),
-    ["3", "1"],
-  );
-  assert.ok(byRule(findings, "RECORDING_DELIVERY_MISSING")[0]);
-  assert.equal(byRule(findings, "CAMERA_COUNT_MISSING").length, 0);
+  for (const ruleId of [
+    "CAMERA_COUNT_MISSING",
+    "CAMERA_OPERATOR_CAPACITY",
+    "RECORDING_DELIVERY_MISSING",
+  ]) {
+    assert.ok(SCOPE_RULES.some((rule) => rule.id === ruleId), `${ruleId} remains restorable`);
+    assert.equal(byRule(findings, ruleId).length, 0, `${ruleId} is inactive`);
+  }
 });
 
-test("a per-room vendor recommendation satisfies the recording camera-plan gap", () => {
+test("room recording data never reactivates retired proposal-level rules", () => {
   const findings = computeScopeGuidance({
     videoRecordingStep: { videoRecordingRequired: "YES" },
     roomByRoom: [{ cameras: { cameras: "Yes", cameraPlanMode: "Vendor Recommendation" } }],

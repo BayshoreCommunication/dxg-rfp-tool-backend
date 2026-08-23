@@ -1,4 +1,5 @@
 import {aiRuntimeAuthorized} from "../../../config/aiEnvironment";
+export const PROPOSAL_DRAFT_INPUT_VERSION="proposal-draft.v2";
 export class ProposalDraftError extends Error{constructor(public readonly code:string,message:string,public readonly status=422){super(message);}}
 export const proposalDraftEnabled=()=>aiRuntimeAuthorized()&&process.env.PROPOSAL_DRAFT_ENABLED==="true";
 export const parseDraftInput=(value:Record<string,unknown>)=>{const expectedProposalVersion=Number(value.expectedProposalVersion),fixture=String(value.fixture||"");if(!Number.isInteger(expectedProposalVersion)||expectedProposalVersion<1)throw new ProposalDraftError("INVALID_PROPOSAL_VERSION","Expected proposal version is required.");if(fixture!=="synthetic-proposal-draft")throw new ProposalDraftError("INVALID_DRAFT_FIXTURE","Only the approved synthetic draft fixture is allowed.");return{expectedProposalVersion,fixture};};

@@ -1,5 +1,5 @@
 import {aiRuntimeAuthorized} from "../../../config/aiEnvironment";
-import {approvedCandidatePaths} from "../candidateApplication/canonicalMapping";
+import {activeCandidatePaths} from "../candidateApplication/canonicalMapping";
 
 export class VendorAnalysisError extends Error{
  constructor(public readonly code:string,message:string,public readonly status=422,public readonly retryable=false){super(message);}
@@ -30,7 +30,7 @@ export const buildRequirements=(proposal:Record<string,unknown>):VendorRequireme
   const index=(SECTION_PRIORITY as readonly string[]).indexOf(segmentsOf(path)[0]);
   return index===-1?SECTION_PRIORITY.length:index;
  };
- const requirements=approvedCandidatePaths
+ const requirements=activeCandidatePaths
   .map((path,order)=>({path,order,value:resolveDotPath(proposal,segmentsOf(path))}))
   .filter(entry=>filled(entry.value))
   .sort((a,b)=>rank(a.path)-rank(b.path)||a.order-b.order)

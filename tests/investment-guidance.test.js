@@ -80,7 +80,7 @@ test("unsupported scopes become explicit refusals, never estimates", () => {
 });
 
 test("a template that resolves nothing refuses its whole scope with a concrete ask", () => {
-  const recording = generalSessionOnly({ videoRecordingStep: { videoRecordingRequired: "YES", numberOfCameras: "3" } });
+  const recording = generalSessionOnly({ roomByRoom: [{ roomFunction: "General Session", videoRecording: { videoRecording: "Yes" }, cameras: { cameras: "Yes", camerasQty: "3" } }] });
   const result = computeInvestmentGuidance(recording, [SPEAKER, A1], [], regionalFactors, modifiers, confidenceRules);
   const refusal = result.refusals.find((item) => item.reason.includes("recording and cameras"));
   assert.ok(refusal, "recording scope is refused");
@@ -89,6 +89,20 @@ test("a template that resolves nothing refuses its whole scope with a concrete a
   assert.ok(!result.lineItems.some((line) => line.templateKey === "RECORDING"));
   // The general session still prices from what is approved.
   assert.ok(lineFor(result, "gs_line_array"));
+});
+
+test("standalone recording data is pricing-neutral while room recording stays active", () => {
+  const baseline = readFacts(generalSessionOnly());
+  const standalone = readFacts(generalSessionOnly({
+    videoRecordingStep: { videoRecordingRequired: "YES", numberOfCameras: "9" },
+  }));
+  assert.deepEqual(standalone, baseline);
+
+  const room = readFacts(generalSessionOnly({
+    roomByRoom: [{ roomFunction: "General Session", videoRecording: { videoRecording: "Yes" }, cameras: { cameras: "Yes", camerasQty: "3" } }],
+  }));
+  assert.equal(room.recordingRequested, true);
+  assert.equal(room.cameraCount, 3);
 });
 
 test("multi-day discount applies to equipment days, never to labor hours", () => {
@@ -200,6 +214,21 @@ test("recommendation and ancillary rules require matching conditions", () => {
   ];
   const result = computeInvestmentGuidance(proposal, [], rules);
   assert.deepEqual(result.recommendations.map((item) => item.ruleKey), ["union_steward"]);
+});
+
+test("rules touching the retired standalone root are inert while room rules remain active", () => {
+  const rules = [
+    { id: "retired", ruleKey: "retired_absence", title: "Retired absence", explanation: "", conditions: [{ path: "/content/videoRecordingStep/videoRecordingRequired", op: "neq", value: "YES" }], effect: { kind: "recommendation", guidanceText: "Must never surface." } },
+    { id: "room", ruleKey: "room_recording", title: "Room recording", explanation: "", conditions: [{ path: "/content/roomByRoom/0/videoRecording/videoRecording", op: "eq", value: "Yes" }], effect: { kind: "recommendation", guidanceText: "Room recording remains active." } },
+  ];
+  const result = computeInvestmentGuidance(generalSessionOnly({
+    roomByRoom: [{ roomFunction: "General Session", videoRecording: { videoRecording: "Yes" } }],
+  }), [], rules);
+  assert.deepEqual(result.recommendations.map((item) => item.ruleKey), ["room_recording"]);
+  const activeOnly = computeInvestmentGuidance(generalSessionOnly({
+    roomByRoom: [{ roomFunction: "General Session", videoRecording: { videoRecording: "Yes" } }],
+  }), [], [rules[1]]);
+  assert.equal(result.budgetAnalysis.ruleReleaseVersion, activeOnly.budgetAnalysis.ruleReleaseVersion);
 });
 
 test("ancillary factors surface with honest statuses and union note", () => {

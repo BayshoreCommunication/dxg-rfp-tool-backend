@@ -7,8 +7,9 @@ import {
   text,
   type UnknownRecord,
 } from "../investment/proposalAccess";
+import { proposalWorkflowSectionEnabled } from "../proposals/domain/workflowSections";
 
-export const SCOPE_RULESET_VERSION = "scope-guidance.v1";
+export const SCOPE_RULESET_VERSION = "scope-guidance.v2";
 
 export const SCOPE_RULE_CATEGORIES = [
   "missing_dependency",
@@ -169,6 +170,7 @@ export const SCOPE_RULES: readonly ScopeRule[] = Object.freeze([
     affectedFields: ["/content/videoRecording/cameraCount"],
     source: "RFPilot recording workflow policy",
     evaluate: ({ proposal, rooms }) => {
+      if (!proposalWorkflowSectionEnabled("video_recording")) return [];
       const recording = record(proposal.videoRecordingStep);
       const hasRoomPlan = rooms.some((room) => {
         const cameras = record(room.cameras);
@@ -203,6 +205,7 @@ export const SCOPE_RULES: readonly ScopeRule[] = Object.freeze([
     ],
     source: "RFPilot recording labor dependency policy",
     evaluate: ({ proposal }) => {
+      if (!proposalWorkflowSectionEnabled("video_recording")) return [];
       const recording = record(proposal.videoRecordingStep);
       const cameras = count(recording.numberOfCameras);
       const operators = count(recording.cameraOperators);
@@ -240,6 +243,7 @@ export const SCOPE_RULES: readonly ScopeRule[] = Object.freeze([
     ],
     source: "RFPilot recording delivery policy",
     evaluate: ({ proposal }) => {
+      if (!proposalWorkflowSectionEnabled("video_recording")) return [];
       const recording = record(proposal.videoRecordingStep);
       const edited = record(recording.editedDeliverable);
       if (

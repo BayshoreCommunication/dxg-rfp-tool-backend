@@ -165,3 +165,45 @@ test("copy ignores unsupported template and non-string event overrides", async (
   assert.equal(capture.create.proposal.templateId, undefined);
   assert.equal(capture.create.proposal.event.eventName, "Original");
 });
+
+test("create, update, and copy do not write or propagate the dormant recording root", async () => {
+  const createCapture = {};
+  await createCreateOwnedProposal(createDependencies(createCapture))({
+    ownerUserId: "user-001",
+    proposal: {
+      event: { eventName: "New" },
+      videoRecordingStep: { videoRecordingRequired: "YES" },
+      "videoRecordingStep.numberOfCameras": "7",
+    },
+  });
+  assert.equal("videoRecordingStep" in createCapture.create.proposal, false);
+  assert.equal("videoRecordingStep.numberOfCameras" in createCapture.create.proposal, false);
+
+  const updateCapture = {};
+  await createUpdateOwnedProposal(createDependencies(updateCapture))({
+    proposalId: "proposal-001",
+    ownerUserId: "user-001",
+    updates: {
+      event: { eventName: "Updated" },
+      videoRecordingStep: { numberOfCameras: "4" },
+      "videoRecordingStep.numberOfCameras": "11",
+      "event.eventName": "Allowed active dotted update",
+    },
+  });
+  assert.equal("videoRecordingStep" in updateCapture.update.updates, false);
+  assert.equal("videoRecordingStep.numberOfCameras" in updateCapture.update.updates, false);
+  assert.equal(updateCapture.update.updates["event.eventName"], "Allowed active dotted update");
+
+  const copyCapture = {};
+  const dependencies = createDependencies(copyCapture);
+  dependencies.proposals.findOwnedCopySourceById = async () => ({
+    event: { eventName: "Stored" },
+    videoRecordingStep: { numberOfCameras: "9" },
+    roomByRoom: [{ videoRecording: "Yes", camerasQty: "2" }],
+  });
+  await createCopyOwnedProposal(dependencies)({
+    proposalId: "source-001", ownerUserId: "user-001", overrides: {},
+  });
+  assert.equal("videoRecordingStep" in copyCapture.create.proposal, false);
+  assert.deepEqual(copyCapture.create.proposal.roomByRoom, [{ videoRecording: "Yes", camerasQty: "2" }]);
+});

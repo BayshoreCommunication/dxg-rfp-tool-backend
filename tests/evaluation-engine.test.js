@@ -192,7 +192,9 @@ test("evaluation review inputs are checksummed and can create a superseding eval
   assert.match(migration, /DROP CONSTRAINT IF EXISTS vendor_evaluation_runs_intelligence_run_id_key/);
   assert.match(repository, /reviewInputChecksum/);
   assert.match(repository, /INTELLIGENCE_COVERAGE_INCOMPLETE/);
-  assert.match(repository, /intelligence_run_id=\$1 AND review_input_checksum=\$2 AND scoring_policy_version=\$3/);
+  assert.match(repository, /intelligence_run_id=\$1 AND matrix_version_id=\$2 AND sealed_price=\$3/);
+  for (const policy of ["assessment_version", "risk_policy_version", "commercial_policy_version", "scoring_policy_version"])
+    assert.match(repository, new RegExp(policy));
 });
 
 test("repository separates sealed price authorization and never calculates with confidence", () => {

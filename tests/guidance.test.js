@@ -79,12 +79,12 @@ test("objective missing and conditional information becomes deterministic questi
   for (const expected of [
     "ATTENDEE_COUNT_MISSING",
     "STREAMING_PLATFORM_MISSING",
-    "CAMERA_COUNT_MISSING",
-    "RECORDING_DELIVERY_MISSING",
     "CONTACT_DETAILS_INCOMPLETE",
   ]) {
     assert.equal(codes.has(expected), true, expected);
   }
+  for (const retired of ["CAMERA_COUNT_MISSING", "RECORDING_DELIVERY_MISSING"])
+    assert.equal(codes.has(retired), false, retired);
   assert.ok(
     result.findings.every(
       (finding) =>
@@ -104,8 +104,9 @@ test("production and risk rules fire on realistic inconsistencies", () => {
     budget: { proposalSubmissionDueDate: "2026-09-15" },
   });
   const codes = result.findings.map((f) => f.code);
-  for (const expected of ["ROOM_COUNT_MISMATCH", "STREAMING_PLATFORM_MISSING", "CAMERA_COUNT_MISSING", "UNION_JURISDICTIONS_MISSING", "PROPOSAL_DUE_AFTER_EVENT"])
+  for (const expected of ["ROOM_COUNT_MISMATCH", "STREAMING_PLATFORM_MISSING", "UNION_JURISDICTIONS_MISSING", "PROPOSAL_DUE_AFTER_EVENT"])
     assert.ok(codes.includes(expected), expected);
+  assert.ok(!codes.includes("CAMERA_COUNT_MISSING"));
 });
 
 test("a consistent proposal produces no blocking findings", () => {
@@ -139,7 +140,7 @@ test("completeness weights the fields a vendor cannot quote without", () => {
   const withEssentials = computeGuidance(essentialsOnly);
   const withTrimmings = computeGuidance(trimmingsOnly);
 
-  // 16 essentials vs 23 optional answers: unweighted, the second proposal wins.
+  // 15 active essentials vs 23 optional answers: unweighted, the second proposal wins.
   assert.ok(
     withEssentials.overall > withTrimmings.overall,
     `a quotable proposal must outscore an unquotable one (${withEssentials.overall} vs ${withTrimmings.overall})`,
@@ -149,9 +150,27 @@ test("completeness weights the fields a vendor cannot quote without", () => {
   // The percentage says how far along; this says what to do next.
   const missing = withTrimmings.findings.find((f) => f.code === "ESSENTIALS_MISSING");
   assert.equal(missing.severity, "warning");
-  assert.equal(missing.paths.length, 16);
+  assert.equal(missing.paths.length, 15);
   assert.ok(missing.paths.includes("/content/event/eventName"));
-  assert.match(missing.message, /16 fields vendors need in order to quote are still empty\./);
+  assert.match(missing.message, /15 fields vendors need in order to quote are still empty\./);
+});
+
+test("retired standalone recording data does not change active readiness", () => {
+  const baseline = computeGuidance({});
+  const withLegacyRecording = computeGuidance({
+    videoRecordingStep: {
+      videoRecordingRequired: "YES",
+      numberOfCameras: "3",
+      cameraOperators: "1",
+    },
+  });
+  assert.equal(withLegacyRecording.overall, baseline.overall);
+  assert.deepEqual(withLegacyRecording.completeness, baseline.completeness);
+  for (const retired of [
+    "CAMERA_COUNT_MISSING",
+    "CAMERA_OPERATOR_CAPACITY",
+    "RECORDING_DELIVERY_MISSING",
+  ]) assert.ok(!withLegacyRecording.findings.some((finding) => finding.code === retired));
 });
 
 test("every essential path is one the proposal can actually hold", () => {
@@ -164,7 +183,7 @@ test("every essential path is one the proposal can actually hold", () => {
   );
   const table = source.slice(source.indexOf("const ESSENTIAL_PATHS"), source.indexOf("const SECTION_LABELS"));
   const paths = [...table.matchAll(/"(\/content\/[^"]+)"/g)].map((m) => m[1]);
-  assert.equal(paths.length, 16, "the table is the one being checked");
+  assert.equal(paths.length, 15, "the table is the one being checked");
   for (const path of paths) assert.ok(approved.has(path), `essential path is on the whitelist: ${path}`);
 });
 
@@ -186,6 +205,11 @@ test("proposal analysis persistence adds summary, versioning, and stale detectio
   assert.ok(up.includes("proposal-analysis.v2"));
   assert.ok(repository.includes("currentProposalVersion"));
   assert.ok(repository.includes("stale:"));
+  assert.ok(repository.includes("row.engine_version !== PROPOSAL_ANALYSIS_VERSION"));
+  assert.ok(
+    repository.includes("proposal_reference_id=$1 AND engine_version=$2"),
+    "historical engines remain auditable but cannot restore retired findings into the live workflow",
+  );
   assert.ok(repository.includes("userId: ctx.actorUserMongoId"));
   assert.ok(route.includes('authorizeAction("proposal:read")'));
 });

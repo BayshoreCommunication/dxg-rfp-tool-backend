@@ -3,6 +3,7 @@ import type { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
 import { comparisonChecksum, ComparisonOrchestrationError } from "../comparisonOrchestration/domain";
+import { REQUIREMENT_GENERATOR_VERSION } from "../requirementRegistry/generator";
 
 export type OperationsContext = { organizationMongoId: string; actorUserMongoId: string; proposalMongoId: string; correlationId: string };
 
@@ -24,7 +25,12 @@ const ownedProposal = async (client: PoolClient, proposalMongoId: string, actorM
 };
 
 const ownedRun = async (client: PoolClient, proposalReferenceId: string, runId: string) => {
-  const result = await client.query<any>("SELECT * FROM rfpilot.comparison_runs WHERE id=$1 AND proposal_reference_id=$2", [runId, proposalReferenceId]);
+  const result = await client.query<any>(
+    `SELECT r.* FROM rfpilot.comparison_runs r
+     JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$3
+     WHERE r.id=$1 AND r.proposal_reference_id=$2`,
+    [runId, proposalReferenceId, REQUIREMENT_GENERATOR_VERSION],
+  );
   if (!result.rows[0]) throw new ComparisonOrchestrationError("COMPARISON_NOT_FOUND", "Comparison was not found.", 404);
   return result.rows[0];
 };
