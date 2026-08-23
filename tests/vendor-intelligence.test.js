@@ -201,6 +201,55 @@ test("pipeline bounds fact extraction chunks to fit the structured-output ceilin
   assert.deepEqual(factChunkSizes, [10, 10, 1]);
 });
 
+test("long mapping runs use bounded concurrency and report monotonic durable-job progress", async () => {
+  const evidence = Array.from({ length: 41 }, (_, index) => ({
+    id: `fragment-${index}`,
+    content: `Vendor evidence ${index}`,
+    sourceLabel: "Vendor.pdf",
+    locator: { page: index + 1 },
+    trustClass: "untrusted_vendor_content",
+  }));
+  const requirements = Array.from({ length: 41 }, (_, index) => ({
+    id: `requirement-${index}`,
+    title: `Requirement ${index}`,
+    text: `Provide requirement ${index}`,
+    kind: "technical",
+    mandatory: false,
+  }));
+  let active = 0, maximumActive = 0;
+  const work = async (output) => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active -= 1;
+    return { model: "fixture-model", output };
+  };
+  const provider = {
+    extractFacts: async () => work({ facts: [] }),
+    mapRequirements: async (input) => work({ mappings: input.requirements.map((item) => ({
+      requirementId: item.id,
+      relationship: "none",
+      confidence: 0.9,
+      candidateFragmentIds: [],
+      ambiguityReasons: [],
+    })) }),
+  };
+  const progress = [];
+  await runVendorFactMappingPipeline({
+    requirements,
+    evidence,
+    provider,
+    ledger: { runType: "vendor_requirement_facts", runId: "run-progress", organizationId: "org-a" },
+    onProgress: async (value, stage) => { progress.push({ value, stage }); },
+  });
+  assert.ok(maximumActive > 1, "independent provider chunks should not run serially");
+  assert.ok(maximumActive <= 3, "provider concurrency stays bounded");
+  assert.deepEqual(progress.map((item) => item.value), [...progress.map((item) => item.value)].sort((a, b) => a - b));
+  assert.equal(progress.at(-1).value, 90);
+  assert.ok(progress.some((item) => item.stage === "extracting_vendor_facts"));
+  assert.ok(progress.some((item) => item.stage === "mapping_requirements"));
+});
+
 test("mapping retrieval reserves lexical evidence for late requirements instead of favoring early requirements", () => {
   const requirements = Array.from({ length: 20 }, (_, index) => ({ id: `r-${index}`, title: `Capability keyword${index}`, text: `Provide keyword${index}`, kind: "technical", mandatory: false }));
   const evidence = requirements.flatMap((requirement, requirementIndex) => Array.from({ length: 5 }, (_, evidenceIndex) => ({
@@ -226,6 +275,20 @@ test("failed vendor intelligence creation requeues its durable job instead of re
   assert.match(repository, /status='queued',attempt_count=0/);
   assert.match(repository, /vendor-intelligence\.requeued:/);
   assert.match(repository, /vendor_intelligence\.requeued/);
+});
+
+test("vendor mapping failures settle the domain run only after durable retries are exhausted", () => {
+  const handler = fs.readFileSync(path.join(__dirname, "../src/modules/durableJobs/vendorIntelligenceHandler.ts"), "utf8");
+  assert.doesNotMatch(handler, /vendorIntelligenceRepository\.fail/,
+    "a retryable provider failure must not prematurely mark the domain run failed");
+  const worker = fs.readFileSync(path.join(__dirname, "../src/modules/durableJobs/worker.ts"), "utf8");
+  assert.match(worker, /\["failed", "dead_letter"\]\.includes\(failed\.status\)/,
+    "the worker settles the domain run after its durable job is terminal");
+  assert.match(worker, /setInterval\(\(\) => \{ void renewLease\(\); \}/,
+    "long provider work renews its durable lease periodically");
+  const repository = fs.readFileSync(path.join(__dirname, "../src/modules/durableJobs/postgresJobRepository.ts"), "utf8");
+  assert.match(repository, /row\.job_type === "vendor_requirement_facts"[\s\S]*vendor_intelligence_runs/,
+    "an exhausted stale lease also settles the vendor-intelligence domain run");
 });
 
 test("migration enforces tenant isolation, immutable outputs, and append-only review", () => {

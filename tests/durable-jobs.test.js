@@ -11,6 +11,7 @@ test("dispatcher records safe failure code when Redis publish fails",async()=>{c
 test("reconciliation republishes authoritative queued job references",async()=>{const repo=repository();let count=0;const dispatcher=createDispatcher(repo,{async publish(){count++}});assert.equal(await dispatcher.reconcile(),1);assert.equal(count,1);});
 
 const {attemptBudget}=require("../src/modules/durableJobs/domain");
+const {leaseHeartbeatIntervalMs}=require("../src/modules/durableJobs/worker");
 test("retry budget honours the per-job-type max_attempts, not just the global ceiling",()=>{
  // The regression: vendor_response_analyze rows declare 2 attempts but fail()
  // compared against the worker's JOB_MAX_ATTEMPTS (default 5), so a failing
@@ -22,6 +23,11 @@ test("retry budget honours the per-job-type max_attempts, not just the global ce
  // Missing or nonsensical row values fall back to the global ceiling.
  for(const value of [null,undefined,0,-1,NaN,"abc"])assert.equal(attemptBudget(value,5),5);
  assert.equal(attemptBudget("3",5),3,"numeric strings from the driver are honoured");
+});
+
+test("long-running workers renew their lease well before expiry",()=>{
+ assert.equal(leaseHeartbeatIntervalMs(90),30000);
+ assert.equal(leaseHeartbeatIntervalMs(2),1000);
 });
 
 const fs=require("node:fs"),path=require("node:path");
