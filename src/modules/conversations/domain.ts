@@ -1,5 +1,6 @@
 import { aiRuntimeAuthorized } from "../../../config/aiEnvironment";
-import { approvedCandidatePaths, normalizeCandidate } from "../candidateApplication/canonicalMapping";
+import { activeCandidatePaths, normalizeCandidate } from "../candidateApplication/canonicalMapping";
+import { isRetiredLegacyProposalWorkflowPath } from "../proposals/domain/workflowSections";
 
 export class ConversationError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 422) { super(message); }
@@ -170,7 +171,9 @@ const EVENT_TYPES = Object.freeze([
   "Hybrid Broadcast / Studio Production",
   "Other",
 ]);
-export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Object.freeze([
+// Keep the complete catalog so restoring a retired workflow section is a
+// one-line availability change. Only the active subset is used proactively.
+export const ALL_IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Object.freeze([
   // Asked first: the proposal is created with a placeholder title, and every
   // downstream surface (breadcrumb, draft, exports) reads better once it is real.
   { path: "/content/event/eventName", prompt: "What is this event called?", impact: "scope", answerType: "text" },
@@ -206,6 +209,16 @@ export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] = Obje
   { path: "/content/hybridVirtual/streamingPlatform", prompt: "Which streaming platform will the event use?", impact: "production", answerType: "choice", options: STREAMING_PLATFORMS },
   { path: "/content/videoRecordingStep/videoRecordingRequired", prompt: "Do you need video recording? (yes / no / not sure)", impact: "production", answerType: "choice", options: YES_NO },
 ]);
+
+export const IMPORTANT_FIELD_QUESTIONS: readonly ImportantFieldQuestion[] =
+  Object.freeze(
+    ALL_IMPORTANT_FIELD_QUESTIONS.filter(
+      (field) =>
+        ![field.path, ...(field.additionalPaths ?? [])].some(
+          isRetiredLegacyProposalWorkflowPath,
+        ),
+    ),
+  );
 
 export const importantFieldPaths = (field: ImportantFieldQuestion): string[] =>
   [field.path, ...(field.additionalPaths ?? [])];
@@ -334,7 +347,7 @@ export const suggestedAnswerFor = (paths: string[], rawValue: unknown): string |
 // is normalizeCandidate, which rejects an invalid value with a 422 before the
 // question resolves; membership of the proactive list is not a safety property.
 export const answerTargetPath = (paths: string[]): string | null =>
-  paths.length === 1 && approvedCandidatePaths.includes(paths[0]) ? paths[0] : null;
+  paths.length === 1 && activeCandidatePaths.includes(paths[0]) ? paths[0] : null;
 
 // Composite writes are deliberately limited to a typed proactive question.
 // Arbitrary multi-path extraction conflicts remain chat-only: one free-form
@@ -343,7 +356,7 @@ export const answerTargetPaths = (paths: string[]): string[] => {
   const single = answerTargetPath(paths);
   if (single) return [single];
   const field = importantFieldQuestionByPaths(paths);
-  return field?.answerType === "date_time" && paths.every((path) => approvedCandidatePaths.includes(path))
+  return field?.answerType === "date_time" && paths.every((path) => activeCandidatePaths.includes(path))
     ? [...paths]
     : [];
 };

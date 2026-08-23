@@ -65,7 +65,7 @@ export const buildChatReply = async (
         ],
       })
         .select(
-          "status isDraft version event venueSchedule roomByRoom production hybridVirtual contentCreative videoRecordingStep venue budget",
+          "status isDraft version event venueSchedule roomByRoom production hybridVirtual contentCreative venue budget",
         )
         .lean<Record<string, unknown>>();
       const live = await liveConversationReply({

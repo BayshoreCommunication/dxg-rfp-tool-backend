@@ -1,4 +1,5 @@
 import { CandidateApplicationError } from "./domain";
+import { isRetiredLegacyProposalWorkflowPath } from "../proposals/domain/workflowSections";
 
 // Declarative candidate mapping between the legacy-Mongo-shaped source paths the AI/dashboard
 // emits, the canonical proposal.v1 contract paths, and the legacy Mongo wizard storage format.
@@ -322,8 +323,17 @@ export const normalizeCandidate = (path: string, value: unknown): NormalizedCand
 
 export const approvedCandidatePaths = Object.freeze(Object.keys(mappings));
 
+// Keep every mapping available to authenticated compatibility writes and
+// future restoration, but expose only reachable workflow fields to active AI
+// extraction and downstream analysis.
+export const activeCandidatePaths = Object.freeze(
+  approvedCandidatePaths.filter(
+    (path) => !isRetiredLegacyProposalWorkflowPath(path),
+  ),
+);
+
 // Consumed by the AI extraction schema as the closed enum of proposable candidate paths.
-export const extractionPathEnum: readonly string[] = approvedCandidatePaths;
+export const extractionPathEnum: readonly string[] = activeCandidatePaths;
 
 // Extraction uses the same mapping metadata as persistence, so prompt guidance,
 // normalization, and application cannot quietly disagree about a field's value

@@ -74,7 +74,7 @@ const loadActiveOwned = async (
     isArchived: { $ne: true },
   })
     .select(
-      "version event venueSchedule roomByRoom hybridVirtual contentCreative videoRecordingStep venue budget isArchived",
+      "version event venueSchedule roomByRoom hybridVirtual contentCreative venue budget isArchived",
     )
     .lean<any[]>();
   const byId = new Map(proposals.map((proposal) => [String(proposal._id), proposal]));
@@ -204,8 +204,9 @@ export const historicalInsightsRepository = {
       const report = await client.query<any>(
         `SELECT * FROM rfpilot.historical_insight_reports
           WHERE current_proposal_reference_id=$1
+            AND analysis_version=$2
           ORDER BY created_at DESC LIMIT 1`,
-        [currentRef.get(context.currentProposalMongoId)],
+        [currentRef.get(context.currentProposalMongoId), HISTORICAL_INSIGHTS_VERSION],
       );
       if (!report.rows[0])
         throw new HistoricalInsightsError(

@@ -3,6 +3,8 @@ import { withPostgresTransaction } from "../../../config/postgres";
 import { AUTO_APPLY_MIN_CONFIDENCE } from "../candidateApplication/domain";
 import { normalizeCandidate } from "../candidateApplication/canonicalMapping";
 import { safeLog } from "../../shared/observability/safeTelemetry";
+import { isRetiredProposalWorkflowPath } from "../proposals/domain/workflowSections";
+import { PROPOSAL_CONTEXT_INPUT_VERSION } from "../proposalContext/domain";
 import { applyAnswersToProposalFields } from "./answerFieldWriter";
 import { conversationRepository } from "./postgresConversationRepository";
 
@@ -32,12 +34,14 @@ export const selectConversationAutoApplyAnswers = (
 ): ConversationAutoApplyAnswer[] => {
   const byPath = new Map<string, ConversationExtractionCandidate[]>();
   for (const candidate of candidates) {
+    if (isRetiredProposalWorkflowPath(candidate.path)) continue;
     byPath.set(candidate.path, [...(byPath.get(candidate.path) ?? []), candidate]);
   }
 
   const answers: ConversationAutoApplyAnswer[] = [];
   const mongoPaths = new Set<string>();
   for (const candidate of candidates) {
+    if (isRetiredProposalWorkflowPath(candidate.path)) continue;
     const peers = byPath.get(candidate.path) ?? [];
     if (
       peers.length !== 1 ||
@@ -92,10 +96,12 @@ const loadConversationRun = async (input: {
     const run = await c.query<{ proposal_mongo_id: string; status: string }>(
       `SELECT p.external_mongo_id proposal_mongo_id,r.status
          FROM rfpilot.proposal_context_runs r
+         JOIN rfpilot.ai_jobs j
+           ON j.id=r.job_id AND j.input_version=$3
          JOIN rfpilot.proposal_references p ON p.id=r.proposal_reference_id
          JOIN rfpilot.users u ON u.id=p.owner_user_id
         WHERE r.id=$1 AND u.external_mongo_id=$2 AND u.status='active'`,
-      [input.runId, input.actorUserMongoId],
+      [input.runId, input.actorUserMongoId, PROPOSAL_CONTEXT_INPUT_VERSION],
     );
     if (!run.rows[0] || run.rows[0].status !== "succeeded") return null;
 

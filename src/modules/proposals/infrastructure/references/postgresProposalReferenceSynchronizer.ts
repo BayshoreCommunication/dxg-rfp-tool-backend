@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { ProposalReferenceSynchronizer } from "../../domain/ports/proposalReferenceSynchronizer";
 import { synchronizeProposalReference } from "../../../dataFoundation/composition";
 import { currentTenant } from "../../../shared/tenancy/tenantContext";
+import { activeProposalWorkflowFingerprintContent } from "../../domain/workflowSections";
 
 const canonical = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(canonical);
@@ -14,16 +15,17 @@ export const postgresProposalReferenceSynchronizer: ProposalReferenceSynchronize
   async synchronize({ proposal, ownerUserId, eventType }) {
     if (process.env.POSTGRES_FOUNDATION_ENABLED !== "true" || process.env.PROPOSAL_REFERENCE_DUAL_WRITE_ENABLED !== "true") return;
     const record = proposal as unknown as Record<string, unknown>;
+    const activeRecord = activeProposalWorkflowFingerprintContent(record);
     const proposalId = String(record._id ?? "");
+    const activeChecksum = checksum(activeRecord);
     try {
       const tenant = currentTenant();
       const result = await synchronizeProposalReference({
         organizationMongoId: tenant.organizationId,
         ownerUserMongoId: ownerUserId,
         proposalMongoId: proposalId,
-        sourceVersion: String(record.__v ?? 0),
-        sourceChecksum: checksum(proposal),
-        sourceUpdatedAt: record.updatedAt instanceof Date ? record.updatedAt : undefined,
+        sourceVersion: activeChecksum,
+        sourceChecksum: activeChecksum,
         correlationId: `proposal-write:${proposalId}`,
         eventType,
       });

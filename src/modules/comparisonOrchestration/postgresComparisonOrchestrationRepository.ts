@@ -5,8 +5,15 @@ import { withPostgresTransaction } from "../../../config/postgres";
 import Proposal from "../../../modal/proposalsModel";
 import VendorSubmission from "../../../modal/vendorSubmissionModel";
 import VendorSubmissionVersion from "../../../modal/vendorSubmissionVersionModel";
-import { ASSESSMENT_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION } from "../evaluationEngine/domain";
+import { ASSESSMENT_VERSION, COMMERCIAL_POLICY_VERSION, RISK_POLICY_VERSION, SCORING_POLICY_VERSION } from "../evaluationEngine/domain";
 import { EXTRACTION_POLICY_VERSION } from "../evidenceExtraction/domain";
+import {
+  activeProposalWorkflowContent,
+  activeProposalWorkflowFingerprintContent,
+  LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+  proposalWorkflowSectionEnabled,
+} from "../proposals/domain/workflowSections";
+import { REQUIREMENT_GENERATOR_VERSION } from "../requirementRegistry/generator";
 import { buildVendorRecommendation, COMPARISON_SCHEMA_VERSION, ComparisonOrchestrationError, PARTICIPANT_SCHEMA_VERSION, RECOMMENDATION_POLICY_VERSION, comparisonChecksum, evaluatorPanelSignature, freezeScoreInput, uniqueReasons, weightedProgress } from "./domain";
 
 type Context = { organizationMongoId: string; actorUserMongoId: string; proposalMongoId: string; correlationId: string };
@@ -32,6 +39,15 @@ const ownedProposal = async (client: PoolClient, proposalMongoId: string, actorM
 const loadMongoInputs = async (input: Context, selected: SelectedParticipant[], requireActive = false) => {
   const proposal = await Proposal.findOne({ _id: input.proposalMongoId, organizationId: input.organizationMongoId, userId: input.actorUserMongoId }).lean<any>();
   if (!proposal) throw new ComparisonOrchestrationError("PROPOSAL_NOT_FOUND", "Proposal was not found.", 404);
+  const activeProposal = activeProposalWorkflowContent(
+    proposal as Record<string, unknown>,
+  );
+  // Mongo's __v/updatedAt can change when a compatibility-only field is
+  // touched. Comparison identity follows active proposal content instead.
+  const fingerprintContent = activeProposalWorkflowFingerprintContent(
+    proposal as Record<string, unknown>,
+  );
+  const proposalFingerprint = comparisonChecksum(fingerprintContent);
   const [submissions, versions] = selected.length ? await Promise.all([
     VendorSubmission.find({
       _id: { $in: selected.map((item) => item.submissionMongoId) },
@@ -63,7 +79,12 @@ const loadMongoInputs = async (input: Context, selected: SelectedParticipant[], 
       documents: (version.documents ?? []).map((document: any) => ({ documentId: String(document.documentId), checksum: String(document.sha256), name: String(document.name || "Attachment").slice(0, 255) })),
     });
   }
-  return { proposal, proposalVersion: String(proposal.__v ?? 0), proposalChecksum: comparisonChecksum(proposal), participants };
+  return {
+    proposal: activeProposal,
+    proposalVersion: proposalFingerprint,
+    proposalChecksum: proposalFingerprint,
+    participants,
+  };
 };
 
 const audit = (client: PoolClient, input: Context, organizationId: string, action: string, runId: string, metadata: Record<string, unknown>) => client.query(
@@ -89,7 +110,12 @@ const queueJob = async (client: PoolClient, input: { organizationId: string; org
 };
 
 const runRow = async (client: PoolClient, proposalReferenceId: string, runId: string) => {
-  const result = await client.query<any>("SELECT * FROM rfpilot.comparison_runs WHERE id=$1 AND proposal_reference_id=$2", [runId, proposalReferenceId]);
+  const result = await client.query<any>(
+    `SELECT r.* FROM rfpilot.comparison_runs r
+     JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$3
+     WHERE r.id=$1 AND r.proposal_reference_id=$2`,
+    [runId, proposalReferenceId, REQUIREMENT_GENERATOR_VERSION],
+  );
   if (!result.rows[0]) throw new ComparisonOrchestrationError("COMPARISON_NOT_FOUND", "Comparison was not found.", 404);
   return result.rows[0];
 };
@@ -210,6 +236,7 @@ const criticalReviewState = async (client: PoolClient, intelligenceRunId: string
     `SELECT (
        SELECT count(*) FROM rfpilot.requirements r
        WHERE r.requirement_set_id=$2 AND r.included=true AND (r.mandatory_status='mandatory' OR r.eligibility=true)
+         AND ($3::boolean OR r.group_key IS DISTINCT FROM $4)
          AND NOT EXISTS (
            SELECT 1 FROM rfpilot.requirement_evidence_mappings m
            JOIN LATERAL (
@@ -230,7 +257,12 @@ const criticalReviewState = async (client: PoolClient, intelligenceRunId: string
            ) review WHERE review.decision IN ('accepted','rejected','corrected')
          )
      )::int count`,
-    [intelligenceRunId, requirementSetId],
+    [
+      intelligenceRunId,
+      requirementSetId,
+      proposalWorkflowSectionEnabled("video_recording"),
+      LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+    ],
   );
   return { complete: Number(result.rows[0]?.count ?? 0) === 0, unresolvedCount: Number(result.rows[0]?.count ?? 0) };
 };
@@ -239,7 +271,7 @@ const currentFreshness = async (client: PoolClient, run: any, mongo: Awaited<Ret
   const manifestResult = await client.query<any>("SELECT * FROM rfpilot.comparison_manifests WHERE comparison_run_id=$1", [run.id]);
   const manifest = manifestResult.rows[0], reasons: string[] = [];
   if (String(manifest.proposal_version) !== mongo.proposalVersion || manifest.proposal_checksum !== mongo.proposalChecksum) reasons.push("proposal_version_changed");
-  const set = await client.query<any>("SELECT status,content_checksum FROM rfpilot.requirement_sets WHERE id=$1", [run.requirement_set_id]);
+  const set = await client.query<any>("SELECT status,content_checksum FROM rfpilot.requirement_sets WHERE id=$1 AND generator_version=$2", [run.requirement_set_id, REQUIREMENT_GENERATOR_VERSION]);
   if (set.rows[0]?.status !== "approved" || set.rows[0]?.content_checksum !== manifest.requirement_checksum) reasons.push("requirement_set_superseded");
   const matrix = await client.query<any>("SELECT status,content_checksum FROM rfpilot.evaluation_matrix_versions WHERE id=$1", [run.matrix_version_id]);
   if (matrix.rows[0]?.status !== "approved" || matrix.rows[0]?.content_checksum !== manifest.matrix_checksum) reasons.push("evaluation_matrix_superseded");
@@ -269,6 +301,8 @@ const currentFreshness = async (client: PoolClient, run: any, mongo: Awaited<Ret
   if (manifest.assessment_schema_version !== ASSESSMENT_VERSION) reasons.push("assessment_schema_changed");
   if (manifest.scoring_policy_version !== SCORING_POLICY_VERSION) reasons.push("scoring_policy_changed");
   if (manifest.commercial_policy_version !== COMMERCIAL_POLICY_VERSION) reasons.push("commercial_policy_changed");
+  if (manifest.manifest?.policies?.risk !== RISK_POLICY_VERSION) reasons.push("risk_policy_changed");
+  if (manifest.manifest?.policies?.comparison !== COMPARISON_SCHEMA_VERSION) reasons.push("comparison_schema_changed");
   if (manifest.manifest?.policies?.recommendation !== RECOMMENDATION_POLICY_VERSION) reasons.push("recommendation_policy_changed");
   const staleReasons = uniqueReasons(reasons);
   await client.query("UPDATE rfpilot.comparison_runs SET freshness_state=$2,stale_reasons=$3::jsonb,updated_at=now() WHERE id=$1", [run.id, staleReasons.length ? "stale" : "current", JSON.stringify(staleReasons)]);
@@ -285,6 +319,7 @@ const intelligenceProjection = async (client: PoolClient, run: any, priceVisibil
               coalesce(ev.evidence,'[]'::jsonb) evidence,coalesce(rv.review_history,'[]'::jsonb) review_history
        FROM rfpilot.comparison_participants p
        JOIN rfpilot.requirements r ON r.requirement_set_id=$2 AND r.included=true
+        AND ($3::boolean OR r.group_key IS DISTINCT FROM $4)
        LEFT JOIN rfpilot.ai_assessments a ON a.evaluation_run_id=p.evaluation_run_id AND a.requirement_id=r.id
        LEFT JOIN LATERAL (
          SELECT jsonb_agg(jsonb_build_object(
@@ -317,7 +352,12 @@ const intelligenceProjection = async (client: PoolClient, run: any, priceVisibil
        ) rv ON true
        WHERE p.comparison_run_id=$1
        ORDER BY r.ordinal,p.ordinal`,
-      [run.id, run.requirement_set_id],
+      [
+        run.id,
+        run.requirement_set_id,
+        proposalWorkflowSectionEnabled("video_recording"),
+        LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+      ],
     ),
     client.query<any>(
       `SELECT p.id participant_id,p.vendor_label,
@@ -354,8 +394,17 @@ const intelligenceProjection = async (client: PoolClient, run: any, priceVisibil
          JOIN rfpilot.source_extraction_runs sx ON sx.id=ef.extraction_run_id
          WHERE re.risk_id=x.id
        ) ev ON true
-       WHERE p.comparison_run_id=$1 ORDER BY p.ordinal,x.ordinal`,
-      [run.id],
+       WHERE p.comparison_run_id=$1
+         AND ($2::boolean OR x.requirement_id IS NULL OR NOT EXISTS(
+           SELECT 1 FROM rfpilot.requirements retired
+            WHERE retired.id=x.requirement_id AND retired.group_key=$3
+         ))
+       ORDER BY p.ordinal,x.ordinal`,
+      [
+        run.id,
+        proposalWorkflowSectionEnabled("video_recording"),
+        LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+      ],
     ),
     client.query<any>(
       `SELECT p.id participant_id,p.vendor_label,coalesce(pr.result->'evaluation','{}'::jsonb) score_summary,
@@ -465,7 +514,7 @@ export const comparisonOrchestrationRepository = {
     const mongo = await loadMongoInputs(input, input.participants, true);
     return withPostgresTransaction(async (client) => {
       const organizationId = await tenant(client, input.organizationMongoId), proposalReferenceId = await ownedProposal(client, input.proposalMongoId, input.actorUserMongoId);
-      const setResult = await client.query<any>("SELECT * FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2 AND status='approved'", [input.requirementSetId, proposalReferenceId]);
+      const setResult = await client.query<any>("SELECT * FROM rfpilot.requirement_sets WHERE id=$1 AND proposal_reference_id=$2 AND status='approved' AND generator_version=$3", [input.requirementSetId, proposalReferenceId, REQUIREMENT_GENERATOR_VERSION]);
       if (!setResult.rows[0]) throw new ComparisonOrchestrationError("REQUIREMENT_SET_NOT_APPROVED", "An approved requirement set is required.", 409);
       const matrixResult = await client.query<any>("SELECT * FROM rfpilot.evaluation_matrix_versions WHERE id=$1 AND requirement_set_id=$2 AND status='approved' AND weights_confirmed=true AND total_weight=100", [input.matrixVersionId, input.requirementSetId]);
       if (!matrixResult.rows[0]) throw new ComparisonOrchestrationError("EVALUATION_MATRIX_NOT_CONFIRMED", "A confirmed 100% evaluation matrix is required.", 409);
@@ -479,7 +528,8 @@ export const comparisonOrchestrationRepository = {
            WHERE e.proposal_reference_id=$1 AND e.requirement_set_id=$2 AND e.matrix_version_id=$3
              AND e.vendor_submission_mongo_id=$4 AND e.vendor_submission_version_mongo_id=$5 AND e.status='ready' AND i.status='succeeded'
              AND e.assessment_version=$6 AND e.commercial_policy_version=$7 AND e.scoring_policy_version=$8
-           ORDER BY e.created_at DESC LIMIT 1`, [proposalReferenceId, input.requirementSetId, input.matrixVersionId, item.submissionMongoId, item.versionMongoId, ASSESSMENT_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION],
+             AND e.risk_policy_version=$9
+           ORDER BY e.created_at DESC LIMIT 1`, [proposalReferenceId, input.requirementSetId, input.matrixVersionId, item.submissionMongoId, item.versionMongoId, ASSESSMENT_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION, RISK_POLICY_VERSION],
         );
         if (!evaluation.rows[0]) throw new ComparisonOrchestrationError("COMPARISON_NOT_READY", `Complete proposal intelligence and evaluation for ${item.vendorLabel} before comparison.`, 409);
         const currentReviewChecksum = await reviewInputChecksum(client, evaluation.rows[0].intelligence_run_id);
@@ -502,19 +552,24 @@ export const comparisonOrchestrationRepository = {
         requirementSet: { id: setResult.rows[0].id, version: setResult.rows[0].version, checksum: setResult.rows[0].content_checksum },
         matrix: { id: matrixResult.rows[0].id, version: matrixResult.rows[0].version, checksum: matrixResult.rows[0].content_checksum, totalWeight: Number(matrixResult.rows[0].total_weight) },
         participants: selected.map((item) => ({ submissionId: item.submissionMongoId, versionId: item.versionMongoId, manifestChecksum: item.submissionManifestChecksum, documents: item.documents, intelligenceRunId: item.evaluation.intelligence_run_id, intelligenceChecksum: item.evaluation.intelligence_output_checksum, reviewInputChecksum: item.reviewInputChecksum, evaluationRunId: item.evaluation.id, evaluationChecksum: item.evaluation.output_checksum, scoreInputChecksum: item.scoreInputChecksum, provider: item.evaluation.provider, model: item.evaluation.model })),
-        policies: { extraction: EXTRACTION_POLICY_VERSION, assessment: ASSESSMENT_VERSION, commercial: COMMERCIAL_POLICY_VERSION, scoring: SCORING_POLICY_VERSION, comparison: COMPARISON_SCHEMA_VERSION, recommendation: RECOMMENDATION_POLICY_VERSION },
+        policies: { extraction: EXTRACTION_POLICY_VERSION, assessment: ASSESSMENT_VERSION, risk: RISK_POLICY_VERSION, commercial: COMMERCIAL_POLICY_VERSION, scoring: SCORING_POLICY_VERSION, comparison: COMPARISON_SCHEMA_VERSION, recommendation: RECOMMENDATION_POLICY_VERSION },
         priceVisibility: input.priceVisibility,
       };
-      const manifestChecksum = comparisonChecksum(manifestBody), requestKey = `comparison-request:${input.idempotencyKey}`;
+      const manifestChecksum = comparisonChecksum(manifestBody),
+        requestKey = `comparison-request:${comparisonChecksum({ requirement: REQUIREMENT_GENERATOR_VERSION, policies: manifestBody.policies })}:${comparisonChecksum(input.idempotencyKey)}`;
       const priorRequest = await client.query<any>(
-        `SELECT r.* FROM rfpilot.comparison_operations o JOIN rfpilot.comparison_runs r ON r.id=o.comparison_run_id
-         WHERE o.organization_id=$1 AND o.idempotency_key=$2`, [organizationId, requestKey],
+        `SELECT r.* FROM rfpilot.comparison_operations o
+         JOIN rfpilot.comparison_runs r ON r.id=o.comparison_run_id
+         JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$3
+         WHERE o.organization_id=$1 AND o.idempotency_key=$2`, [organizationId, requestKey, REQUIREMENT_GENERATOR_VERSION],
       );
       if (priorRequest.rows[0]) {
         if (priorRequest.rows[0].manifest_checksum !== manifestChecksum) throw new ComparisonOrchestrationError("IDEMPOTENCY_CONFLICT", "Idempotency key was already used for different comparison inputs.", 409);
         return { runId: priorRequest.rows[0].id, status: priorRequest.rows[0].status, created: false };
       }
-      const old = await client.query<any>("SELECT * FROM rfpilot.comparison_runs WHERE organization_id=$1 AND manifest_checksum=$2", [organizationId, manifestChecksum]);
+      const old = await client.query<any>(`SELECT r.* FROM rfpilot.comparison_runs r
+        JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$3
+        WHERE r.organization_id=$1 AND r.manifest_checksum=$2`, [organizationId, manifestChecksum, REQUIREMENT_GENERATOR_VERSION]);
       if (old.rows[0]) {
         await client.query("INSERT INTO rfpilot.comparison_operations(id,organization_id,comparison_run_id,idempotency_key,manifest_checksum) VALUES($1,$2,$3,$4,$5)", [uuidv7(), organizationId, old.rows[0].id, requestKey, manifestChecksum]);
         return { runId: old.rows[0].id, status: old.rows[0].status, created: false };
@@ -564,7 +619,13 @@ export const comparisonOrchestrationRepository = {
   async executeParticipant(input: { organizationMongoId: string; actorUserMongoId: string; participantId: string }) {
     return withPostgresTransaction(async (client) => {
       const organizationId = await tenant(client, input.organizationMongoId);
-      const participantResult = await client.query<any>("SELECT * FROM rfpilot.comparison_participants WHERE id=$1 FOR UPDATE", [input.participantId]);
+      const participantResult = await client.query<any>(
+        `SELECT p.* FROM rfpilot.comparison_participants p
+         JOIN rfpilot.comparison_runs r ON r.id=p.comparison_run_id
+         JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$2
+         WHERE p.id=$1 FOR UPDATE OF p`,
+        [input.participantId, REQUIREMENT_GENERATOR_VERSION],
+      );
       const participant = participantResult.rows[0];
       if (!participant) throw new ComparisonOrchestrationError("COMPARISON_PARTICIPANT_NOT_FOUND", "Comparison participant was not found.", 404);
       const existing = await client.query<any>("SELECT * FROM rfpilot.comparison_participant_results WHERE participant_id=$1", [participant.id]);
@@ -612,7 +673,9 @@ export const comparisonOrchestrationRepository = {
   async executeAggregate(input: { organizationMongoId: string; actorUserMongoId: string; runId: string }) {
     return withPostgresTransaction(async (client) => {
       const organizationId = await tenant(client, input.organizationMongoId);
-      const runResult = await client.query<any>("SELECT * FROM rfpilot.comparison_runs WHERE id=$1 FOR UPDATE", [input.runId]), run = runResult.rows[0];
+      const runResult = await client.query<any>(`SELECT r.* FROM rfpilot.comparison_runs r
+        JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$2
+        WHERE r.id=$1 FOR UPDATE OF r`, [input.runId, REQUIREMENT_GENERATOR_VERSION]), run = runResult.rows[0];
       if (!run) throw new ComparisonOrchestrationError("COMPARISON_NOT_FOUND", "Comparison was not found.", 404);
       const existing = await client.query<any>("SELECT * FROM rfpilot.comparison_snapshots WHERE comparison_run_id=$1", [run.id]);
       if (existing.rows[0]) return { resultReference: run.id };
@@ -621,12 +684,28 @@ export const comparisonOrchestrationRepository = {
       const requirementMatrix = await client.query<any>(
         `SELECT r.id requirement_id,r.title,r.mandatory_status,r.eligibility,p.id participant_id,p.vendor_label,a.verdict,a.needs_human_review
          FROM rfpilot.comparison_participants p JOIN rfpilot.ai_assessments a ON a.evaluation_run_id=p.evaluation_run_id
-         JOIN rfpilot.requirements r ON r.id=a.requirement_id WHERE p.comparison_run_id=$1 ORDER BY r.ordinal,p.ordinal`, [run.id],
+         JOIN rfpilot.requirements r ON r.id=a.requirement_id
+          AND ($2::boolean OR r.group_key IS DISTINCT FROM $3)
+         WHERE p.comparison_run_id=$1 ORDER BY r.ordinal,p.ordinal`, [
+          run.id,
+          proposalWorkflowSectionEnabled("video_recording"),
+          LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+        ],
       );
       const risks = await client.query<any>(
         `SELECT p.id participant_id,p.vendor_label,x.id risk_id,x.category,x.severity,x.title,x.basis,c.question
          FROM rfpilot.comparison_participants p JOIN rfpilot.evaluation_risks x ON x.evaluation_run_id=p.evaluation_run_id
-         LEFT JOIN rfpilot.clarification_candidates c ON c.risk_id=x.id WHERE p.comparison_run_id=$1 ORDER BY p.ordinal,x.ordinal`, [run.id],
+         LEFT JOIN rfpilot.clarification_candidates c ON c.risk_id=x.id
+         WHERE p.comparison_run_id=$1
+           AND ($2::boolean OR x.requirement_id IS NULL OR NOT EXISTS(
+             SELECT 1 FROM rfpilot.requirements retired
+              WHERE retired.id=x.requirement_id AND retired.group_key=$3
+           ))
+         ORDER BY p.ordinal,x.ordinal`, [
+          run.id,
+          proposalWorkflowSectionEnabled("video_recording"),
+          LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+        ],
       );
       const participantResults = results.rows.map((row) => row.result);
       const recommendation = buildVendorRecommendation({
@@ -653,7 +732,10 @@ export const comparisonOrchestrationRepository = {
   async onJobSettled(input: { organizationMongoId: string; actorUserMongoId: string; jobId: string }) {
     return withPostgresTransaction(async (client) => {
       const organizationId = await tenant(client, input.organizationMongoId);
-      const nodeResult = await client.query<any>("SELECT n.comparison_run_id FROM rfpilot.comparison_job_nodes n WHERE n.ai_job_id=$1", [input.jobId]);
+      const nodeResult = await client.query<any>(`SELECT n.comparison_run_id FROM rfpilot.comparison_job_nodes n
+        JOIN rfpilot.comparison_runs r ON r.id=n.comparison_run_id
+        JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$2
+        WHERE n.ai_job_id=$1`, [input.jobId, REQUIREMENT_GENERATOR_VERSION]);
       if (!nodeResult.rows[0]) return { comparison: false };
       const runResult = await client.query<any>("SELECT * FROM rfpilot.comparison_runs WHERE id=$1 FOR UPDATE", [nodeResult.rows[0].comparison_run_id]), run = runResult.rows[0];
       await syncGraph(client, run.id);
@@ -667,7 +749,9 @@ export const comparisonOrchestrationRepository = {
     const mongoProposal = await loadMongoInputs(input, []);
     return withPostgresTransaction(async (client) => {
       await tenant(client, input.organizationMongoId); const proposalReferenceId = await ownedProposal(client, input.proposalMongoId, input.actorUserMongoId);
-      const result = await client.query<any>("SELECT * FROM rfpilot.comparison_runs WHERE proposal_reference_id=$1 ORDER BY created_at DESC LIMIT 50", [proposalReferenceId]);
+      const result = await client.query<any>(`SELECT r.* FROM rfpilot.comparison_runs r
+        JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$2
+        WHERE r.proposal_reference_id=$1 ORDER BY r.created_at DESC LIMIT 50`, [proposalReferenceId, REQUIREMENT_GENERATOR_VERSION]);
       const views = [];
       for (const row of result.rows) {
         const participantRows = await client.query<any>("SELECT vendor_submission_mongo_id submission_mongo_id,vendor_submission_version_mongo_id version_mongo_id FROM rfpilot.comparison_participants WHERE comparison_run_id=$1", [row.id]);
@@ -692,7 +776,7 @@ export const comparisonOrchestrationRepository = {
       await currentFreshness(client, run, mongo);
       run = (await client.query<any>("SELECT * FROM rfpilot.comparison_runs WHERE id=$1", [run.id])).rows[0];
       const value = await projection(client, run, true);
-      return { ...value, proposal: { proposalId: input.proposalMongoId, title: String(mongo.proposal?.event?.eventName || "Proposal") } };
+      return { ...value, proposal: { proposalId: input.proposalMongoId, title: String((mongo.proposal.event as any)?.eventName || "Proposal") } };
     });
   },
 

@@ -224,3 +224,19 @@ test("curation migration and downstream queries exclude non-evaluation requireme
   assert.match(evaluation, /r\.criterion_id=c\.id AND r\.included=true/);
   assert.match(comparison, /r\.requirement_set_id=\$2 AND r\.included=true/);
 });
+
+test("registry active views, replay, and rendered prose are current-epoch only", () => {
+  const repository = read("src/modules/requirementRegistry/postgresRequirementRegistryRepository.ts");
+  const generator = read("src/modules/requirementRegistry/generator.ts");
+  for (const token of [
+    "requirement-registry.v3",
+    "registryEpochKey",
+    "generator_version=$3",
+    "s.generator_version=$4",
+    "PROPOSAL_DRAFT_INPUT_VERSION",
+    "activeProposalWorkflowFingerprintContent",
+    "LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY",
+  ]) assert.ok(`${repository}\n${generator}`.includes(token), token);
+  assert.match(repository, /JOIN rfpilot\.requirement_sets s[\s\S]*s\.generator_version=\$3/);
+  assert.match(repository, /proposal_draft_citations retired/);
+});

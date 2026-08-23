@@ -3,6 +3,7 @@ import type {
   LegacyPublicProposal,
   PublicProposalAccessRepository,
 } from "../../domain/ports/publicProposalAccessRepository";
+import { activeProposalWorkflowContent } from "../../domain/workflowSections";
 
 const DETAIL_PROPOSAL_SELECT = "-__v";
 
@@ -68,7 +69,9 @@ export const redactPrivateUploadUrls = (uploads: unknown): unknown => {
 export const redactProposalForPublicView = (
   record: Record<string, unknown>,
 ): Record<string, unknown> => {
-  const redacted: Record<string, unknown> = { ...record };
+  const redacted: Record<string, unknown> = {
+    ...activeProposalWorkflowContent(record),
+  };
   for (const field of PUBLIC_REDACTED_FIELDS) {
     delete redacted[field];
   }

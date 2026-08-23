@@ -7,6 +7,7 @@ const {
   PROPOSAL_FORM_FIELD_GUIDANCE,
   PROPOSAL_FORM_GUIDANCE_VERSION,
   PROPOSAL_FORM_SCHEMA_LEAF_PATHS,
+  ALL_PROPOSAL_FORM_SECTIONS,
   PROPOSAL_FORM_SECTIONS,
   PROPOSAL_FORM_UI_EXCLUSIONS,
   proposalFormGuidanceCoverage,
@@ -14,6 +15,9 @@ const {
   proposalFormGuidanceEvidenceForQuery,
   proposalFormGuidanceForField,
 } = require("../src/modules/platformAssistant/proposalFormGuidance");
+const {
+  isRetiredCanonicalProposalWorkflowPath,
+} = require("../src/modules/proposals/domain/workflowSections");
 
 const EXPECTED_PROPOSAL_FORM_SCHEMA_DIGEST =
   "7c28af9a162898c84309e4fdf85cc63f7b04f3db0ffa14289133ae43f207ccfb";
@@ -27,11 +31,15 @@ test("proposal field guidance covers the canonical form contract", () => {
   );
   assert.deepEqual(coverage.uncoveredPaths, []);
   assert.equal(PROPOSAL_FORM_UI_EXCLUSIONS.size, 11);
+  assert.equal(coverage.excludedFieldCount, 28);
 });
 
 test("proposal field registry has complete stable metadata", () => {
-  assert.equal(PROPOSAL_FORM_GUIDANCE_VERSION, "proposal-form-guidance.v3");
-  assert.equal(PROPOSAL_FORM_SECTIONS.length, 10);
+  assert.equal(PROPOSAL_FORM_GUIDANCE_VERSION, "proposal-form-guidance.v4");
+  assert.equal(PROPOSAL_FORM_SECTIONS.length, 9);
+  assert.equal(ALL_PROPOSAL_FORM_SECTIONS.length, 10);
+  assert.ok(!PROPOSAL_FORM_SECTIONS.some((section) => section.id === "video_recording"));
+  assert.ok(ALL_PROPOSAL_FORM_SECTIONS.some((section) => section.id === "video_recording"));
   assert.equal(
     new Set(PROPOSAL_FORM_SECTIONS.map((section) => section.id)).size,
     PROPOSAL_FORM_SECTIONS.length,
@@ -64,10 +72,14 @@ test("proposal field registry has complete stable metadata", () => {
 test("Event Overview UI metadata produces exact effective field guidance", () => {
   assert.equal(proposalFormUi.schemaVersion, "proposal-form-ui.v1");
   for (const fieldKey of Object.keys(proposalFormUi.fields)) {
-    assert.ok(
-      proposalFormGuidanceForField(fieldKey),
-      `${fieldKey} must resolve to canonical field guidance`,
-    );
+    if (isRetiredCanonicalProposalWorkflowPath(fieldKey)) {
+      assert.equal(proposalFormGuidanceForField(fieldKey), undefined);
+    } else {
+      assert.ok(
+        proposalFormGuidanceForField(fieldKey),
+        `${fieldKey} must resolve to canonical field guidance`,
+      );
+    }
   }
 
   const eventType = proposalFormGuidanceForField("/content/event/type");
@@ -114,14 +126,10 @@ test("Event Overview UI metadata produces exact effective field guidance", () =>
   const recording = proposalFormGuidanceForField(
     "/content/videoRecording/required",
   );
-  assert.equal(recording?.label, "Video Recording Required");
-  assert.equal(recording?.requirement, "required");
-  assert.deepEqual(
-    recording?.allowedOptions.map((option) => option.label),
-    [
-      "Yes — Record sessions during the event",
-      "No — No recording needed",
-    ],
+  assert.equal(recording, undefined);
+  assert.ok(
+    proposalFormUi.fields["/content/videoRecording/required"],
+    "legacy UI metadata remains available for restoration",
   );
 
   const investmentFlexibility = proposalFormGuidanceForField(
@@ -168,16 +176,6 @@ test("exact, natural-language, and unknown field guidance degrade safely", () =>
   );
 });
 
-test("video recording requirement wording ranks the exact control first", () => {
-  const evidence = proposalFormGuidanceEvidenceForQuery(
-    "What options are available for the video recording requirement field?",
-  );
-
-  assert.match(evidence[0]?.title ?? "", /Video Recording Required/);
-  assert.match(evidence[0]?.content ?? "", /Yes — Record sessions/);
-  assert.match(evidence[0]?.content ?? "", /No — No recording needed/);
-});
-
 test("field-help prompts from the proposal UI resolve across intake sections", () => {
   const examples = [
     ["Event Name", /Event Overview: Event Name/],
@@ -206,11 +204,8 @@ test("conditional field guidance retains machine-readable dependencies", () => {
   assert.equal(streaming?.requirement, "conditional");
   assert.ok(streaming?.dependencies.includes("/content/event/format"));
 
-  const cameraCount = proposalFormGuidanceForField(
-    "/content/videoRecording/cameraCount",
-  );
-  assert.equal(cameraCount?.requirement, "conditional");
-  assert.ok(
-    cameraCount?.dependencies.includes("/content/videoRecording/required"),
+  assert.equal(
+    proposalFormGuidanceForField("/content/videoRecording/cameraCount"),
+    undefined,
   );
 });

@@ -3,6 +3,7 @@ import { normalizeCandidate } from "../candidateApplication/canonicalMapping";
 import { CandidateApplicationError } from "../candidateApplication/domain";
 import { isLoadInAfterShow } from "./domain";
 import { resolveVenueLocation } from "./venueLocationResolver";
+import { isRetiredProposalWorkflowPath } from "../proposals/domain/workflowSections";
 
 export type AppliedAnswerField = { path: string; mongoPath: string; value: unknown };
 
@@ -85,6 +86,12 @@ export const applyAnswersToProposalFields = async (input: {
   onlyIfEmpty?: boolean;
 }): Promise<AppliedAnswerField[] | null> => {
   if (input.answers.length === 0) return [];
+  if (input.answers.some((item) => isRetiredProposalWorkflowPath(item.path))) {
+    throw new CandidateApplicationError(
+      "CANDIDATE_PATH_NOT_APPROVED",
+      "This proposal field is not available in the active workflow.",
+    );
+  }
   const draftExists = await validateLoadInOrdering(input, input.answers);
   if (!draftExists) return null;
   const locationAnswer = input.answers.find((item) => item.path === "/content/venueSchedule/venueCity");

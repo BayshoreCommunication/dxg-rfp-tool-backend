@@ -1,8 +1,14 @@
+import {
+  activeProposalWorkflowContent,
+  LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY,
+  proposalWorkflowSectionEnabled,
+} from "../proposals/domain/workflowSections";
+
 export const SELECTED_PROPOSAL_KNOWLEDGE_VERSION =
-  "selected-proposal-knowledge.v1";
+  "selected-proposal-knowledge.v2";
 export const MAX_SELECTED_PROPOSAL_KNOWLEDGE_CHARACTERS = 24_000;
 
-const INCLUDED_SECTIONS = [
+const ALL_INCLUDED_SECTIONS = [
   "event",
   "venueSchedule",
   "roomByRoom",
@@ -13,6 +19,12 @@ const INCLUDED_SECTIONS = [
   "venue",
   "budget",
 ] as const;
+
+const INCLUDED_SECTIONS = ALL_INCLUDED_SECTIONS.filter(
+  (section) =>
+    section !== LEGACY_STANDALONE_VIDEO_RECORDING_SECTION_KEY ||
+    proposalWorkflowSectionEnabled("video_recording"),
+);
 
 const BLOCKED_KEYS = new Set([
   "_id",
@@ -147,15 +159,16 @@ export type SelectedProposalKnowledge = {
 export const buildSelectedProposalKnowledge = (
   proposal: Record<string, unknown>,
 ): SelectedProposalKnowledge => {
+  const activeProposal = activeProposalWorkflowContent(proposal);
   const budget = {
     remaining: MAX_SELECTED_PROPOSAL_KNOWLEDGE_CHARACTERS,
   };
   const sections: Record<string, unknown> = {};
   for (const section of INCLUDED_SECTIONS) {
-    const sanitized = sanitize(proposal[section], budget);
+    const sanitized = sanitize(activeProposal[section], budget);
     if (sanitized !== undefined) sections[section] = sanitized;
   }
-  const version = Number(proposal.version);
+  const version = Number(activeProposal.version);
   return {
     schemaVersion: SELECTED_PROPOSAL_KNOWLEDGE_VERSION,
     selection: "explicit_owner_authorized",
@@ -163,10 +176,10 @@ export const buildSelectedProposalKnowledge = (
       Number.isInteger(version) && version > 0 ? version : 1,
     lifecycle: {
       status:
-        typeof proposal.status === "string"
-          ? proposal.status.slice(0, 40)
+        typeof activeProposal.status === "string"
+          ? activeProposal.status.slice(0, 40)
           : "unknown",
-      draft: proposal.isDraft === true,
+      draft: activeProposal.isDraft === true,
     },
     sections,
     privacy: {

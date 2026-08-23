@@ -1,5 +1,5 @@
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path");
-const { approvedCandidatePaths, normalizeCandidate } = require("../src/modules/candidateApplication/canonicalMapping");
+const { activeCandidatePaths, approvedCandidatePaths, normalizeCandidate } = require("../src/modules/candidateApplication/canonicalMapping");
 
 const fixtureDir = path.join(__dirname, "..", "docs", "testing", "gold-fixtures");
 const fixtureFiles = fs.readdirSync(fixtureDir).filter((file) => file.endsWith(".json") && file !== "last-run.json").sort();
@@ -47,6 +47,14 @@ test("every expected path is in approvedCandidatePaths and every expected value 
       assert.doesNotThrow(() => normalizeCandidate(candidate.path, prepared), `${fixture.file}: normalizeCandidate rejected ${candidate.path}=${JSON.stringify(candidate.value)}`);
     }
   }
+});
+
+test("dormant recording expectations remain documented but are not active predictions", () => {
+  const documented = fixtures.flatMap((fixture) => fixture.expected.candidates);
+  assert.ok(documented.some((candidate) => candidate.path.startsWith("/content/videoRecordingStep/")));
+  assert.ok(!activeCandidatePaths.some((candidatePath) => candidatePath.startsWith("/content/videoRecordingStep/")));
+  const harness = fs.readFileSync(path.join(__dirname, "..", "scripts", "goldEval.ts"), "utf8");
+  assert.ok(harness.includes("activeExpectedCandidates"));
 });
 
 test("the prompt-injection fixture exists and its expectations exclude the injected content", () => {

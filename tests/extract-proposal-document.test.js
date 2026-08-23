@@ -63,6 +63,39 @@ test("document extraction trims and bounds text before model invocation", async 
   assert.equal(result.data.event.eventName, "DXG Summit");
 });
 
+test("legacy extraction output keeps schema compatibility but removes the dormant active field", async () => {
+  const extracted = createExtractProposalDocument({
+    textExtractor: { extract: async () => "recording and room requirements" },
+    model: { extract: async () => ({
+      videoRecordingStep: { videoRecordingRequired: "YES", numberOfCameras: "6" },
+      roomByRoom: [{ videoRecording: "Yes", camerasQty: "2" }],
+    }) },
+    prompts: { current: () => ({ id: "active-proposal-extraction.v2", version: 2, content: "active prompt", outputSchemaId: "legacy-proposal-extraction-result.v1" }) },
+    outputValidator: { validate: (data) => ({ valid: true, data }) },
+  });
+  const result = await extracted({ buffer: Buffer.from("source"), mimetype: "text/plain" });
+  assert.equal(result.kind, "extracted");
+  assert.equal("videoRecordingStep" in result.data, false);
+  assert.deepEqual(result.data.roomByRoom, [{ videoRecording: "Yes", camerasQty: "2" }]);
+});
+
+test("current extraction prompt omits standalone recording while retaining room recording", () => {
+  const { versionedExtractionPromptRegistry } = require("../src/modules/extraction/infrastructure/prompts/versionedExtractionPromptRegistry");
+  const prompt = versionedExtractionPromptRegistry.current();
+  assert.equal(prompt.id, "active-proposal-extraction.v2");
+  assert.equal(prompt.content.includes('"videoRecordingStep"'), false);
+  assert.equal(prompt.content.includes('"videoRecording": "one of: Yes | No"'), true);
+  const source = require("node:fs").readFileSync(
+    require("node:path").join(
+      __dirname,
+      "../src/modules/extraction/infrastructure/prompts/versionedExtractionPromptRegistry.ts",
+    ),
+    "utf8",
+  );
+  assert.match(source, /proposalWorkflowSectionEnabled\("video_recording"\)/);
+  assert.match(source, /LEGACY_PROPOSAL_EXTRACTION_PROMPT_V1/);
+});
+
 test("parser and model remain replaceable application ports", async () => {
   const calls = [];
   const extract = createExtractProposalDocument({

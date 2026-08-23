@@ -115,6 +115,35 @@ test("shared sections require current-event confirmation", () => {
   assert.ok(insight.question);
 });
 
+test("legacy standalone recording presence is not remapped into another section", () => {
+  const result = computeHistoricalInsights(
+    { version: 2 },
+    [
+      {
+        proposal: {
+          version: 1,
+          videoRecordingStep: {
+            videoRecordingRequired: "YES",
+            numberOfCameras: "3",
+          },
+        },
+        proposalVersion: 1,
+      },
+    ],
+  );
+  const roomComparison = result.comparisons.find(
+    (comparison) => comparison.section === "roomByRoom",
+  );
+  assert.equal(roomComparison.status, "not_present");
+  assert.match(roomComparison.label, /Room specifications/i);
+  assert.ok(
+    !result.comparisons.some(
+      (comparison) => comparison.section === "videoRecordingStep",
+    ),
+  );
+  assert.ok(!result.insights.some((insight) => insight.affectedSection === "roomByRoom"));
+});
+
 test("historical reference selection is explicit, unique and bounded", () => {
   const currentId = "64b000000000000000000001";
   assert.deepEqual(
