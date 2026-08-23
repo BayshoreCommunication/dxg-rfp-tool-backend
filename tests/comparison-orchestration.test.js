@@ -25,10 +25,12 @@ test("score input snapshots are complete, observer-neutral, and content sensitiv
   ];
   const complete = freezeScoreInput(rows);
   const withObserver = freezeScoreInput([...rows, { assignmentId: "observer", role: "observer", conflictStatus: "clear", criterionId: "technical", eventId: "ignored", eventType: "submitted", score: 5, weightedContribution: 25 }]);
+  const automated = freezeScoreInput(rows.map((row) => ({ ...row, conflictStatus: "not_applicable" })));
   const changed = freezeScoreInput(rows.map((row) => row.eventId === "e1" ? { ...row, eventId: "e3", eventType: "superseded", score: 2, weightedContribution: 10 } : row));
   const incomplete = freezeScoreInput(rows.map((row) => row.eventId === "e2" ? { ...row, eventId: null, eventType: null, score: null, weightedContribution: null } : row));
 
   assert.equal(complete.complete, true);
+  assert.equal(automated.complete, true);
   assert.equal(withObserver.checksum, complete.checksum);
   assert.notEqual(changed.checksum, complete.checksum);
   assert.equal(incomplete.complete, false);
@@ -147,7 +149,7 @@ test("participant score summaries average each criterion and exclude non-scoring
   const repository = read("src/modules/comparisonOrchestration/postgresComparisonOrchestrationRepository.ts");
   assert.match(repository, /avg\(e\.weighted_contribution\) mean_contribution/);
   assert.match(repository, /role<>'observer'/);
-  assert.match(repository, /conflict_status='clear'/);
+  assert.match(repository, /conflict_status IN\('clear','not_applicable'\)/);
   assert.doesNotMatch(repository, /coalesce\(sum\(weighted_contribution\) FILTER/);
   assert.match(repository, /criterion_scores/);
   assert.match(repository, /avg\(e\.score\) mean_score/);

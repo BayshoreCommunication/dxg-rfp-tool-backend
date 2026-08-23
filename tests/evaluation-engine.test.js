@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
-const { aggregateCriterionScores, applyHumanReviews, buildAssessments, buildRisks, calculateContribution, coverageEligibility, normalizeCommercial, rubricMaximum } = require("../src/modules/evaluationEngine/domain");
+const { aggregateCriterionScores, applyHumanReviews, buildAssessments, buildRisks, calculateContribution, coverageEligibility, deriveAutomatedCriterionScore, normalizeCommercial, rubricMaximum } = require("../src/modules/evaluationEngine/domain");
 
 const mapping = (overrides = {}) => ({ mappingId: "mapping", requirementId: "requirement", title: "Provide staffing coverage", mandatory: false, eligibility: false, relationship: "supports", confidence: 0.95, fragmentIds: ["fragment"], ...overrides });
 const moneyFact = (overrides = {}) => ({ factId: "fact", factKey: "commercial.total", family: "commercial", factType: "commercial_total", statement: "Total is USD 100,000", valueKind: "money", normalizedValue: "USD 100000", typedValue: { kind: "money", number: 100000, currency: "USD" }, currency: "USD", contradictionGroup: null, fragmentIds: ["fragment"], ...overrides });
@@ -47,18 +47,42 @@ test("confirmed rubric contribution ignores confidence and uses only score, maxi
   assert.throws(() => calculateContribution({ score: 6, rubricMaximum: 5, weight: 25 }), (error) => error.code === "SCORE_OUT_OF_RANGE");
 });
 
+test("automatic rubric baselines are deterministic, cited, and never presented as human opinion", () => {
+  const result = deriveAutomatedCriterionScore({
+    criterionName: "Technical approach",
+    rubricMaximum: 5,
+    assessments: [
+      { verdict: "addressed", mandatory: true, eligibility: false, evidenceFragmentIds: ["fragment-a"] },
+      { verdict: "partially_addressed", mandatory: false, eligibility: false, evidenceFragmentIds: ["fragment-b"] },
+      { verdict: "missing", mandatory: false, eligibility: false, evidenceFragmentIds: [] },
+    ],
+  });
+  assert.equal(result.score, 3.313);
+  assert.deepEqual(result.evidenceFragmentIds, ["fragment-a", "fragment-b"]);
+  assert.match(result.rationale, /automated evidence-derived score/i);
+  assert.match(result.rationale, /not a human reviewer opinion/i);
+});
+
+test("automatic rubric baselines use zero rather than inventing a score when no evidence is mapped", () => {
+  const result = deriveAutomatedCriterionScore({ criterionName: "Creative", rubricMaximum: 10, assessments: [] });
+  assert.equal(result.score, 0);
+  assert.deepEqual(result.evidenceFragmentIds, []);
+});
+
 test("criterion aggregation averages eligible evaluators and excludes observers and conflicts", () => {
   const aggregates = aggregateCriterionScores({
     criterionIds: ["technical", "commercial"],
     assignments: [
       { assignmentId: "evaluator-a", role: "combined", conflictStatus: "clear", criterionIds: ["technical", "commercial"] },
       { assignmentId: "evaluator-b", role: "technical", conflictStatus: "clear", criterionIds: ["technical"] },
+      { assignmentId: "automated", role: "combined", conflictStatus: "not_applicable", criterionIds: ["technical"] },
       { assignmentId: "observer", role: "observer", conflictStatus: "clear", criterionIds: ["technical"] },
       { assignmentId: "conflicted", role: "combined", conflictStatus: "conflict", criterionIds: ["technical"] },
     ],
     scores: [
       { assignmentId: "evaluator-a", criterionId: "technical", eventType: "submitted", score: 4, weightedContribution: 20 },
       { assignmentId: "evaluator-b", criterionId: "technical", eventType: "submitted", score: 2, weightedContribution: 10 },
+      { assignmentId: "automated", criterionId: "technical", eventType: "submitted", score: 3, weightedContribution: 15 },
       { assignmentId: "observer", criterionId: "technical", eventType: "submitted", score: 5, weightedContribution: 25 },
       { assignmentId: "conflicted", criterionId: "technical", eventType: "submitted", score: 5, weightedContribution: 25 },
       { assignmentId: "evaluator-a", criterionId: "commercial", eventType: "submitted", score: 3, weightedContribution: 30 },
@@ -66,7 +90,7 @@ test("criterion aggregation averages eligible evaluators and excludes observers 
   });
 
   assert.deepEqual(aggregates, [
-    { criterionId: "technical", submittedCount: 2, assignedCount: 2, mean: 3, minimum: 2, maximum: 4, spread: 2, meanWeightedContribution: 15 },
+    { criterionId: "technical", submittedCount: 3, assignedCount: 3, mean: 3, minimum: 2, maximum: 4, spread: 2, meanWeightedContribution: 15 },
     { criterionId: "commercial", submittedCount: 1, assignedCount: 1, mean: 3, minimum: 3, maximum: 3, spread: 0, meanWeightedContribution: 30 },
   ]);
 });
@@ -228,4 +252,16 @@ test("evaluation APIs separate assigned scoring from owner-only management", () 
   assert.match(routes, /score-events[^\n]+authorizeAction\("proposal:read"\)/);
   assert.match(routes, /assignments[^\n]+authorizeAction\("proposal:write"\)/);
   assert.match(routes, /commercial-access-events[^\n]+authorizeAction\("proposal:write"\)/);
+  assert.match(routes, /evaluation-runs\/automatic[^\n]+authorizeAction\("proposal:write"\)/);
+});
+
+test("automatic evaluation is auditable and explicitly distinct from human scoring", () => {
+  const repository = fs.readFileSync(path.join(__dirname, "../src/modules/evaluationEngine/postgresEvaluationEngineRepository.ts"), "utf8");
+  const domain = fs.readFileSync(path.join(__dirname, "../src/modules/evaluationEngine/domain.ts"), "utf8");
+  const intelligence = fs.readFileSync(path.join(__dirname, "../src/modules/vendorIntelligence/postgresVendorIntelligenceRepository.ts"), "utf8");
+  const migration = fs.readFileSync(path.join(__dirname, "../migrations/postgres/059_automatic_vendor_evaluation.up.sql"), "utf8");
+  assert.match(domain, /evidence-derived-rubric-score\.v1/);
+  assert.match(repository, /vendor_evaluation\.automatically_completed/);
+  assert.match(intelligence, /vendor_intelligence\.automatically_reviewed/);
+  assert.match(migration, /not_applicable/);
 });
