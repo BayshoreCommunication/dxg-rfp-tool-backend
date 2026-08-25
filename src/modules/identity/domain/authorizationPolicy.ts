@@ -2,14 +2,15 @@ export const ORGANIZATION_ACTIONS = [
   "proposal:read", "proposal:write", "proposal:publish",
   "assistant:use",
   "knowledge:read", "knowledge:write", "knowledge:approve",
-  "vendor-response:read", "organization:manage", "security:admin",
+  "vendor-response:read", "vendor-response:write",
+  "organization:manage", "security:admin",
 ] as const;
 export type OrganizationAction = (typeof ORGANIZATION_ACTIONS)[number];
 
 const roleActions: Record<string, readonly OrganizationAction[]> = {
-  planner: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read"],
-  organization_admin: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "knowledge:write", "knowledge:approve", "vendor-response:read", "organization:manage"],
-  dxg_producer: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read"],
+  planner: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read", "vendor-response:write"],
+  organization_admin: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "knowledge:write", "knowledge:approve", "vendor-response:read", "vendor-response:write", "organization:manage"],
+  dxg_producer: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read", "vendor-response:write"],
   knowledge_editor: ["proposal:read", "knowledge:read", "knowledge:write"],
   knowledge_approver: ["proposal:read", "knowledge:read", "knowledge:write", "knowledge:approve"],
   dxg_admin: ORGANIZATION_ACTIONS,

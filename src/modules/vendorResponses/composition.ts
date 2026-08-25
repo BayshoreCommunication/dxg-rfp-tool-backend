@@ -41,7 +41,7 @@ export const checkVendorResponse = createCheckVendorResponse(
 export const getVendorSubmissionReceipt = createGetVendorSubmissionReceipt(
   mongoVendorSubmissionRepository,
 );
-export const submitPublicVendorResponse = createSubmitVendorResponse({
+const submitVendorResponseVersion = createSubmitVendorResponse({
   repository: mongoVendorSubmissionRepository,
   storage: spacesVendorDocumentStorage,
   notifier: vendorResponseNotificationAdapter,
@@ -50,3 +50,16 @@ export const submitPublicVendorResponse = createSubmitVendorResponse({
   folderName: process.env.DO_FOLDER_NAME || "rfp-tool",
   malwareScan: vendorUploadMalwareScan,
 });
+
+type SubmitInput = Parameters<typeof submitVendorResponseVersion>[0];
+
+export const submitPublicVendorResponse = (
+  input: Omit<SubmitInput, "channel" | "recordedByUserId">,
+) => submitVendorResponseVersion({ ...input, channel: "public_portal" });
+
+/* Planner-entered response, on behalf of a vendor that replied outside the
+   portal. Same version chain, same malware scan, same idempotency — only the
+   channel, the ownership check, and the notifications differ. */
+export const recordManualVendorResponse = (
+  input: Omit<SubmitInput, "channel"> & { recordedByUserId: string },
+) => submitVendorResponseVersion({ ...input, channel: "planner_upload" });

@@ -142,6 +142,22 @@ reconciles eligible sources, and journals checksummed outcomes. Comparison,
 requirement mapping, extraction, evaluator scoring, and decision UX remain later
 explicitly approved tasks.
 
+### Planner-entered vendor responses (2026-08-25)
+
+Not every vendor replies through the portal. `POST
+/api/vendor-responses/manual` lets a planner record a response that arrived by
+email, courier, or in person. It reuses the portal use case, so the response
+joins the same `VendorSubmission` chain, gets the same immutable version,
+manifest checksum, private storage, fail-closed malware scan, and idempotency
+key — only the attribution and the notifications differ: the version is stamped
+`sourceSystem: "planner_upload"`, and neither the planner notification nor the
+vendor confirmation email is sent (the vendor submitted nothing, so a receipt to
+them would be false). The route requires the new `vendor-response:write` action
+and ownership of the proposal, checked against the same `ownerUserId` the
+dashboard reads are scoped to. The dashboard exposes it as "Add response
+manually" on a proposal's responses page; reusing a vendor's email adds the next
+version to that vendor's existing response rather than creating a second one.
+
 ### The DXG pricing engine (client workbook)
 
 The founder supplied `RFPilot_AV_Pricing_Engine` (baseline v3): 433 line items
