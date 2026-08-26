@@ -26,3 +26,12 @@ test("legacy route guards map to membership roles during transition", () => {
   assert.deepEqual(legacyAuthorizationRoles("admin"), ["dxg_admin", "super_admin"]);
   assert.deepEqual(legacyAuthorizationRoles("superadmin"), ["super_admin"]);
 });
+
+test("planner roles may record a vendor response, knowledge roles may not", () => {
+  for (const role of ["planner", "organization_admin", "dxg_producer", "dxg_admin", "super_admin"]) {
+    assert.equal(hasOrganizationAction([role], "vendor-response:write"), true, role);
+  }
+  for (const role of ["knowledge_editor", "knowledge_approver"]) {
+    assert.equal(hasOrganizationAction([role], "vendor-response:write"), false, role);
+  }
+});

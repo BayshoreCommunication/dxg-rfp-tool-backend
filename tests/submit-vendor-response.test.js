@@ -350,3 +350,107 @@ test("idempotent replay returns the original version before scanning or uploadin
   assert.equal(capture.upload, undefined);
   assert.equal(capture.save, undefined);
 });
+
+test("portal submissions stay attributed to the public portal", async () => {
+  const capture = {};
+  const submit = createSubmitVendorResponse(dependencies(capture));
+
+  await submit({
+    proposalId: "proposal-001",
+    vendorName: "AV Partners",
+    submittedBy: "Avery",
+    email: "vendor@example.com",
+    files: [],
+  });
+
+  assert.equal(capture.save.sourceSystem, "public_portal");
+});
+
+test("planner-entered response is attributed to the planner and stays silent", async () => {
+  const capture = {};
+  const submit = createSubmitVendorResponse(dependencies(capture));
+
+  const result = await submit({
+    proposalId: "proposal-001",
+    vendorName: "  AV Partners ",
+    submittedBy: "Avery Vendor",
+    email: " SALES@AV.EXAMPLE ",
+    message: "Quote received by email.",
+    channel: "planner_upload",
+    recordedByUserId: "planner-001",
+    files: [{ originalname: "quote.pdf", path: "/tmp/quote" }],
+  });
+
+  assert.equal(result.kind, "created");
+  assert.equal(capture.save.sourceSystem, "planner_upload");
+  assert.equal(capture.save.email, "sales@av.example");
+  assert.equal(capture.save.newDocuments.length, 1);
+  // The planner is the actor and the vendor never submitted, so neither the
+  // planner notification nor the vendor confirmation receipt may be sent.
+  assert.equal(capture.notification, undefined);
+  assert.equal(capture.confirmation, undefined);
+});
+
+test("planner-entered revision carries the reason the planner selected", async () => {
+  const capture = {};
+  const deps = dependencies(capture);
+  deps.repository.findExisting = async () => ({
+    _id: "response-existing",
+    currentVersionId: "507f1f77bcf86cd799439013",
+    currentVersionNumber: 1,
+  });
+  const submit = createSubmitVendorResponse(deps);
+
+  const result = await submit({
+    proposalId: "proposal-001",
+    vendorName: "AV Partners",
+    submittedBy: "Avery",
+    email: "vendor@example.com",
+    reason: "bafo",
+    channel: "planner_upload",
+    recordedByUserId: "planner-001",
+    files: [],
+  });
+
+  assert.equal(result.kind, "version_created");
+  assert.equal(capture.save.reason, "bafo");
+  assert.equal(capture.save.sourceSystem, "planner_upload");
+  assert.equal(capture.confirmation, undefined);
+});
+
+test("planner-entered response is refused for a proposal owned by someone else", async () => {
+  const capture = {};
+  const submit = createSubmitVendorResponse(dependencies(capture));
+
+  const result = await submit({
+    proposalId: "proposal-001",
+    vendorName: "AV Partners",
+    submittedBy: "Avery",
+    email: "vendor@example.com",
+    channel: "planner_upload",
+    recordedByUserId: "planner-002",
+    files: [{ originalname: "quote.pdf", path: "/tmp/quote" }],
+  });
+
+  assert.deepEqual(result, { kind: "forbidden" });
+  assert.equal(capture.cleanup, "/tmp/quote");
+  assert.equal(capture.upload, undefined);
+  assert.equal(capture.save, undefined);
+});
+
+test("planner channel without a recorded user is refused", async () => {
+  const capture = {};
+  const submit = createSubmitVendorResponse(dependencies(capture));
+
+  const result = await submit({
+    proposalId: "proposal-001",
+    vendorName: "AV Partners",
+    submittedBy: "Avery",
+    email: "vendor@example.com",
+    channel: "planner_upload",
+    files: [],
+  });
+
+  assert.deepEqual(result, { kind: "forbidden" });
+  assert.equal(capture.save, undefined);
+});

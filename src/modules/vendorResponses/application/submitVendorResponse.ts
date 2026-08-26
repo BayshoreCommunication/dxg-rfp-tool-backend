@@ -36,6 +36,13 @@ const allowedRevisionReasons = new Set<VendorSubmissionVersionReason>([
   "administrative_correction",
 ]);
 
+/* A submission either arrives from the vendor through the public portal or is
+   recorded by the planner on the vendor's behalf (a response that reached them
+   by email, courier, or in person). Both produce the same immutable version
+   chain; the channel only decides who may write it, how the version is
+   attributed, and which notifications are appropriate. */
+export type VendorSubmissionChannel = "public_portal" | "planner_upload";
+
 const fallbackIdempotencyKey = (input: {
   proposalId: string;
   email: string;
@@ -131,6 +138,8 @@ export const createSubmitVendorResponse = (dependencies: {
   trackingId?: unknown;
   idempotencyKey?: unknown;
   reason?: unknown;
+  channel?: VendorSubmissionChannel;
+  recordedByUserId?: unknown;
   files: VendorUpload[];
 }) => {
   for (const [value, field] of [
@@ -162,11 +171,27 @@ export const createSubmitVendorResponse = (dependencies: {
         files: input.files,
       });
   const folder = dependencies.folderName.replace(/^\/+|\/+$/g, "") || "rfp-tool";
+  const channel: VendorSubmissionChannel =
+    input.channel === "planner_upload" ? "planner_upload" : "public_portal";
 
   const proposal = await dependencies.repository.findProposal(input.proposalId);
   if (!proposal) {
     await Promise.all(input.files.map((file) => dependencies.storage.cleanup(file.path)));
     return { kind: "proposal_not_found" as const };
+  }
+
+  // The public portal is gated by a per-proposal access grant. A planner-entered
+  // response carries no such grant, so ownership is checked here against the same
+  // owner the dashboard reads are scoped to — a planner can only record responses
+  // for their own proposals.
+  if (
+    channel === "planner_upload" &&
+    (typeof input.recordedByUserId !== "string" ||
+      !input.recordedByUserId.trim() ||
+      input.recordedByUserId.trim() !== proposal.ownerUserId)
+  ) {
+    await Promise.all(input.files.map((file) => dependencies.storage.cleanup(file.path)));
+    return { kind: "forbidden" as const };
   }
 
   const replay = await dependencies.repository.findVersionByIdempotencyKey({
@@ -250,7 +275,7 @@ export const createSubmitVendorResponse = (dependencies: {
     trackingId,
     idempotencyKey,
     reason: existingResponse ? requestedReason : "initial",
-    sourceSystem: "public_portal",
+    sourceSystem: channel,
     receivedAt: new Date((dependencies.now ?? Date.now)()),
   });
   const sourceRegistration = await reconcileSources(
@@ -258,23 +283,28 @@ export const createSubmitVendorResponse = (dependencies: {
     saved.record,
   );
 
-  if (saved.created && saved.record.versionNumber === 1) {
-    await dependencies.notifier.notifyPlanner({
-      ...proposal,
-      responseId: String(saved.record.response._id),
-      vendorName,
-      submittedBy,
-      email,
-    });
-  }
-  if (saved.created) {
-    void dependencies.confirmation.send({
-      email,
-      vendorName,
-      submittedBy,
-      proposalTitle: proposal.proposalTitle,
-      isUpdate: saved.record.versionNumber > 1,
-    });
+  // Planner-entered responses skip both notifications: the planner is the actor,
+  // and the vendor never submitted anything here, so a "we received your
+  // response" confirmation to them would be a false receipt.
+  if (channel === "public_portal") {
+    if (saved.created && saved.record.versionNumber === 1) {
+      await dependencies.notifier.notifyPlanner({
+        ...proposal,
+        responseId: String(saved.record.response._id),
+        vendorName,
+        submittedBy,
+        email,
+      });
+    }
+    if (saved.created) {
+      void dependencies.confirmation.send({
+        email,
+        vendorName,
+        submittedBy,
+        proposalTitle: proposal.proposalTitle,
+        isUpdate: saved.record.versionNumber > 1,
+      });
+    }
   }
 
   return {
