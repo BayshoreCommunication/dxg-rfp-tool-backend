@@ -10,8 +10,9 @@ import {
   getVendorResponseById,
   getVendorSubmissionDetail,
   markVendorResponseRead,
+  recordVendorResponseOnBehalf,
 } from "../controller/vendorResponseController";
-import { authenticate, authorizeAction } from "../middleware/auth";
+import { authenticate, authorizeAction, type AuthRequest } from "../middleware/auth";
 import { uploadVendorDocs } from "../middleware/upload";
 import { requirePublicGrant } from "../middleware/publicAccess";
 import {
@@ -26,6 +27,34 @@ const publicGrantLimit = securityRateLimit({
   windowMs: 15 * 60_000,
   identity: grantAndIpIdentity,
 });
+const plannerWriteLimit = securityRateLimit({
+  name: "vendor-response-write",
+  limit: 60,
+  windowMs: 15 * 60_000,
+  // Runs after authenticate, so the planner — not a shared office IP — is the
+  // subject of the limit.
+  identity: (req: Request) => (req as AuthRequest).user?.userId || req.ip || "unknown",
+});
+
+const receiveVendorDocuments = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  uploadVendorDocs(req, res, (err: unknown) => {
+    if (err) {
+      const msg =
+        err instanceof Error && err.message.includes("File too large")
+          ? "One or more files exceed the 10 MB size limit."
+          : err instanceof Error
+            ? err.message
+            : "File upload error.";
+      res.status(400).json({ success: false, message: msg });
+      return;
+    }
+    next();
+  });
+};
 
 const validateResponseId = (
   req: Request,
@@ -55,26 +84,22 @@ router.get(
 router.post(
   "/",
   publicGrantLimit,
-  (req: Request, res: Response, next: NextFunction) => {
-    uploadVendorDocs(req, res, (err: unknown) => {
-      if (err) {
-        const msg =
-          err instanceof Error && err.message.includes("File too large")
-            ? "One or more files exceed the 10 MB size limit."
-            : err instanceof Error
-              ? err.message
-              : "File upload error.";
-        res.status(400).json({ success: false, message: msg });
-        return;
-      }
-      next();
-    });
-  },
+  receiveVendorDocuments,
   requirePublicGrant("vendor:submit"),
   submitVendorResponse,
 );
 
 /* Protected routes — planner dashboard */
+/* Authentication runs before the upload middleware so an anonymous caller can
+   never stream files onto disk. */
+router.post(
+  "/manual",
+  authenticate,
+  authorizeAction("vendor-response:write"),
+  plannerWriteLimit,
+  receiveVendorDocuments,
+  recordVendorResponseOnBehalf,
+);
 router.get(
   "/",
   authenticate,
