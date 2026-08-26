@@ -1,6 +1,6 @@
 # AWS deployment — current state and handoff
 
-> Status as of 2026-08-18. Owner: Travis (Bayshore). This file is the
+> Status as of 2026-08-26. Owner: Travis (Bayshore). This file is the
 > single place to read before continuing AWS work in a new session.
 > Operating docs: [README.md](README.md) (bootstrap/deploy/rollback runbook).
 > No secrets in this file — all secret values live in AWS Secrets Manager.
@@ -16,14 +16,14 @@ from AWS on 2026-08-18 (see "Staging removal" below).
 | Region | `us-east-2` |
 | Production API | `https://api.dxg-agency.com` (HTTPS, 80→443 redirect; CNAME in Namecheap → ALB `Rfpilo-Alb16-pj5OOUBQqRrt-519967115.us-east-2.elb.amazonaws.com`) |
 | TLS cert | ACM wildcard `*.dxg-agency.com` + apex, us-east-2, `.../f6976da6-0174-40b4-86bc-9525267a8b08` (DNS-validated; validation CNAME lives in Namecheap — do not delete it, ACM renews through it) |
-| Health | `GET /health` → 200 OK; Mongo connected, Postgres migrated to `043`, Redis queue ready, observability enabled |
+| Health | `GET /health` → 200 OK; Mongo connected, Postgres migrated to `059`, Redis queue ready, observability enabled (verified 2026-08-26) |
 | ECS cluster | `rfpilot-production` — services `api`(1), `worker`(1), `dispatcher`(1), `cron`(1), `clamav`(1), `ai-gateway`(1) |
 | Assets CDN | `d1hn23mh1h53mx.cloudfront.net` |
 | NAT egress IP | `13.58.171.171` (allowlisted in Atlas Network Access) |
 | MongoDB | Atlas, database `dxg_rfp_tool_prod` |
 | ECR | `295229565954.dkr.ecr.us-east-2.amazonaws.com/rfpilot-backend`, immutable `sha-<commit>` tags (shared, in `Rfpilot-Cicd`) |
 | Secrets | `rfpilot/production/app`, `rfpilot/production/redis-auth` |
-| Deployed image | `sha-bf698269` (2026-08-10) |
+| Deployed image | `sha-ef78816c` (2026-08-26) |
 
 **CI/CD**: push to `production` → `.github/workflows/deploy-aws.yml` runs quality
 gates → image build → Trivy scan → ECR push → one-off Postgres migration task
@@ -33,13 +33,22 @@ keys). Domain/cert/URL CDK contexts flow from the `production` GitHub
 environment's variables. Doc-only pushes do not deploy (`paths-ignore`).
 `main` carries CI only and no longer deploys anything.
 
-⚠️ **CD is currently RED.** The 2026-08-12 deploy runs on both branches failed
-at the quality gate — two failing tests (`proposal field guidance covers the
-canonical form contract`, `schema field inventory digest detects unreviewed
-additions, removals, and renames`). Nothing has deployed since 2026-08-10, so
-production runs migration `043` while the repo carries `044`–`052` committed
-and `053`–`058` uncommitted. Fixing those two tests is the gate for shipping
-the vendor-intelligence / evaluation-engine work.
+**CD is GREEN.** The 2026-08-12 red — two failing quality-gate tests
+(`proposal field guidance covers the canonical form contract`, `schema field
+inventory digest detects unreviewed additions, removals, and renames`) — was
+cleared, and deploys have run clean since 2026-08-23. Production is on
+migration `059`; the 044–058 backlog that had accumulated behind the red gate
+is applied.
+
+**Last deploy**: 2026-08-26, run
+[32957748882](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/actions/runs/32957748882),
+image `sha-ef78816c`, 16m end to end (quality gates 3m56s, build/migrate/deploy
+12m29s). Shipped planner-entered vendor responses (`POST
+/api/vendor-responses/manual`, PR #12). Verified after the roll: `/health` 200
+with Mongo connected, Postgres `059`, queue ready, observability enabled; the
+new route answers 401 unauthenticated while an unknown route under the same
+prefix still answers 404, so it is registered rather than swallowed by a
+catch-all.
 
 **Stacks deployed**: `Rfpilot-Cicd` + the four `Rfpilot-production-*` stacks.
 `api.dxg-agency.com` has pointed at the AWS prod ALB since 2026-08-03.
