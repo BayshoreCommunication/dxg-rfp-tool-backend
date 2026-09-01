@@ -315,15 +315,6 @@ export class AppStack extends cdk.Stack {
           circuitBreaker: { enable: true, rollback: true },
         },
       );
-      // TEMPORARY (remove after one successful production deploy): with cron
-      // scaled to zero, Observability skips the cron alarms and stops
-      // importing this export — but the currently deployed Observability
-      // stack still imports it, and CloudFormation refuses to delete an
-      // in-use export (UPDATE_ROLLBACK on 2026-09-01). Keep it alive for
-      // this deploy; delete these lines once Observability no longer imports it.
-      if (config.ecs.cronDesiredCount === 0) {
-        this.exportValue(this.cronService.serviceName);
-      }
     }
 
     /* ── Worker ──────────────────────────────────────────────────────── */
