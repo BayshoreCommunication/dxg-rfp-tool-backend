@@ -73,11 +73,14 @@ export class ObservabilityStack extends cdk.Stack {
      * back on before relying on multi-task services. */
     for (const [name, service, desired] of [
       ["api", app.apiService, 1],
-      ["cron", app.cronService, 1],
+      ["cron", app.cronService, config.ecs.cronDesiredCount],
       ["worker", app.workerService, 1],
       ["dispatcher", app.dispatcherService, 1],
-      ["clamav", app.clamavService, 1],
+      ["clamav", app.clamavService, config.ecs.clamavDesiredCount],
     ] as const) {
+      // Skip alarms for services scaled to zero — there are no tasks to
+      // monitor, and the missing-data fallback would fire immediately.
+      if (desired === 0) continue;
       alert(
         new cloudwatch.Alarm(this, `${name}TasksLow`, {
           alarmName: `rfpilot-${config.envName}-${name}-tasks-low`,

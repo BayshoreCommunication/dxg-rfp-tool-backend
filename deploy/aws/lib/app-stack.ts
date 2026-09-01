@@ -131,7 +131,7 @@ export class AppStack extends cdk.Stack {
     const logGroup = (name: string): logs.LogGroup =>
       new logs.LogGroup(this, `${name}Logs`, {
         logGroupName: `/rfpilot/${config.envName}/${name.toLowerCase()}`,
-        retention: logs.RetentionDays.ONE_MONTH,
+        retention: logs.RetentionDays.ONE_WEEK,
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       });
 
@@ -300,7 +300,7 @@ export class AppStack extends cdk.Stack {
           cluster: this.cluster,
           serviceName: 'cron',
           taskDefinition: cronTaskDef,
-          desiredCount: 1,
+          desiredCount: config.ecs.cronDesiredCount,
           // Use the same outbound/network posture as the API, where these jobs
           // previously ran successfully in-process. The cron task has no ALB
           // target, so the API security group's ingress rule is never exercised.
@@ -474,7 +474,7 @@ export class AppStack extends cdk.Stack {
         cluster: this.cluster,
         serviceName: 'clamav',
         taskDefinition: clamavTaskDef,
-        desiredCount: 1,
+        desiredCount: config.ecs.clamavDesiredCount,
         securityGroups: [network.clamavSg],
         vpcSubnets: {
           subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
@@ -597,56 +597,58 @@ export class AppStack extends cdk.Stack {
       });
     }
 
-    const webAcl = new wafv2.CfnWebACL(this, 'WebAcl', {
-      scope: 'REGIONAL',
-      defaultAction: { allow: {} },
-      visibilityConfig: {
-        cloudWatchMetricsEnabled: true,
-        metricName: `rfpilot-${config.envName}-waf`,
-        sampledRequestsEnabled: true,
-      },
-      rules: [
-        {
-          name: 'AWSManagedCommonRuleSet',
-          priority: 1,
-          overrideAction: { none: {} },
-          statement: {
-            managedRuleGroupStatement: {
-              vendorName: 'AWS',
-              name: 'AWSManagedRulesCommonRuleSet',
-              // The app legitimately accepts up to 50 MB document uploads;
-              // the size restriction rule would block them at 8 KB.
-              excludedRules: [{ name: 'SizeRestrictions_BODY' }],
+    if (config.wafEnabled) {
+      const webAcl = new wafv2.CfnWebACL(this, 'WebAcl', {
+        scope: 'REGIONAL',
+        defaultAction: { allow: {} },
+        visibilityConfig: {
+          cloudWatchMetricsEnabled: true,
+          metricName: `rfpilot-${config.envName}-waf`,
+          sampledRequestsEnabled: true,
+        },
+        rules: [
+          {
+            name: 'AWSManagedCommonRuleSet',
+            priority: 1,
+            overrideAction: { none: {} },
+            statement: {
+              managedRuleGroupStatement: {
+                vendorName: 'AWS',
+                name: 'AWSManagedRulesCommonRuleSet',
+                // The app legitimately accepts up to 50 MB document uploads;
+                // the size restriction rule would block them at 8 KB.
+                excludedRules: [{ name: 'SizeRestrictions_BODY' }],
+              },
+            },
+            visibilityConfig: {
+              cloudWatchMetricsEnabled: true,
+              metricName: 'common-rules',
+              sampledRequestsEnabled: true,
             },
           },
-          visibilityConfig: {
-            cloudWatchMetricsEnabled: true,
-            metricName: 'common-rules',
-            sampledRequestsEnabled: true,
-          },
-        },
-        {
-          name: 'RateLimitPerIp',
-          priority: 2,
-          action: { block: {} },
-          statement: {
-            rateBasedStatement: {
-              limit: 2000,
-              aggregateKeyType: 'IP',
+          {
+            name: 'RateLimitPerIp',
+            priority: 2,
+            action: { block: {} },
+            statement: {
+              rateBasedStatement: {
+                limit: 2000,
+                aggregateKeyType: 'IP',
+              },
+            },
+            visibilityConfig: {
+              cloudWatchMetricsEnabled: true,
+              metricName: 'rate-limit',
+              sampledRequestsEnabled: true,
             },
           },
-          visibilityConfig: {
-            cloudWatchMetricsEnabled: true,
-            metricName: 'rate-limit',
-            sampledRequestsEnabled: true,
-          },
-        },
-      ],
-    });
-    new wafv2.CfnWebACLAssociation(this, 'WebAclAssociation', {
-      resourceArn: this.alb.loadBalancerArn,
-      webAclArn: webAcl.attrArn,
-    });
+        ],
+      });
+      new wafv2.CfnWebACLAssociation(this, 'WebAclAssociation', {
+        resourceArn: this.alb.loadBalancerArn,
+        webAclArn: webAcl.attrArn,
+      });
+    }
 
     /* ── Outputs consumed by the deploy workflow and runbook ─────────── */
     new cdk.CfnOutput(this, 'AlbDnsName', {
