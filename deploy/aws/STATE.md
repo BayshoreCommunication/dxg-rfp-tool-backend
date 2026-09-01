@@ -1,6 +1,6 @@
 # AWS deployment — current state and handoff
 
-> Status as of 2026-08-26. Owner: Travis (Bayshore). This file is the
+> Status as of 2026-09-01. Owner: Travis (Bayshore). This file is the
 > single place to read before continuing AWS work in a new session.
 > Operating docs: [README.md](README.md) (bootstrap/deploy/rollback runbook).
 > No secrets in this file — all secret values live in AWS Secrets Manager.
@@ -16,14 +16,14 @@ from AWS on 2026-08-18 (see "Staging removal" below).
 | Region | `us-east-2` |
 | Production API | `https://api.dxg-agency.com` (HTTPS, 80→443 redirect; CNAME in Namecheap → ALB `Rfpilo-Alb16-pj5OOUBQqRrt-519967115.us-east-2.elb.amazonaws.com`) |
 | TLS cert | ACM wildcard `*.dxg-agency.com` + apex, us-east-2, `.../f6976da6-0174-40b4-86bc-9525267a8b08` (DNS-validated; validation CNAME lives in Namecheap — do not delete it, ACM renews through it) |
-| Health | `GET /health` → 200 OK; Mongo connected, Postgres migrated to `059`, Redis queue ready, observability enabled (verified 2026-08-26) |
-| ECS cluster | `rfpilot-production` — services `api`(1), `worker`(1), `dispatcher`(1), `cron`(1), `clamav`(1), `ai-gateway`(1) |
+| Health | `GET /health` → 200 OK; Mongo connected, Postgres migrated to `059`, Redis queue ready, observability enabled (verified 2026-09-01) |
+| ECS cluster | `rfpilot-production` — services `api`(1), `worker`(1), `dispatcher`(1), `cron`(0, scaled to zero pre-launch), `clamav`(1), `ai-gateway`(1) |
 | Assets CDN | `d1hn23mh1h53mx.cloudfront.net` |
 | NAT egress IP | `13.58.171.171` (allowlisted in Atlas Network Access) |
 | MongoDB | Atlas, database `dxg_rfp_tool_prod` |
 | ECR | `295229565954.dkr.ecr.us-east-2.amazonaws.com/rfpilot-backend`, immutable `sha-<commit>` tags (shared, in `Rfpilot-Cicd`) |
 | Secrets | `rfpilot/production/app`, `rfpilot/production/redis-auth` |
-| Deployed image | `sha-ef78816c` (2026-08-26) |
+| Deployed image | `sha-7246b6bb` (2026-09-01) |
 
 **CI/CD**: push to `production` → `.github/workflows/deploy-aws.yml` runs quality
 gates → image build → Trivy scan → ECR push → one-off Postgres migration task
@@ -40,15 +40,43 @@ cleared, and deploys have run clean since 2026-08-23. Production is on
 migration `059`; the 044–058 backlog that had accumulated behind the red gate
 is applied.
 
-**Last deploy**: 2026-08-26, run
-[32957748882](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/actions/runs/32957748882),
-image `sha-ef78816c`, 16m end to end (quality gates 3m56s, build/migrate/deploy
-12m29s). Shipped planner-entered vendor responses (`POST
-/api/vendor-responses/manual`, PR #12). Verified after the roll: `/health` 200
-with Mongo connected, Postgres `059`, queue ready, observability enabled; the
-new route answers 401 unauthenticated while an unknown route under the same
-prefix still answers 404, so it is registered rather than swallowed by a
-catch-all.
+**Last deploy**: 2026-09-01, run
+[33506322481](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/actions/runs/33506322481),
+image `sha-7246b6bb`. Third of three runs that day:
+
+1. Run
+   [33501517217](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/actions/runs/33501517217)
+   (`e6cec2c`) **failed harmlessly** — `Rfpilot-production-App` rolled back
+   in ~2s with "Cannot delete export …CronService…Name… as it is in use by
+   Rfpilot-production-Observability". Cause: the rightsizing commit
+   (`b965d24`, cron `desiredCount: 0`) makes Observability skip the cron
+   alarms and drop its import of the App stack's CronService name export,
+   but CI deploys App before Observability, so CloudFormation refused to
+   delete the still-imported export. API stayed 200 throughout; no
+   resources changed.
+2. Run
+   [33503797929](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/actions/runs/33503797929)
+   (`6a51f2d`, ~18m) **succeeded** with the two-phase fix: a temporary
+   `this.exportValue(cronService.serviceName)` kept the export alive while
+   Observability dropped its import. Shipped: vendor fact-mapping
+   output-limit fix (clamp 4000→16000 + `LIVE_AI_OUTPUT_TOKEN_LIMIT=16000`,
+   PR #16 — fixes deterministic `LIVE_AI_MALFORMED_OUTPUT` on partially
+   OCR'd vendor PDFs), evaluation-controller error logging (unknown errors
+   were previously swallowed silently), and the pre-launch rightsizing
+   (`b965d24`: RDS `t4g.micro`, 7-day backups, cron scaled to 0).
+3. Run
+   [33506322481](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/actions/runs/33506322481)
+   (`7246b6b`) **succeeded** — removed the temporary export now that the
+   deployed Observability stack no longer imports it.
+
+Verified after the final roll: `/health` 200 with Mongo connected, Postgres
+`059`, queue ready, observability enabled.
+
+**New lesson (2026-09-01)**: removing a cross-stack export (e.g. by scaling a
+service to zero so its alarms — and their imports — disappear) needs a
+two-phase deploy because CI deploys App before Observability: first deploy
+with a temporary `this.exportValue(...)` in the App stack keeping the old
+export alive, then a second deploy that removes it.
 
 **Stacks deployed**: `Rfpilot-Cicd` + the four `Rfpilot-production-*` stacks.
 `api.dxg-agency.com` has pointed at the AWS prod ALB since 2026-08-03.
