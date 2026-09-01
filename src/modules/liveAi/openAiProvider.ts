@@ -6,7 +6,7 @@ import {beginProviderAttempt,completeProviderAttempt,type ProviderAttemptContext
 // this default requires a new release record and gold-fixture evaluation.
 export const LIVE_AI_MODEL=process.env.LIVE_AI_MODEL||"gpt-5.4-mini-2026-03-17";
 export const LIVE_AI_INPUT_TOKEN_LIMIT=Number(process.env.LIVE_AI_INPUT_TOKEN_LIMIT||32000);
-export const LIVE_AI_OUTPUT_TOKEN_LIMIT=Math.min(Number(process.env.LIVE_AI_OUTPUT_TOKEN_LIMIT||4000),4000);
+export const LIVE_AI_OUTPUT_TOKEN_LIMIT=Math.min(Number(process.env.LIVE_AI_OUTPUT_TOKEN_LIMIT||4000),16000);
 
 export class LiveAiError extends Error{
  constructor(public readonly code:string,message:string,public readonly status=422,public readonly retryable=false){super(message);}

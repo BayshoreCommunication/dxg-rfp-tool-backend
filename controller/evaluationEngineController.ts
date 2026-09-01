@@ -12,7 +12,7 @@ const context = (req: AuthRequest) => {
   if (!req.user?.organizationId || !req.user.userId) throw new EvaluationEngineError("AUTHENTICATION_REQUIRED", "Authentication required.", 401);
   return { organizationMongoId: req.user.organizationId, actorUserMongoId: req.user.userId, proposalMongoId: mongoId(req.params.proposalId, "PROPOSAL_NOT_FOUND", "Proposal was not found."), submissionMongoId: mongoId(req.params.submissionId, "VENDOR_SUBMISSION_NOT_FOUND", "Vendor submission was not found."), versionMongoId: mongoId(req.params.versionId, "SUBMISSION_VERSION_NOT_FOUND", "Vendor submission version was not found."), correlationId: String(req.headers["x-correlation-id"] || crypto.randomUUID()) };
 };
-const handle = (res: Response, error: unknown) => { const known = error instanceof EvaluationEngineError; const status = known ? error.status : 500; res.status(status).json({ title: known ? error.message : "Vendor evaluation operation failed.", status, code: known ? error.code : "INTERNAL_ERROR" }); };
+const handle = (res: Response, error: unknown) => { const known = error instanceof EvaluationEngineError; const status = known ? error.status : 500; if (!known) console.error("[evaluationEngine] unhandled error", error); const detail = !known && process.env.NODE_ENV === "development" && error instanceof Error ? ` (${error.message})` : ""; res.status(status).json({ title: known ? error.message : `Vendor evaluation operation failed.${detail}`, status, code: known ? error.code : "INTERNAL_ERROR" }); };
 
 export const createEvaluation = async (req: AuthRequest, res: Response) => { try {
   const body = (req.body ?? {}) as Record<string, unknown>;
