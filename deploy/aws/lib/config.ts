@@ -32,12 +32,15 @@ export interface EnvironmentConfig {
     readonly nodeType: string; // e.g. "cache.t4g.micro"
     readonly replicas: number;
   };
+  readonly wafEnabled: boolean;
   readonly ecs: {
     readonly api: TaskSize;
     readonly worker: TaskSize;
     readonly dispatcher: TaskSize;
     readonly clamav: TaskSize;
     readonly workerMaxCount: number;
+    readonly cronDesiredCount: number;
+    readonly clamavDesiredCount: number;
   };
   /** ECS Container Insights. Publishes ~158 custom metrics for this cluster
    *  (~$47/month) and is the ONLY source of ECS/ContainerInsights
@@ -151,13 +154,14 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
     natGateways: 1,
     privateAwsEndpoints: false,
     rds: {
-      instanceClass: "t4g.medium",
+      instanceClass: "t4g.micro",
       multiAz: !PRE_LAUNCH_REDUCED_REDUNDANCY,
       allocatedStorageGb: 50,
-      backupRetentionDays: 30,
+      backupRetentionDays: 7,
       deletionProtection: true,
     },
-    redis: { nodeType: "cache.t4g.small", replicas: PRE_LAUNCH_REDUCED_REDUNDANCY ? 0 : 1 },
+    redis: { nodeType: "cache.t4g.micro", replicas: PRE_LAUNCH_REDUCED_REDUNDANCY ? 0 : 1 },
+    wafEnabled: false,
     // CPU rightsized 2026-08-18 from 1024 on api/worker/clamav. Seven-day
     // observed utilisation at the time: api 2.3% avg / 8.8% peak, worker
     // 1.1% / 3.0%, clamav 1.1% / 1.8% — i.e. under a tenth of one vCPU.
@@ -171,6 +175,8 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
       dispatcher: { cpu: 256, memoryMiB: 512 },
       clamav: { cpu: 512, memoryMiB: 3072 },
       workerMaxCount: 4,
+      cronDesiredCount: 0,
+      clamavDesiredCount: 1,
     },
     containerInsights: false,
     albIdleTimeoutSeconds: 180,
