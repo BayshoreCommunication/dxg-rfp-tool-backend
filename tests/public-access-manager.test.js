@@ -109,6 +109,30 @@ test("vendor grant consumption fails closed when a recipient is required but mis
   assert.equal(consumeCalled, false);
 });
 
+test("vendor grant can authorize an alternate response contact when the route opts in", async () => {
+  const consumedHashes = [];
+  const manager = createPublicAccessManager({
+    resourceOwned: async () => true,
+    create: async () => ({ id: "grant-1" }),
+    consume: async (_tokenHash, _purpose, _resourceId, _now, suppliedHash) => {
+      consumedHashes.push(suppliedHash);
+      return suppliedHash === null ? { resourceId: "proposal" } : null;
+    },
+    revoke: async () => true,
+  });
+
+  const result = await manager.validateAndConsume({
+    token: "opaque-token",
+    purpose: "vendor:submit",
+    resourceId: "proposal",
+    recipient: "confirmation@example.com",
+    allowAlternateVendorContact: true,
+  });
+
+  assert.ok(result);
+  assert.deepEqual(consumedHashes, [null]);
+});
+
 test("read-only proposal rendering can consume a vendor invite before email entry", async () => {
   let consumeCalled = false;
   const manager = createPublicAccessManager({

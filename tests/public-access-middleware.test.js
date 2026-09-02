@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const { publicAccess } = require("../src/modules/publicAccess/composition");
 const { requirePublicGrant } = require("../middleware/publicAccess");
 
-const invoke = async ({ purpose = "vendor:submit", query = {}, body = {} } = {}) => {
+const invoke = async ({ purpose = "vendor:submit", options = {}, query = {}, body = {} } = {}) => {
   const response = {
     statusCode: 200,
     payload: null,
@@ -12,7 +12,7 @@ const invoke = async ({ purpose = "vendor:submit", query = {}, body = {} } = {})
     json(payload) { this.payload = payload; return this; },
   };
   let nextCalled = false;
-  await requirePublicGrant(purpose)(
+  await requirePublicGrant(purpose, options)(
     {
       params: {},
       query: { proposalId: "proposal-1", accessGrant: "opaque-grant", ...query },
@@ -42,6 +42,27 @@ test("dedicated vendor operations pass caller email and require recipient bindin
     const rejected = await invoke({ query: { email: "attacker@example.com" } });
     assert.equal(rejected.nextCalled, false);
     assert.equal(rejected.response.statusCode, 403);
+  } finally {
+    publicAccess.validateAndConsume = original;
+  }
+});
+
+test("vendor response routes can use a separate confirmation email", async () => {
+  const original = publicAccess.validateAndConsume;
+  let captured;
+  publicAccess.validateAndConsume = async (input) => {
+    captured = input;
+    return input.allowAlternateVendorContact ? { resourceId: "proposal-1" } : null;
+  };
+
+  try {
+    const result = await invoke({
+      options: { allowAlternateVendorContact: true },
+      body: { email: "confirmation@example.com" },
+    });
+    assert.equal(result.nextCalled, true);
+    assert.equal(captured.recipient, "confirmation@example.com");
+    assert.equal(captured.allowAlternateVendorContact, true);
   } finally {
     publicAccess.validateAndConsume = original;
   }

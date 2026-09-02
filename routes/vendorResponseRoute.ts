@@ -27,6 +27,10 @@ const publicGrantLimit = securityRateLimit({
   windowMs: 15 * 60_000,
   identity: grantAndIpIdentity,
 });
+
+// The invite token remains bound to this proposal and operation. The vendor's
+// response contact may be a different mailbox from the invitation recipient.
+const alternateVendorContact = { allowAlternateVendorContact: true } as const;
 const plannerWriteLimit = securityRateLimit({
   name: "vendor-response-write",
   limit: 60,
@@ -72,20 +76,20 @@ const validateResponseId = (
 router.get(
   "/check",
   publicGrantLimit,
-  requirePublicGrant("vendor:submit"),
+  requirePublicGrant("vendor:submit", alternateVendorContact),
   checkVendorResponseExists,
 );
 router.get(
   "/receipt/:versionId",
   publicGrantLimit,
-  requirePublicGrant("vendor:submit"),
+  requirePublicGrant("vendor:submit", alternateVendorContact),
   getVendorResponseReceipt,
 );
 router.post(
   "/",
   publicGrantLimit,
   receiveVendorDocuments,
-  requirePublicGrant("vendor:submit"),
+  requirePublicGrant("vendor:submit", alternateVendorContact),
   submitVendorResponse,
 );
 
