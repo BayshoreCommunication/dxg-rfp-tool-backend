@@ -273,8 +273,18 @@ test("failed vendor intelligence creation requeues its durable job instead of re
   const repository = fs.readFileSync(path.join(__dirname, "../src/modules/vendorIntelligence/postgresVendorIntelligenceRepository.ts"), "utf8");
   assert.match(repository, /prior\.status === "failed"/);
   assert.match(repository, /status='queued',attempt_count=0/);
+  assert.match(repository, /warning_count=\$4,warnings=\$5::jsonb/);
+  assert.match(repository, /inputWarnings\.length, JSON\.stringify\(inputWarnings\)/);
   assert.match(repository, /vendor-intelligence\.requeued:/);
   assert.match(repository, /vendor_intelligence\.requeued/);
+});
+
+test("vendor intelligence execution replaces stale coverage warnings with the latest extraction state", () => {
+  const repository = fs.readFileSync(path.join(__dirname, "../src/modules/vendorIntelligence/postgresVendorIntelligenceRepository.ts"), "utf8");
+  assert.match(repository, /const warnings = currentWarnings;/);
+  assert.doesNotMatch(repository, /Array\.isArray\(run\.warnings\)[\s\S]*\.\.\.currentWarnings/);
+  const domain = fs.readFileSync(path.join(__dirname, "../src/modules/vendorIntelligence/domain.ts"), "utf8");
+  assert.match(domain, /mapping-fact-validation\.v8/);
 });
 
 test("vendor mapping failures settle the domain run only after durable retries are exhausted", () => {
