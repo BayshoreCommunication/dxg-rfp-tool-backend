@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { assignContradictionGroups, validateFactCorrectionPayload } from "../vendorIntelligence/domain";
 
-export const ASSESSMENT_VERSION = "vendor-assessment.v3";
+export const ASSESSMENT_VERSION = "vendor-assessment.v4";
 export const RISK_POLICY_VERSION = "evaluation-risk.v1";
 export const COMMERCIAL_POLICY_VERSION = "commercial-normalization.v1";
 export const SCORING_POLICY_VERSION = "confirmed-rubric-score.v2";
@@ -11,7 +11,7 @@ export class EvaluationEngineError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 422) { super(message); }
 }
 
-const blockingCoverageWarnings = new Set(["SOURCE_COVERAGE_INCOMPLETE", "SOURCE_UNAVAILABLE", "EVIDENCE_COVERAGE_BOUNDED"]);
+const blockingCoverageWarnings = new Set(["SOURCE_COVERAGE_INCOMPLETE", "SOURCE_UNAVAILABLE"]);
 export const coverageEligibility = (warnings: Array<{ code?: unknown }>) => {
   const blockingCodes = [...new Set(warnings.map((warning) => String(warning.code ?? "")).filter((code) => blockingCoverageWarnings.has(code)))].sort();
   return { eligible: blockingCodes.length === 0, blockingCodes };
