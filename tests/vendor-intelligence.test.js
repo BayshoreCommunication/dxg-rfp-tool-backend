@@ -122,7 +122,7 @@ test("human fact corrections preserve the extracted value type", () => {
   );
 });
 
-test("partial, unavailable, and bounded source coverage remain explicit intelligence blockers", () => {
+test("partial, unavailable, and bounded source coverage remain explicit intelligence warnings", () => {
   const result = sourceCoverageWarnings([
     { status: "succeeded", sourceLabel: "Cover message", warnings: [] },
     { status: "partial", sourceLabel: "Technical.pdf", warnings: [{ code: "PAGE_COVERAGE_INCOMPLETE", message: "Some pages were unreadable." }] },

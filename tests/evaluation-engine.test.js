@@ -95,21 +95,25 @@ test("criterion aggregation averages eligible evaluators and excludes observers 
   ]);
 });
 
-test("incomplete or bounded source coverage is ineligible for evaluation", () => {
+test("only incomplete or unavailable source coverage is ineligible for evaluation", () => {
   assert.deepEqual(coverageEligibility([]), { eligible: true, blockingCodes: [] });
+  assert.deepEqual(coverageEligibility([
+    { code: "EVIDENCE_COVERAGE_BOUNDED" },
+  ]), { eligible: true, blockingCodes: [] });
   assert.deepEqual(coverageEligibility([
     { code: "PAGE_COVERAGE_INCOMPLETE" },
     { code: "SOURCE_COVERAGE_INCOMPLETE" },
     { code: "EVIDENCE_COVERAGE_BOUNDED" },
+    { code: "SOURCE_UNAVAILABLE" },
     { code: "SOURCE_COVERAGE_INCOMPLETE" },
-  ]), { eligible: false, blockingCodes: ["EVIDENCE_COVERAGE_BOUNDED", "SOURCE_COVERAGE_INCOMPLETE"] });
+  ]), { eligible: false, blockingCodes: ["SOURCE_COVERAGE_INCOMPLETE", "SOURCE_UNAVAILABLE"] });
 });
 
 test("coverage eligibility is a versioned assessment policy", () => {
-  const migration = fs.readFileSync(path.join(__dirname, "../migrations/postgres/055_evaluation_coverage_eligibility.up.sql"), "utf8");
+  const migration = fs.readFileSync(path.join(__dirname, "../migrations/postgres/060_bounded_evidence_evaluation.up.sql"), "utf8");
   const domain = fs.readFileSync(path.join(__dirname, "../src/modules/evaluationEngine/domain.ts"), "utf8");
-  assert.match(domain, /vendor-assessment\.v3/);
-  assert.match(migration, /vendor-assessment\.v3/);
+  assert.match(domain, /vendor-assessment\.v4/);
+  assert.match(migration, /vendor-assessment\.v4/);
 });
 
 test("rejected mappings become cited-safe missing assessments instead of retaining model compliance", () => {
