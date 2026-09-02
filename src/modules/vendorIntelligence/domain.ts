@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 export const MAPPING_VERSION = "requirement-mapping.v1";
 export const FACT_VERSION = "vendor-fact.v3";
-export const VALIDATION_VERSION = "mapping-fact-validation.v8";
+export const VALIDATION_VERSION = "mapping-fact-validation.v9";
 export const PROMPT_VERSION = "vendor-intelligence-prompt.v4";
 export const MAX_FACTS_PER_CHUNK = 24;
 
@@ -127,7 +127,16 @@ export const sourceCoverageWarnings = (
 
 const FACT_KEY = /^[a-z][a-z0-9_.:-]{0,149}$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const forbiddenDecision = /\b(?:winner|award(?:ed)?|shortlist(?:ed)?|select(?:ed)?\s+(?:this|the)\s+vendor|disqualif(?:y|ied))\b/i;
+const valueKinds: ValueKind[] = ["string", "number", "boolean", "money", "date", "date_range", "duration", "quantity", "list", "unknown"];
+const mappingRelationships: ProviderMapping["relationship"][] = ["supports", "partially_supports", "contradicts", "context_only", "none"];
+const prohibitedDecisionPatterns = [
+  /\b(?:recommend|advise|urge|should|must)\s+(?:that\s+)?(?:the\s+)?(?:planner\s+)?(?:award|select|shortlist|disqualify)\b/i,
+  /\b(?:award|select|shortlist|disqualify)\s+(?:this|the)\s+(?:vendor|response|bid|proposal)\b/i,
+  /\b(?:this|the)\s+(?:vendor|response|bid|proposal)\s+(?:is|should\s+be|must\s+be)\s+(?:the\s+)?(?:winner|selected|awarded|shortlisted|disqualified)\b/i,
+  /\b(?:best|strongest|winning)\s+(?:vendor|response|bid|proposal)\b/i,
+];
+const containsProhibitedDecisionLanguage = (value: string) =>
+  prohibitedDecisionPatterns.some((pattern) => pattern.test(value));
 const boundedText = (value: unknown, max: number): string => typeof value === "string" ? value.trim().slice(0, max) : "";
 const finiteConfidence = (value: unknown): number => {
   const number = Number(value);
@@ -135,15 +144,15 @@ const finiteConfidence = (value: unknown): number => {
     throw new VendorIntelligenceError("SCHEMA_VALIDATION_FAILED", "Provider confidence is invalid.");
   return number;
 };
-const validDate = (value: string | null): string | null => {
+const validDate = (value: unknown): string | null => {
   if (value === null) return null;
-  if (!ISO_DATE.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00.000Z`)))
+  if (typeof value !== "string" || !ISO_DATE.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00.000Z`)))
     throw new VendorIntelligenceError("SCHEMA_VALIDATION_FAILED", "Provider date is invalid.");
   return value;
 };
 
 const validateValue = (kind: ValueKind, value: ProviderValue) => {
-  if (!value || typeof value !== "object")
+  if (!value || typeof value !== "object" || Array.isArray(value))
     throw new VendorIntelligenceError("SCHEMA_VALIDATION_FAILED", "Provider typed value is invalid.");
   const text = value.text === null ? null : boundedText(value.text, 2000);
   const numeric = value.number === null ? null : Number(value.number);
@@ -185,15 +194,19 @@ export const validateFacts = (output: ProviderFactOutput, allowedFragments: Set<
     throw new VendorIntelligenceError("SCHEMA_VALIDATION_FAILED", "Provider fact output is invalid.");
   const seen = new Set<string>();
   const validated = output.facts.map((fact): ValidatedFact | null => {
-    if (!FACT_KEY.test(fact.factKey) || !factFamilies.includes(fact.family) || !factTypes.includes(fact.factType))
+    if (!fact || typeof fact !== "object" || Array.isArray(fact)
+      || !FACT_KEY.test(fact.factKey) || !factFamilies.includes(fact.family) || !factTypes.includes(fact.factType)
+      || !valueKinds.includes(fact.valueKind) || !["explicit", "derived"].includes(fact.explicitness))
       throw new VendorIntelligenceError("SCHEMA_VALIDATION_FAILED", "Provider fact identity is invalid.");
     const statement = boundedText(fact.statement, 1200);
-    if (!statement || forbiddenDecision.test(statement))
-      throw new VendorIntelligenceError("PROHIBITED_DECISION_LANGUAGE", "Provider output contains prohibited decision language.");
+    if (!statement) return null;
+    if (containsProhibitedDecisionLanguage(statement))
+      throw new VendorIntelligenceError("PROHIBITED_DECISION_LANGUAGE", "Provider output attempted to make a vendor decision.");
     if (!Array.isArray(fact.citations) || !fact.citations.length || fact.citations.length > 8)
       throw new VendorIntelligenceError("CITATION_VALIDATION_FAILED", "Every fact requires evidence citations.");
     for (const citation of fact.citations) {
-      if (!allowedFragments.has(citation.fragmentId) || !["supports", "contradicts", "context"].includes(citation.role))
+      if (!citation || typeof citation !== "object" || Array.isArray(citation)
+        || !allowedFragments.has(citation.fragmentId) || !["supports", "contradicts", "context"].includes(citation.role))
         throw new VendorIntelligenceError("CITATION_VALIDATION_FAILED", "Provider citation is outside the vendor evidence boundary.");
     }
     const citations = [...new Map(
@@ -212,6 +225,33 @@ export const validateFacts = (output: ProviderFactOutput, allowedFragments: Set<
     return { ...fact, citations, statement, confidence: finiteConfidence(fact.confidence), ...value };
   });
   return validated.filter((fact): fact is ValidatedFact => fact !== null);
+};
+
+const recoverableProviderValidationCodes = new Set([
+  "SCHEMA_VALIDATION_FAILED",
+  "CITATION_VALIDATION_FAILED",
+  "PROHIBITED_DECISION_LANGUAGE",
+]);
+
+const isRecoverableProviderValidationError = (error: unknown) =>
+  error instanceof VendorIntelligenceError && recoverableProviderValidationCodes.has(error.code);
+
+/**
+ * Treat model-produced facts as untrusted input. Invalid items are discarded at
+ * the provider boundary so one bad item cannot abort valid evidence processing.
+ */
+export const sanitizeProviderFacts = (output: unknown, allowedFragments: Set<string>): ValidatedFact[] => {
+  const facts = output && typeof output === "object" && Array.isArray((output as { facts?: unknown }).facts)
+    ? (output as { facts: unknown[] }).facts.slice(0, MAX_FACTS_PER_CHUNK)
+    : [];
+  return facts.flatMap((candidate) => {
+    try {
+      return validateFacts({ facts: [candidate as ProviderFact] }, allowedFragments);
+    } catch (error) {
+      if (isRecoverableProviderValidationError(error)) return [];
+      throw error;
+    }
+  });
 };
 
 const numberWords = new Map([
@@ -273,7 +313,9 @@ export const validateMappings = (
     throw new VendorIntelligenceError("SCHEMA_VALIDATION_FAILED", "Provider mapping output is invalid.");
   const seen = new Set<string>();
   const validated = output.mappings.map((mapping) => {
-    if (!allowedRequirements.has(mapping.requirementId) || seen.has(mapping.requirementId))
+    if (!mapping || typeof mapping !== "object" || Array.isArray(mapping)
+      || !allowedRequirements.has(mapping.requirementId) || seen.has(mapping.requirementId)
+      || !mappingRelationships.includes(mapping.relationship))
       throw new VendorIntelligenceError("SCHEMA_VALIDATION_FAILED", "Provider requirement mapping identity is invalid.");
     seen.add(mapping.requirementId);
     const ids = Array.isArray(mapping.candidateFragmentIds) ? mapping.candidateFragmentIds : [];
@@ -292,6 +334,38 @@ export const validateMappings = (
   if (validated.length !== allowedRequirements.size)
     throw new VendorIntelligenceError("SCHEMA_VALIDATION_FAILED", "Provider omitted a requirement mapping.");
   return validated;
+};
+
+/**
+ * Preserve only mappings that pass the strict evidence-boundary validator.
+ * Callers complete omitted requirements with a deterministic `none` mapping.
+ */
+export const sanitizeProviderMappings = (
+  output: unknown,
+  allowedRequirements: Set<string>,
+  allowedFragments: Set<string>,
+): ProviderMapping[] => {
+  const mappings = output && typeof output === "object" && Array.isArray((output as { mappings?: unknown }).mappings)
+    ? (output as { mappings: unknown[] }).mappings.slice(0, 40)
+    : [];
+  const seen = new Set<string>();
+  return mappings.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const requirementId = (candidate as { requirementId?: unknown }).requirementId;
+    if (typeof requirementId !== "string" || !allowedRequirements.has(requirementId) || seen.has(requirementId)) return [];
+    try {
+      const validated = validateMappings(
+        { mappings: [candidate as ProviderMapping] },
+        new Set([requirementId]),
+        allowedFragments,
+      );
+      seen.add(requirementId);
+      return validated;
+    } catch (error) {
+      if (isRecoverableProviderValidationError(error)) return [];
+      throw error;
+    }
+  });
 };
 
 export const assignContradictionGroups = <T extends { factKey: string; normalizedValue: string }>(facts: T[]): Array<T & { contradictionGroup: string | null }> => {

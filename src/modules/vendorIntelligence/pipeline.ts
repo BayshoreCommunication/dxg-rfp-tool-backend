@@ -2,7 +2,8 @@ import type { ProviderAttemptContext } from "../liveAi/attemptLedger";
 import {
   assignContradictionGroups,
   contentChecksum,
-  validateFacts,
+  sanitizeProviderFacts,
+  sanitizeProviderMappings,
   validateGroundedFacts,
   validateMappings,
   type ProviderMapping,
@@ -159,7 +160,7 @@ export const runVendorFactMappingPipeline = async (input: {
   for (const { result, evidenceChunk } of factResults) {
     model = result.model;
     facts.push(...groundedFacts(
-      validateFacts(result.output, new Set(evidenceChunk.map((item) => item.id))),
+      sanitizeProviderFacts(result.output, new Set(evidenceChunk.map((item) => item.id))),
       evidenceChunk,
     ));
   }
@@ -183,10 +184,13 @@ export const runVendorFactMappingPipeline = async (input: {
   });
   for (const { result, requirementChunk, selectedEvidence } of mappingResults) {
     model = result.model;
+    const allowedRequirements = new Set(requirementChunk.map((item) => item.id));
+    const allowedFragments = new Set(selectedEvidence.map((item) => item.id));
+    const safeMappings = sanitizeProviderMappings(result.output, allowedRequirements, allowedFragments);
     mappings.push(...validateMappings(
-      { mappings: completeMissingMappings(requirementChunk, result.output.mappings) },
-      new Set(requirementChunk.map((item) => item.id)),
-      new Set(selectedEvidence.map((item) => item.id)),
+      { mappings: completeMissingMappings(requirementChunk, safeMappings) },
+      allowedRequirements,
+      allowedFragments,
     ));
   }
   const contradictionFacts = assignContradictionGroups([...uniqueFacts.values()]);
