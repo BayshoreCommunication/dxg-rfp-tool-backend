@@ -199,10 +199,11 @@ export const vendorIntelligenceRepository = {
           `UPDATE rfpilot.vendor_intelligence_runs SET
              status='queued',provider=NULL,model=NULL,requirement_count=0,
              mapped_requirement_count=0,fact_count=0,contradiction_count=0,
+             warning_count=$4,warnings=$5::jsonb,
              safe_error_code=NULL,output_checksum=NULL,started_at=NULL,
              completed_at=NULL,correlation_id=$2,actor_external_user_id=$3,updated_at=now()
            WHERE id=$1 RETURNING *`,
-          [prior.id, input.correlationId, input.actorUserMongoId],
+          [prior.id, input.correlationId, input.actorUserMongoId, inputWarnings.length, JSON.stringify(inputWarnings)],
         );
         const payload = {
           jobId: prior.job_id,
@@ -341,9 +342,10 @@ export const vendorIntelligenceRepository = {
         sourceLabel: row.source_label,
         warnings: Array.isArray(row.warnings) ? row.warnings : [],
       })), Number(available.rows[0]?.count ?? 0), fragments.rows.length);
-      const warnings = [...(Array.isArray(run.warnings) ? run.warnings : []), ...currentWarnings].filter((warning, index, all) =>
-        all.findIndex((candidate) => candidate.code === warning.code && candidate.sourceLabel === warning.sourceLabel) === index,
-      );
+      // The latest extraction attempts are authoritative. A source can recover after
+      // this run was queued, so retaining its earlier coverage warning would make a
+      // fully readable response impossible to evaluate.
+      const warnings = currentWarnings;
       await client.query(
         "UPDATE rfpilot.vendor_intelligence_runs SET status='running',started_at=coalesce(started_at,now()),safe_error_code=NULL,updated_at=now() WHERE id=$1",
         [input.runId],
