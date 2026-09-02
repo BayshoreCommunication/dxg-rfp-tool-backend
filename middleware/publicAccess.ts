@@ -3,7 +3,14 @@ import type { PublicGrantPurpose } from "../src/modules/publicAccess/domain/publ
 import { publicAccess } from "../src/modules/publicAccess/composition";
 import { AuthRequest } from "./auth";
 
-export const requirePublicGrant = (purpose: PublicGrantPurpose | readonly PublicGrantPurpose[]) => async (req: Request, res: Response, next: NextFunction) => {
+type PublicGrantRequirementOptions = {
+  allowAlternateVendorContact?: boolean;
+};
+
+export const requirePublicGrant = (
+  purpose: PublicGrantPurpose | readonly PublicGrantPurpose[],
+  options: PublicGrantRequirementOptions = {},
+) => async (req: Request, res: Response, next: NextFunction) => {
   if ((req as AuthRequest).user) return next();
   // Fail closed: enforcement is the default. Disabling requires an explicit
   // opt-out, and never in production.
@@ -26,8 +33,10 @@ export const requirePublicGrant = (purpose: PublicGrantPurpose | readonly Public
       resourceId,
       recipient,
       // A vendor invite may render the read-only proposal before the vendor
-      // enters an email. Dedicated vendor operations always bind the email.
+      // enters an email. Response routes may explicitly accept a separate
+      // confirmation/contact mailbox while retaining token scope and expiry.
       allowRecipientlessVendorProposalRead: Array.isArray(purpose),
+      allowAlternateVendorContact: options.allowAlternateVendorContact === true,
     });
     if (grant) break;
   }

@@ -33,19 +33,32 @@ export const createPublicAccessManager = (repository: PublicAccessRepository) =>
     const record = await repository.create({ ...input, tokenHash: hashPublicGrant(token), recipientHash, expiresAt, useCount: 0, maxUses: input.maxUses ?? null });
     return { id: record.id, token, expiresAt, purpose: input.purpose, resourceId: input.resourceId };
   },
-  validateAndConsume(input: { token: string; purpose: PublicGrantPurpose; resourceId: string; recipient?: string; allowRecipientlessVendorProposalRead?: boolean }) {
+  validateAndConsume(input: {
+    token: string;
+    purpose: PublicGrantPurpose;
+    resourceId: string;
+    recipient?: string;
+    allowRecipientlessVendorProposalRead?: boolean;
+    allowAlternateVendorContact?: boolean;
+  }) {
     const recipient = normalizeRecipient(input.recipient);
     if (
       input.purpose === "vendor:submit"
       && !recipient
       && !input.allowRecipientlessVendorProposalRead
+      && !input.allowAlternateVendorContact
     ) return Promise.resolve(null);
+    const recipientHash = input.purpose === "vendor:submit" && input.allowAlternateVendorContact
+      ? null
+      : recipient
+        ? hashRecipient(recipient)
+        : undefined;
     return repository.consume(
       hashPublicGrant(input.token),
       input.purpose,
       input.resourceId,
       new Date(),
-      recipient ? hashRecipient(recipient) : null,
+      recipientHash,
     );
   },
   revoke: repository.revoke,
