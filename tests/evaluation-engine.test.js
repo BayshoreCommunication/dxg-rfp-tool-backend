@@ -229,6 +229,14 @@ test("evaluation review inputs are checksummed and can create a superseding eval
     assert.match(repository, new RegExp(policy));
 });
 
+test("evaluation snapshot identity includes every policy version", () => {
+  const migration = fs.readFileSync(path.join(__dirname, "../migrations/postgres/062_evaluation_policy_snapshot_identity.up.sql"), "utf8");
+  assert.match(migration, /DROP CONSTRAINT IF EXISTS vendor_evaluation_runs_frozen_input_unique/);
+  assert.match(migration, /ADD CONSTRAINT vendor_evaluation_runs_policy_input_unique/);
+  for (const policy of ["assessment_version", "risk_policy_version", "commercial_policy_version", "scoring_policy_version"])
+    assert.match(migration, new RegExp(policy));
+});
+
 test("repository separates sealed price authorization and never calculates with confidence", () => {
   const source = fs.readFileSync(path.join(__dirname, "../src/modules/evaluationEngine/postgresEvaluationEngineRepository.ts"), "utf8");
   assert.match(source, /commercial_access_events/);
