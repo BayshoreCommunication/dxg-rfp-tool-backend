@@ -1,7 +1,9 @@
 require("ts-node/register/transpile-only");
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { PLATFORM_FACTS } = require("../src/modules/platformAssistant/platformKnowledge");
 const {
+  ASSISTANT_INTENTS,
   ASSISTANT_INTENT_VERSION,
   classifyAssistantIntent,
   evidenceAllowedForIntent,
@@ -123,4 +125,29 @@ test("intent filters remove unrelated platform facts and retrieval", () => {
   );
   assert.equal(intentUsesOperatingGuidance("event_planning"), true);
   assert.equal(intentUsesOperatingGuidance("platform_navigation"), false);
+});
+
+test("every platform fact prefix can reach at least one intent", () => {
+  // A fact nothing can surface is invisible: the Proposal Intelligence facts
+  // were filtered out of every prompt because "platform:intelligence:" was not
+  // on any intent's allowlist, so the assistant kept answering from the
+  // assistant-scope fact instead.
+  const prefixes = new Set(
+    PLATFORM_FACTS.map((fact) => fact.id.split(":").slice(0, 2).join(":") + ":"),
+  );
+  for (const prefix of prefixes) {
+    const reachable = ASSISTANT_INTENTS.some((intent) =>
+      evidenceAllowedForIntent(`${prefix}probe`, intent),
+    );
+    assert.ok(reachable, `no intent can surface ${prefix}`);
+  }
+});
+
+test("a question about comparing vendors can surface the Proposal Intelligence facts", () => {
+  const intent = classifyAssistantIntent({
+    query: "What does Proposal Intelligence do?",
+    uiContext: null,
+  }).intent;
+  assert.ok(evidenceAllowedForIntent("platform:intelligence:overview", intent));
+  assert.ok(evidenceAllowedForIntent("platform:intelligence:scoring", intent));
 });
