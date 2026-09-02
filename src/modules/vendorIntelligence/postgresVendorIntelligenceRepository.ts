@@ -155,7 +155,7 @@ export const vendorIntelligenceRepository = {
         status: row.status,
         sourceLabel: row.source_label,
         warnings: Array.isArray(row.warnings) ? row.warnings : [],
-      })), 0, 0);
+      })), 0, 0, false);
       const inputChecksum = contentChecksum({
         requirementSet: set.content_checksum,
         submissionVersion: version.manifestChecksum,
@@ -336,7 +336,6 @@ export const vendorIntelligenceRepository = {
          WHERE source_rank<=80 ORDER BY source_label,id LIMIT 240`,
         [run.vendor_submission_version_mongo_id],
       );
-      if (!fragments.rows.length) throw new VendorIntelligenceError("SOURCE_NOT_READY", "Vendor evidence is unavailable.", 409);
       const currentWarnings = sourceCoverageWarnings(sourceRuns.map((row) => ({
         status: row.status,
         sourceLabel: row.source_label,
@@ -434,7 +433,8 @@ export const vendorIntelligenceRepository = {
       const contradictionGroups = new Set(result.facts.map((fact) => fact.contradictionGroup).filter(Boolean));
       await client.query(
         `UPDATE rfpilot.vendor_intelligence_runs SET
-           status='succeeded',provider='openai',model=$2,requirement_count=$3,mapped_requirement_count=$4,
+           status='succeeded',provider=CASE WHEN $2='deterministic:no-evidence' THEN 'deterministic' ELSE 'openai' END,
+           model=$2,requirement_count=$3,mapped_requirement_count=$4,
            fact_count=$5,contradiction_count=$6,warning_count=$7,warnings=$8::jsonb,
            output_checksum=$9,completed_at=now(),updated_at=now()
          WHERE id=$1`,

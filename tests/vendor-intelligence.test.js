@@ -153,7 +153,7 @@ test("human fact corrections preserve the extracted value type", () => {
   );
 });
 
-test("partial, unavailable, and bounded source coverage remain explicit intelligence warnings", () => {
+test("partial, unavailable, empty, and bounded source coverage remain explicit intelligence warnings", () => {
   const result = sourceCoverageWarnings([
     { status: "succeeded", sourceLabel: "Cover message", warnings: [] },
     { status: "partial", sourceLabel: "Technical.pdf", warnings: [{ code: "PAGE_COVERAGE_INCOMPLETE", message: "Some pages were unreadable." }] },
@@ -161,6 +161,45 @@ test("partial, unavailable, and bounded source coverage remain explicit intellig
   ], 400, 240);
   assert.deepEqual(result.map((warning) => warning.code), ["PAGE_COVERAGE_INCOMPLETE", "SOURCE_COVERAGE_INCOMPLETE", "SOURCE_UNAVAILABLE", "EVIDENCE_COVERAGE_BOUNDED"]);
   assert.ok(result.every((warning) => warning.sourceLabel || warning.code === "EVIDENCE_COVERAGE_BOUNDED"));
+  assert.deepEqual(
+    sourceCoverageWarnings([{ status: "succeeded", sourceLabel: "Empty.pdf", warnings: [] }], 0, 0),
+    [{
+      code: "SOURCE_EVIDENCE_EMPTY",
+      message: "The readable source produced no extractable evidence; requirements are treated as not evidenced.",
+      availableFragments: 0,
+      usedFragments: 0,
+    }],
+  );
+  assert.deepEqual(
+    sourceCoverageWarnings([{ status: "succeeded", sourceLabel: "Pending count.pdf", warnings: [] }], 0, 0, false),
+    [],
+  );
+});
+
+test("pipeline completes an empty-evidence vendor as not evidenced without calling the provider", async () => {
+  let providerCalls = 0;
+  const provider = {
+    extractFacts: async () => { providerCalls += 1; throw new Error("provider must not be called"); },
+    mapRequirements: async () => { providerCalls += 1; throw new Error("provider must not be called"); },
+  };
+  const requirements = [
+    { id: requirement, title: "Pricing", text: "Provide total price", kind: "commercial", mandatory: true },
+    { id: requirementB, title: "Support", text: "Describe support coverage", kind: "technical", mandatory: false },
+  ];
+  const progress = [];
+  const output = await runVendorFactMappingPipeline({
+    requirements,
+    evidence: [],
+    provider,
+    ledger: { runType: "vendor_requirement_facts", runId: "run-empty-evidence", organizationId: "org-a" },
+    onProgress: async (value, stage) => progress.push([value, stage]),
+  });
+  assert.equal(providerCalls, 0);
+  assert.equal(output.model, "deterministic:no-evidence");
+  assert.deepEqual(output.facts, []);
+  assert.deepEqual(output.mappings.map((item) => item.relationship), ["none", "none"]);
+  assert.ok(output.mappings.every((item) => item.confidence === 0 && item.candidateFragmentIds.length === 0));
+  assert.deepEqual(progress, [[90, "mapping_requirements_without_evidence"]]);
 });
 
 test("pipeline sends only the supplied vendor evidence and ledgers stable phases", async () => {
@@ -454,7 +493,7 @@ test("vendor intelligence execution replaces stale coverage warnings with the la
   assert.match(repository, /const warnings = currentWarnings;/);
   assert.doesNotMatch(repository, /Array\.isArray\(run\.warnings\)[\s\S]*\.\.\.currentWarnings/);
   const domain = fs.readFileSync(path.join(__dirname, "../src/modules/vendorIntelligence/domain.ts"), "utf8");
-  assert.match(domain, /mapping-fact-validation\.v9/);
+  assert.match(domain, /mapping-fact-validation\.v10/);
 });
 
 test("vendor mapping failures settle the domain run only after durable retries are exhausted", () => {
