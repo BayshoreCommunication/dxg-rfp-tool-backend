@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 export const MAPPING_VERSION = "requirement-mapping.v1";
 export const FACT_VERSION = "vendor-fact.v3";
-export const VALIDATION_VERSION = "mapping-fact-validation.v9";
+export const VALIDATION_VERSION = "mapping-fact-validation.v10";
 export const PROMPT_VERSION = "vendor-intelligence-prompt.v4";
 export const MAX_FACTS_PER_CHUNK = 24;
 
@@ -96,6 +96,7 @@ export const sourceCoverageWarnings = (
   sources: SourceCoverageInput[],
   availableFragments: number,
   usedFragments: number,
+  evidenceCountKnown = true,
 ): IntelligenceCoverageWarning[] => {
   const warnings: IntelligenceCoverageWarning[] = [];
   for (const source of sources) {
@@ -114,6 +115,12 @@ export const sourceCoverageWarnings = (
       warnings.push({ code: "SOURCE_UNAVAILABLE", message: "This source was not available to proposal intelligence.", sourceLabel: source.sourceLabel });
     }
   }
+  if (evidenceCountKnown && availableFragments === 0) warnings.push({
+    code: "SOURCE_EVIDENCE_EMPTY",
+    message: "The readable source produced no extractable evidence; requirements are treated as not evidenced.",
+    availableFragments: 0,
+    usedFragments: 0,
+  });
   if (availableFragments > usedFragments) warnings.push({
     code: "EVIDENCE_COVERAGE_BOUNDED",
     message: "The run used a bounded source-fair evidence sample rather than all extracted fragments.",

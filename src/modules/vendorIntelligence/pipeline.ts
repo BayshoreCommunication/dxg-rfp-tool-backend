@@ -137,6 +137,16 @@ export const runVendorFactMappingPipeline = async (input: {
   ledger: ProviderAttemptContext;
   onProgress?: (progress: number, stage: string) => Promise<void> | void;
 }) => {
+  if (input.evidence.length === 0) {
+    const mappings = completeMissingMappings(input.requirements, []);
+    await input.onProgress?.(90, "mapping_requirements_without_evidence");
+    return {
+      model: "deterministic:no-evidence",
+      facts: [],
+      mappings,
+      outputChecksum: contentChecksum({ facts: [], mappings }),
+    };
+  }
   const evidenceChunks = chunks(input.evidence, FACT_CHUNK);
   const requirementChunks = chunks(input.requirements, REQUIREMENT_CHUNK);
   const operationCount = evidenceChunks.length + requirementChunks.length;
