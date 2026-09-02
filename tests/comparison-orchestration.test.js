@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
-const { buildVendorRecommendation, comparisonChecksum, evaluatorPanelSignature, freezeScoreInput, uniqueReasons, weightedProgress } = require("../src/modules/comparisonOrchestration/domain");
+const { buildVendorRecommendation, comparisonChecksum, evaluatorPanelSignature, freezeScoreInput, isMandatoryGap, isMandatoryPartial, uniqueReasons, weightedProgress } = require("../src/modules/comparisonOrchestration/domain");
 
 const read = (file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");
 
@@ -77,10 +77,15 @@ test("recommendation policy applies eligibility gates, human scores, close-call 
   assert.deepEqual(close.confidenceReasons, ["close_score_margin"]);
 });
 
-test("confidence is low with one evaluator or material evaluator disagreement", () => {
+test("one scorer is not treated as a problem, because RFPilot has one user per proposal", () => {
+  // There is no UI to assign a second evaluator, so warning that fewer than two
+  // contributed asked for something the product cannot do.
   const single = buildVendorRecommendation({ participants: [{ participantId: "a", vendorLabel: "Alpha", score: 90, evaluatorCount: 1, maxCriterionSpread: 0 }, { participantId: "b", vendorLabel: "Beta", score: 80, evaluatorCount: 1, maxCriterionSpread: 0 }], requirements: [], risks: [] });
-  assert.equal(single.confidence, "low");
-  assert.ok(single.confidenceReasons.includes("insufficient_independent_evaluators"));
+  assert.deepEqual(single.confidenceReasons, []);
+  assert.ok(!single.confidenceReasons.includes("insufficient_independent_evaluators"));
+});
+
+test("material scoring disagreement still lowers confidence", () => {
   const disputed = buildVendorRecommendation({ participants: [{ participantId: "a", vendorLabel: "Alpha", score: 90, evaluatorCount: 3, maxCriterionSpread: 2 }, { participantId: "b", vendorLabel: "Beta", score: 80, evaluatorCount: 3, maxCriterionSpread: 1 }], requirements: [], risks: [] });
   assert.equal(disputed.confidence, "low");
   assert.ok(disputed.confidenceReasons.includes("high_evaluator_disagreement"));
@@ -215,4 +220,46 @@ test("comparison creation requires human disposition of critical requirement map
   assert.match(repository, /COMPARISON_CRITICAL_REVIEW_INCOMPLETE/);
   assert.match(repository, /r\.included=true AND \(r\.mandatory_status='mandatory' OR r\.eligibility=true\)/);
   assert.match(repository, /f\.contradiction_group IS NOT NULL/);
+});
+
+test("a mandatory gap means unanswered, and a partial answer is not a gap", () => {
+  // The ranking used to count every non-addressed mandatory verdict as a gap
+  // while the comparison overview counted only missing/contradictory, so one
+  // screen could show "Mandatory gaps 0" beside "1 mandatory gap".
+  for (const verdict of ["missing", "contradictory", "not_assessable"])
+    assert.equal(isMandatoryGap({ mandatoryStatus: "mandatory", verdict }), true, verdict);
+  for (const verdict of ["addressed", "partially_addressed", "not_applicable"])
+    assert.equal(isMandatoryGap({ mandatoryStatus: "mandatory", verdict }), false, verdict);
+  assert.equal(isMandatoryGap({ mandatoryStatus: "optional", verdict: "missing" }), false);
+
+  assert.equal(isMandatoryPartial({ mandatoryStatus: "mandatory", verdict: "partially_addressed" }), true);
+  assert.equal(isMandatoryPartial({ mandatoryStatus: "optional", verdict: "partially_addressed" }), false);
+  assert.equal(isMandatoryPartial({ mandatoryStatus: "mandatory", verdict: "missing" }), false);
+});
+
+test("a partly answered mandatory requirement is reported as a partial, not a gap", () => {
+  const value = buildVendorRecommendation({
+    participants: [{ participantId: "a", vendorLabel: "Alpha", score: 80, evaluatorCount: 3, maxCriterionSpread: 0 }],
+    requirements: [
+      { participantId: "a", eligibility: false, mandatoryStatus: "mandatory", verdict: "partially_addressed", needsHumanReview: false },
+    ],
+    risks: [],
+  });
+  const leader = value.ranking[0];
+  assert.equal(leader.mandatoryGaps, 0);
+  assert.equal(leader.mandatoryPartials, 1);
+  assert.ok(!value.confidenceReasons.includes("mandatory_gaps"));
+  assert.ok(value.confidenceReasons.includes("mandatory_partials"));
+});
+
+test("an unanswered mandatory requirement still counts as a gap for the leader", () => {
+  const value = buildVendorRecommendation({
+    participants: [{ participantId: "a", vendorLabel: "Alpha", score: 80, evaluatorCount: 3, maxCriterionSpread: 0 }],
+    requirements: [
+      { participantId: "a", eligibility: false, mandatoryStatus: "mandatory", verdict: "not_assessable", needsHumanReview: false },
+    ],
+    risks: [],
+  });
+  assert.equal(value.ranking[0].mandatoryGaps, 1);
+  assert.ok(value.confidenceReasons.includes("mandatory_gaps"));
 });

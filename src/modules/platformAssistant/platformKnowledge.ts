@@ -6,7 +6,7 @@ import {
 import type { AssistantUiContext } from "./domain";
 import { normalizeCommonAssistantTypos } from "./queryNormalization";
 
-export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v7";
+export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v8";
 
 type PlatformFact = Omit<AssistantPromptEvidence, "sourceType" | "trust" | "releaseId"> & {
   keywords: readonly string[];
@@ -253,6 +253,111 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = Object.freeze([
       "The Vendor Responses page lists responses available to the signed-in user, including unread filtering and pagination.",
     href: "/vendor-responses",
     keywords: ["vendor", "response", "responses", "unread", "submission"],
+  },
+  {
+    id: "platform:intelligence:overview",
+    title: "Proposal Intelligence",
+    content:
+      "Proposal Intelligence is where vendor responses are compared. It is not the AI Assistant. RFPilot reads every response received for a proposal, checks each one against the requirements the user approved, and lines the vendors up side by side with each claim linked back to the vendor's own words. It suggests a starting score from that evidence; the user confirms or changes it and chooses the vendor. It runs in four steps: 1 approve your requirements, 2 analyze responses, 3 side-by-side comparison, 4 recommendation. At least two readable responses are needed before vendors can be compared.",
+    href: "/proposals",
+    keywords: [
+      "proposal intelligence",
+      "intelligence",
+      "compare",
+      "comparison",
+      "side by side",
+      "recommendation",
+      "shortlist",
+      "strongest fit",
+      "rank",
+      "ranking",
+    ],
+  },
+  {
+    id: "platform:intelligence:requirement-checklist",
+    title: "Requirement checklist",
+    content:
+      "The requirement checklist is the approved list of requirements every vendor is judged against. It is created from the proposal, then approved and locked on the Prepare vendor evaluation page so the list cannot change midway through a comparison. Each revision gets a version number, and the approved version records when it was approved. Approving it is step 1 of Proposal Intelligence.",
+    keywords: [
+      "requirement checklist",
+      "checklist",
+      "requirement registry",
+      "registry",
+      "approved requirements",
+      "approve requirements",
+      "locked",
+      "frozen",
+      "version",
+    ],
+  },
+  {
+    id: "platform:intelligence:coverage-words",
+    title: "How requirement coverage is described",
+    content:
+      "Every requirement gets one of these labels per vendor. Answered: the vendor answered it and RFPilot can show where. Partly answered: part of it is answered and the user decides whether the rest matters. Mentioned, not answered: the response mentions the topic but never answers the requirement. Conflicting answers: the response answers it in two ways that disagree. Not answered: nothing in the response answers it. A must-have requirement that is not answered is a gap; one that is only partly answered is a partial, which is a review flag rather than an automatic disqualification.",
+    keywords: [
+      "answered",
+      "partly answered",
+      "not answered",
+      "mentioned",
+      "coverage",
+      "verdict",
+      "must-have",
+      "mandatory",
+      "gap",
+      "partial",
+    ],
+  },
+  {
+    id: "platform:intelligence:scoring",
+    title: "Scoring and starting scores",
+    content:
+      "Each vendor is scored against weighted criteria. Where the user has not scored a criterion themselves, RFPilot supplies a starting score worked out from the cited evidence and labels it 'RFPilot starting score' — it is a starting point, not a judgement, and the user's own score replaces it. A criterion with no requirement mapped to it cannot be scored from evidence and is shown as not scored rather than as zero. RFPilot has one user per proposal, so there is no panel of reviewers.",
+    keywords: [
+      "score",
+      "scoring",
+      "scorecard",
+      "starting score",
+      "weight",
+      "criteria",
+      "criterion",
+      "rubric",
+      "points",
+    ],
+  },
+  {
+    id: "platform:intelligence:evidence",
+    title: "Cited evidence and confidence",
+    content:
+      "Every answer RFPilot reports links to the vendor's own words. Opening the cited evidence shows the lines of the source document that answer the requirement, with the matching words marked, and the full page one click away. The confidence percentage says how sure RFPilot is that it read the document correctly — it is not a score, and it is not a judgement about the vendor.",
+    keywords: [
+      "evidence",
+      "cited",
+      "citation",
+      "quote",
+      "source",
+      "confidence",
+      "extraction",
+      "readable",
+      "ocr",
+    ],
+  },
+  {
+    id: "platform:intelligence:decision",
+    title: "Recording the decision",
+    content:
+      "The ranking RFPilot shows is advisory. Nothing is decided until the user records a decision on the comparison's Evaluation tab, choosing shortlist, selection, or no award, and writing the reasoning. That recorded decision is the official outcome and is saved permanently with the comparison.",
+    keywords: [
+      "decision",
+      "decide",
+      "award",
+      "shortlist",
+      "selection",
+      "no award",
+      "record",
+      "choose",
+      "winner",
+    ],
   },
   {
     id: "platform:navigation:settings",

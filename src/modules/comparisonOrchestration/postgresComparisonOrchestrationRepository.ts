@@ -14,7 +14,7 @@ import {
   proposalWorkflowSectionEnabled,
 } from "../proposals/domain/workflowSections";
 import { REQUIREMENT_GENERATOR_VERSION } from "../requirementRegistry/generator";
-import { buildVendorRecommendation, COMPARISON_SCHEMA_VERSION, ComparisonOrchestrationError, PARTICIPANT_SCHEMA_VERSION, RECOMMENDATION_POLICY_VERSION, comparisonChecksum, evaluatorPanelSignature, freezeScoreInput, uniqueReasons, weightedProgress } from "./domain";
+import { buildVendorRecommendation, COMPARISON_SCHEMA_VERSION, ComparisonOrchestrationError, PARTICIPANT_SCHEMA_VERSION, RECOMMENDATION_POLICY_VERSION, comparisonChecksum, evaluatorPanelSignature, freezeScoreInput, isMandatoryGap, isMandatoryPartial, uniqueReasons, weightedProgress } from "./domain";
 
 type Context = { organizationMongoId: string; actorUserMongoId: string; proposalMongoId: string; correlationId: string };
 type SelectedParticipant = { submissionMongoId: string; versionMongoId: string };
@@ -452,12 +452,13 @@ const intelligenceProjection = async (client: PoolClient, run: any, priceVisibil
       originalWeight: Number(criterion.originalWeight ?? 0),
     })),
   }));
-  const mandatoryGaps = requirementList.reduce((count, requirement) => count + requirement.vendors.filter((vendor: any) => requirement.mandatoryStatus === "mandatory" && ["missing", "contradictory"].includes(vendor.verdict)).length, 0);
+  const mandatoryGaps = requirementList.reduce((count, requirement) => count + requirement.vendors.filter((vendor: any) => isMandatoryGap({ mandatoryStatus: requirement.mandatoryStatus, verdict: vendor.verdict })).length, 0);
+  const mandatoryPartials = requirementList.reduce((count, requirement) => count + requirement.vendors.filter((vendor: any) => isMandatoryPartial({ mandatoryStatus: requirement.mandatoryStatus, verdict: vendor.verdict })).length, 0);
   const unresolvedReviews = requirementList.reduce((count, requirement) => count + requirement.vendors.filter((vendor: any) => vendor.needsHumanReview).length, 0);
   return {
     overview: {
       responseCount: run.participant_count, versionCount: run.participant_count, approvedRequirementCount: requirementList.length,
-      mandatoryGapCount: mandatoryGaps, unresolvedReviewCount: unresolvedReviews,
+      mandatoryGapCount: mandatoryGaps, mandatoryPartialCount: mandatoryPartials, unresolvedReviewCount: unresolvedReviews,
       evaluatorCompletedCount: evaluation.reduce((sum, item) => sum + item.completedEvaluatorCount, 0),
       evaluatorAssignedCount: evaluation.reduce((sum, item) => sum + item.evaluatorCount, 0),
     },
