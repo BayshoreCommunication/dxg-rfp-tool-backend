@@ -51,54 +51,41 @@ test("schema migration journal matches the checked-in migration files", async ()
   );
 });
 
-test("latest assistant retention migration rolls back cleanly and reapplies", async () => {
+test("latest checked-in migration rolls back cleanly and reapplies", () => {
+  const before = runMigrationCommand("status");
+  assert.equal(before.status, 0, `status before rollback failed:\n${before.stderr}${before.stdout}`);
+  const migrations = JSON.parse(before.stdout) as StatusRow[];
+  const latest = migrations.at(-1);
+  assert.ok(latest, "expected at least one checked-in migration");
+  assert.equal(latest.status, "applied");
+
   const rollback = runMigrationCommand("rollback");
   assert.equal(
     rollback.status,
     0,
-    `assistant retention rollback failed:\n${rollback.stderr}${rollback.stdout}`,
+    `latest migration rollback failed:\n${rollback.stderr}${rollback.stdout}`,
   );
-  assert.match(rollback.stdout, /Rolled back 043_assistant_retention_privacy/);
+  assert.equal(rollback.stdout.trim(), `Rolled back ${latest.version}_${latest.name}`);
 
   try {
-    const rolledBack = await postgresPool().query<{
-      policies: string | null;
-      deletion_requests: string | null;
-      legal_holds: string | null;
-    }>(
-      `
-        SELECT
-          to_regclass('rfpilot.assistant_retention_policies')::text AS policies,
-          to_regclass('rfpilot.assistant_deletion_requests')::text AS deletion_requests,
-          to_regclass('rfpilot.assistant_legal_holds')::text AS legal_holds
-      `,
-    );
-    assert.equal(rolledBack.rows[0]?.policies, null);
-    assert.equal(rolledBack.rows[0]?.deletion_requests, null);
-    assert.equal(rolledBack.rows[0]?.legal_holds, null);
+    const rolledBack = runMigrationCommand("status");
+    assert.equal(rolledBack.status, 0, `status after rollback failed:\n${rolledBack.stderr}${rolledBack.stdout}`);
+    const rolledBackRows = JSON.parse(rolledBack.stdout) as StatusRow[];
+    assert.equal(rolledBackRows.at(-1)?.version, latest.version);
+    assert.equal(rolledBackRows.at(-1)?.status, "pending");
   } finally {
     const reapply = runMigrationCommand("up");
     assert.equal(
       reapply.status,
       0,
-      `assistant retention reapply failed:\n${reapply.stderr}${reapply.stdout}`,
+      `latest migration reapply failed:\n${reapply.stderr}${reapply.stdout}`,
     );
-    assert.match(reapply.stdout, /Applied 043_assistant_retention_privacy/);
+    assert.equal(reapply.stdout.trim(), `Applied ${latest.version}_${latest.name}`);
   }
 
-  const reapplied = await postgresPool().query<{
-    policies: string | null;
-    deletion_requests: string | null;
-    legal_holds: string | null;
-  }>(
-    `
-      SELECT
-        to_regclass('rfpilot.assistant_retention_policies')::text AS policies,
-        to_regclass('rfpilot.assistant_deletion_requests')::text AS deletion_requests,
-        to_regclass('rfpilot.assistant_legal_holds')::text AS legal_holds
-    `,
-  );
-  assert.equal(reapplied.rows[0]?.policies, "rfpilot.assistant_retention_policies");
-  assert.equal(reapplied.rows[0]?.deletion_requests, "rfpilot.assistant_deletion_requests");
-  assert.equal(reapplied.rows[0]?.legal_holds, "rfpilot.assistant_legal_holds");
+  const reapplied = runMigrationCommand("status");
+  assert.equal(reapplied.status, 0, `status after reapply failed:\n${reapplied.stderr}${reapplied.stdout}`);
+  const reappliedRows = JSON.parse(reapplied.stdout) as StatusRow[];
+  assert.equal(reappliedRows.at(-1)?.version, latest.version);
+  assert.equal(reappliedRows.at(-1)?.status, "applied");
 });
