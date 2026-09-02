@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 export const MAPPING_VERSION = "requirement-mapping.v1";
 export const FACT_VERSION = "vendor-fact.v3";
-export const VALIDATION_VERSION = "mapping-fact-validation.v7";
+export const VALIDATION_VERSION = "mapping-fact-validation.v8";
 export const PROMPT_VERSION = "vendor-intelligence-prompt.v4";
 export const MAX_FACTS_PER_CHUNK = 24;
 
