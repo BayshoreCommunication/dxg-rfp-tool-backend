@@ -2,13 +2,16 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
-const { assignContradictionGroups, sourceCoverageWarnings, validateFactCorrectionPayload, validateFacts, validateGroundedFacts, validateMappings, VendorIntelligenceError } = require("../src/modules/vendorIntelligence/domain");
+const { assignContradictionGroups, sanitizeProviderFacts, sanitizeProviderMappings, sourceCoverageWarnings, validateFactCorrectionPayload, validateFacts, validateGroundedFacts, validateMappings, VendorIntelligenceError } = require("../src/modules/vendorIntelligence/domain");
 const { runVendorFactMappingPipeline, selectMappingEvidence } = require("../src/modules/vendorIntelligence/pipeline");
 const { factSchemaFor, mappingSchemaFor } = require("../src/modules/vendorIntelligence/openAiVendorFactMappingProvider");
+const { buildAssessments, buildRisks, calculateContribution, deriveAutomatedCriterionScore } = require("../src/modules/evaluationEngine/domain");
+const { buildVendorRecommendation, freezeScoreInput } = require("../src/modules/comparisonOrchestration/domain");
 
 const fragmentA = "00000000-0000-4000-8000-000000000101";
 const fragmentB = "00000000-0000-4000-8000-000000000102";
 const requirement = "00000000-0000-4000-8000-000000000201";
+const requirementB = "00000000-0000-4000-8000-000000000202";
 const fact = (overrides = {}) => ({
   factKey: "commercial.total", family: "commercial", factType: "commercial_total",
   statement: "The stated total is USD 148,500.", valueKind: "money",
@@ -29,10 +32,24 @@ test("vendor evidence is never mislabeled as non-confidential at the provider bo
   assert.equal((provider.match(/classification: "vendor_confidential"/g) || []).length, 2);
 });
 
-test("facts require in-boundary citations and reject decision language", () => {
+test("facts require in-boundary citations and distinguish decisions from historical factual language", () => {
   assert.equal(validateFacts({ facts: [fact()] }, new Set([fragmentA]))[0].normalizedValue, "USD 148500");
   assert.throws(() => validateFacts({ facts: [fact({ citations: [{ fragmentId: fragmentB, role: "supports" }] })] }, new Set([fragmentA])), (error) => error instanceof VendorIntelligenceError && error.code === "CITATION_VALIDATION_FAILED");
-  assert.throws(() => validateFacts({ facts: [fact({ statement: "Select this vendor as the winner." })] }, new Set([fragmentA])), (error) => error.code === "PROHIBITED_DECISION_LANGUAGE");
+  assert.throws(() => validateFacts({ facts: [fact({ statement: "Select this vendor as the winner." })] }, new Set([fragmentA])), (error) => error instanceof VendorIntelligenceError && error.code === "PROHIBITED_DECISION_LANGUAGE");
+  assert.equal(validateFacts({ facts: [fact({ statement: "If shortlisted, the vendor will hold its USD 148,500 price." })] }, new Set([fragmentA])).length, 1);
+  assert.equal(validateFacts({ facts: [fact({ statement: "The vendor was awarded a prior contract valued at USD 148,500." })] }, new Set([fragmentA])).length, 1);
+});
+
+test("provider fact sanitization drops malformed items without weakening evidence boundaries", () => {
+  const valid = fact();
+  const unsafe = fact({ factKey: "decision.recommendation", statement: "Select this vendor as the winner." });
+  const foreign = fact({ factKey: "commercial.foreign", citations: [{ fragmentId: fragmentB, role: "supports" }] });
+  const badConfidence = fact({ factKey: "commercial.bad_confidence", confidence: 2 });
+  assert.deepEqual(
+    sanitizeProviderFacts({ facts: [null, unsafe, foreign, badConfidence, valid] }, new Set([fragmentA])),
+    validateFacts({ facts: [valid] }, new Set([fragmentA])),
+  );
+  assert.deepEqual(sanitizeProviderFacts({ broken: true }, new Set([fragmentA])), []);
 });
 
 test("facts collapse duplicate provider citations before immutable persistence", () => {
@@ -85,6 +102,20 @@ test("typed facts discard incomplete values without failing valid output", () =>
 test("mappings are complete and none cannot carry citations", () => {
   assert.throws(() => validateMappings({ mappings: [] }, new Set([requirement]), new Set([fragmentA])), (error) => error.code === "SCHEMA_VALIDATION_FAILED");
   assert.throws(() => validateMappings({ mappings: [{ requirementId: requirement, relationship: "none", confidence: 0.7, candidateFragmentIds: [fragmentA], ambiguityReasons: [] }] }, new Set([requirement]), new Set([fragmentA])), (error) => error.code === "CITATION_VALIDATION_FAILED");
+});
+
+test("provider mapping sanitization drops malformed, duplicate, and foreign mappings", () => {
+  const valid = { requirementId: requirement, relationship: "supports", confidence: 0.9, candidateFragmentIds: [fragmentA], ambiguityReasons: [] };
+  const output = sanitizeProviderMappings({ mappings: [
+    null,
+    { ...valid, requirementId: "foreign-requirement" },
+    { ...valid, relationship: "winner" },
+    { ...valid, candidateFragmentIds: [fragmentB] },
+    valid,
+    { ...valid, relationship: "contradicts" },
+  ] }, new Set([requirement]), new Set([fragmentA]));
+  assert.deepEqual(output, [valid]);
+  assert.deepEqual(sanitizeProviderMappings({ broken: true }, new Set([requirement]), new Set([fragmentA])), []);
 });
 
 test("provider schemas constrain all cited identities to the current input boundary", () => {
@@ -177,6 +208,145 @@ test("pipeline safely drops an ungrounded fact and completes omitted mappings as
     candidateFragmentIds: [],
     ambiguityReasons: ["No supported evidence mapping was returned; treated as not evidenced."],
   }]);
+});
+
+test("pipeline drops prohibited decision output without failing valid facts or requirement mapping", async () => {
+  const provider = {
+    extractFacts: async () => ({
+      model: "fixture-model",
+      output: { facts: [fact(), fact({ factKey: "decision.recommendation", statement: "Select this vendor as the winner." })] },
+    }),
+    mapRequirements: async () => ({
+      model: "fixture-model",
+      output: { mappings: [{ requirementId: requirement, relationship: "supports", confidence: 0.9, candidateFragmentIds: [fragmentA], ambiguityReasons: [] }] },
+    }),
+  };
+  const output = await runVendorFactMappingPipeline({
+    requirements: [{ id: requirement, title: "Pricing", text: "Provide total price", kind: "commercial", mandatory: true }],
+    evidence: [{ id: fragmentA, content: "The all-inclusive total is USD 148,500.", sourceLabel: "Vendor A.pdf", locator: { page: 2 }, trustClass: "untrusted_vendor_content" }],
+    provider,
+    ledger: { runType: "vendor_requirement_facts", runId: "run-decision-recovery", organizationId: "org-a" },
+  });
+  assert.equal(output.facts.length, 1);
+  assert.equal(output.facts[0].normalizedValue, "USD 148500");
+  assert.equal(output.mappings.length, 1);
+  assert.equal(output.mappings[0].relationship, "supports");
+});
+
+test("full mocked response process recovers malformed AI items and reaches comparison-ready inputs", async () => {
+  const requirements = [
+    { id: requirement, title: "Provide 24/7 security monitoring", text: "Provide a dedicated team and continuous monitoring", kind: "technical", mandatory: true, eligibility: true },
+    { id: requirementB, title: "Provide an all-inclusive price", text: "State the all-inclusive commercial total", kind: "commercial", mandatory: false, eligibility: false },
+  ];
+  const runVendor = async ({ vendorId, total, malformed }) => {
+    const technicalFragment = `00000000-0000-4000-8000-${vendorId.padStart(12, "0")}`;
+    const priceFragment = `00000000-0000-4000-8001-${vendorId.padStart(12, "0")}`;
+    const evidence = [
+      { id: technicalFragment, content: "Our dedicated security team provides 24/7 monitoring.", sourceLabel: `${vendorId}-technical.pdf`, locator: { page: 1 }, trustClass: "untrusted_vendor_content" },
+      { id: priceFragment, content: `The all-inclusive total is USD ${total.toLocaleString("en-US")}.`, sourceLabel: `${vendorId}-pricing.pdf`, locator: { page: 2 }, trustClass: "untrusted_vendor_content" },
+    ];
+    const validFact = fact({
+      statement: `The all-inclusive total is USD ${total.toLocaleString("en-US")}.`,
+      value: { ...fact().value, number: total },
+      citations: [{ fragmentId: priceFragment, role: "supports" }],
+    });
+    const provider = {
+      extractFacts: async () => ({
+        model: "fixture-model",
+        output: { facts: malformed ? [
+          null,
+          fact({ factKey: "decision.recommendation", statement: "Select this vendor as the winner.", citations: [{ fragmentId: technicalFragment, role: "supports" }] }),
+          fact({ factKey: "commercial.foreign", citations: [{ fragmentId: fragmentA, role: "supports" }] }),
+          fact({ factKey: "commercial.bad_confidence", confidence: 4, citations: [{ fragmentId: priceFragment, role: "supports" }] }),
+          validFact,
+        ] : [validFact] },
+      }),
+      mapRequirements: async () => ({
+        model: "fixture-model",
+        output: { mappings: [
+          { requirementId: requirement, relationship: "supports", confidence: 0.96, candidateFragmentIds: [technicalFragment], ambiguityReasons: [] },
+          ...(malformed ? [
+            { requirementId: requirementB, relationship: "winner", confidence: 0.8, candidateFragmentIds: [priceFragment], ambiguityReasons: [] },
+            { requirementId: "foreign-requirement", relationship: "supports", confidence: 0.8, candidateFragmentIds: [priceFragment], ambiguityReasons: [] },
+          ] : [{ requirementId: requirementB, relationship: "supports", confidence: 0.95, candidateFragmentIds: [priceFragment], ambiguityReasons: [] }]),
+        ] },
+      }),
+    };
+    const intelligence = await runVendorFactMappingPipeline({
+      requirements,
+      evidence,
+      provider,
+      ledger: { runType: "vendor_requirement_facts", runId: `run-${vendorId}`, organizationId: "org-a" },
+    });
+    const mappings = intelligence.mappings.map((item, index) => {
+      const source = requirements.find((candidate) => candidate.id === item.requirementId);
+      return {
+        mappingId: `${vendorId}-mapping-${index}`,
+        requirementId: item.requirementId,
+        title: source.title,
+        mandatory: source.mandatory,
+        eligibility: source.eligibility,
+        relationship: item.relationship,
+        confidence: item.confidence,
+        fragmentIds: item.candidateFragmentIds,
+        humanReviewDecision: "accepted",
+      };
+    });
+    const facts = intelligence.facts.map((item, index) => ({
+      ...item,
+      factId: `${vendorId}-fact-${index}`,
+      fragmentIds: item.citations.map((citation) => citation.fragmentId),
+    }));
+    const assessments = buildAssessments(mappings);
+    const risks = buildRisks(mappings, facts);
+    const automated = deriveAutomatedCriterionScore({
+      criterionName: "Overall response",
+      rubricMaximum: 5,
+      assessments: assessments.map((item) => ({
+        verdict: item.verdict,
+        mandatory: item.mandatory,
+        eligibility: item.eligibility,
+        evidenceFragmentIds: item.fragmentIds,
+      })),
+    });
+    const contribution = calculateContribution({ score: automated.score, rubricMaximum: 5, weight: 100 });
+    const scoreInput = freezeScoreInput([{
+      assignmentId: "automatic-owner-review",
+      role: "combined",
+      conflictStatus: "not_applicable",
+      criterionId: "overall",
+      eventId: `${vendorId}-score`,
+      eventType: "submitted",
+      score: automated.score,
+      weightedContribution: contribution,
+    }]);
+    return { vendorId, intelligence, assessments, risks, contribution, scoreInput };
+  };
+
+  const recovered = await runVendor({ vendorId: "301", total: 148500, malformed: true });
+  const complete = await runVendor({ vendorId: "302", total: 132000, malformed: false });
+  assert.equal(recovered.intelligence.facts.length, 1);
+  assert.deepEqual(recovered.intelligence.mappings.map((item) => item.relationship), ["supports", "none"]);
+  assert.equal(recovered.scoreInput.complete, true);
+  assert.equal(complete.scoreInput.complete, true);
+  assert.ok([...recovered.assessments, ...complete.assessments].every((item) => item.needsHumanReview === false));
+
+  const recommendation = buildVendorRecommendation({
+    participants: [
+      { participantId: recovered.vendorId, vendorLabel: "Recovered Vendor", score: recovered.contribution, evaluatorCount: 1, maxCriterionSpread: 0 },
+      { participantId: complete.vendorId, vendorLabel: "Complete Vendor", score: complete.contribution, evaluatorCount: 1, maxCriterionSpread: 0 },
+    ],
+    requirements: [recovered, complete].flatMap((vendor) => vendor.assessments.map((item) => ({
+      participantId: vendor.vendorId,
+      eligibility: item.eligibility,
+      mandatoryStatus: item.mandatory ? "mandatory" : "optional",
+      verdict: item.verdict,
+      needsHumanReview: item.needsHumanReview,
+    }))),
+    risks: [recovered, complete].flatMap((vendor) => vendor.risks.map((item) => ({ participantId: vendor.vendorId, severity: item.severity }))),
+  });
+  assert.equal(recommendation.status, "recommended");
+  assert.equal(recommendation.bestParticipantId, complete.vendorId);
 });
 
 test("pipeline bounds fact extraction chunks to fit the structured-output ceiling", async () => {
@@ -284,7 +454,7 @@ test("vendor intelligence execution replaces stale coverage warnings with the la
   assert.match(repository, /const warnings = currentWarnings;/);
   assert.doesNotMatch(repository, /Array\.isArray\(run\.warnings\)[\s\S]*\.\.\.currentWarnings/);
   const domain = fs.readFileSync(path.join(__dirname, "../src/modules/vendorIntelligence/domain.ts"), "utf8");
-  assert.match(domain, /mapping-fact-validation\.v8/);
+  assert.match(domain, /mapping-fact-validation\.v9/);
 });
 
 test("vendor mapping failures settle the domain run only after durable retries are exhausted", () => {
