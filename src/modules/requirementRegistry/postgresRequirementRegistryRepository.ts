@@ -17,8 +17,7 @@ import type { RequirementUpdate } from "./domain";
 import {
   generateCriteria,
   generateRequirements,
-  REQUIREMENT_GENERATOR_VERSION,
-} from "./generator";
+  REQUIREMENT_GENERATOR_VERSION, isPlannerInstructionLocator } from "./generator";
 import type { RenderedParagraph } from "./generator";
 import {
   activeProposalWorkflowContent,
@@ -282,7 +281,7 @@ export const requirementRegistryRepository = {
       const initialValidation = validateForApproval({
         weightsConfirmed: (current.proposal.budget as any)?.evaluationMatrixConfirmed === true,
         criteria: criteria.map((item) => ({ id: criterionIds.get(item.key)!, weight: item.weight })),
-        requirements: requirements.map((item) => ({ included: true, inclusion_reviewed: false, normalized_text: item.text, mandatory_status: "pending", mandatory_reviewed: false, source_locator: item.sourceLocator, criterion_id: null, criterion_reviewed: false, verification_method: "pending" })),
+        requirements: requirements.map((item) => ({ included: !isPlannerInstructionLocator(item.sourceLocator), inclusion_reviewed: isPlannerInstructionLocator(item.sourceLocator), normalized_text: item.text, mandatory_status: "pending", mandatory_reviewed: false, source_locator: item.sourceLocator, criterion_id: null, criterion_reviewed: false, verification_method: "pending" })),
       });
       await client.query(
         `INSERT INTO rfpilot.requirement_sets(
@@ -311,9 +310,9 @@ export const requirementRegistryRepository = {
           `INSERT INTO rfpilot.requirements(
             id,organization_id,requirement_set_id,requirement_key,kind,title,normalized_text,
             mandatory_status,source_kind,source_locator,criterion_id,importance,verification_method,
-            group_key,ordinal,updated_by_external_user_id
-           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16)`,
-          [uuidv7(), organizationId, setId, requirement.key, requirement.kind, requirement.title, requirement.text, requirement.mandatoryStatus, requirement.sourceKind, JSON.stringify(requirement.sourceLocator), criterionIds.get(requirement.suggestedCriterionKey ?? "") ?? null, requirement.importance, requirement.verificationMethod, requirement.groupKey.slice(0, 100), requirement.ordinal, input.actorUserMongoId],
+            group_key,ordinal,updated_by_external_user_id,included,inclusion_reviewed
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18)`,
+          [uuidv7(), organizationId, setId, requirement.key, requirement.kind, requirement.title, requirement.text, requirement.mandatoryStatus, requirement.sourceKind, JSON.stringify(requirement.sourceLocator), criterionIds.get(requirement.suggestedCriterionKey ?? "") ?? null, requirement.importance, requirement.verificationMethod, requirement.groupKey.slice(0, 100), requirement.ordinal, input.actorUserMongoId, !isPlannerInstructionLocator(requirement.sourceLocator), isPlannerInstructionLocator(requirement.sourceLocator)],
         );
       }
       await client.query(
@@ -482,7 +481,8 @@ export const requirementRegistryRepository = {
         ordinal: Number(item.ordinal),
       })));
       for (const requirement of requirements.rows) {
-        const included = !duplicateIds.has(requirement.id);
+        // Instructions to vendors stay out unless the planner includes them by hand.
+        const included = !duplicateIds.has(requirement.id) && !isPlannerInstructionLocator(requirement.source_locator);
         const criterionId = requirement.criterion_id ?? criterionIds.get(suggestedCriterionKey(requirement)) ?? null;
         await client.query(
           `UPDATE rfpilot.requirements SET included=$2,inclusion_reviewed=true,

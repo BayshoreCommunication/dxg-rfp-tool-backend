@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { generateCriteria, generateRequirements } = require("../src/modules/requirementRegistry/generator");
+const { generateCriteria, generateRequirements, isPlannerInstructionLocator } = require("../src/modules/requirementRegistry/generator");
 const { duplicateRequirementIds, normalizeCriterionWeights, suggestedMandatoryStatus, suggestedVerificationMethod, validateForApproval, parseRequirementUpdate } = require("../src/modules/requirementRegistry/domain");
 
 const read = (relative) => fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
@@ -239,4 +239,53 @@ test("registry active views, replay, and rendered prose are current-epoch only",
   ]) assert.ok(`${repository}\n${generator}`.includes(token), token);
   assert.match(repository, /JOIN rfpilot\.requirement_sets s[\s\S]*s\.generator_version=\$3/);
   assert.match(repository, /proposal_draft_citations retired/);
+});
+
+test("planner instructions are generated but start excluded, so vendors are never marked as failing to answer a due date", () => {
+  const proposal = {
+    event: { attendeeCount: 450, sacredConstraints: "Use the venue's exclusive union labor provider." },
+    budget: {
+      estimatedAvBudget: "USD 200,000",
+      proposalSubmissionDueDate: "2026-09-30",
+      vendorQuestionsDueDate: "2026-09-15",
+      proposalFormatPreferences: "PDF, under 30 pages",
+      competitiveBid: true,
+      sustainabilityDeiNotes: "Describe your DEI hiring practices.",
+    },
+    production: { platformIntegrationWithAv: "Zoom Events" },
+  };
+  const requirements = generateRequirements(proposal);
+  const byTitle = Object.fromEntries(requirements.map((item) => [item.title, item]));
+  for (const title of ["Proposal Submission Due Date", "Vendor Questions Due Date", "Proposal Format Preferences", "Competitive Bid", "Estimated AV Budget"]) {
+    assert.ok(byTitle[title], `${title} is still generated for traceability`);
+    assert.ok(isPlannerInstructionLocator(byTitle[title].sourceLocator), `${title} is flagged as an instruction to vendors`);
+  }
+  assert.ok(byTitle["Sustainability DEI Notes"] && !isPlannerInstructionLocator(byTitle["Sustainability DEI Notes"].sourceLocator), "a real ask stays a requirement");
+  assert.ok(!isPlannerInstructionLocator(byTitle["Attendee Count"].sourceLocator));
+  assert.equal(byTitle["Platform Integration With AV"].kind, "technical", "industry acronyms are kept upright in titles");
+  assert.equal(isPlannerInstructionLocator(null), false);
+  assert.equal(isPlannerInstructionLocator({ kind: "canonical_proposal" }), false);
+});
+
+test("each non-negotiable constraint becomes its own requirement, titled by what it says", () => {
+  const proposal = { event: { sacredConstraints: "Union labor only at the venue.\nClosed captions on every session; No drones indoors" } };
+  const constraints = generateRequirements(proposal).filter((item) => item.kind === "mandatory");
+  assert.deepEqual(constraints.map((item) => item.title), [
+    "Non-negotiable: Union labor only at the venue.",
+    "Non-negotiable: Closed captions on every session",
+    "Non-negotiable: No drones indoors",
+  ]);
+  assert.equal(new Set(constraints.map((item) => item.key)).size, 3, "each constraint has its own stable key");
+  assert.ok(constraints.every((item) => item.sourceLocator.path === "/content/event/sacredConstraints"));
+  assert.ok(constraints.every((item) => item.importance === "high"));
+  const single = generateRequirements({ event: { sacredConstraints: "One rule." } }).filter((item) => item.kind === "mandatory");
+  assert.equal(single.length, 1);
+  assert.equal(single[0].title, "Non-negotiable: One rule.");
+});
+
+test("the registry stores planner instructions as excluded and keeps them excluded on automatic review", () => {
+  const repository = read("src/modules/requirementRegistry/postgresRequirementRegistryRepository.ts");
+  assert.match(repository, /group_key,ordinal,updated_by_external_user_id,included,inclusion_reviewed/);
+  assert.match(repository, /!isPlannerInstructionLocator\(requirement\.sourceLocator\), isPlannerInstructionLocator\(requirement\.sourceLocator\)\]/);
+  assert.match(repository, /const included = !duplicateIds\.has\(requirement\.id\) && !isPlannerInstructionLocator\(requirement\.source_locator\)/);
 });
