@@ -471,11 +471,15 @@ export const vendorIntelligenceRepository = {
            WHERE r.id=$1 AND r.proposal_reference_id=$2 AND r.vendor_submission_version_mongo_id=$3`,
           [input.runId, proposalReferenceId, input.versionMongoId, REQUIREMENT_GENERATOR_VERSION],
         )
+        // The newest successful analysis is the current one. A later attempt
+        // that failed (provider outage, malformed output) must not blank out a
+        // response that was already fully analysed; it only surfaces when no
+        // run has ever succeeded.
         : await client.query<any>(
           `SELECT r.* FROM rfpilot.vendor_intelligence_runs r
            JOIN rfpilot.requirement_sets s ON s.id=r.requirement_set_id AND s.generator_version=$3
            WHERE r.proposal_reference_id=$1 AND r.vendor_submission_version_mongo_id=$2
-           ORDER BY r.created_at DESC LIMIT 1`,
+           ORDER BY (r.status='succeeded') DESC,r.created_at DESC LIMIT 1`,
           [proposalReferenceId, input.versionMongoId, REQUIREMENT_GENERATOR_VERSION],
         );
       const run = runResult.rows[0];
