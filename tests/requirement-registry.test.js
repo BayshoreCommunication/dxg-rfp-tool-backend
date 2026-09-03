@@ -295,4 +295,7 @@ test("the requirement-set list counts only included requirements, matching what 
   // The intelligence home said "Version 4 contains 22 requirements" while the
   // list showed 19 included and 3 left out.
   assert.match(repository, /WHERE r\.requirement_set_id=s\.id AND r\.included=true\n\s+AND \(\$2::boolean OR r\.group_key IS DISTINCT FROM \$3\)\) requirement_count/);
+  // The list and the detail view both override that SQL count from the rows they load.
+  assert.equal((repository.match(/requirement_count: requirements\.rows\.filter\(\(row: any\) => row\.included\)\.length/g) ?? []).length, 2);
+  assert.doesNotMatch(repository, /requirement_count: requirements\.rows\.length/);
 });

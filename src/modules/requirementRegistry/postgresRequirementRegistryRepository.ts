@@ -238,7 +238,7 @@ const view = async (
       ...set,
       validation,
       content_checksum: contentChecksum,
-      requirement_count: requirements.rows.length,
+      requirement_count: requirements.rows.filter((row: any) => row.included).length,
     },
     matrix: criteria.rows.length ? {
       id: criteria.rows[0].matrix_version_id,
@@ -350,7 +350,8 @@ export const requirementRegistryRepository = {
         ]);
         return {
           ...set,
-          requirement_count: requirements.rows.length,
+          // What vendors are judged on; instructions and duplicates are left out.
+          requirement_count: requirements.rows.filter((row: any) => row.included).length,
           validation: validationForRows(requirements.rows, criteria.rows),
           content_checksum: contentChecksumForRows(requirements.rows, criteria.rows),
           freshness: {
