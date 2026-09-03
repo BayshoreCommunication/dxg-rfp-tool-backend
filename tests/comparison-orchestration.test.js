@@ -156,6 +156,23 @@ test("participant score summaries average each criterion and exclude non-scoring
   assert.match(repository, /max\(e\.criterion_weight\) original_weight/);
 });
 
+test("participant score summaries record who set each criterion score and why", () => {
+  const repository = read("src/modules/comparisonOrchestration/postgresComparisonOrchestrationRepository.ts");
+  const { AUTOMATED_SCORING_POLICY_VERSION, automatedScoringPolicyPattern } = require("../src/modules/evaluationEngine/domain");
+  // Origin is read off the scoring policy version the evaluation engine stamps
+  // on every automated event, never guessed from the actor or the rationale.
+  assert.match(repository, /\(s\.scoring_policy_version LIKE \$2\) automated/);
+  assert.match(repository, /count\(\*\) FILTER \(WHERE e\.automated\)::int automated_count/);
+  assert.match(repository, /count\(\*\) FILTER \(WHERE NOT e\.automated\)::int human_count/);
+  // A person's rationale wins over RFPilot's when both exist for a criterion.
+  assert.match(repository, /array_agg\(e\.rationale ORDER BY e\.automated,e\.rationale\)/);
+  assert.match(repository, /'automatedCount',automated_count,'humanCount',human_count,'rationale',coalesce\(rationale,''\)/);
+  assert.match(repository, /automatedCount: Number\(criterion\.automatedCount \?\? 0\)/);
+  const pattern = automatedScoringPolicyPattern();
+  assert.equal(pattern, "evidence-derived-rubric-score%");
+  assert.ok(AUTOMATED_SCORING_POLICY_VERSION.startsWith(pattern.slice(0, -1)));
+});
+
 test("worker completion advances the PostgreSQL graph and job types are durable", () => {
   const domain = read("src/modules/durableJobs/domain.ts"), worker = read("src/modules/durableJobs/worker.ts");
   assert.match(domain, /comparison_participant_snapshot/);

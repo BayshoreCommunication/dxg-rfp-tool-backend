@@ -6,6 +6,11 @@ export const RISK_POLICY_VERSION = "evaluation-risk.v1";
 export const COMMERCIAL_POLICY_VERSION = "commercial-normalization.v1";
 export const SCORING_POLICY_VERSION = "confirmed-rubric-score.v2";
 export const AUTOMATED_SCORING_POLICY_VERSION = "evidence-derived-rubric-score.v1";
+/**
+ * SQL LIKE pattern matching every version of the automated scoring policy, so
+ * a future v2 still counts as an RFPilot starting score rather than a person's.
+ */
+export const automatedScoringPolicyPattern = () => `${AUTOMATED_SCORING_POLICY_VERSION.replace(/\.v\d+$/, "")}%`;
 
 export class EvaluationEngineError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 422) { super(message); }
@@ -146,14 +151,14 @@ export const buildRisks = (mappings: MappingInput[], facts: FactInput[]): Derive
   const risks: DerivedRisk[] = [];
   for (const mapping of mappings) {
     if (mapping.mandatory && mapping.relationship !== "supports") risks.push({
-      category: "mandatory_gap", severity: "high", title: `Mandatory item needs disposition: ${mapping.title}`,
+      category: "mandatory_gap", severity: "high", title: `Must-have not fully answered: ${mapping.title}`,
       basis: "The response did not fully address a mandatory requirement. This is a review flag, not an automatic disqualification.",
       requirementId: mapping.requirementId, factId: null, fragmentIds: mapping.fragmentIds,
       question: `Please clarify how your proposal fully addresses the mandatory requirement: ${mapping.title}.`,
     });
     else if (["none", "context_only", "partially_supports"].includes(mapping.relationship)) risks.push({
       category: "missing_detail", severity: mapping.relationship === "none" ? "medium" : "low",
-      title: `Response detail needed: ${mapping.title}`,
+      title: `Missing detail: ${mapping.title}`,
       basis: mapping.relationship === "none" ? "No cited response evidence addresses this requirement." : "The cited response does not fully establish compliance with this requirement.",
       requirementId: mapping.requirementId, factId: null, fragmentIds: mapping.fragmentIds,
       question: `Please provide specific response details for: ${mapping.title}.`,
@@ -161,18 +166,18 @@ export const buildRisks = (mappings: MappingInput[], facts: FactInput[]): Derive
   }
   for (const fact of facts) {
     if (fact.contradictionGroup) risks.push({
-      category: "contradiction", severity: "high", title: "Conflicting vendor statements require clarification",
+      category: "contradiction", severity: "high", title: "The response says two different things",
       basis: `Conflicting values were preserved for ${fact.factKey}; the system did not select one as authoritative.`,
       requirementId: null, factId: fact.factId, fragmentIds: fact.fragmentIds,
       question: `Please confirm the authoritative value for ${fact.factKey} and identify which cited statement it replaces.`,
     });
     if (["commercial_exclusion", "commercial_option", "assumption", "exception", "dependency"].includes(fact.factType)) risks.push({
-      category: "commercial_exception", severity: "medium", title: "Commercial assumption or exclusion requires review",
+      category: "commercial_exception", severity: "medium", title: "Pricing assumption or exclusion to check",
       basis: fact.statement, requirementId: null, factId: fact.factId, fragmentIds: fact.fragmentIds,
       question: `Please confirm whether this item is included in the submitted total: ${fact.statement}`,
     });
     if (fact.factType === "client_reference") risks.push({
-      category: "reference_unverified", severity: "low", title: "Vendor reference has not been independently verified",
+      category: "reference_unverified", severity: "low", title: "Reference has not been checked",
       basis: fact.statement, requirementId: null, factId: fact.factId, fragmentIds: fact.fragmentIds,
       question: `Please confirm the current contact and permission to verify this reference: ${fact.statement}`,
     });
