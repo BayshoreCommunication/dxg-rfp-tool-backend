@@ -5,7 +5,7 @@ import { withPostgresTransaction } from "../../../config/postgres";
 import Proposal from "../../../modal/proposalsModel";
 import VendorSubmission from "../../../modal/vendorSubmissionModel";
 import VendorSubmissionVersion from "../../../modal/vendorSubmissionVersionModel";
-import { ASSESSMENT_VERSION, COMMERCIAL_POLICY_VERSION, RISK_POLICY_VERSION, SCORING_POLICY_VERSION } from "../evaluationEngine/domain";
+import { ASSESSMENT_VERSION, automatedScoringPolicyPattern, COMMERCIAL_POLICY_VERSION, RISK_POLICY_VERSION, SCORING_POLICY_VERSION } from "../evaluationEngine/domain";
 import { EXTRACTION_POLICY_VERSION } from "../evidenceExtraction/domain";
 import {
   activeProposalWorkflowContent,
@@ -450,6 +450,10 @@ const intelligenceProjection = async (client: PoolClient, run: any, priceVisibil
       meanScore: Number(criterion.meanScore ?? 0), meanWeightedContribution: Number(criterion.meanWeightedContribution ?? 0),
       spread: Number(criterion.spread ?? 0), rubricMaximum: Number(criterion.rubricMaximum ?? 0),
       originalWeight: Number(criterion.originalWeight ?? 0),
+      // Snapshots taken before score origin was recorded carry zeros here; the
+      // dashboard treats 0/0 as "origin unknown" rather than inventing one.
+      automatedCount: Number(criterion.automatedCount ?? 0), humanCount: Number(criterion.humanCount ?? 0),
+      rationale: String(criterion.rationale ?? ""),
     })),
   }));
   const mandatoryGaps = requirementList.reduce((count, requirement) => count + requirement.vendors.filter((vendor: any) => requirement.mandatoryStatus === "mandatory" && ["missing", "contradictory"].includes(vendor.verdict)).length, 0);
@@ -637,9 +641,13 @@ export const comparisonOrchestrationRepository = {
         client.query<any>(`SELECT verdict,count(*)::int count,count(*) FILTER(WHERE needs_human_review)::int review_count FROM rfpilot.ai_assessments WHERE evaluation_run_id=$1 GROUP BY verdict ORDER BY verdict`, [participant.evaluation_run_id]),
         client.query<any>(`SELECT severity,category,count(*)::int count FROM rfpilot.evaluation_risks WHERE evaluation_run_id=$1 GROUP BY severity,category ORDER BY severity,category`, [participant.evaluation_run_id]),
         client.query<any>(`SELECT s.submitted_total,s.submitted_currency,n.comparable,n.normalized_total,n.currency normalized_currency,n.arithmetic_status,n.assumptions,n.refusal_codes,n.policy_version FROM rfpilot.commercial_submissions s JOIN rfpilot.commercial_normalizations n ON n.commercial_submission_id=s.id WHERE s.evaluation_run_id=$1`, [participant.evaluation_run_id]),
+        // Each criterion also records who set its scores (a person, or RFPilot's
+        // evidence-derived starting score) and the rationale behind them, so the
+        // comparison can explain a ranking gap instead of just reporting it.
         client.query<any>(`WITH latest AS (
           SELECT DISTINCT ON(s.assignment_id,s.criterion_id) s.assignment_id,s.criterion_id,s.event_type,s.score,s.weighted_contribution,
-                 s.rubric_maximum,s.criterion_weight
+                 s.rubric_maximum,s.criterion_weight,s.rationale,
+                 (s.scoring_policy_version LIKE $2) automated
           FROM rfpilot.evaluator_score_events s WHERE s.evaluation_run_id=$1
           ORDER BY s.assignment_id,s.criterion_id,s.created_at DESC,s.id DESC
         ), eligible AS (
@@ -648,7 +656,10 @@ export const comparisonOrchestrationRepository = {
         ), criterion_means AS (
           SELECT e.criterion_id,c.name,avg(e.score) mean_score,avg(e.weighted_contribution) mean_contribution,
                  max(e.score)-min(e.score) score_spread,max(e.rubric_maximum) rubric_maximum,
-                 max(e.criterion_weight) original_weight
+                 max(e.criterion_weight) original_weight,
+                 count(*) FILTER (WHERE e.automated)::int automated_count,
+                 count(*) FILTER (WHERE NOT e.automated)::int human_count,
+                 (array_agg(e.rationale ORDER BY e.automated,e.rationale))[1] rationale
           FROM eligible e JOIN rfpilot.evaluation_criteria c ON c.id=e.criterion_id
           GROUP BY e.criterion_id,c.name
         ) SELECT
@@ -659,8 +670,9 @@ export const comparisonOrchestrationRepository = {
           coalesce((SELECT jsonb_agg(jsonb_build_object(
             'criterionId',criterion_id,'name',name,'meanScore',mean_score,
             'meanWeightedContribution',mean_contribution,'spread',score_spread,
-            'rubricMaximum',rubric_maximum,'originalWeight',original_weight
-          ) ORDER BY name,criterion_id) FROM criterion_means),'[]'::jsonb) criterion_scores`, [participant.evaluation_run_id]),
+            'rubricMaximum',rubric_maximum,'originalWeight',original_weight,
+            'automatedCount',automated_count,'humanCount',human_count,'rationale',coalesce(rationale,'')
+          ) ORDER BY name,criterion_id) FROM criterion_means),'[]'::jsonb) criterion_scores`, [participant.evaluation_run_id, automatedScoringPolicyPattern()]),
       ]);
       const result = { participantId: participant.id, vendorLabel: participant.vendor_label, submissionId: participant.vendor_submission_mongo_id, versionId: participant.vendor_submission_version_mongo_id, evaluationRunId: participant.evaluation_run_id, assessments: assessments.rows, risks: risks.rows, commercial: commercial.rows[0] ?? null, evaluation: scoreSummary.rows[0], schemaVersion: PARTICIPANT_SCHEMA_VERSION };
       const outputChecksum = comparisonChecksum(result), resultId = uuidv7();

@@ -8,9 +8,17 @@ export const mongoDashboardReadRepository: DashboardReadRepository = {
   async getOwnedOverview(ownerUserId) {
     const userId = new mongoose.Types.ObjectId(ownerUserId);
     const organizationId = tenantObjectId();
+    // The same set the Proposals page calls "All": archived proposals and
+    // saved copies are excluded, so the dashboard total and the list agree.
+    const ownedProposals = {
+      userId,
+      organizationId,
+      isArchived: { $ne: true },
+      isCopy: { $ne: true },
+    };
     const [totalProposals, emailRows, proposalViewRows, latestDocuments] =
       await Promise.all([
-        Proposal.countDocuments({ userId, organizationId }),
+        Proposal.countDocuments(ownedProposals),
         EmailCampaign.aggregate<{
           totalEmailSent: number;
           totalEmailClicked: number;
@@ -25,7 +33,7 @@ export const mongoDashboardReadRepository: DashboardReadRepository = {
           },
         ]),
         Proposal.aggregate<{ totalProposalViews: number }>([
-          { $match: { userId, organizationId } },
+          { $match: ownedProposals },
           {
             $group: {
               _id: null,
@@ -33,7 +41,7 @@ export const mongoDashboardReadRepository: DashboardReadRepository = {
             },
           },
         ]),
-        Proposal.find({ userId, organizationId })
+        Proposal.find(ownedProposals)
           .sort({ createdAt: -1 })
           .limit(5)
           .select(

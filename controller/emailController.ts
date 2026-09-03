@@ -127,11 +127,12 @@ export const sendProposalEmailCampaign = async (
       return;
     }
 
-    const { proposalId, recipientEmails, subject, message } = req.body as {
+    const { proposalId, recipientEmails, subject, message, kind } = req.body as {
       proposalId?: string;
       recipientEmails?: unknown;
       subject?: string;
       message?: string;
+      kind?: unknown;
     };
 
     const result = await sendOwnedEmailCampaign({
@@ -140,6 +141,7 @@ export const sendProposalEmailCampaign = async (
       recipientEmails,
       subject,
       message,
+      kind: kind === "question" ? "question" : "invitation",
     });
     if (result.kind === "proposal_id_required") {
       res.status(400).json({

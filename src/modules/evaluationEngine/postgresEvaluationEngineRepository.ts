@@ -154,7 +154,7 @@ export const evaluationEngineRepository = {
       const mappings = effective.mappings, facts = effective.facts;
       if (!mappings.length) throw new EvaluationEngineError("ASSESSMENT_COVERAGE_EMPTY", "No requirement mappings are available for evaluation.", 409);
       const assessments = buildAssessments(mappings), risks = buildRisks(mappings, facts), commercial = normalizeCommercial(facts);
-      if (!commercial.comparable) risks.push({ category: "commercial_non_comparable", severity: "high", title: "Commercial response is not deterministically comparable", basis: `Normalization was refused: ${commercial.refusalCodes.join(", ")}.`, requirementId: null, factId: commercial.totalFactId, fragmentIds: [], question: "Please provide one authoritative, all-inclusive submitted total in a single currency and identify all options or exclusions." });
+      if (!commercial.comparable) risks.push({ category: "commercial_non_comparable", severity: "high", title: "The price can't be compared yet", basis: `Normalization was refused: ${commercial.refusalCodes.join(", ")}.`, requirementId: null, factId: commercial.totalFactId, fragmentIds: [], question: "Please provide one authoritative, all-inclusive submitted total in a single currency and identify all options or exclusions." });
       const outputChecksum = checksum({ assessments, risks, commercial, reviewInputChecksum, matrix: matrix.content_checksum, policies: [ASSESSMENT_VERSION, RISK_POLICY_VERSION, COMMERCIAL_POLICY_VERSION, SCORING_POLICY_VERSION] });
       const runId = uuidv7();
       await client.query(
