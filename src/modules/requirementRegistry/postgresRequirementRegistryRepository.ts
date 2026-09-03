@@ -331,7 +331,7 @@ export const requirementRegistryRepository = {
       const proposalReferenceId = await owned(client, input.proposalMongoId, input.actorUserMongoId);
       const result = await client.query<any>(
         `SELECT s.*,(SELECT count(*)::int FROM rfpilot.requirements r
-                     WHERE r.requirement_set_id=s.id
+                     WHERE r.requirement_set_id=s.id AND r.included=true
                        AND ($2::boolean OR r.group_key IS DISTINCT FROM $3)) requirement_count
          FROM rfpilot.requirement_sets s
          WHERE s.proposal_reference_id=$1 AND s.generator_version=$4

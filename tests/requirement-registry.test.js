@@ -289,3 +289,10 @@ test("the registry stores planner instructions as excluded and keeps them exclud
   assert.match(repository, /!isPlannerInstructionLocator\(requirement\.sourceLocator\), isPlannerInstructionLocator\(requirement\.sourceLocator\)\]/);
   assert.match(repository, /const included = !duplicateIds\.has\(requirement\.id\) && !isPlannerInstructionLocator\(requirement\.source_locator\)/);
 });
+
+test("the requirement-set list counts only included requirements, matching what vendors are judged on", () => {
+  const repository = read("src/modules/requirementRegistry/postgresRequirementRegistryRepository.ts");
+  // The intelligence home said "Version 4 contains 22 requirements" while the
+  // list showed 19 included and 3 left out.
+  assert.match(repository, /WHERE r\.requirement_set_id=s\.id AND r\.included=true\n\s+AND \(\$2::boolean OR r\.group_key IS DISTINCT FROM \$3\)\) requirement_count/);
+});
