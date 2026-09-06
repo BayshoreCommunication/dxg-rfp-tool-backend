@@ -44,6 +44,29 @@ const BUDGET_REQUIREMENT_FIELDS = new Set([
   "proposalFormatPreferences",
 ]);
 const CONFIDENTIALITY_REQUIREMENT_FIELDS = new Set(["ndaRequired", "ndaType"]);
+/**
+ * Planner instructions and context that vendors are told, not asked. They are
+ * still generated (so the registry shows where every line came from) but they
+ * start excluded: a vendor cannot "answer" the proposal due date, and marking
+ * one "not answered" inflated gaps, emails and risk flags.
+ */
+const PLANNER_INSTRUCTION_FIELDS = new Set([
+  "proposalSubmissionDueDate",
+  "vendorQuestionsDueDate",
+  "vendorPresentationDate",
+  "vendorPresentationOpportunity",
+  "proposalFormatPreferences",
+  "competitiveBid",
+  "estimatedAvBudget",
+  "amountMinor",
+  "currency",
+  "budgetFlexibility",
+]);
+export const PLANNER_INSTRUCTION_ROLE = "planner_instruction";
+const isPlannerInstruction = (segments: string[]) => PLANNER_INSTRUCTION_FIELDS.has(segments.at(-1) ?? "");
+/** True for a stored requirement whose source locator was generated as a planner instruction. */
+export const isPlannerInstructionLocator = (locator: unknown) =>
+  Boolean(locator && typeof locator === "object" && (locator as Record<string, unknown>).role === PLANNER_INSTRUCTION_ROLE);
 const CONTEXT_ONLY_FIELDS = new Set([
   "_id",
   "id",
@@ -89,10 +112,15 @@ const DEFAULT_CRITERION_WEIGHTS: Record<string, number> = {
   sustainability_dei: 4,
 };
 
+const ACRONYMS: Record<string, string> = { av: "AV", dei: "DEI", nda: "NDA", rfp: "RFP", coi: "COI" };
 const words = (value: string) => value
   .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
   .replace(/[_-]+/g, " ")
-  .trim();
+  .trim()
+  // "Platform Integration With Av" reads as a typo; keep industry acronyms upright.
+  .split(" ")
+  .map((word) => ACRONYMS[word.toLowerCase()] ?? word)
+  .join(" ");
 const FIELD_TITLES: Record<string, string> = { sacredConstraints: "Non-negotiable constraints" };
 const title = (segments: string[]) => {
   const leaf = [...segments].reverse().find((part) => !/^\d+$/.test(part)) ?? "Requirement";
@@ -106,6 +134,16 @@ const scalarText = (value: unknown) => {
   return typeof value === "string" ? value.trim() : "";
 };
 const requirementText = (segments: string[], value: string) => `${title(segments)}: ${value}`.slice(0, 8000);
+/**
+ * A planner's non-negotiable constraints arrive as one free-text field. Each
+ * line or clause is its own obligation, so each becomes its own requirement,
+ * titled by what it says rather than by the field it came from.
+ */
+const constraintItems = (value: string) => value
+  .split(/\r?\n|;|(?<=\.)\s+(?=[A-Z])/)
+  .map((item) => item.replace(/^[\s\-\u2022*\d.)]+/, "").trim())
+  .filter(Boolean);
+const constraintTitle = (item: string) => `Non-negotiable: ${item.length > 90 ? `${item.slice(0, 87).trimEnd()}…` : item}`.slice(0, 300);
 const kindFor = (path: string): RequirementKind => {
   const lower = path.toLowerCase();
   if (/sacredconstraints|nonnegotiable/.test(lower)) return "mandatory";
@@ -175,7 +213,7 @@ export const generateRequirements = (
           text: requirementText(segments, scalarValues.join("; ")),
           mandatoryStatus: "pending",
           sourceKind: "canonical_proposal",
-          sourceLocator: { kind: "canonical_proposal", path: `/content${path}`, paths: scalarValues.map((_, index) => `/content${path}/${index}`), provenanceLabel: "Planner-authored proposal fields" },
+          sourceLocator: { kind: "canonical_proposal", path: `/content${path}`, paths: scalarValues.map((_, index) => `/content${path}/${index}`), provenanceLabel: "Planner-authored proposal fields", ...(isPlannerInstruction(segments) ? { role: PLANNER_INSTRUCTION_ROLE } : {}) },
           suggestedCriterionKey: criterionFor(path, kind),
           importance: kind === "submission" || kind === "legal_policy" ? "high" : "medium",
           verificationMethod: "pending",
@@ -197,6 +235,26 @@ export const generateRequirements = (
     if (!text || /^(https?:\/\/|s3:\/\/)/i.test(text) || text.includes("private/")) return;
     const path = `/${segments.join("/")}`;
     const kind = kindFor(path);
+    if (leaf === "sacredConstraints") {
+      const items = constraintItems(text);
+      (items.length ? items : [text]).forEach((item, index) => {
+        output.push({
+          key: safeKey("req", { source: "canonical_proposal", path, constraint: index }),
+          kind,
+          title: constraintTitle(item),
+          text: `${title(segments)}: ${item}`.slice(0, 8000),
+          mandatoryStatus: "pending",
+          sourceKind: "canonical_proposal",
+          sourceLocator: { kind: "canonical_proposal", path: `/content${path}`, constraintIndex: index, provenanceLabel: "Planner-authored proposal field" },
+          suggestedCriterionKey: criterionFor(path, kind),
+          importance: "high",
+          verificationMethod: "pending",
+          groupKey: segments[0] ?? "proposal",
+          ordinal: output.length,
+        });
+      });
+      return;
+    }
     output.push({
       key: safeKey("req", { source: "canonical_proposal", path }),
       kind,
@@ -204,7 +262,7 @@ export const generateRequirements = (
       text: requirementText(segments, text),
       mandatoryStatus: "pending",
       sourceKind: "canonical_proposal",
-      sourceLocator: { kind: "canonical_proposal", path: `/content${path}`, provenanceLabel: "Planner-authored proposal field" },
+      sourceLocator: { kind: "canonical_proposal", path: `/content${path}`, provenanceLabel: "Planner-authored proposal field", ...(isPlannerInstruction(segments) ? { role: PLANNER_INSTRUCTION_ROLE } : {}) },
       suggestedCriterionKey: criterionFor(path, kind),
       importance: kind === "submission" || kind === "legal_policy" ? "high" : "medium",
       verificationMethod: "pending",

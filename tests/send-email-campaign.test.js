@@ -148,3 +148,38 @@ test("all failed deliveries return typed gateway-failure outcome", async () => {
   assert.equal(result.failedCount, 1);
   assert.equal(capture.finalized.sentCount, 0);
 });
+
+test("a vendor question goes out as a plain email without proposal or submission links", async () => {
+  const capture = {};
+  const send = createSendOwnedEmailCampaign(dependencies(capture));
+  const result = await send({
+    ownerUserId: "user-001",
+    proposalId: "proposal-001",
+    recipientEmails: ["vendor@example.com"],
+    subject: "Questions about your response to DXG Summit",
+    message: "We could not find answers to:\n- Union Labor",
+    kind: "question",
+  });
+  assert.equal(result.kind, "processed");
+  assert.equal(capture.deliveries.length, 1);
+  const [delivery] = capture.deliveries;
+  assert.equal(delivery.subject, "Questions about your response to DXG Summit");
+  assert.match(delivery.html, /A question about your response to/);
+  assert.match(delivery.html, /Union Labor/);
+  assert.match(delivery.html, /Reply to this email to answer/);
+  assert.doesNotMatch(delivery.html, /Submit Your Proposal|View Proposal|accessGrant|vendor-response\//);
+  assert.doesNotMatch(delivery.text, /View proposal|Give feedback/);
+  // Open tracking stays so the planner can see it was read.
+  assert.match(delivery.html, /api\/emails\/open\/tracking-1/);
+  assert.equal(capture.finalized.sentCount, 1);
+});
+
+test("a vendor question with no subject gets a question subject, not an invitation one", async () => {
+  const capture = {};
+  const send = createSendOwnedEmailCampaign(dependencies(capture));
+  await send({ ownerUserId: "user-001", proposalId: "proposal-001", recipientEmails: ["vendor@example.com"], message: "Hi", kind: "question" });
+  assert.equal(capture.deliveries[0].subject, "A question about your response to DXG Summit");
+  await send({ ownerUserId: "user-001", proposalId: "proposal-001", recipientEmails: ["vendor@example.com"], message: "Hi" });
+  assert.equal(capture.deliveries[1].subject, "Proposal for DXG Summit - DXG RFP Tool");
+  assert.match(capture.deliveries[1].html, /Submit Your Proposal/);
+});

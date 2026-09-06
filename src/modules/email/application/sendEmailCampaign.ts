@@ -62,6 +62,22 @@ const emailHtml = (input: {
   </div>
 `;
 
+/**
+ * A question to one vendor about a response they already sent. Unlike the
+ * invitation, it carries no "View Proposal" or "Submit Your Proposal" buttons
+ * and no access links — the vendor simply replies to the sender.
+ */
+const questionEmailHtml = (input: { title: string; message: string; reference: string; openUrl: string }) => `
+  <div style="font-family:Inter,Arial,sans-serif;max-width:620px;margin:0 auto;padding:24px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
+    <p style="margin:0 0 8px;color:#0f172a;font-size:14px;">A question about your response to</p>
+    <h2 style="margin:0 0 8px;color:#0f172a;font-size:22px;">${escapeHtml(input.title)}</h2>
+    <p style="margin:0 0 14px;color:#64748b;font-size:12px;">Reference: ${escapeHtml(input.reference)}</p>
+    <div style="margin:0 0 20px;color:#334155;font-size:14px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(input.message)}</div>
+    <p style="margin:16px 0 0;color:#64748b;font-size:12px;">Reply to this email to answer.</p>
+    <img src="${input.openUrl}" alt="" width="1" height="1" style="display:block;opacity:0;" />
+  </div>
+`;
+
 export const createSendOwnedEmailCampaign = (dependencies: {
   repository: EmailCampaignSendingRepository;
   delivery: CampaignEmailDeliveryPort;
@@ -78,8 +94,11 @@ export const createSendOwnedEmailCampaign = (dependencies: {
   recipientEmails: unknown;
   subject?: string;
   message?: string;
+  /** "invitation" (default) sends the proposal with response links; "question" is a plain email to a vendor who already responded. */
+  kind?: "invitation" | "question";
 }) => {
   if (!input.proposalId) return { kind: "proposal_id_required" as const };
+  const isQuestion = input.kind === "question";
   const emails = normalizeRecipients(input.recipientEmails);
   if (!emails.length) return { kind: "recipients_required" as const };
   const proposal = await dependencies.repository.findOwnedProposal({
@@ -96,7 +115,9 @@ export const createSendOwnedEmailCampaign = (dependencies: {
   const vendorBaseUrl = `${frontend}/vendor-response/${proposalSlug}?source=email`;
   const subject =
     input.subject?.trim() ||
-    `Proposal for ${proposal.proposalTitle} - DXG RFP Tool`;
+    (isQuestion
+      ? `A question about your response to ${proposal.proposalTitle}`
+      : `Proposal for ${proposal.proposalTitle} - DXG RFP Tool`);
   const defaultMessage = `Hi,\n\nPlease review the proposal and let us know your feedback.\n\nBest regards,\nDXG Team`;
   const message = cleanMessage(input.message?.trim() || defaultMessage);
   const reference = `#${proposal.proposalId.slice(-8).toUpperCase()}`;
@@ -117,6 +138,20 @@ export const createSendOwnedEmailCampaign = (dependencies: {
   let sentCount = 0;
   for (const recipient of recipients) {
     try {
+      if (isQuestion) {
+        const openUrl = `${api}/api/emails/open/${recipient.trackingId}`;
+        await dependencies.delivery.send({
+          to: recipient.email,
+          subject,
+          html: questionEmailHtml({ title: proposal.proposalTitle, message, reference, openUrl }),
+          text: message,
+        });
+        recipient.status = "sent";
+        recipient.sentAt = (dependencies.now ?? (() => new Date()))();
+        delete recipient.errorMessage;
+        sentCount += 1;
+        continue;
+      }
       const [proposalGrant, vendorGrant] = dependencies.grants ? await Promise.all([
         dependencies.grants.issue({ resourceId: proposal.proposalId, purpose: "proposal:view", recipient: recipient.email }),
         dependencies.grants.issue({ resourceId: proposal.proposalId, purpose: "vendor:submit", recipient: recipient.email }),
