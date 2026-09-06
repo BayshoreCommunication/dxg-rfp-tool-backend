@@ -85,7 +85,11 @@ test("Event Overview UI metadata produces exact effective field guidance", () =>
   const eventType = proposalFormGuidanceForField("/content/event/type");
   assert.equal(eventType?.requirement, "required");
   assert.equal(eventType?.fieldType, "select");
-  assert.equal(eventType?.allowedOptions.length, 13);
+  assert.equal(eventType?.allowedOptions.length, 14);
+  for (const label of ["Annual Meeting", "Shareholder Event"]) {
+    assert.ok(eventType?.allowedOptions.some((option) => option.label === label));
+  }
+  assert.equal(eventType?.allowedOptions.some((option) => option.label === "Annual Meeting / Shareholder Event"), false);
   assert.ok(
     eventType?.allowedOptions.some(
       (option) => option.label === "Sales Kickoff (SKO)",

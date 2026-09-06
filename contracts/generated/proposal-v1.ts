@@ -168,7 +168,7 @@ export interface VideoRequirements {
   otherCameraCount?: NonNegativeInteger;
   videoRecordingRequired?: NullableBoolean;
   recordingType?: string;
-  recordingCodec?: "H.264" | "H.265" | "ProRes";
+  recordingCodec?: "H.264" | "H.265" | "ProRes" | "Vendor recommendation";
   recordIn4k?: NullableBoolean;
   programConfidenceMonitorRequired?: NullableBoolean;
   programConfidenceMonitorCount?: NonNegativeInteger;
@@ -267,7 +267,7 @@ export interface VideoRecording {
   cameraOperatorCount?: NonNegativeInteger;
   isoRecordings?: string;
   resolution?: string;
-  codec?: "H.264" | "H.265" | "ProRes";
+  codec?: "H.264" | "H.265" | "ProRes" | "Vendor recommendation";
   recordIn4k?: NullableBoolean;
   recordingMedia?: string;
   editedDeliverable?: EditedDeliverable;

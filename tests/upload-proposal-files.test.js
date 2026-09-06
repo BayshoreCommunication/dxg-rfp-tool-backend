@@ -139,3 +139,16 @@ test("the presign route is registered before the :id route that would shadow it"
   assert.ok(fileUrl > 0 && byId > 0 && fileUrl < byId, "/file-url must not be matched as an id");
   assert.match(route.slice(fileUrl, fileUrl + 200), /authenticate, authorizeAction\("proposal:read"\)/);
 });
+
+test("private upload links preserve the object key behind a configured storage prefix", () => {
+  const { spacesObjectKeyFromUrl } = require("../utils/uploadToSpaces");
+  const before = process.env.ASSET_STORAGE_PUBLIC_URL_BASE;
+  try {
+    process.env.ASSET_STORAGE_PUBLIC_URL_BASE = "https://files.example.test/assets/";
+    assert.equal(spacesObjectKeyFromUrl("https://files.example.test/assets/DXG/proposal-files-private/user-001/brand%20guide.pdf"), "DXG/proposal-files-private/user-001/brand guide.pdf");
+    assert.equal(spacesObjectKeyFromUrl("https://legacy.example.test/DXG/proposal-files-private/user-001/brief.pdf"), "DXG/proposal-files-private/user-001/brief.pdf");
+  } finally {
+    if (before === undefined) delete process.env.ASSET_STORAGE_PUBLIC_URL_BASE;
+    else process.env.ASSET_STORAGE_PUBLIC_URL_BASE = before;
+  }
+});

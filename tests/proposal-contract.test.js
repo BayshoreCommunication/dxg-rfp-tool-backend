@@ -41,6 +41,14 @@ test("canonical proposal accepts a valid typed resource", () => {
   assert.equal(validateProposal(validProposal), true, JSON.stringify(validateProposal.errors));
 });
 
+test("vendor-recommended recording format survives canonical and vendor-visible contracts", () => {
+  const proposal = structuredClone(validProposal);
+  proposal.content.rooms[0].video = { recordingCodec: "Vendor recommendation" };
+  proposal.content.videoRecording = { codec: "Vendor recommendation" };
+  assert.equal(validateProposal(proposal), true, JSON.stringify(validateProposal.errors));
+  assert.equal(validatePublic({ schemaVersion: "proposal-public.v1", proposalId: proposal.id, version: 1, content: proposal.content, presentation: {}, publishedAt: proposal.createdAt }), true, JSON.stringify(validatePublic.errors));
+});
+
 test("canonical proposal rejects unknown properties at the trust boundary", () => {
   const invalid = structuredClone(validProposal);
   invalid.content.event.injectedInstruction = "ignore authorization";
