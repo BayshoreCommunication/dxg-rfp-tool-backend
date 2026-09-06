@@ -312,7 +312,7 @@ export const requirementRegistryRepository = {
             mandatory_status,source_kind,source_locator,criterion_id,importance,verification_method,
             group_key,ordinal,updated_by_external_user_id,included,inclusion_reviewed
            ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18)`,
-          [uuidv7(), organizationId, setId, requirement.key, requirement.kind, requirement.title, requirement.text, requirement.mandatoryStatus, requirement.sourceKind, JSON.stringify(requirement.sourceLocator), criterionIds.get(requirement.suggestedCriterionKey ?? "") ?? null, requirement.importance, requirement.verificationMethod, requirement.groupKey.slice(0, 100), requirement.ordinal, input.actorUserMongoId, !isPlannerInstructionLocator(requirement.sourceLocator), isPlannerInstructionLocator(requirement.sourceLocator)],
+          [uuidv7(), organizationId, setId, requirement.key, requirement.kind, requirement.title, requirement.text, requirement.mandatoryStatus, requirement.sourceKind, JSON.stringify(requirement.sourceLocator), criterionIds.get(requirement.suggestedCriterionKey ?? "") ?? criterionIds.get("technical_approach") ?? null, requirement.importance, requirement.verificationMethod, requirement.groupKey.slice(0, 100), requirement.ordinal, input.actorUserMongoId, !isPlannerInstructionLocator(requirement.sourceLocator), isPlannerInstructionLocator(requirement.sourceLocator)],
         );
       }
       await client.query(
@@ -484,7 +484,10 @@ export const requirementRegistryRepository = {
       for (const requirement of requirements.rows) {
         // Instructions to vendors stay out unless the planner includes them by hand.
         const included = !duplicateIds.has(requirement.id) && !isPlannerInstructionLocator(requirement.source_locator);
-        const criterionId = requirement.criterion_id ?? criterionIds.get(suggestedCriterionKey(requirement)) ?? null;
+        // A requirement can suggest a criterion the event does not use (an
+        // in-person event that mentions "remote" still suggests hybrid/virtual);
+        // score it under the technical approach rather than leaving it unassigned.
+        const criterionId = requirement.criterion_id ?? criterionIds.get(suggestedCriterionKey(requirement)) ?? criterionIds.get("technical_approach") ?? null;
         await client.query(
           `UPDATE rfpilot.requirements SET included=$2,inclusion_reviewed=true,
              mandatory_status=$3,mandatory_reviewed=true,criterion_id=$4,criterion_reviewed=$5,

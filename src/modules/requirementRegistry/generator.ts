@@ -1,4 +1,4 @@
-import { checksum } from "./domain";
+import { checksum, normalizeCriterionWeights } from "./domain";
 import type { GeneratedCriterion, GeneratedRequirement, RequirementKind } from "./domain";
 import {
   activeProposalWorkflowContent,
@@ -180,14 +180,46 @@ const rubric = (criterion: string) => ({
   ],
 });
 
+const isYes = (value: unknown) =>
+  value === true || ["yes", "y", "true"].includes(String(value ?? "").trim().toLowerCase());
+
+/**
+ * The proposal builder hides the hybrid/virtual and creative/scenic weighting
+ * rows when the event does not use them, and only the visible rows have to
+ * total 100. Hidden rows keep whatever value they held, so the saved matrix
+ * can still carry weight for criteria the planner never saw. Mirror the
+ * builder's rule here so those criteria are never scored.
+ */
+export const activeCriterionKeys = (proposal: Record<string, unknown>) => {
+  const event = proposal.event && typeof proposal.event === "object" ? proposal.event as Record<string, unknown> : {};
+  const format = String(event.eventFormat ?? "").trim().toLowerCase();
+  const hybridVirtual = format === "hybrid" || format === "virtual";
+  const rooms = Array.isArray(proposal.roomByRoom) ? proposal.roomByRoom as unknown[] : [];
+  const creative = proposal.contentCreative && typeof proposal.contentCreative === "object" ? proposal.contentCreative as Record<string, unknown> : {};
+  const creativeScenic = rooms.some((room) => !!room && typeof room === "object" && isYes((room as Record<string, unknown>).scenicStageDesign))
+    || isYes(creative.contentServicesNeeded);
+  return new Set(Object.keys(CRITERIA).filter((key) => {
+    if (key === "hybrid_virtual") return hybridVirtual;
+    if (key === "creative_scenic") return creativeScenic;
+    return true;
+  }));
+};
+
 export const generateCriteria = (proposal: Record<string, unknown>): GeneratedCriterion[] => {
   const budget = proposal.budget && typeof proposal.budget === "object" ? proposal.budget as Record<string, unknown> : {};
-  const matrix = budget.evaluationMatrix && typeof budget.evaluationMatrix === "object" ? budget.evaluationMatrix as Record<string, unknown> : {};
-  return Object.entries(CRITERIA).flatMap(([key, presentation], ordinal) => {
+  const hasMatrix = !!budget.evaluationMatrix && typeof budget.evaluationMatrix === "object";
+  const matrix = hasMatrix ? budget.evaluationMatrix as Record<string, unknown> : {};
+  const active = activeCriterionKeys(proposal);
+  const criteria = Object.entries(CRITERIA).filter(([key]) => active.has(key)).map(([key, presentation], ordinal) => {
     const weight = Number(matrix[presentation.proposalKey]);
     const resolvedWeight = Number.isFinite(weight) && weight >= 0 && weight <= 100 ? weight : DEFAULT_CRITERION_WEIGHTS[key];
-    return [{ key, name: presentation.name, description: presentation.description, weight: resolvedWeight, ordinal, rubric: rubric(presentation.name) }];
+    return { key, name: presentation.name, description: presentation.description, weight: resolvedWeight, ordinal, rubric: rubric(presentation.name) };
   });
+  if (hasMatrix) return criteria;
+  // Without a planner matrix the shipped defaults are only a starting point,
+  // so rescale whichever of them apply to this event back to a full 100.
+  const normalized = new Map(normalizeCriterionWeights(criteria.map((item) => ({ id: item.key, weight: item.weight, ordinal: item.ordinal }))).map((item) => [item.id, item.weight]));
+  return criteria.map((item) => ({ ...item, weight: normalized.get(item.key) ?? item.weight }));
 };
 
 export type RenderedParagraph = { runId: string; runChecksum: string | null; sectionKey: string; paragraphId: string; ordinal: number; text: string };

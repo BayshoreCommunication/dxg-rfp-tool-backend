@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { generateCriteria, generateRequirements, isPlannerInstructionLocator } = require("../src/modules/requirementRegistry/generator");
+const { activeCriterionKeys, generateCriteria, generateRequirements, isPlannerInstructionLocator } = require("../src/modules/requirementRegistry/generator");
 const { duplicateRequirementIds, normalizeCriterionWeights, suggestedMandatoryStatus, suggestedVerificationMethod, validateForApproval, parseRequirementUpdate } = require("../src/modules/requirementRegistry/domain");
 
 const read = (relative) => fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
@@ -49,7 +49,7 @@ test("accepted rendered RFP narrative retains an exact source locator", () => {
 });
 
 test("evaluation criteria preserve confirmed proposal weights", () => {
-  const criteria = generateCriteria({ budget: { evaluationMatrix: {
+  const criteria = generateCriteria({ event: { eventFormat: "Hybrid" }, roomByRoom: [{ scenicStageDesign: "Yes" }], budget: { evaluationMatrix: {
     technicalApproach: 30,
     crewExperience: 20,
     hybridVirtual: 10,
@@ -67,10 +67,38 @@ test("evaluation criteria preserve confirmed proposal weights", () => {
 });
 
 test("evaluation criteria provide a complete 100 percent fallback matrix", () => {
-  const criteria = generateCriteria({});
-  assert.equal(criteria.length, 7);
-  assert.equal(criteria.reduce((sum, criterion) => sum + criterion.weight, 0), 100);
-  assert.equal(criteria.find((criterion) => criterion.key === "technical_approach").weight, 30);
+  const everything = generateCriteria({ event: { eventFormat: "Virtual" }, contentCreative: { contentServicesNeeded: "YES" } });
+  assert.equal(everything.length, 7);
+  assert.equal(everything.reduce((sum, criterion) => sum + criterion.weight, 0), 100);
+  assert.equal(everything.find((criterion) => criterion.key === "technical_approach").weight, 30);
+  const inPerson = generateCriteria({});
+  assert.equal(inPerson.length, 5, "an event with no matrix still only scores the criteria it uses");
+  assert.equal(Math.round(inPerson.reduce((sum, criterion) => sum + criterion.weight, 0) * 100) / 100, 100, "the applicable defaults are rescaled to a full 100");
+});
+
+test("criteria the proposal builder hides for the event are never scored", () => {
+  // The builder hides the hybrid/virtual and creative/scenic rows for an
+  // in-person event without scenic or content work, and only the visible rows
+  // must total 100 — but the hidden rows keep their shipped defaults. Those
+  // defaults must not leak into scoring as weight the planner never saw.
+  const savedByBuilder = {
+    event: { eventFormat: "In-Person" },
+    roomByRoom: [{ roomFunction: "General Session", scenicStageDesign: "No" }],
+    contentCreative: { contentServicesNeeded: "NO" },
+    budget: { evaluationMatrix: {
+      technicalApproach: 35, crewExperience: 25, hybridVirtual: 20, pricing: 25, creativeScenic: 10, responsiveness: 10, sustainabilityDei: 5,
+    }, evaluationMatrixConfirmed: true },
+  };
+  const criteria = generateCriteria(savedByBuilder);
+  assert.deepEqual(criteria.map((criterion) => criterion.key), ["technical_approach", "crew_experience", "pricing", "responsiveness", "sustainability_dei"]);
+  assert.equal(criteria.reduce((sum, criterion) => sum + criterion.weight, 0), 100, "the planner's visible weights are kept exactly as entered");
+  assert.equal(criteria.find((criterion) => criterion.key === "technical_approach").weight, 35);
+  assert.deepEqual(criteria.map((criterion) => criterion.ordinal), [0, 1, 2, 3, 4], "ordinals stay contiguous after hidden criteria are removed");
+
+  assert.ok(activeCriterionKeys({ event: { eventFormat: "hybrid" } }).has("hybrid_virtual"), "format matching is case-insensitive");
+  assert.ok(activeCriterionKeys({ roomByRoom: [{ scenicStageDesign: true }] }).has("creative_scenic"), "a scenic room activates creative/scenic");
+  assert.ok(activeCriterionKeys({ contentCreative: { contentServicesNeeded: "yes" } }).has("creative_scenic"), "content services activate creative/scenic");
+  assert.ok(!activeCriterionKeys({ event: { eventFormat: "In-Person" } }).has("hybrid_virtual"));
 });
 
 test("approval validation blocks unreviewed requirements and invalid weights", () => {
