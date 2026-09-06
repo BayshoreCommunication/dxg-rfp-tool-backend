@@ -12,7 +12,7 @@ export interface AuthRequest extends Request {
   user?: TokenPayload;
 }
 
-export const authenticate = async (
+export const createAuthenticate = (verifyToken: (token: string) => TokenPayload) => async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
@@ -31,7 +31,7 @@ export const authenticate = async (
     const token = authHeader.substring(7); // Remove "Bearer " prefix
 
     try {
-      const decoded = verifyAccessToken(token);
+      const decoded = verifyToken(token);
       if (!decoded.organizationId || !decoded.sessionId) {
         res.status(401).json({ success: false, message: "Session-bound access token required" });
         return;
@@ -90,6 +90,10 @@ export const authenticate = async (
     return;
   }
 };
+
+// Both normal access and upload-only tickets recheck current membership,
+// blocked users, organization status, roles version, and session revocation.
+export const authenticate = createAuthenticate(verifyAccessToken);
 
 // Optional: Role-based authorization middleware
 export const authorize = (...roles: string[]) => {

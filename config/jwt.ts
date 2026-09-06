@@ -51,6 +51,35 @@ export type NotificationSocketTicketPayload = {
 const NOTIFICATION_SOCKET_TICKET_TTL_SECONDS = 30;
 const NOTIFICATION_SOCKET_AUDIENCE = `${JWT_AUDIENCE}:notification-ws`;
 
+// A short-lived capability for the direct, malware-scanned proposal upload
+// route only. It cannot be used as a normal API access token.
+const PROPOSAL_UPLOAD_AUDIENCE = `${JWT_AUDIENCE}:proposal-upload`;
+export const generateProposalUploadTicket = (payload: TokenPayload) => {
+  if (!payload.organizationId || !payload.sessionId) throw new Error("Active session required");
+  return {
+    ticket: jwt.sign({ ...payload, purpose: "proposal_upload" }, JWT_SECRET, {
+      algorithm: "HS256", issuer: JWT_ISSUER, audience: PROPOSAL_UPLOAD_AUDIENCE,
+      subject: payload.userId, expiresIn: 120, jwtid: crypto.randomUUID(),
+    }),
+    expiresAt: Date.now() + 120_000,
+  };
+};
+
+export const verifyProposalUploadTicket = (ticket: string): TokenPayload => {
+  const decoded = jwt.verify(ticket, JWT_SECRET, {
+    algorithms: ["HS256"], issuer: JWT_ISSUER, audience: PROPOSAL_UPLOAD_AUDIENCE,
+  }) as jwt.JwtPayload;
+  if (decoded.purpose !== "proposal_upload" || typeof decoded.sub !== "string" ||
+      typeof decoded.email !== "string" || typeof decoded.role !== "string" ||
+      typeof decoded.organizationId !== "string" || typeof decoded.sessionId !== "string" ||
+      typeof decoded.rolesVersion !== "number") throw new Error("Invalid proposal upload ticket");
+  return {
+    userId: decoded.sub, email: decoded.email, role: decoded.role,
+    organizationId: decoded.organizationId, sessionId: decoded.sessionId,
+    rolesVersion: decoded.rolesVersion,
+  };
+};
+
 // Generate an access token using the configured lifetime.
 export const generateAccessToken = (payload: TokenPayload): TokenResponse => {
   const accessToken = jwt.sign({

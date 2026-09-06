@@ -17,7 +17,8 @@ import {
   updateProposalStatus,
   uploadProposalFiles,
 } from "../controller/proposalsController";
-import { authenticate, authorizeAction, type AuthRequest } from "../middleware/auth";
+import { authenticate, createAuthenticate, authorizeAction, type AuthRequest } from "../middleware/auth";
+import { generateProposalUploadTicket, verifyProposalUploadTicket } from "../config/jwt";
 import { uploadProposalDocs } from "../middleware/upload";
 import { requirePublicGrant } from "../middleware/publicAccess";
 import { grantAndIpIdentity, securityRateLimit } from "../middleware/securityRateLimit";
@@ -70,6 +71,12 @@ router.post("/", authenticate, authorizeAction("proposal:write"), createProposal
 // Support documents are private objects; this issues the short-lived link.
 router.get("/file-url", authenticate, authorizeAction("proposal:read"), getProposalFileUrl);
 router.post("/upload-files", authenticate, authorizeAction("proposal:write"), uploadProposalDocs, uploadProposalFiles);
+// File bytes bypass the frontend's Server Action/serverless body limits. The
+// ticket is issued server-to-server and is useless on other API routes.
+router.post("/upload-ticket", authenticate, authorizeAction("proposal:write"), (req: AuthRequest, res: Response) => {
+  res.json({ success: true, data: generateProposalUploadTicket(req.user!) });
+});
+router.post("/upload-files/direct", createAuthenticate(verifyProposalUploadTicket), authorizeAction("proposal:write"), uploadProposalDocs, uploadProposalFiles);
 
 /* Routes accessible with or without auth — different controller per case */
 router.get("/:id", validateProposalId, optionalAuth, rateLimitPublicProposal, requirePublicGrant(["proposal:view", "vendor:submit"]), (req: Request, res: Response) => {

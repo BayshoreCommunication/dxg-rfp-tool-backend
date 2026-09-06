@@ -152,7 +152,18 @@ export const uploadPrivateToSpaces = (
 // Derive the object key from a canonical Spaces URL we generated at upload time.
 export const spacesObjectKeyFromUrl = (url: string): string | null => {
   try {
-    const pathname = new URL(url).pathname;
+    const parsed = new URL(url);
+    let pathname = parsed.pathname;
+    // A configured CDN or local S3 endpoint can include a path prefix (for
+    // example /bucket). That prefix is not part of the stored object key.
+    const base = process.env.ASSET_STORAGE_PUBLIC_URL_BASE;
+    if (base) {
+      const parsedBase = new URL(base);
+      const prefix = parsedBase.pathname.replace(/\/+$/, "");
+      if (parsed.origin === parsedBase.origin && prefix && pathname.startsWith(`${prefix}/`)) {
+        pathname = pathname.slice(prefix.length);
+      }
+    }
     const objectKey = decodeURIComponent(pathname.replace(/^\/+/, ""));
     return objectKey || null;
   } catch {
