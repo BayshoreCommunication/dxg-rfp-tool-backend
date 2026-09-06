@@ -145,6 +145,14 @@ export class AppStack extends cdk.Stack {
       ASSET_STORAGE_PUBLIC_URL_BASE: config.assetPublicUrlBase,
       ...config.aiEnvironment,
       POSTGRES_FOUNDATION_ENABLED: 'true',
+      /* Writes rfpilot.proposal_references when a proposal is created,
+         updated or copied. Without it the row only appears once a chat
+         message repairs it on demand, so the first document upload on a
+         brand-new proposal failed with PROPOSAL_NOT_FOUND
+         (docs/architecture/POSTGRES_DATA_FOUNDATION.md, "Dual-write
+         behavior"). The write is best-effort and never blocks the MongoDB
+         proposal write. */
+      PROPOSAL_REFERENCE_DUAL_WRITE_ENABLED: 'true',
       POSTGRES_SSL: 'true',
       NODE_EXTRA_CA_CERTS: '/app/rds-global-bundle.pem',
       /* Without this safeLog returns early and the only thing reaching

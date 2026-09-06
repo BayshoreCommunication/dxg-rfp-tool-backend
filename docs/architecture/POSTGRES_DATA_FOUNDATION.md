@@ -76,6 +76,10 @@ PROPOSAL_REFERENCE_DUAL_WRITE_ENABLED=true
 
 Proposal create, update, and copy operations then synchronize the PostgreSQL reference and outbox record. MongoDB remains authoritative. A PostgreSQL outage is logged as a deferred secondary synchronization and repaired by reconciliation; it does not roll back or corrupt the successful MongoDB proposal write.
 
+### On-demand repair
+
+Read paths that join a proposal through `rfpilot.proposal_references` cannot assume the row exists: the flag may be off in an environment, or the deferred write may not have landed yet. The conversation workspace (`conversationProposalReference.ts`) and private document sources — upload sessions and pasted notes (`documentIngestion/proposalReference.ts`) — therefore treat a repository `PROPOSAL_NOT_FOUND` as "owned in MongoDB, missing in PostgreSQL", re-validate ownership, synchronize the reference with `eventType: "proposal.reference.backfilled"`, and retry the operation once. A genuine ownership failure still returns 404; a data-foundation failure during the repair returns `ORGANIZATION_NOT_READY` (503).
+
 ## Backup and recovery
 
 - Shared environments require automated backups and point-in-time recovery.

@@ -5,6 +5,7 @@ import type { AuthRequest } from "../middleware/auth";
 import { documentIngestion, documentIngestionEnabled } from "../src/modules/documentIngestion/composition";
 import { DocumentIngestionError } from "../src/modules/documentIngestion/domain";
 import { createTextSource } from "../src/modules/documentIngestion/textSource";
+import { withDocumentProposalReference } from "../src/modules/documentIngestion/proposalReference";
 import { getOwnedProposal } from "../src/modules/proposals/composition";
 
 const context = (req: AuthRequest) => {
@@ -32,18 +33,21 @@ export const createProposalNotes = async(req:AuthRequest,res:Response)=>{try{
   const title=typeof body.title==="string"&&body.title.trim()?body.title.trim().slice(0,80):"Pasted notes";
   // Shares one implementation of the private-source boundary with
   // conversational extraction, which drives the same path from the server.
-  const {source,created}=await createTextSource({
+  const {source,created}=await withDocumentProposalReference(ctx,req.params.id,()=>createTextSource({
     ...ctx, proposalMongoId:req.params.id, text:body.text, title, origin:"notes",
     classification:String(body.classification||"confidential"),
     idempotencyKey:String(req.headers["idempotency-key"]||""),
-  });
+  }));
   const {objectKey:_privateKey,...safeSource}=source as Record<string,unknown>;
   res.status(created?201:200).json({data:{source:safeSource,created}});
 }catch(error){handle(res,error);}};
 
 export const createDocumentUploadSession = async(req:AuthRequest,res:Response)=>{try{
   const ctx=context(req); await ownsProposal(req.params.id,ctx.organizationMongoId,ctx.userMongoId);
-  const body=req.body as Record<string,unknown>; const result=await documentIngestion.createUpload({...ctx,proposalMongoId:req.params.id,filename:String(body.filename||""),mimeType:String(body.mimeType||""),sizeBytes:Number(body.sizeBytes),classification:String(body.classification||"confidential"),idempotencyKey:String(req.headers["idempotency-key"]||"")});
+  const body=req.body as Record<string,unknown>;
+  // A proposal created moments ago may not have its PostgreSQL reference yet;
+  // the wrapper repairs it once and retries so the first attachment succeeds.
+  const result=await withDocumentProposalReference(ctx,req.params.id,()=>documentIngestion.createUpload({...ctx,proposalMongoId:req.params.id,filename:String(body.filename||""),mimeType:String(body.mimeType||""),sizeBytes:Number(body.sizeBytes),classification:String(body.classification||"confidential"),idempotencyKey:String(req.headers["idempotency-key"]||"")}));
   res.status(result.created?201:200).json({data:result});
 }catch(error){handle(res,error);}};
 export const completeDocumentUpload=async(req:AuthRequest,res:Response)=>{try{res.json({data:await documentIngestion.complete({...context(req),sourceId:sourceId(req.params.sourceId)})});}catch(error){handle(res,error);}};
