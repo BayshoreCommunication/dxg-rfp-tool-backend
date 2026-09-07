@@ -216,8 +216,10 @@ roles now applied as append-only `$addToSet` writes and manual review/apply
 endpoints retained.
 
 Originally: a review-first, deterministic room recommendation capability behind
-`ROOM_RECOMMENDATIONS_ENABLED` / `NEXT_PUBLIC_ROOM_RECOMMENDATIONS_ENABLED`
-(both default off). Confirmed room/event facts plus approved synthetic
+`ROOM_RECOMMENDATIONS_ENABLED`. The dashboard Smart Fill surface and its
+`NEXT_PUBLIC_ROOM_RECOMMENDATIONS_ENABLED` flag were removed on 2026-09-07;
+the backend endpoints and governed audit history remain available but are no
+longer exposed by the planner dashboard. Confirmed room/event facts plus approved synthetic
 knowledge fixtures produce a strictly validated `room-recommendation.v1`
 payload (migration 030) in which every value is classified
 (`deterministic_derivation` / `recommended_assumption` / questions for
