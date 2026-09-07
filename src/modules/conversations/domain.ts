@@ -400,6 +400,11 @@ export const questionPrompt = (code: string, paths: string[]): string => {
   const extraPrompts: Record<string, string> = {
     "/content/venueSchedule/rehearsalDate": "When is the rehearsal? You can skip this if it is not decided yet.",
     "/content/hybridVirtual/virtualAttendeeEstimate": "How many people are expected to attend online?",
+    "/content/hybridVirtual/remoteSpeakers/howManyRemoteSpeakers": "How many speakers will present remotely?",
+    "/content/venueSchedule/venueAddress": "What is the venue address? You can skip this if it is not decided yet.",
+    "/content/venue/venueAvContactName": "Who is the venue's AV contact? You can skip this if it is not decided yet.",
+    "/content/venue/venueAvContactEmail": "What is the venue AV contact's email address? You can skip this if it is not decided yet.",
+    "/content/venue/venueAvContactPhone": "What is the venue AV contact's phone number? You can skip this if it is not decided yet.",
     "/content/budget/estimatedAvBudget": "What is your estimated AV budget or budget range? You can skip this if it is not decided yet.",
   };
   if (paths.length === 1 && extraPrompts[paths[0]]) return extraPrompts[paths[0]];

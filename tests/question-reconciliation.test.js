@@ -60,6 +60,11 @@ test('technical extraction diagnostics use meaningful prompts and compatible ans
     ['BUDGET_UNSTATED', '/content/budget/estimatedAvBudget', /estimated AV budget/, 'text', '$100,000'],
     ['REHEARSALDATE_NOT_SUPPORTED', '/content/venueSchedule/rehearsalDate', /When is the rehearsal/, 'date', '2027-09-13'],
     ['INVALID_CANDIDATE_VALUE', '/content/hybridVirtual/virtualAttendeeEstimate', /attend online/, 'number', '300'],
+    ['REMOTE_SPEAKERS_UNSTATED', '/content/hybridVirtual/remoteSpeakers/howManyRemoteSpeakers', /How many speakers will present remotely/, 'number', '3'],
+    ['VENUE_ADDRESS_UNSTATED', '/content/venueSchedule/venueAddress', /What is the venue address/, 'text', '123 Test Avenue'],
+    ['VENUE_AV_CONTACT_UNSTATED', '/content/venue/venueAvContactName', /Who is the venue's AV contact/, 'text', 'QA Contact'],
+    ['VENUE_AV_CONTACT_UNSTATED', '/content/venue/venueAvContactEmail', /AV contact's email address/, 'text', 'qa@example.com'],
+    ['VENUE_AV_CONTACT_UNSTATED', '/content/venue/venueAvContactPhone', /AV contact's phone number/, 'text', '555-0100'],
   ];
   for (const [code,path,prompt,type,answer] of scenarios) {
     assert.match(questionPrompt(code,[path]), prompt);
