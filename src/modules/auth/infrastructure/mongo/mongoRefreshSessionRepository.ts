@@ -21,7 +21,7 @@ export const mongoRefreshSessionRepository: RefreshSessionRepository = {
     });
   },
   async findByTokenHash(tokenHash) {
-    const token = await RefreshSession.findOne({ tokenHash }).select("+tokenHash").lean();
+    const token = await RefreshSession.findOne({ $or: [{ tokenHash }, { consumedTokenHashes: tokenHash }] }).select("+tokenHash +lastRotation").lean();
     return token ? {
       id: String(token._id),
       organizationId: String(token.organizationId),
@@ -29,15 +29,24 @@ export const mongoRefreshSessionRepository: RefreshSessionRepository = {
       sessionId: token.sessionId,
       familyId: token.familyId,
       tokenId: token.tokenId,
+      tokenHash: token.tokenHash,
+      rotationCount: token.rotationCount ?? 0,
+      lastRotation: token.lastRotation,
       status: token.status,
       expiresAt: token.expiresAt,
       idleExpiresAt: token.idleExpiresAt,
     } : null;
   },
-  async consumeActive({ id, now }) {
+  async rotateActive({ id, previousHash, tokenHash, tokenId, keyHash, now, maxRotations }) {
+    // One document owns this session across rotations. Revocation and rotation
+    // now contend on the same row: logout can never be followed by child insert.
     const result = await RefreshSession.updateOne(
-      { _id: id, status: "active" },
-      { $set: { status: "consumed", consumedAt: now, lastUsedAt: now } },
+      { _id: id, tokenHash: previousHash, status: "active",
+        expiresAt: { $gt: now }, idleExpiresAt: { $gt: now },
+        $or: [{ rotationCount: { $lt: maxRotations } }, { rotationCount: { $exists: false } }],
+      },
+      { $set: { tokenHash, tokenId, lastUsedAt: now, lastRotation: { previousHash, keyHash, at: now } },
+        $push: { consumedTokenHashes: previousHash }, $inc: { rotationCount: 1 } },
     );
     return result.modifiedCount === 1;
   },

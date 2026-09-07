@@ -30,7 +30,7 @@ if (
 const jsonRequest = async (
   path: string,
   body: Record<string, unknown>,
-  options: { accessToken?: string; bff?: boolean } = {},
+  options: { accessToken?: string; bff?: boolean; operationKey?: string } = {},
 ) => {
   const headers = new Headers({ "Content-Type": "application/json" });
   if (options.accessToken) {
@@ -39,6 +39,7 @@ const jsonRequest = async (
   if (options.bff) {
     headers.set("x-rfpilot-bff-key", bffSharedSecret);
   }
+  if (options.operationKey) headers.set('x-rfpilot-refresh-operation', options.operationKey);
   const response = await fetch(`${baseUrl}${path}`, {
     method: "POST",
     headers,
@@ -175,11 +176,19 @@ const run = async () => {
       "the rejected request must not partially create a proposal",
     );
 
-    const refresh = await jsonRequest(
+    const operationKey = crypto.createHmac('sha256', bffSharedSecret)
+      .update(JSON.stringify(['rfpilot-refresh-operation-v1', firstRefreshToken])).digest('hex');
+    const unauthorizedOperation = await jsonRequest('/api/auth/refresh', {refreshToken:firstRefreshToken}, {operationKey});
+    assert.equal(unauthorizedOperation.response.status, 400, 'only a validated BFF may request idempotent handoff');
+    const refreshes = await Promise.all(Array.from({length: 4}, () => jsonRequest(
       "/api/auth/refresh",
       { refreshToken: firstRefreshToken },
-      { bff: true },
-    );
+      { bff: true, operationKey },
+    )));
+    assert.deepEqual(refreshes.map(result => result.response.status), [200,200,200,200]);
+    const refresh = refreshes[0];
+    assert.ok(refreshes.every(result => result.payload.refreshToken === refresh.payload.refreshToken));
+    assert.equal(refresh.payload.refreshExpiresAt, login.payload.refreshExpiresAt);
     assert.equal(refresh.response.status, 200);
     const secondAccessToken = requireString(
       refresh.payload.accessToken,
@@ -190,6 +199,7 @@ const run = async () => {
       "rotated refresh token",
     );
     assert.notEqual(secondRefreshToken, firstRefreshToken);
+    assert.equal((await fetch(`${baseUrl}/api/auth/me`, {headers:{Authorization:`Bearer ${secondAccessToken}`}})).status, 200, 'the concurrent winner must remain authorized');
 
     const retriedSubmit = await jsonRequest(
       "/api/proposals",
@@ -218,7 +228,7 @@ const run = async () => {
 
     const logout = await jsonRequest(
       "/api/auth/logout-session",
-      { refreshToken: secondRefreshToken },
+      { refreshToken: firstRefreshToken },
       { bff: true },
     );
     assert.equal(logout.response.status, 200);
@@ -279,7 +289,7 @@ const run = async () => {
         success: true,
         login: "issued_one_session",
         expiredProposalSubmit: "rejected_without_partial_write",
-        refresh: "rotated",
+        refresh: "four_concurrent_requests_one_active_successor",
         proposalRetry: "created_exactly_once_with_preserved_input",
         logout: "revoked_without_access_token",
         signup: "created_without_orphan_session",

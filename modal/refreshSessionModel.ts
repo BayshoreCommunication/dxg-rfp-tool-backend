@@ -7,6 +7,9 @@ export interface IRefreshSession extends Document {
   familyId: string;
   tokenId: string;
   tokenHash: string;
+  consumedTokenHashes: string[];
+  rotationCount: number;
+  lastRotation?: { previousHash: string; keyHash: string | null; at: Date } | null;
   parentTokenId?: string | null;
   status: "active" | "consumed" | "revoked";
   expiresAt: Date;
@@ -29,6 +32,9 @@ const refreshSessionSchema = new Schema<IRefreshSession>(
     familyId: { type: String, required: true, trim: true },
     tokenId: { type: String, required: true, trim: true, unique: true },
     tokenHash: { type: String, required: true, trim: true, unique: true, select: false },
+    consumedTokenHashes: { type: [String], default: [], select: false },
+    rotationCount: { type: Number, default: 0 },
+    lastRotation: { type: new Schema({ previousHash: String, keyHash: String, at: Date }, { _id: false }), default: null, select: false },
     parentTokenId: { type: String, trim: true, default: null },
     status: {
       type: String,
@@ -49,6 +55,7 @@ const refreshSessionSchema = new Schema<IRefreshSession>(
 );
 
 refreshSessionSchema.index({ familyId: 1, status: 1 });
+refreshSessionSchema.index({ consumedTokenHashes: 1 });
 refreshSessionSchema.index({ organizationId: 1, userId: 1, sessionId: 1 });
 refreshSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 

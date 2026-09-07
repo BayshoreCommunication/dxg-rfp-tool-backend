@@ -14,6 +14,9 @@ export type StoredRefreshToken = {
   sessionId: string;
   familyId: string;
   tokenId: string;
+  tokenHash: string;
+  rotationCount: number;
+  lastRotation?: { previousHash: string; keyHash: string | null; at: Date } | null;
   status: "active" | "consumed" | "revoked";
   expiresAt: Date;
   idleExpiresAt: Date;
@@ -35,7 +38,10 @@ export interface RefreshSessionRepository {
     ipHash?: string;
   }): Promise<void>;
   findByTokenHash(tokenHash: string): Promise<StoredRefreshToken | null>;
-  consumeActive(input: { id: string; now: Date }): Promise<boolean>;
+  rotateActive(input: {
+    id: string; previousHash: string; tokenHash: string; tokenId: string;
+    keyHash: string | null; now: Date; maxRotations: number;
+  }): Promise<boolean>;
   revokeFamily(input: { familyId: string; reason: string; now: Date }): Promise<number>;
   revokeSession(input: { sessionId: string; userId: string; reason: string; now: Date }): Promise<number>;
   revokeAll(input: { userId: string; organizationId: string; reason: string; now: Date }): Promise<number>;

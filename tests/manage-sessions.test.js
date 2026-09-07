@@ -1,6 +1,8 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { createSessionManager, hashOpaqueToken } = require("../src/modules/auth/application/manageSessions");
+const crypto = require('node:crypto');
+const operationKey = 'a'.repeat(64);
 const {
   generateAccessToken,
   generateNotificationSocketTicket,
@@ -33,17 +35,29 @@ const setup = (overrides = {}) => {
         sessionId: input.sessionId,
         familyId: input.familyId,
         tokenId: input.tokenId,
+        tokenHash: input.tokenHash,
+        consumedTokenHashes: [],
+        rotationCount: 0,
         status: "active",
         expiresAt: input.expiresAt,
         idleExpiresAt: input.idleExpiresAt,
       });
     },
-    async findByTokenHash(hash) { return records.get(hash) ?? null; },
-    async consumeActive({ id, now }) {
+    async findByTokenHash(hash) {
+      const record = [...records.values()].find(item => item.tokenHash === hash || item.consumedTokenHashes.includes(hash));
+      return record ? structuredClone(record) : null;
+    },
+    async rotateActive(input) {
+      if (overrides.beforeRotate) await overrides.beforeRotate();
+      const {id, now, previousHash} = input;
       const record = [...records.values()].find((item) => item.id === id);
-      if (!record || record.status !== "active") return false;
-      record.status = "consumed";
-      calls.push(["consume", id, now]);
+      if (!record || record.status !== "active" || record.tokenHash !== previousHash || record.expiresAt <= now || record.idleExpiresAt <= now || record.rotationCount >= input.maxRotations) return false;
+      record.consumedTokenHashes.push(previousHash);
+      record.tokenHash = input.tokenHash;
+      record.tokenId = input.tokenId;
+      record.rotationCount += 1;
+      record.lastRotation = {previousHash, keyHash: input.keyHash, at: now};
+      calls.push(["rotate", input]);
       return true;
     },
     async revokeFamily(input) {
@@ -71,16 +85,18 @@ const setup = (overrides = {}) => {
     async listActive() { return []; },
     ...overrides.sessions,
   };
-  const manager = createSessionManager({
+  const dependencies = {
     sessions,
     accounts: { load: async () => account, ...overrides.accounts },
     accessTokens: { issue: (_account, sessionId) => ({ accessToken: `access-${sessionId}`, expiresAt: 1, expiresIn: 900 }) },
     audit: { append: async (input) => calls.push(["audit", input]) },
-    now: () => overrides.now ?? fixedNow,
+    now: () => typeof overrides.now === 'function' ? overrides.now() : overrides.now ?? fixedNow,
     opaqueToken: () => `refresh-${++sequence}`,
     id: () => `id-${++sequence}`,
-  });
-  return { manager, calls, records };
+    deriveRefreshToken: (previous, key) => crypto.createHmac('sha256', 'test-only-server-secret').update(JSON.stringify([previous, key])).digest('base64url'),
+  };
+  const manager = createSessionManager(dependencies);
+  return { manager, calls, records, secondManager: createSessionManager({...dependencies, ...(overrides.secondNow ? {now:overrides.secondNow} : {})}) };
 };
 
 test("begin stores only the refresh hash and returns one raw token", async () => {
@@ -103,16 +119,100 @@ test("begin stores only the refresh hash and returns one raw token", async () =>
   assert.equal(calls.at(-1)[1].action, "auth.session.created");
 });
 
-test("rotation consumes the old token and preserves the session family", async () => {
-  const { manager, calls } = setup();
+test("rotation replaces the credential atomically and preserves the session family", async () => {
+  const { manager, calls, records } = setup();
   const first = await manager.begin({ account, correlationId: "c1" });
   const result = await manager.rotate({ refreshToken: first.refreshToken, correlationId: "c2" });
   assert.equal(result.kind, "rotated");
   assert.notEqual(result.refreshToken, first.refreshToken);
   const creates = calls.filter(([kind]) => kind === "create").map(([, value]) => value);
-  assert.equal(creates[1].familyId, creates[0].familyId);
-  assert.equal(creates[1].sessionId, creates[0].sessionId);
-  assert.equal(creates[1].parentTokenId, creates[0].tokenId);
+  assert.equal(creates.length, 1);
+  const row = [...records.values()][0];
+  assert.equal(row.familyId, creates[0].familyId);
+  assert.equal(row.sessionId, creates[0].sessionId);
+  assert.equal(row.tokenHash, hashOpaqueToken(result.refreshToken));
+  assert.deepEqual(row.consumedTokenHashes, [hashOpaqueToken(first.refreshToken)]);
+  assert.equal(result.refreshExpiresAt, first.refreshExpiresAt);
+});
+
+test('independent managers return one successor for concurrent BFF operations', async () => {
+  const {manager, secondManager, records, calls} = setup();
+  const first = await manager.begin({account, correlationId:'start'});
+  const input = {refreshToken:first.refreshToken, rotationKey:operationKey, correlationId:'refresh'};
+  const results = await Promise.all([manager.rotate(input), secondManager.rotate(input)]);
+  assert.deepEqual(results.map(row => row.kind), ['rotated', 'rotated']);
+  assert.equal(results[0].refreshToken, results[1].refreshToken);
+  assert.equal([...records.values()][0].rotationCount, 1);
+  assert.equal([...records.values()][0].status, 'active');
+  assert.equal(calls.some(([kind]) => kind === 'revokeFamily'), false);
+  assert.equal(JSON.stringify([...records.values()]).includes(results[0].refreshToken), false);
+});
+
+test('retry window starts at the first rotation, never at the latest retry', async () => {
+  let time = new Date(fixedNow);
+  const {manager, records} = setup({now:() => time});
+  const first = await manager.begin({account, correlationId:'start'});
+  const input = {refreshToken:first.refreshToken, rotationKey:operationKey, correlationId:'refresh'};
+  const winner = await manager.rotate(input);
+  time = new Date(fixedNow.getTime() + 29_999);
+  assert.equal((await manager.rotate(input)).refreshToken, winner.refreshToken);
+  time = new Date(fixedNow.getTime() + 30_000);
+  assert.equal((await manager.rotate(input)).kind, 'reuse_detected');
+  assert.equal([...records.values()][0].status, 'revoked');
+});
+
+test('small server clock skew does not revoke an identical in-flight operation', async () => {
+  const {manager, secondManager} = setup({secondNow:() => new Date(fixedNow.getTime() - 1000)});
+  const first = await manager.begin({account,correlationId:'start'});
+  const input = {refreshToken:first.refreshToken,rotationKey:operationKey,correlationId:'r'};
+  const winner = await manager.rotate(input);
+  assert.equal((await secondManager.rotate(input)).refreshToken, winner.refreshToken);
+});
+
+for (const key of [undefined, 'b'.repeat(64)]) test(`a missing or different operation key revokes reused credentials (${key?.[0] ?? 'none'})`, async () => {
+  const {manager, records} = setup();
+  const first = await manager.begin({account, correlationId:'start'});
+  await manager.rotate({refreshToken:first.refreshToken, rotationKey:operationKey, correlationId:'r1'});
+  assert.equal((await manager.rotate({refreshToken:first.refreshToken, rotationKey:key, correlationId:'r2'})).kind, 'reuse_detected');
+  assert.equal([...records.values()][0].status, 'revoked');
+});
+
+test('an older generation cannot recover after its successor also rotates', async () => {
+  const {manager} = setup();
+  const first = await manager.begin({account, correlationId:'start'});
+  const second = await manager.rotate({refreshToken:first.refreshToken, rotationKey:operationKey, correlationId:'r1'});
+  await manager.rotate({refreshToken:second.refreshToken, rotationKey:'b'.repeat(64), correlationId:'r2'});
+  assert.equal((await manager.rotate({refreshToken:first.refreshToken, rotationKey:operationKey, correlationId:'r3'})).kind, 'reuse_detected');
+});
+
+for (const reason of ['logout', 'logout_all', 'family']) test(`revocation during account loading cannot be undone (${reason})`, async () => {
+  let revoke;
+  const {manager, records} = setup({beforeRotate:async () => revoke()});
+  const first = await manager.begin({account, correlationId:'start'});
+  revoke = async () => {
+    if (reason === 'logout') await manager.revokePresented({refreshToken:first.refreshToken, correlationId:'out'});
+    else for (const row of records.values()) row.status = 'revoked';
+  };
+  assert.equal((await manager.rotate({refreshToken:first.refreshToken, rotationKey:operationKey, correlationId:'r'})).kind, 'reuse_detected');
+  assert.equal(records.size, 1);
+  assert.equal([...records.values()][0].status, 'revoked');
+});
+
+test('historical-token logout revokes the current credential', async () => {
+  const {manager, records} = setup();
+  const first = await manager.begin({account, correlationId:'start'});
+  await manager.rotate({refreshToken:first.refreshToken, rotationKey:operationKey, correlationId:'r'});
+  await manager.revokePresented({refreshToken:first.refreshToken, correlationId:'out'});
+  assert.equal([...records.values()][0].status, 'revoked');
+  assert.equal((await manager.rotate({refreshToken:first.refreshToken, rotationKey:operationKey, correlationId:'retry'})).kind, 'reuse_detected');
+});
+
+test('rotation history ends safely at its storage limit without pruning replay evidence', async () => {
+  const {manager, records, calls} = setup();
+  const first = await manager.begin({account, correlationId:'start'});
+  [...records.values()][0].rotationCount = 10000;
+  assert.equal((await manager.rotate({refreshToken:first.refreshToken, rotationKey:operationKey, correlationId:'r'})).kind, 'expired');
+  assert.ok(calls.some(([kind, input]) => kind === 'revokeFamily' && input.reason === 'refresh_rotation_limit'));
 });
 
 test("presenting a consumed refresh token revokes its entire family", async () => {

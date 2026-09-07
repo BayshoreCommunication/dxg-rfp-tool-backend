@@ -28,6 +28,8 @@ test("refresh token hashes are hidden from default projections", () => {
   const path = RefreshSession.schema.path("tokenHash");
   assert.equal(path.options.select, false);
   assert.equal(path.options.unique, true);
+  assert.equal(RefreshSession.schema.path('consumedTokenHashes').options.select, false);
+  assert.equal(RefreshSession.schema.path('lastRotation').options.select, false);
 });
 
 test("public grants reject unsupported purposes and invalid use limits", () => {

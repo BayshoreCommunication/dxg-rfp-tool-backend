@@ -28,6 +28,7 @@ import {
 import { safeLog } from "../../shared/observability/safeTelemetry";
 import { ensureIdentityProjection } from "../dataFoundation/composition";
 import { REFRESH_TOKEN_EXPIRY_MS } from "../../../config/jwt";
+import crypto from 'node:crypto';
 
 export const requestAuthenticationOtp = createRequestOtp({
   users: mongoAuthUserLookup,
@@ -84,6 +85,11 @@ export const authenticationSessions = createSessionManager({
   accessTokens: jwtSessionAccessTokenIssuer,
   audit: mongoSecurityAuditWriter,
   refreshTokenTtlMs: REFRESH_TOKEN_EXPIRY_MS,
+  deriveRefreshToken: (previous, operationKey) => {
+    const secret = process.env.BFF_SHARED_SECRET?.trim();
+    if (!secret) throw new Error('BFF_SHARED_SECRET is required for refresh handoff');
+    return crypto.createHmac('sha256', secret).update(JSON.stringify(['rfpilot-refresh-successor-v1', previous, operationKey])).digest('base64url');
+  },
 });
 
 /* Every governed AI table in PostgreSQL is keyed off an rfpilot.users row that

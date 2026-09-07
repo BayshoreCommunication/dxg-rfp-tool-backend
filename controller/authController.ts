@@ -593,6 +593,11 @@ export const signOutSession = async (
 
 export const refreshSession = async (req: Request, res: Response): Promise<void> => {
   if (rejectInvalidBffCredential(req, res)) return;
+  const rotationKey = req.headers['x-rfpilot-refresh-operation'];
+  if (rotationKey !== undefined && (!isAuthorizedBff(req) || typeof rotationKey !== 'string' || !/^[a-f0-9]{64}$/.test(rotationKey))) {
+    res.status(400).json({success:false, code:'INVALID_REFRESH_OPERATION', message:'Invalid refresh operation'});
+    return;
+  }
   const refreshToken = presentedRefreshToken(req);
   if (!refreshToken) {
     res.status(401).json({
@@ -602,12 +607,22 @@ export const refreshSession = async (req: Request, res: Response): Promise<void>
     });
     return;
   }
-  const result = await authenticationSessions.rotate({
-    refreshToken,
-    correlationId: correlationId(req),
-    userAgent: req.headers["user-agent"],
-    ip: req.ip,
-  });
+  let result: Awaited<ReturnType<typeof authenticationSessions.rotate>>;
+  try {
+    result = await authenticationSessions.rotate({
+      refreshToken,
+      ...(typeof rotationKey === 'string' ? { rotationKey } : {}),
+      correlationId: correlationId(req),
+      userAgent: req.headers["user-agent"],
+      ip: req.ip,
+    });
+  } catch {
+    // A lost database/audit response is retryable with the same operation.
+    // Never clear a valid refresh cookie or expose credentials in error logs.
+    res.status(503).set('Retry-After', '3').json({ success: false,
+      code: 'AUTH_REFRESH_TEMPORARILY_UNAVAILABLE', message: 'Please retry session refresh shortly' });
+    return;
+  }
   if (result.kind !== "rotated") {
     clearRefreshCookie(res);
     res.status(401).json({
