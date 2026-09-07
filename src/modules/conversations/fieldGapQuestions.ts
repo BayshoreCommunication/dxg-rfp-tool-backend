@@ -81,6 +81,7 @@ export const syncFieldGapQuestions = async (
       WHERE q.proposal_reference_id=$1
         AND q.status<>'superseded'
         AND q.issue_code LIKE 'MISSING_FIELD:%'
+        AND q.issue_code=ANY($4::text[])
         AND NOT EXISTS(
           SELECT 1
             FROM jsonb_array_elements_text(coalesce(q.canonical_paths,'[]'::jsonb)) path
@@ -91,8 +92,11 @@ export const syncFieldGapQuestions = async (
       proposalReferenceId,
       LEGACY_STANDALONE_VIDEO_RECORDING_ROOT,
       CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
+      mapped.map(({ field }) => fieldQuestionCode(field.path)),
     ],
   );
+  // Extra extraction clarifications have a separate purpose and cannot spend
+  // the core intake budget. Otherwise they can starve the last core questions.
   // The beginner intake has a lifetime question budget, not a moving
   // "currently open" budget. Otherwise every answer frees a slot and the
   // eight-question journey quietly grows to nine, ten, and beyond.
