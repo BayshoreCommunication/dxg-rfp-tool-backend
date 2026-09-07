@@ -44,6 +44,7 @@ export const handleConversationChat = async (message: QueueMessage) =>
           job.proposalMongoId,
           job.organizationId,
           message.jobId,
+          message.inputReference,
         );
         const completed = await conversationRepository.completeChatJob({
           ...ctx,

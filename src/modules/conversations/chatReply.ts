@@ -9,6 +9,7 @@ import {
   type AssistantActionId,
 } from "./domain";
 import { buildSelectedProposalKnowledge } from "./selectedProposalKnowledge";
+import { attachmentReceiptReply } from "./attachmentReply";
 import {
   conversationExtractionEnabled,
   isSubstantive,
@@ -33,15 +34,20 @@ export const buildChatReply = async (
   proposalMongoId: string,
   organizationId: string | undefined,
   generationId: string,
+  userMessageId?: string,
 ): Promise<ChatReply> => {
   let reply = FIRST_TURN_REPLY;
   let actions: AssistantActionId[] = [];
   try {
     const conversation = await conversationRepository.read({ ...ctx, proposalMongoId, limit: 12 });
-    const latestUserMessage = [...conversation.messages].reverse().find((message: { role: string }) => message.role === "user");
+    const latestUserMessage = userMessageId
+      ? conversation.messages.find(message => message.id === userMessageId && message.role === "user")
+      : [...conversation.messages].reverse().find((message: { role: string }) => message.role === "user");
     const userTurnCount = conversation.messages.filter((message: { role: string }) => message.role === "user").length;
     reply = userTurnCount <= 1 ? FIRST_TURN_REPLY : FOLLOW_UP_REPLY;
     const latestContent = String(latestUserMessage?.content ?? "");
+    const attachmentReply = attachmentReceiptReply(latestUserMessage?.attachments ?? []);
+    if (attachmentReply) return { reply: attachmentReply, actions: [] };
     const explicitlyAsked = asksForRoomScheduleHelp(latestContent);
     const detailedBrief =
       conversationExtractionEnabled() &&
