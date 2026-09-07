@@ -39,7 +39,7 @@ export const syncFieldGapQuestions = async (
   proposalReferenceId: string,
   conversationId: string,
   input: { organizationMongoId: string; actorUserMongoId: string; proposalMongoId: string },
-): Promise<void> => {
+): Promise<Record<string, unknown> | null> => {
   // The canonical mapping owns path -> mongo path; no value validation here.
   const allMapped = IMPORTANT_FIELD_QUESTIONS.map((field) => ({
     field,
@@ -53,7 +53,7 @@ export const syncFieldGapQuestions = async (
     userId: input.actorUserMongoId,
     organizationId: input.organizationMongoId,
   }).select(paths.join(" ")).lean<Record<string, unknown>>();
-  if (!proposal) return;
+  if (!proposal) return null;
 
   const venueNamePath = mongoPathFor("/content/venueSchedule/venueName");
   const venueStatusPath = mongoPathFor("/content/venueSchedule/venueConfirmedStatus");
@@ -123,4 +123,5 @@ export const syncFieldGapQuestions = async (
     );
     if (inserted.rows[0]) budget -= 1;
   }
+  return proposal;
 };

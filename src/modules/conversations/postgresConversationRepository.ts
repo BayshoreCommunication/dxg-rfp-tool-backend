@@ -4,6 +4,7 @@ import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
 import { safeLog } from "../../shared/observability/safeTelemetry";
 import { syncFieldGapQuestions } from "./fieldGapQuestions";
+import { buildIntakeProgress } from "./intakeProgress";
 import { planExtractionQuestions, reconcileQuestionDuplicates } from "./questionReconciliation";
 import {
   CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
@@ -320,7 +321,7 @@ export const conversationRepository = {
       await syncQuestions(c, org, proposalRefId, conversation.id);
       // Key questions must also appear when there are no sources at all, so a
       // proposal started by conversation still gets asked what matters.
-      await syncFieldGapQuestions(c, org, proposalRefId, conversation.id, {
+      const intakeProposal = await syncFieldGapQuestions(c, org, proposalRefId, conversation.id, {
         organizationMongoId: ctx.organizationMongoId,
         actorUserMongoId: ctx.actorUserMongoId,
         proposalMongoId: ctx.proposalMongoId,
@@ -450,6 +451,7 @@ export const conversationRepository = {
       }
       return {
         conversation: { id: conversation.id, title: conversation.title, status: conversation.status, messageCount: Number(activeMessageCount.rows[0]?.n ?? 0), updatedAt: conversation.updated_at },
+        intakeProgress: intakeProposal ? buildIntakeProgress(intakeProposal, activeQuestions) : null,
         messages: rows.map((row) => messagePayload(row, attachments)),
         questions: activeQuestions.map((q) => {
           const paths: string[] = Array.isArray(q.canonical_paths) ? q.canonical_paths : [];
