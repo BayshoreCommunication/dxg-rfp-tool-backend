@@ -4,6 +4,7 @@ import { v7 as uuidv7 } from "uuid";
 import { withPostgresTransaction } from "../../../config/postgres";
 import { safeLog } from "../../shared/observability/safeTelemetry";
 import { syncFieldGapQuestions } from "./fieldGapQuestions";
+import { planExtractionQuestions, reconcileQuestionDuplicates } from "./questionReconciliation";
 import {
   CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,
   isRetiredProposalWorkflowPath,
@@ -14,11 +15,6 @@ import { PROPOSAL_CONTEXT_INPUT_VERSION } from "../proposalContext/domain";
 import { PROPOSAL_DRAFT_INPUT_VERSION } from "../proposalDraft/domain";
 import {
   ConversationError,
-  IMPORTANT_FIELD_QUESTIONS,
-  MAX_OPEN_FIELD_QUESTIONS,
-  fieldQuestionCode,
-  importantFieldPaths,
-  isCatchAllIssue,
   questionImpact,
   questionAnswerType,
   questionPrompt,
@@ -258,7 +254,7 @@ const syncQuestions = async (c: PoolClient, org: string, proposalRefId: string, 
   await supersedeRetiredOpenQuestions(c, proposalRefId);
   const runId = await latestSucceededContextRun(c, proposalRefId);
   if (!runId) return;
-  // Only field-gap questions are superseded by a newer run. A stale "what is
+  // Ordinary field questions are superseded by a newer run. A stale "what is
   // the room count?" is fine to replace, but a blocking CROSS_SOURCE_CONFLICT
   // is a decision the planner still owes: wiping it on the next run meant a
   // conflict raised by one extraction was destroyed by the following one,
@@ -267,12 +263,23 @@ const syncQuestions = async (c: PoolClient, org: string, proposalRefId: string, 
   await c.query(
     `UPDATE rfpilot.clarification_questions SET status='superseded',updated_at=now()
       WHERE proposal_reference_id=$1 AND status='open' AND context_run_id<>$2
-        AND issue_code LIKE 'MISSING_FIELD:%'`,
+        AND severity<>'blocking' AND issue_code !~* 'CONFLICT|PROMPT_INJECTION'`,
     [proposalRefId, runId],
   );
   const issues = await c.query<{ code: string; severity: string; paths: string[] }>(
     "SELECT code,severity,paths FROM rfpilot.proposal_context_issues WHERE run_id=$1 ORDER BY ordinal",
     [runId],
+  );
+  const planned = planExtractionQuestions(issues.rows);
+  // Retire older diagnostic-shaped questions from this same run as well.
+  // Their source issues remain intact; only actionable field questions belong
+  // in onboarding. Answered/skipped rows and decisions retain their history.
+  await c.query(
+    `UPDATE rfpilot.clarification_questions SET status='superseded',updated_at=now()
+      WHERE proposal_reference_id=$1 AND context_run_id=$2 AND status='open'
+        AND severity<>'blocking' AND issue_code !~* 'CONFLICT|PROMPT_INJECTION'
+        AND issue_code<>ALL($3::text[])`,
+    [proposalRefId, runId, planned.map(question => question.code)],
   );
   const insertQuestion = (code: string, severity: string, paths: string[], prompt: string) =>
     c.query<{ id: string }>(
@@ -282,47 +289,8 @@ const syncQuestions = async (c: PoolClient, org: string, proposalRefId: string, 
        RETURNING id`,
       [uuidv7(), org, proposalRefId, conversationId, runId, code, severity, JSON.stringify(paths), prompt.slice(0, 1000)],
     );
-  const asked = await c.query<{ n: number }>(
-    "SELECT count(*)::int n FROM rfpilot.clarification_questions WHERE proposal_reference_id=$1 AND context_run_id=$2 AND status<>'superseded'",
-    [proposalRefId, runId],
-  );
-  let questionBudget = MAX_OPEN_FIELD_QUESTIONS - Number(asked.rows[0]?.n ?? 0);
-  for (const issue of issues.rows) {
-    if (questionBudget <= 0) break;
-    const paths = issue.paths || [];
-    if (!paths.length || paths.some(isRetiredProposalWorkflowPath)) continue;
-    const compositeField = IMPORTANT_FIELD_QUESTIONS.find((field) =>
-      field.answerType === "date_time" && importantFieldPaths(field).some((path) => paths.includes(path)));
-    if (compositeField) {
-      const inserted = await insertQuestion(
-        fieldQuestionCode(compositeField.path),
-        issue.severity,
-        importantFieldPaths(compositeField),
-        compositeField.prompt,
-      );
-      if (inserted.rows[0]) questionBudget -= 1;
-      continue;
-    }
-    if (isCatchAllIssue(issue.code, paths)) {
-      // A broad "missing fields" issue never becomes one giant card. It is
-      // exploded into individual questions — one whitelisted high-impact field
-      // each, in whitelist priority order, capped at MAX_OPEN_FIELD_QUESTIONS
-      // open at once. As earlier ones get answered or dismissed, later
-      // whitelist fields are not backfilled after every answer. The first eight
-      // create the minimum viable draft; later detail is requested as a
-      // prioritized improvement rather than extending intake indefinitely.
-      for (const field of IMPORTANT_FIELD_QUESTIONS) {
-        if (questionBudget <= 0) break;
-        const fieldPaths = importantFieldPaths(field);
-        if (!fieldPaths.some((path) => paths.includes(path))) continue;
-        const inserted = await insertQuestion(fieldQuestionCode(field.path), issue.severity, fieldPaths, field.prompt);
-        if (inserted.rows[0]) questionBudget -= 1;
-      }
-      continue;
-    }
-    const inserted = await insertQuestion(issue.code, issue.severity, paths, questionPrompt(issue.code, paths));
-    if (inserted.rows[0]) questionBudget -= 1;
-  }
+  for (const question of planned)
+    await insertQuestion(question.code, question.severity, question.paths, question.prompt);
 };
 
 const messagePayload = (row: any, attachments: any[]) => ({
@@ -357,6 +325,7 @@ export const conversationRepository = {
         actorUserMongoId: ctx.actorUserMongoId,
         proposalMongoId: ctx.proposalMongoId,
       });
+      await reconcileQuestionDuplicates(c, proposalRefId, PROPOSAL_CONTEXT_INPUT_VERSION);
       const limit = Math.min(Math.max(ctx.limit ?? 200, 1), 500);
       const questions = await c.query<any>(
         `SELECT q.id,q.issue_code,q.severity,q.canonical_paths,q.prompt,q.status,
@@ -368,7 +337,7 @@ export const conversationRepository = {
                   WHERE r.id=q.context_run_id
                 )) current_context
            FROM rfpilot.clarification_questions q
-          WHERE q.proposal_reference_id=$1 AND q.status IN('open','answered')
+          WHERE q.proposal_reference_id=$1 AND q.status IN('open','answered','dismissed')
           ORDER BY q.created_at`,
         [proposalRefId, PROPOSAL_CONTEXT_INPUT_VERSION],
       );
@@ -494,7 +463,7 @@ export const conversationRepository = {
             code: q.issue_code,
             severity: q.severity,
             paths: q.canonical_paths,
-            prompt: q.prompt,
+            prompt: questionPrompt(q.issue_code, paths),
             status: q.status,
             impact: questionImpact(paths),
             // The control the dashboard renders (date picker, choice pills,
@@ -907,6 +876,7 @@ export const conversationRepository = {
         actorUserMongoId: ctx.actorUserMongoId,
         proposalMongoId: ctx.proposalMongoId,
       });
+      await reconcileQuestionDuplicates(c, proposalRefId, PROPOSAL_CONTEXT_INPUT_VERSION);
       const [pending, open, messageCount] = await Promise.all([
         activeMessageCount(c, conversation.id, true),
         activeQuestionCount(c, proposalRefId, "open"),

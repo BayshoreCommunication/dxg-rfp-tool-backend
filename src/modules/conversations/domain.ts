@@ -1,5 +1,5 @@
 import { aiRuntimeAuthorized } from "../../../config/aiEnvironment";
-import { activeCandidatePaths, normalizeCandidate } from "../candidateApplication/canonicalMapping";
+import { activeCandidatePaths, candidateFieldMetadata, normalizeCandidate } from "../candidateApplication/canonicalMapping";
 import { isRetiredLegacyProposalWorkflowPath } from "../proposals/domain/workflowSections";
 
 export class ConversationError extends Error {
@@ -274,7 +274,13 @@ export const questionImpact = (paths: string[]): ImportantFieldImpact | null =>
 // free-text box.
 export const questionAnswerType = (paths: string[]): { answerType: ImportantFieldAnswerType; options?: readonly string[] } => {
   const field = importantFieldQuestionByPaths(paths);
-  if (!field) return { answerType: "text" };
+  if (!field) {
+    const metadata = paths.length === 1 ? candidateFieldMetadata[paths[0]] : null;
+    if (metadata?.acceptedValues) return { answerType: "choice", options: metadata.acceptedValues };
+    if (metadata?.valueKind === "date" || metadata?.valueKind === "time") return { answerType: metadata.valueKind };
+    if (metadata?.valueKind === "count") return { answerType: "number" };
+    return { answerType: "text" };
+  }
   return field.options ? { answerType: field.answerType, options: field.options } : { answerType: field.answerType };
 };
 
@@ -385,12 +391,21 @@ const QUESTION_PROMPTS: Record<string, string> = {
 };
 
 export const questionPrompt = (code: string, paths: string[]): string => {
+  // Conflict/security notices keep their meaning; machine diagnostics never
+  // become instructions the planner is expected to decipher.
   const known = QUESTION_PROMPTS[code];
   if (known) return known.slice(0, 1000);
-  const fields = paths.slice(0, 8).map((path) => path.split("/").pop() || path).join(", ");
-  const readable = code.toLowerCase().replace(/_/g, " ");
-  // The clarification_questions table enforces char_length(prompt) <= 1000.
-  return (fields ? `Please review: ${readable} (${fields}).` : `Please review: ${readable}.`).slice(0, 1000);
+  const field = importantFieldQuestionByPaths(paths);
+  if (field) return field.prompt;
+  const extraPrompts: Record<string, string> = {
+    "/content/venueSchedule/rehearsalDate": "When is the rehearsal? You can skip this if it is not decided yet.",
+    "/content/hybridVirtual/virtualAttendeeEstimate": "How many people are expected to attend online?",
+    "/content/budget/estimatedAvBudget": "What is your estimated AV budget or budget range? You can skip this if it is not decided yet.",
+  };
+  if (paths.length === 1 && extraPrompts[paths[0]]) return extraPrompts[paths[0]];
+  const labels = paths.slice(0, 4).map(path => (path.split("/").pop() || "event detail")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]/g, " ").toLowerCase());
+  return (labels.length ? `Please confirm the ${labels.join(" and ")}. You can skip this if it is not decided yet.` : "Please confirm this event detail, or skip it for now.").slice(0, 1000);
 };
 
 export const runStatusMessage = (runType: "proposal_context" | "proposal_draft", status: string): string => {

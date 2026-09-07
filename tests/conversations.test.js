@@ -136,8 +136,8 @@ test("question updates require an answer only when marking answered", () => {
 test("question prompts are plain language for known and unknown codes", () => {
   assert.match(questionPrompt("MISSING_ROOM_COUNT", []), /how many event rooms/i);
   const fallback = questionPrompt("MISSING_LOAD_IN_TIME", ["/content/venueSchedule/loadInTime"]);
-  assert.match(fallback, /missing load in time/);
-  assert.match(fallback, /loadInTime/);
+  assert.match(fallback, /load in time/i);
+  assert.doesNotMatch(fallback, /MISSING_|loadInTime|Please review:/);
 });
 
 test("combined load-in answers cannot fall after show start", () => {
@@ -408,7 +408,8 @@ test("the conversation read payload carries the answer control alongside the imp
   assert.ok(/SELECT[^;]*answered_message_id[^;]*FROM rfpilot\.clarification_questions/.test(repository), "the column must be selected");
   assert.ok(repository.includes("supersedeRetiredOpenQuestions"));
   assert.ok(repository.includes("isRetiredProposalWorkflowPath"));
-  assert.ok(repository.includes("if (!paths.length || paths.some(isRetiredProposalWorkflowPath)) continue"));
+  const reconciliation = fs.readFileSync(path.join(root, "src/modules/conversations/questionReconciliation.ts"), "utf8");
+  assert.ok(reconciliation.includes("if (!paths.length || paths.some(isRetiredProposalWorkflowPath)) continue"));
 });
 
 test("reading an existing conversation does not advance its updated timestamp", () => {
@@ -443,10 +444,11 @@ test("whitelisted answers normalize through the candidate mapping as human data 
 test("catch-all explosion and answer field writing are wired into repository and controller", () => {
   const repository = fs.readFileSync(path.join(root, "src/modules/conversations/postgresConversationRepository.ts"), "utf8");
   // The catch-all card is never inserted: explosion happens before the generic insert.
-  assert.ok(repository.includes("isCatchAllIssue"), "repository must detect catch-all issues");
-  assert.ok(repository.includes("MISSING_FIELD:"), "repository must count open exploded questions");
-  assert.ok(repository.includes("MAX_OPEN_FIELD_QUESTIONS"), "repository must cap open field questions");
-  assert.ok(repository.indexOf("isCatchAllIssue(issue.code") < repository.indexOf("insertQuestion(issue.code"), "explosion must be checked before the generic insert");
+  const reconciliation = fs.readFileSync(path.join(root, "src/modules/conversations/questionReconciliation.ts"), "utf8");
+  assert.ok(repository.includes("planExtractionQuestions(issues.rows)"));
+  assert.ok(reconciliation.includes("isCatchAllIssue"), "planner must detect catch-all issues");
+  assert.ok(reconciliation.includes("MAX_OPEN_FIELD_QUESTIONS"), "planner must cap ordinary field questions");
+  assert.equal(repository.match(/await reconcileQuestionDuplicates\(c, proposalRefId, PROPOSAL_CONTEXT_INPUT_VERSION\)/g).length, 2, "read and snapshot must reconcile the same question set");
   const controller = fs.readFileSync(path.join(root, "controller/conversationsController.ts"), "utf8");
   assert.ok(controller.includes("applyAnswersToProposalFields"), "controller must write typed answers into the proposal");
   assert.ok(controller.indexOf("applyAnswersToProposalFields") < controller.indexOf("updateQuestion"), "field writes must precede resolving the question so invalid values re-ask");
@@ -602,7 +604,8 @@ test("key questions are generated from empty high-impact fields, with no run req
   assert.ok(source.includes("importantFieldPaths"), "composite questions evaluate and persist every canonical path");
   assert.ok(source.includes("WHERE NOT EXISTS"), "field-gap sync must not duplicate an open extraction question");
   const repository = fs.readFileSync(path.join(root, "src/modules/conversations/postgresConversationRepository.ts"), "utf8");
-  assert.ok(repository.includes('field.answerType === "date_time"'), "specific load-in issues must also become one composite question");
+  const reconciliation = fs.readFileSync(path.join(root, "src/modules/conversations/questionReconciliation.ts"), "utf8");
+  assert.ok(reconciliation.includes('field.answerType === "date_time"'), "specific load-in issues must also become one composite question");
   assert.equal((repository.match(/syncFieldGapQuestions\(/g) || []).length, 2, "wired into both read and snapshot");
   const migration = fs.readFileSync(path.join(root, "migrations/postgres/025_field_gap_questions.up.sql"), "utf8");
   assert.ok(migration.includes("ALTER COLUMN context_run_id DROP NOT NULL"));

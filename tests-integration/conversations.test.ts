@@ -100,7 +100,7 @@ test("issues from a succeeded context run surface as clarification questions", a
   // The extraction issue joins the intake questions rather than replacing them:
   // both are things the planner still has to answer.
   assert.equal(state.questions.length, fieldGapCount + 1);
-  const question = state.questions.find((item) => item.code === "MISSING_SHOW_END_TIME");
+  const question = state.questions.find((item) => item.code === "MISSING_FIELD:/content/venueSchedule/showEndTime");
   assert.ok(question, "the context run's issue is surfaced as a question");
   questionId = question.id;
   assert.equal(question.severity, "question");
@@ -206,4 +206,26 @@ test("chat append is durable and a replay returns the same job and placeholder",
   assert.equal(durable.rows[0].status, "queued");
   assert.equal(durable.rows[0].input_reference, first.message.id);
   assert.equal(Number(durable.rows[0].outbox_count), 1, "the job is recoverable from exactly one outbox event");
+});
+
+test("overlapping extraction issues collapse into the stable intake question and explicit skips survive reads", async () => {
+  const run = await postgresPool().query("SELECT context_run_id FROM rfpilot.clarification_questions WHERE id=$1", [questionId]);
+  for (const [ordinal, code] of [[90, 'VENUE_NAME_UNSTATED'], [91, 'VENUE_DETAIL_MISSING']] as const) {
+    await postgresPool().query(
+      `INSERT INTO rfpilot.proposal_context_issues(id,organization_id,run_id,ordinal,code,severity,paths)
+       VALUES($1,$2,$3,$4,$5,'question',$6::text[])`,
+      [crypto.randomUUID(),tenant.organizationId,run.rows[0].context_run_id,ordinal,code,['/content/venueSchedule/venueName']],
+    );
+  }
+  const state = await conversationRepository.read(ctx());
+  const venue = state.questions.filter(item => item.paths.includes('/content/venueSchedule/venueName'));
+  assert.equal(venue.length,1);
+  assert.equal(venue[0].contextRunId,null,'the stable beginner-intake row is preserved');
+  assert.doesNotMatch(venue[0].prompt,/UNSTATED|MISSING_FIELD|venueName/);
+  await conversationRepository.updateQuestion({...ctx(),questionId:venue[0].id,status:'dismissed',answer:''});
+  const again = await conversationRepository.read(ctx());
+  const afterSkip = again.questions.filter(item => item.paths.includes('/content/venueSchedule/venueName'));
+  assert.equal(afterSkip.length,1);
+  assert.equal(afterSkip[0].status,'dismissed');
+  assert.equal((await conversationRepository.snapshot(ctx())).openQuestions,again.questions.filter(item => item.status==='open').length);
 });

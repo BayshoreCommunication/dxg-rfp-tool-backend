@@ -76,7 +76,7 @@ export const syncFieldGapQuestions = async (
   }
 
   const asked = await c.query<{ n: number }>(
-    `SELECT count(*)::int n
+    `SELECT count(DISTINCT q.issue_code)::int n
        FROM rfpilot.clarification_questions q
       WHERE q.proposal_reference_id=$1
         AND q.status<>'superseded'
