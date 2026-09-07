@@ -21,7 +21,7 @@ export const mongoRefreshSessionRepository: RefreshSessionRepository = {
     });
   },
   async findByTokenHash(tokenHash) {
-    const token = await RefreshSession.findOne({ tokenHash }).select("+tokenHash").lean();
+    const token = await RefreshSession.findOne({ $or: [{ tokenHash }, { consumedTokenHashes: tokenHash }] }).select("+tokenHash").lean();
     return token ? {
       id: String(token._id),
       organizationId: String(token.organizationId),
@@ -29,14 +29,16 @@ export const mongoRefreshSessionRepository: RefreshSessionRepository = {
       sessionId: token.sessionId,
       familyId: token.familyId,
       tokenId: token.tokenId,
-      status: token.status,
+      // Legacy rotation still treats historical credentials as consumed.
+      // Logout can locate them and revoke the current family after rollback.
+      status: token.tokenHash === tokenHash ? token.status : "consumed",
       expiresAt: token.expiresAt,
       idleExpiresAt: token.idleExpiresAt,
     } : null;
   },
-  async consumeActive({ id, now }) {
+  async consumeActive({ id, tokenHash, now }) {
     const result = await RefreshSession.updateOne(
-      { _id: id, status: "active" },
+      { _id: id, tokenHash, status: "active" },
       { $set: { status: "consumed", consumedAt: now, lastUsedAt: now } },
     );
     return result.modifiedCount === 1;

@@ -110,7 +110,7 @@ export const createSessionManager = (dependencies: Dependencies) => {
       await dependencies.sessions.revokeFamily({ familyId: stored.familyId, reason: "refresh_expired", now: issuedAt });
       return { kind: "expired" };
     }
-    const consumed = await dependencies.sessions.consumeActive({ id: stored.id, now: issuedAt });
+    const consumed = await dependencies.sessions.consumeActive({ id: stored.id, tokenHash: hashOpaqueToken(input.refreshToken), now: issuedAt });
     if (!consumed) {
       await dependencies.sessions.revokeFamily({ familyId: stored.familyId, reason: "refresh_race_or_reuse", now: issuedAt });
       return { kind: "reuse_detected" };

@@ -35,7 +35,7 @@ export interface RefreshSessionRepository {
     ipHash?: string;
   }): Promise<void>;
   findByTokenHash(tokenHash: string): Promise<StoredRefreshToken | null>;
-  consumeActive(input: { id: string; now: Date }): Promise<boolean>;
+  consumeActive(input: { id: string; tokenHash: string; now: Date }): Promise<boolean>;
   revokeFamily(input: { familyId: string; reason: string; now: Date }): Promise<number>;
   revokeSession(input: { sessionId: string; userId: string; reason: string; now: Date }): Promise<number>;
   revokeAll(input: { userId: string; organizationId: string; reason: string; now: Date }): Promise<number>;
