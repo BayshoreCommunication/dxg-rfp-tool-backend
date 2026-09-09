@@ -1,6 +1,10 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import multer from "multer";
+import {
+  FLAT_MULTIPART_FIELD_LIMITS,
+  preserveLegacyMultipartFilename,
+} from "../middleware/multipartCompatibility";
 import { extractProposalDocument, normalizeScheduleTimes } from "../src/modules/extraction/composition";
 import { MAX_VALUES } from "../src/modules/extraction/application/normalizeScheduleTimes";
 import {
@@ -13,8 +17,12 @@ import { safeLog } from "../src/shared/observability/safeTelemetry";
 /* ─── Multer — memory storage (no disk writes) ─── */
 export const extractUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
+  limits: {
+    ...FLAT_MULTIPART_FIELD_LIMITS,
+    fileSize: 20 * 1024 * 1024,
+  }, // 20 MB
   fileFilter: (_req, file, cb) => {
+    preserveLegacyMultipartFilename(file);
     const allowed = [
       "application/pdf",
       "application/msword",
