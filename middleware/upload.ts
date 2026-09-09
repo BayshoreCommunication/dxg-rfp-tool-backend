@@ -3,6 +3,10 @@ import fs from "fs";
 import multer, { FileFilterCallback } from "multer";
 import path from "path";
 import { getUploadPath } from "../utils/paths";
+import {
+  FLAT_MULTIPART_FIELD_LIMITS,
+  preserveLegacyMultipartFilename,
+} from "./multipartCompatibility";
 
 // Get upload directories using the utility function
 const uploadsDir = getUploadPath();
@@ -37,6 +41,7 @@ const storage = multer.diskStorage({
 
 // File filter to accept only images
 const imageFilter = (_req: Request, file: any, cb: FileFilterCallback) => {
+  preserveLegacyMultipartFilename(file);
   // Allowed image formats
   const allowedMimes = [
     "image/jpeg",
@@ -61,6 +66,7 @@ const imageFilter = (_req: Request, file: any, cb: FileFilterCallback) => {
 
 // File filter for proposal documents (PDF, Office, images, video)
 const documentFilter = (_req: Request, file: any, cb: FileFilterCallback) => {
+  preserveLegacyMultipartFilename(file);
   const allowedMimes = [
     // Images
     "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/bmp",
@@ -90,6 +96,7 @@ export const uploadImage = multer({
   storage,
   fileFilter: imageFilter,
   limits: {
+    ...FLAT_MULTIPART_FIELD_LIMITS,
     fileSize: 10 * 1024 * 1024, // 10MB max file size
   },
 });
@@ -99,6 +106,7 @@ export const uploadDocument = multer({
   storage,
   fileFilter: documentFilter,
   limits: {
+    ...FLAT_MULTIPART_FIELD_LIMITS,
     fileSize: 50 * 1024 * 1024, // 50MB
   },
 });
@@ -133,6 +141,7 @@ export const vendorDocumentFilter = (
   _file: any,
   cb: FileFilterCallback,
 ) => {
+  preserveLegacyMultipartFilename(_file);
   cb(null, true);
 };
 
@@ -140,6 +149,7 @@ const uploadVendorDocsMulter = multer({
   storage,
   fileFilter: vendorDocumentFilter,
   limits: {
+    ...FLAT_MULTIPART_FIELD_LIMITS,
     fileSize: 10 * 1024 * 1024, // 10 MB
     files: 10,
   },

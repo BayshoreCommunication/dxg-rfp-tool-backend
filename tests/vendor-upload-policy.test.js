@@ -1,6 +1,9 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const express = require("express");
+const multer = require("multer");
 const { vendorDocumentFilter } = require("../middleware/upload");
+const { FLAT_MULTIPART_FIELD_LIMITS } = require("../middleware/multipartCompatibility");
 const {
   vendorUploadMalwareScan,
   vendorUploadScanRequired,
@@ -25,6 +28,68 @@ test("vendor response attachments accept arbitrary file formats", async () => {
   for (const file of files) {
     assert.equal(await runFileFilter(file), true, file.originalname);
   }
+});
+
+test("multipart filename decoding keeps legacy escaped upload metadata", async () => {
+  const file = {
+    originalname: 'quote"line\r\nbreak.pdf',
+    mimetype: "application/pdf",
+  };
+
+  assert.equal(await runFileFilter(file), true);
+  assert.equal(file.originalname, "quote%22line%0D%0Abreak.pdf");
+});
+
+test("WHATWG multipart uploads retain literal escaped filename text", async (t) => {
+  const app = express();
+  let observedName;
+  let uploadErrorCode;
+  app.post(
+    "/",
+    multer({
+      storage: multer.memoryStorage(),
+      fileFilter: vendorDocumentFilter,
+      limits: FLAT_MULTIPART_FIELD_LIMITS,
+    }).single("file"),
+    (req, res) => {
+      observedName = req.file.originalname;
+      res.status(204).end();
+    },
+  );
+  app.use((error, _req, res, _next) => {
+    uploadErrorCode = error.code;
+    res.status(400).json({ code: error.code });
+  });
+
+  const server = await new Promise((resolve) => {
+    const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const address = server.address();
+  assert.equal(typeof address, "object");
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob(["test"], { type: "application/pdf" }),
+    "quote%22line%0Abreak.pdf",
+  );
+  const response = await fetch(`http://127.0.0.1:${address.port}`, {
+    method: "POST",
+    body: form,
+  });
+
+  assert.equal(response.status, 204);
+  assert.equal(observedName, "quote%22line%0Abreak.pdf");
+
+  const nestedForm = new FormData();
+  nestedForm.append("payload[1000000000]", "blocked");
+  const nestedResponse = await fetch(`http://127.0.0.1:${address.port}`, {
+    method: "POST",
+    body: nestedForm,
+  });
+  assert.equal(nestedResponse.status, 400);
+  assert.equal(uploadErrorCode, "LIMIT_FIELD_NESTING");
 });
 
 test("missing malware scanner blocks production but not local development", async () => {
