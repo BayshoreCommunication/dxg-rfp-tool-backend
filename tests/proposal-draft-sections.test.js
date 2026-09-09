@@ -4,6 +4,7 @@ const test = require("node:test"),
   path = require("node:path");
 const { DRAFT_SECTION_KEYS, parseSectionKey, parseSectionDecision, ProposalDraftError } = require("../src/modules/proposalDraft/domain");
 const { deterministicProposalDraft } = require("../src/modules/proposalDraft/deterministicDraftProvider");
+const { proposalDraftSchema } = require("../src/modules/liveAi/operations");
 
 const root = path.join(__dirname, "..");
 
@@ -46,9 +47,35 @@ test("migration 018 adds decisions table, scope column and parent link with RLS"
     assert.ok(up.includes(value), value);
 });
 
+const draftSchemaParts = (schema) => {
+  const sections = schema.properties.sections;
+  const section = sections.items;
+  const citations = section.properties.paragraphs.items.properties.citations;
+  return { sections, sectionKeys: section.properties.key.enum, citationIds: citations.items.enum };
+};
+
+test("live draft schema restricts citations to the exact supplied evidence ids", () => {
+  const supplied = [
+    "/content/event/eventName",
+    "/knowledge/release-1/fragment-2",
+    "/content/event/eventName",
+  ];
+  const parts = draftSchemaParts(proposalDraftSchema(supplied));
+  assert.deepEqual(parts.citationIds, [
+    "/content/event/eventName",
+    "/knowledge/release-1/fragment-2",
+  ]);
+  assert.deepEqual(parts.sectionKeys, DRAFT_SECTION_KEYS);
+  assert.equal(parts.sections.maxItems, 10);
+});
+
 test("live draft narrows the output schema when a section scope is set", () => {
+  const parts = draftSchemaParts(proposalDraftSchema(["/content/venueSchedule/venueName"], "venue_schedule"));
+  assert.deepEqual(parts.sectionKeys, ["venue_schedule"]);
+  assert.deepEqual(parts.citationIds, ["/content/venueSchedule/venueName"]);
+  assert.equal(parts.sections.maxItems, 1);
+
   const source = fs.readFileSync(path.join(root, "src/modules/liveAi/operations.ts"), "utf8");
-  assert.ok(source.includes("enum:[scope]"), "scoped schema must restrict the section key enum");
   assert.ok(source.includes("rfpilot_proposal_draft_section"), "scoped runs use a distinct schema name");
   assert.ok(source.includes("Draft only the"), "scoped instructions must target one section");
 });
@@ -141,11 +168,36 @@ test("draft generation reads every active RFP-content proposal section", () => {
   }
 });
 
-test("draft worker marks the domain run failed when execution fails", () => {
+test("draft retries remain non-terminal until the durable worker exhausts them", () => {
   const handler = readFile("src/modules/durableJobs/proposalDraftHandler.ts");
+  const worker = readFile("src/modules/durableJobs/worker.ts");
+  const repository = readFile("src/modules/proposalDraft/postgresProposalDraftRepository.ts");
   assert.ok(handler.includes("catch (error)"));
-  assert.ok(handler.includes("proposalDraftRepository.fail"));
-  assert.ok(handler.includes('status: "failed"'));
+  assert.doesNotMatch(handler, /proposalDraftRepository\.fail/,
+    "the handler cannot know whether the durable retry budget is exhausted");
+  for (const token of [
+    'job.data.jobType === "proposal_draft_generate"',
+    '["failed", "dead_letter"].includes(failed.status)',
+    'code !== "PROPOSAL_VERSION_CONFLICT"',
+    "proposalDraftRepository.fail",
+  ]) assert.ok(worker.includes(token), token);
+  assert.ok(worker.indexOf("repository.fail") < worker.indexOf("proposalDraftRepository.fail"),
+    "the durable job status must be known before settling the draft run");
+  assert.ok(repository.includes("r.status NOT IN ('succeeded','conflict')"),
+    "late worker failures cannot overwrite a completed draft or an explicit conflict");
+});
+
+test("draft execution emits safe structured outcome telemetry", () => {
+  const handler = readFile("src/modules/durableJobs/proposalDraftHandler.ts");
+  for (const token of [
+    "continueTrace",
+    "pseudonym",
+    'safeLog("info", "job.execution.started"',
+    'safeLog("info", "job.execution.completed"',
+    'safeLog("error", "job.execution.failed"',
+    "safeErrorCode",
+    "retryable",
+  ]) assert.ok(handler.includes(token), token);
 });
 
 test("draft persistence exposes only the current clean input epoch", () => {

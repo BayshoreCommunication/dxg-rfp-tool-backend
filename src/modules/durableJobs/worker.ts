@@ -18,6 +18,7 @@ import { handleConversationChat } from "./conversationChatHandler";
 import { conversationRepository } from "../conversations/postgresConversationRepository";
 import { comparisonOrchestrationRepository } from "../comparisonOrchestration/postgresComparisonOrchestrationRepository";
 import { vendorIntelligenceRepository } from "../vendorIntelligence/postgresVendorIntelligenceRepository";
+import { proposalDraftRepository } from "../proposalDraft/postgresProposalDraftRepository";
 
 const stageFor = (type: QueueMessage["jobType"]) => ({
   knowledge_parse: "deterministic_parse",
@@ -125,6 +126,20 @@ export const createSourceSecurityWorker = (repository: JobRepository) => {
       const retryable = Boolean((error as { retryable?: boolean }).retryable);
       const code = String((error as { code?: string }).code || "JOB_HANDLER_FAILED");
       const failed = await repository.fail({ message: job.data, workerId, attempt, diagnosticCode: code, retryable, maxAttempts });
+      // The job repository owns the retry budget. Settle the linked draft only
+      // after it says no retry remains; a version conflict was already recorded
+      // as `conflict` by the draft repository and must not be downgraded.
+      if (
+        job.data.jobType === "proposal_draft_generate" &&
+        ["failed", "dead_letter"].includes(failed.status) &&
+        code !== "PROPOSAL_VERSION_CONFLICT"
+      )
+        await proposalDraftRepository.fail({
+          organizationMongoId: job.data.organizationMongoId,
+          runId: job.data.inputReference,
+          code,
+          status: "failed",
+        });
       if (job.data.jobType === "vendor_requirement_facts" && ["failed", "dead_letter"].includes(failed.status))
         await vendorIntelligenceRepository.fail({
           organizationMongoId: job.data.organizationMongoId,

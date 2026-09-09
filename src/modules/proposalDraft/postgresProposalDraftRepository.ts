@@ -307,6 +307,7 @@ export const proposalDraftRepository = {
         `UPDATE rfpilot.proposal_draft_runs r
             SET status=$2,safe_error_code=$3,completed_at=now(),updated_at=now()
           WHERE r.id=$1
+            AND r.status NOT IN ('succeeded','conflict')
             AND EXISTS(SELECT 1 FROM rfpilot.ai_jobs j WHERE j.id=r.job_id AND j.input_version=$4)`,
         [input.runId, input.status, input.code, PROPOSAL_DRAFT_INPUT_VERSION],
       );

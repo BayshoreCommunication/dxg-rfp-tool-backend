@@ -75,9 +75,15 @@ const getOrCreateConversation = async (c: PoolClient, org: string, proposalRefId
 
 // Refresh pending assistant messages from their linked run state so a finished
 // run becomes a completed assistant turn on the next read (write-on-read).
+// Failed draft turns are also rechecked: older workers could mark a run failed
+// before its durable retry, and the same run may since have succeeded.
 const materializeRuns = async (c: PoolClient, conversationId: string) => {
   const pending = await c.query<any>(
-    "SELECT id,run_type,run_id FROM rfpilot.conversation_messages WHERE conversation_id=$1 AND status='pending' AND run_id IS NOT NULL",
+    `SELECT id,run_type,run_id,status,content
+       FROM rfpilot.conversation_messages
+      WHERE conversation_id=$1
+        AND run_id IS NOT NULL
+        AND (status='pending' OR (status='failed' AND run_type='proposal_draft'))`,
     [conversationId],
   );
   for (const message of pending.rows) {
@@ -94,11 +100,17 @@ const materializeRuns = async (c: PoolClient, conversationId: string) => {
       [message.run_id, inputVersion],
     );
     const status = run.rows[0]?.status;
-    if (!status || ["queued", "running"].includes(status)) continue;
-    const messageStatus = status === "succeeded" ? "complete" : "failed";
+    if (!status) continue;
+    const messageStatus = ["queued", "running"].includes(status)
+      ? "pending"
+      : status === "succeeded"
+        ? "complete"
+        : "failed";
+    const content = runStatusMessage(message.run_type, status);
+    if (message.status === messageStatus && message.content === content) continue;
     await c.query(
       "UPDATE rfpilot.conversation_messages SET status=$2,content=$3,updated_at=now() WHERE id=$1",
-      [message.id, messageStatus, runStatusMessage(message.run_type, status)],
+      [message.id, messageStatus, content],
     );
   }
 };

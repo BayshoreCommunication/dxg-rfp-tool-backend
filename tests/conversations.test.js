@@ -523,6 +523,20 @@ test("run status narration covers every lifecycle state", () => {
   assert.match(runStatusMessage("proposal_draft", "succeeded"), /cited draft/i);
 });
 
+test("conversation reads repair a failed draft turn when the same run later succeeds", () => {
+  const repository = fs.readFileSync(path.join(root, "src/modules/conversations/postgresConversationRepository.ts"), "utf8");
+  const materialize = repository.slice(
+    repository.indexOf("const materializeRuns"),
+    repository.indexOf("const materializeChatJobs"),
+  );
+  assert.match(materialize, /status='failed' AND run_type='proposal_draft'/,
+    "failed draft messages must be rechecked, not treated as permanently terminal");
+  assert.match(materialize, /status === "succeeded"[\s\S]*?"complete"/,
+    "a recovered run must restore its existing conversation turn to complete");
+  assert.match(materialize, /\["queued", "running"\][\s\S]*?"pending"/,
+    "a retried run must return its conversation turn to pending while it executes");
+});
+
 test("conversation migration enforces tenancy, ordinals and question lifecycle", () => {
   const up = fs.readFileSync(path.join(root, "migrations/postgres/017_conversations.up.sql"), "utf8");
   for (const value of [
