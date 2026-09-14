@@ -18,7 +18,10 @@ export const mongoPublicAccessRepository: PublicAccessRepository = {
       $expr: { $or: [{ $eq: ["$maxUses", null] }, { $lt: ["$useCount", "$maxUses"] }] },
     }, { $inc: { useCount: 1 }, $set: { lastUsedAt: now } }, { new: true }).select("+tokenHash").lean();
     return grant ? {
+      id: String(grant._id),
       organizationId: String(grant.organizationId), resourceId: String(grant.resourceId),
+      createdByUserId: String(grant.createdByUserId),
+      recipientHash: grant.recipientHash ?? null,
       purpose: grant.purpose, expiresAt: grant.expiresAt, maxUses: grant.maxUses,
       useCount: grant.useCount, revokedAt: grant.revokedAt,
     } : null;

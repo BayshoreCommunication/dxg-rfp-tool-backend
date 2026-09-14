@@ -12,17 +12,18 @@ const invoke = async ({ purpose = "vendor:submit", options = {}, query = {}, bod
     json(payload) { this.payload = payload; return this; },
   };
   let nextCalled = false;
-  await requirePublicGrant(purpose, options)(
-    {
+  const request = {
       params: {},
       query: { proposalId: "proposal-1", accessGrant: "opaque-grant", ...query },
       body,
       headers: {},
-    },
+    };
+  await requirePublicGrant(purpose, options)(
+    request,
     response,
     () => { nextCalled = true; },
   );
-  return { response, nextCalled };
+  return { request, response, nextCalled };
 };
 
 test("dedicated vendor operations pass caller email and require recipient binding", async () => {
@@ -85,6 +86,32 @@ test("read-only proposal route keeps vendor invites usable before email entry", 
       { purpose: "proposal:view", allowRecipientlessVendorProposalRead: true },
       { purpose: "vendor:submit", allowRecipientlessVendorProposalRead: true },
     ]);
+  } finally {
+    publicAccess.validateAndConsume = original;
+  }
+});
+
+test("successful validation attaches safe grant context without the raw token", async () => {
+  const original = publicAccess.validateAndConsume;
+  publicAccess.validateAndConsume = async () => ({
+    id: "grant-1",
+    organizationId: "organization-1",
+    resourceId: "proposal-1",
+    createdByUserId: "planner-1",
+    recipientHash: "a".repeat(64),
+    purpose: "vendor:submit",
+    expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+    maxUses: null,
+    useCount: 1,
+    revokedAt: null,
+  });
+
+  try {
+    const result = await invoke({ options: { allowRecipientlessVendorRead: true } });
+    assert.equal(result.nextCalled, true);
+    assert.equal(result.request.publicGrant.id, "grant-1");
+    assert.equal(result.request.publicGrant.organizationId, "organization-1");
+    assert.equal(JSON.stringify(result.request.publicGrant).includes("opaque-grant"), false);
   } finally {
     publicAccess.validateAndConsume = original;
   }

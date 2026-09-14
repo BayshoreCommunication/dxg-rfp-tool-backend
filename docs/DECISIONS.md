@@ -1,6 +1,6 @@
 # Architectural Decisions
 
-> Purpose: concise register of accepted, durable decisions. Last updated: 2026-08-10. Owner: engineering/product.
+> Purpose: concise register of accepted, durable decisions. Last updated: 2026-09-14. Owner: engineering/product.
 
 | Decision | Rationale / consequence |
 |---|---|
@@ -9,6 +9,7 @@
 | PostgreSQL owns durable AI state; Redis is transport only. | RLS, auditability, recovery, and reference-only queue messages. |
 | Canonical `proposal.v1` contract with generated types. | One validated shape across API, AI, UI, and tests while legacy adapters preserve compatibility. |
 | Canonical migration uses immutable snapshots, not in-place rewrites. | Dry-run, review, idempotency, and rollback without touching legacy records. |
+| Vendor questionnaires are immutable, tenant-scoped MongoDB projections of canonical proposals (2026-09-14). | A deterministic projection exposes only vendor-safe fields and gives every room and specification a stable ID plus proposal source reference. Re-publishing the same source checksum is idempotent; a changed projection creates version `n + 1`, records the publishing actor, and supersedes the prior published version. The public workspace is an allowlisted DTO built from validated grant context, never from a raw token. |
 | AI provider access uses a governed port and pinned model snapshot. | Provider replacement, deterministic release evidence, budget controls, and no hidden legacy endpoint. |
 | Extracted field candidates never auto-apply. | Every candidate remains read-only until the owner reviews individual current/proposed values and explicitly confirms application. The client-side auto-apply hook was removed; the backend's `automatic` path still exists behind `AUTO_APPLY_MIN_CONFIDENCE` but is uncalled. |
 | Room recommendations are the one unattended application path. | Deterministic room suggestions fill **empty** allowlisted room fields without prior approval, so the planner adjusts values in the form instead of approving each. Bounded by: filled fields never overwritten, allowlisted paths only, crew appends only, version CAS plus per-room identity checks, and an audit row per application. Pending explicit DXG confirmation — see `architecture/ROOM_RECOMMENDATIONS.md`. |
