@@ -142,6 +142,26 @@ reconciles eligible sources, and journals checksummed outcomes. Comparison,
 requirement mapping, extraction, evaluator scoring, and decision UX remain later
 explicitly approved tasks.
 
+### Vendor response questionnaire publication (Task 2, 2026-09-14)
+
+The vendor response workspace now starts from an immutable, tenant-scoped
+questionnaire version rather than exposing the proposal document directly. A
+deterministic canonical-proposal projection retains the vendor-safe event,
+venue, deadline, currency, room, and specification context; every room and
+specification receives a stable identifier and exact proposal source reference.
+Publishing unchanged source data is idempotent. A changed projection creates
+version `n + 1`, records its actor and checksums, and supersedes the prior
+published version without mutating it.
+
+`GET /api/vendor-responses/workspace` validates the scoped public grant and
+returns only the allowlisted workspace contract. It never includes raw access
+tokens, organization or owner identifiers, private upload URLs, internal flags,
+or unrelated proposal fields. Access state is derived from the published/open
+lifecycle and deadline; revoked, expired, or otherwise invalid grants fail in
+the public-access boundary before the workspace service runs. Authenticated
+proposal owners can explicitly publish through `POST
+/api/vendor-responses/questionnaires/publish`.
+
 ### Planner-entered vendor responses (2026-08-25)
 
 Not every vendor replies through the portal. `POST

@@ -11,6 +11,8 @@ import {
   getVendorSubmissionDetail,
   markVendorResponseRead,
   recordVendorResponseOnBehalf,
+  getVendorResponseWorkspace,
+  publishVendorQuestionnaire,
 } from "../controller/vendorResponseController";
 import { authenticate, authorizeAction, type AuthRequest } from "../middleware/auth";
 import { uploadVendorDocs } from "../middleware/upload";
@@ -74,6 +76,12 @@ const validateResponseId = (
 
 /* Public routes — no authentication required */
 router.get(
+  "/workspace",
+  publicGrantLimit,
+  requirePublicGrant("vendor:submit", { allowRecipientlessVendorRead: true }),
+  getVendorResponseWorkspace,
+);
+router.get(
   "/check",
   publicGrantLimit,
   requirePublicGrant("vendor:submit", alternateVendorContact),
@@ -96,6 +104,13 @@ router.post(
 /* Protected routes — planner dashboard */
 /* Authentication runs before the upload middleware so an anonymous caller can
    never stream files onto disk. */
+router.post(
+  "/questionnaires/publish",
+  authenticate,
+  authorizeAction("vendor-response:write"),
+  plannerWriteLimit,
+  publishVendorQuestionnaire,
+);
 router.post(
   "/manual",
   authenticate,

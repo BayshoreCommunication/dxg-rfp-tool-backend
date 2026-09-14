@@ -36,6 +36,15 @@ const text = (value: unknown): string | undefined => {
   return normalized || undefined;
 };
 
+const currencyCode = (value: unknown): string | undefined => {
+  const normalized = text(value)?.toUpperCase();
+  if (!normalized) return undefined;
+  if (/^[A-Z]{3}$/.test(normalized)) return normalized;
+  return ({ "$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY" } as Record<string, string>)[
+    normalized
+  ];
+};
+
 const integer = (value: unknown): number | undefined => {
   if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
     return value;
@@ -712,6 +721,14 @@ export const mapLegacyProposalToV1 = (
       ...optional("linkPrefix", text(settings.linkPrefix)),
       ...optional("font", text(settings.defaultFont)),
       ...optional("language", text(settings.proposalLanguage)),
+      ...optional(
+        "currency",
+        currencyCode(
+          budget.estimatedAvBudgetCurrency
+            ?? settings.currency
+            ?? settings.defaultCurrency,
+        ),
+      ),
       ...optional("dateFormat", text(settings.dateFormat)),
       ...optional("decimalPrecision", integer(settings.decimalPrecision)),
     },

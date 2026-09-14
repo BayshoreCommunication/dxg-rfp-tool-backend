@@ -1,11 +1,17 @@
 import { NextFunction, Request, Response } from "express";
+import type { ConsumedPublicGrantRecord } from "../src/modules/publicAccess/application/managePublicAccess";
 import type { PublicGrantPurpose } from "../src/modules/publicAccess/domain/publicGrant";
 import { publicAccess } from "../src/modules/publicAccess/composition";
 import { AuthRequest } from "./auth";
 
 type PublicGrantRequirementOptions = {
   allowAlternateVendorContact?: boolean;
+  allowRecipientlessVendorRead?: boolean;
 };
+
+export interface PublicGrantRequest extends Request {
+  publicGrant?: ConsumedPublicGrantRecord;
+}
 
 export const requirePublicGrant = (
   purpose: PublicGrantPurpose | readonly PublicGrantPurpose[],
@@ -35,11 +41,13 @@ export const requirePublicGrant = (
       // A vendor invite may render the read-only proposal before the vendor
       // enters an email. Response routes may explicitly accept a separate
       // confirmation/contact mailbox while retaining token scope and expiry.
-      allowRecipientlessVendorProposalRead: Array.isArray(purpose),
+      allowRecipientlessVendorProposalRead:
+        Array.isArray(purpose) || options.allowRecipientlessVendorRead === true,
       allowAlternateVendorContact: options.allowAlternateVendorContact === true,
     });
     if (grant) break;
   }
   if (!grant) { res.status(403).json({ success: false, message: "Access grant is invalid, expired, revoked, or exhausted" }); return; }
+  (req as PublicGrantRequest).publicGrant = grant;
   next();
 };

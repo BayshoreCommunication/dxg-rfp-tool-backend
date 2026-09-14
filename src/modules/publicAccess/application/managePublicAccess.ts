@@ -10,10 +10,15 @@ export type PublicGrantRecord = {
   organizationId: string; resourceId: string; purpose: PublicGrantPurpose;
   expiresAt: Date; maxUses?: number | null; useCount: number; revokedAt?: Date | null;
 };
+export type ConsumedPublicGrantRecord = PublicGrantRecord & {
+  id: string;
+  createdByUserId: string;
+  recipientHash?: string | null;
+};
 export interface PublicAccessRepository {
   resourceOwned(resourceId: string, organizationId: string, userId: string): Promise<boolean>;
   create(input: PublicGrantRecord & { tokenHash: string; createdByUserId: string; recipientHash?: string | null }): Promise<{ id: string }>;
-  consume(tokenHash: string, purpose: PublicGrantPurpose, resourceId: string, now: Date, recipientHash?: string | null): Promise<PublicGrantRecord | null>;
+  consume(tokenHash: string, purpose: PublicGrantPurpose, resourceId: string, now: Date, recipientHash?: string | null): Promise<ConsumedPublicGrantRecord | null>;
   revoke(id: string, organizationId: string, reason: string): Promise<boolean>;
 }
 

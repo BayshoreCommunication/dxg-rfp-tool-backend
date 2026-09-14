@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import type { AuthRequest } from "../middleware/auth";
+import type { PublicGrantRequest } from "../middleware/publicAccess";
 import {
   checkVendorResponse,
   getVendorSubmissionReceipt,
@@ -10,7 +11,88 @@ import {
   listOwnedVendorResponses,
   recordManualVendorResponse,
   submitPublicVendorResponse,
+  getPublicVendorResponseWorkspace,
+  publishVendorResponseQuestionnaire,
 } from "../src/modules/vendorResponses/composition";
+import { VendorResponseWorkspaceError } from "../src/modules/vendorResponses/application/vendorResponseWorkspace";
+
+const sendWorkspaceError = (
+  res: Response,
+  error: unknown,
+  fallback: string,
+): void => {
+  if (error instanceof VendorResponseWorkspaceError) {
+    res.status(error.status).json({
+      success: false,
+      code: error.code,
+      message: error.message,
+    });
+    return;
+  }
+  res.status(500).json({ success: false, message: fallback });
+};
+
+export const getVendorResponseWorkspace = async (
+  req: PublicGrantRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const proposalId = typeof req.query.proposalId === "string"
+      ? req.query.proposalId
+      : "";
+    const grant = req.publicGrant;
+    if (!mongoose.isValidObjectId(proposalId)) {
+      res.status(400).json({ success: false, message: "Valid proposal id is required." });
+      return;
+    }
+    if (!grant || grant.purpose !== "vendor:submit" || grant.resourceId !== proposalId) {
+      res.status(403).json({ success: false, message: "Vendor workspace access is unavailable." });
+      return;
+    }
+    const workspace = await getPublicVendorResponseWorkspace({
+      organizationId: grant.organizationId,
+      proposalId,
+      grantActorId: grant.createdByUserId,
+    });
+    res.status(200).json({ success: true, data: workspace });
+  } catch (error) {
+    sendWorkspaceError(res, error, "Vendor workspace is temporarily unavailable.");
+  }
+};
+
+export const publishVendorQuestionnaire = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const proposalId = typeof req.body?.proposalId === "string"
+      ? req.body.proposalId
+      : "";
+    const userId = req.user?.userId;
+    const organizationId = req.user?.organizationId;
+    if (!userId || !organizationId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+    if (!mongoose.isValidObjectId(proposalId)) {
+      res.status(400).json({ success: false, message: "Valid proposal id is required." });
+      return;
+    }
+    const result = await publishVendorResponseQuestionnaire({
+      organizationId,
+      proposalId,
+      actorId: userId,
+      ownerUserId: userId,
+    });
+    res.status(result.publication.created ? 201 : 200).json({
+      success: true,
+      created: result.publication.created,
+      data: result.publication.questionnaire,
+    });
+  } catch (error) {
+    sendWorkspaceError(res, error, "Vendor questionnaire could not be published.");
+  }
+};
 
 export const checkVendorResponseExists = async (
   req: Request,

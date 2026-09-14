@@ -19,6 +19,14 @@ import { vendorUploadMalwareScan } from "./infrastructure/security/vendorUploadM
 import { vendorResponseNotificationAdapter } from "./infrastructure/notifications/vendorResponseNotificationAdapter";
 import { vendorConfirmationEmailAdapter } from "./infrastructure/email/vendorConfirmationEmailAdapter";
 import { postgresVendorSubmissionSourceRegistry } from "./infrastructure/postgres/postgresVendorSubmissionSourceRegistry";
+import { createVendorResponseQuestionnaireService } from "./application/vendorResponseWorkspace";
+import { mongoVendorResponseQuestionnaireRepository } from "./infrastructure/mongo/mongoVendorResponseQuestionnaireRepository";
+
+const questionnaireService = createVendorResponseQuestionnaireService(
+  mongoVendorResponseQuestionnaireRepository,
+);
+export const getPublicVendorResponseWorkspace = questionnaireService.workspace;
+export const publishVendorResponseQuestionnaire = questionnaireService.publish;
 
 export const listOwnedVendorResponses = createListOwnedVendorResponses(
   mongoVendorResponseReadRepository,
