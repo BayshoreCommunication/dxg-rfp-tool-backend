@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rfpilot.com/contracts/vendor-response-workspace.v1.schema.json",
+  "title": "VendorResponseWorkspaceV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "access", "questionnaire", "draft", "currentSubmission"],
+  "properties": {
+    "schemaVersion": { "const": "vendor-response-workspace.v1" },
+    "access": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "canEdit", "canSubmit"],
+      "properties": {
+        "state": { "type": "string", "enum": ["open", "closed", "expired", "revoked", "unavailable"] },
+        "canEdit": { "type": "boolean" },
+        "canSubmit": { "type": "boolean" },
+        "message": { "type": "string", "maxLength": 1000 }
+      }
+    },
+    "questionnaire": { "$ref": "vendor-response-questionnaire.v1.schema.json" },
+    "draft": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["draftId", "draftRevision", "status", "lastSavedAt", "response"],
+          "properties": {
+            "draftId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "draftRevision": { "type": "integer", "minimum": 1 },
+            "status": { "type": "string", "enum": ["active", "submitted", "abandoned"] },
+            "lastSavedAt": { "type": "string", "format": "date-time" },
+            "response": { "$ref": "vendor-response.v1.schema.json" }
+          }
+        }
+      ]
+    },
+    "currentSubmission": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["submissionId", "versionId", "versionNumber", "receivedAt", "format"],
+          "properties": {
+            "submissionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "versionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "versionNumber": { "type": "integer", "minimum": 1 },
+            "receivedAt": { "type": "string", "format": "date-time" },
+            "format": { "type": "string", "enum": ["structured_v1", "legacy_unstructured"] }
+          }
+        }
+      ]
+    }
+  }
+}
