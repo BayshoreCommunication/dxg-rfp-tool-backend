@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rfpilot.com/contracts/vendor-response-calculation.v1.schema.json",
+  "title": "VendorResponseCalculationV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "currency", "roomTotals", "equipmentSubtotalMinor", "laborSubtotalMinor", "travelSubtotalMinor", "feeSubtotalMinor", "taxSubtotalMinor", "discountMinor", "grandTotalMinor", "requestedRoomNights", "specCounts", "completion", "calculatedAt"],
+  "properties": {
+    "schemaVersion": { "const": "vendor-response-calculation.v1" },
+    "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "roomTotals": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/roomTotal" } },
+    "equipmentSubtotalMinor": { "$ref": "#/$defs/nonNegativeMoney" },
+    "laborSubtotalMinor": { "$ref": "#/$defs/nonNegativeMoney" },
+    "travelSubtotalMinor": { "$ref": "#/$defs/nonNegativeMoney" },
+    "feeSubtotalMinor": { "$ref": "#/$defs/nonNegativeMoney" },
+    "taxSubtotalMinor": { "$ref": "#/$defs/nonNegativeMoney" },
+    "discountMinor": { "$ref": "#/$defs/nonNegativeMoney" },
+    "grandTotalMinor": { "$ref": "#/$defs/nonNegativeMoney" },
+    "requestedRoomNights": { "type": "integer", "minimum": 0, "maximum": 10000000 },
+    "specCounts": { "$ref": "#/$defs/specCounts" },
+    "completion": { "$ref": "#/$defs/completion" },
+    "calculatedAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "nonNegativeMoney": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "roomTotal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roomId", "equipmentSubtotalMinor", "laborSubtotalMinor", "roomTotalMinor"],
+      "properties": {
+        "roomId": { "$ref": "#/$defs/identifier" },
+        "equipmentSubtotalMinor": { "$ref": "#/$defs/nonNegativeMoney" },
+        "laborSubtotalMinor": { "$ref": "#/$defs/nonNegativeMoney" },
+        "roomTotalMinor": { "$ref": "#/$defs/nonNegativeMoney" }
+      }
+    },
+    "specCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "answered", "comply", "substitute", "exception"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "answered": { "type": "integer", "minimum": 0 },
+        "comply": { "type": "integer", "minimum": 0 },
+        "substitute": { "type": "integer", "minimum": 0 },
+        "exception": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requiredSections", "completedSections", "percent"],
+      "properties": {
+        "requiredSections": { "type": "integer", "minimum": 0, "maximum": 11 },
+        "completedSections": { "type": "integer", "minimum": 0, "maximum": 11 },
+        "percent": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    }
+  }
+}
