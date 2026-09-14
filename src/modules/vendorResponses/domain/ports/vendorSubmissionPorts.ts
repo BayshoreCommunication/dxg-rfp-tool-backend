@@ -1,7 +1,11 @@
 export interface VendorDocumentStorage {
   upload(input: { localPath: string; objectKey: string }): Promise<string>;
-  inspect(localPath: string): Promise<{ sizeBytes: number; sha256: string }>;
+  inspect(
+    localPath: string,
+    declaredMimeType?: string,
+  ): Promise<{ sizeBytes: number; sha256: string; detectedMimeType?: string | null }>;
   cleanup(localPath: string): Promise<void>;
+  delete(objectKey: string): Promise<void>;
 }
 
 /**

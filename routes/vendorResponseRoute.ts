@@ -13,6 +13,12 @@ import {
   recordVendorResponseOnBehalf,
   getVendorResponseWorkspace,
   publishVendorQuestionnaire,
+  abandonVendorResponseDraft,
+  createVendorResponseDraft,
+  getVendorResponseDraft,
+  retireVendorResponseDraftDocument,
+  saveVendorResponseDraft,
+  uploadVendorResponseDraftDocuments,
 } from "../controller/vendorResponseController";
 import { authenticate, authorizeAction, type AuthRequest } from "../middleware/auth";
 import { uploadVendorDocs } from "../middleware/upload";
@@ -92,6 +98,46 @@ router.get(
   publicGrantLimit,
   requirePublicGrant("vendor:submit", alternateVendorContact),
   getVendorResponseReceipt,
+);
+router.post(
+  "/drafts",
+  publicGrantLimit,
+  requirePublicGrant("vendor:submit", alternateVendorContact),
+  createVendorResponseDraft,
+);
+router.get(
+  "/drafts/:draftId",
+  publicGrantLimit,
+  requirePublicGrant("vendor:submit", alternateVendorContact),
+  getVendorResponseDraft,
+);
+router.patch(
+  "/drafts/:draftId",
+  publicGrantLimit,
+  requirePublicGrant("vendor:submit", alternateVendorContact),
+  saveVendorResponseDraft,
+);
+/* Grant validation runs before multipart processing so unauthorized callers
+   cannot stream draft files onto local disk. proposalId and the grant must be
+   supplied in the query string or request headers for this endpoint. */
+router.post(
+  "/drafts/:draftId/documents",
+  publicGrantLimit,
+  requirePublicGrant("vendor:submit", alternateVendorContact),
+  receiveVendorDocuments,
+  uploadVendorResponseDraftDocuments,
+);
+router.delete(
+  "/drafts/:draftId/documents/:documentId",
+  publicGrantLimit,
+  requirePublicGrant("vendor:submit", alternateVendorContact),
+  retireVendorResponseDraftDocument,
+);
+router.delete(
+  "/drafts/:draftId",
+  publicGrantLimit,
+  requirePublicGrant("vendor:submit", alternateVendorContact),
+  abandonVendorResponseDraft,
 );
 router.post(
   "/",

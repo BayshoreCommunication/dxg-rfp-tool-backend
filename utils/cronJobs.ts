@@ -121,6 +121,23 @@ const runRetentionSweep = async () => {
   }
 };
 
+export const runVendorDraftCleanup = async () => {
+  try {
+    const { cleanupExpiredVendorResponseDrafts } = await import(
+      "../src/modules/vendorResponses/composition"
+    );
+    const result = await cleanupExpiredVendorResponseDrafts();
+    if (result.drafts > 0) {
+      console.log(
+        `[Cron] Vendor draft cleanup processed ${result.drafts} draft(s): ${result.deletedDocuments} document(s) deleted, ${result.retainedDocuments} retained, ${result.failedDocuments} pending retry`,
+      );
+    }
+  } catch {
+    // Do not print provider errors, object keys, filenames, or draft payloads.
+    console.error("[Cron] Vendor draft cleanup failed");
+  }
+};
+
 export const startCronJobs = () => {
   // Run once immediately on startup
   runExpirationCheck();
@@ -142,5 +159,11 @@ export const startCronJobs = () => {
   // deletion pass should happen on a predictable schedule, not on every deploy.
   setInterval(() => {
     void runRetentionSweep();
+  }, 24 * 60 * 60 * 1000);
+
+  // Draft cleanup is intentionally not run during process startup. It is a
+  // deletion workflow and should execute on the predictable daily schedule.
+  setInterval(() => {
+    void runVendorDraftCleanup();
   }, 24 * 60 * 60 * 1000);
 };
