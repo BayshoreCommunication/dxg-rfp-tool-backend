@@ -40,6 +40,10 @@ const memoryRepository = () => {
     records,
     submittedDocumentIds,
     revisionSeed: null,
+    currentSubmission: null,
+    async findCurrentSubmission() {
+      return this.currentSubmission;
+    },
     async findActive(input, now) {
       return records.find((record) =>
         sameScope(record, input)
@@ -477,6 +481,29 @@ test("workspace resumes the questionnaire snapshot pinned by its active draft", 
   assert.equal(hydrated.draft.documentManifest, undefined);
 });
 
+test("workspace exposes the current submission so a returning vendor starts a revision", async () => {
+  const harness = serviceHarness();
+  const workspace = {
+    schemaVersion: "vendor-response-workspace.v1",
+    access: { state: "open", canEdit: true, canSubmit: true },
+    questionnaire: buildVendorResponseQuestionnaire(),
+    draft: null,
+    currentSubmission: null,
+  };
+  harness.repository.currentSubmission = {
+    submissionId: "507f1f77bcf86cd799439099",
+    versionId: "507f1f77bcf86cd799439098",
+    versionNumber: 2,
+    receivedAt: "2026-09-14T10:00:00.000Z",
+    format: "structured_v1",
+  };
+
+  const hydrated = await harness.service.hydrateWorkspace(workspace, scope);
+
+  assert.equal(hydrated.draft, null);
+  assert.deepEqual(hydrated.currentSubmission, harness.repository.currentSubmission);
+});
+
 test("revision drafts seed the current structured version and inherited documents", async () => {
   const harness = serviceHarness();
   const questionnaire = buildVendorResponseQuestionnaire();
@@ -577,6 +604,53 @@ test("revision authorization is tenant scoped and bound to the original public g
     });
   } finally {
     VendorSubmission.findOne = original;
+  }
+});
+
+test("current submission summary is grant scoped and identifies structured revisions", async () => {
+  const originalSubmissionFind = VendorSubmission.findOne;
+  const originalVersionFind = VendorSubmissionVersion.findOne;
+  let submissionFilter;
+  let versionFilter;
+  VendorSubmission.findOne = (filter) => {
+    submissionFilter = filter;
+    return {
+      sort: () => ({
+        select: () => ({ lean: async () => ({ _id: "507f1f77bcf86cd799439099", currentVersionId: "507f1f77bcf86cd799439098", currentVersionNumber: 2 }) }),
+      }),
+    };
+  };
+  VendorSubmissionVersion.findOne = (filter) => {
+    versionFilter = filter;
+    return {
+      select: () => ({ lean: async () => ({ _id: "507f1f77bcf86cd799439098", versionNumber: 2, receivedAt: new Date("2026-09-14T10:00:00.000Z"), responseSchemaVersion: "vendor-response.v1" }) }),
+    };
+  };
+
+  try {
+    const summary = await mongoVendorSubmissionDraftRepository.findCurrentSubmission(scope);
+    assert.deepEqual(submissionFilter, {
+      organizationId: scope.organizationId,
+      proposalId: scope.proposalId,
+      status: "active",
+      publicGrantIds: scope.grantId,
+    });
+    assert.deepEqual(versionFilter, {
+      _id: "507f1f77bcf86cd799439098",
+      organizationId: scope.organizationId,
+      proposalId: scope.proposalId,
+      submissionId: "507f1f77bcf86cd799439099",
+    });
+    assert.deepEqual(summary, {
+      submissionId: "507f1f77bcf86cd799439099",
+      versionId: "507f1f77bcf86cd799439098",
+      versionNumber: 2,
+      receivedAt: "2026-09-14T10:00:00.000Z",
+      format: "structured_v1",
+    });
+  } finally {
+    VendorSubmission.findOne = originalSubmissionFind;
+    VendorSubmissionVersion.findOne = originalVersionFind;
   }
 });
 

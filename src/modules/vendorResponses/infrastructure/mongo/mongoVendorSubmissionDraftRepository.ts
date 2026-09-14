@@ -98,6 +98,37 @@ const duplicateKey = (error: unknown): boolean =>
   (error as { code?: number } | null)?.code === 11000;
 
 export const mongoVendorSubmissionDraftRepository: VendorSubmissionDraftRepository = {
+  async findCurrentSubmission(scope) {
+    const submission = await VendorSubmission.findOne({
+      organizationId: scope.organizationId,
+      proposalId: scope.proposalId,
+      status: "active",
+      publicGrantIds: scope.grantId,
+    })
+      .sort({ updatedAt: -1 })
+      .select("_id currentVersionId currentVersionNumber")
+      .lean<{ _id?: unknown; currentVersionId?: unknown; currentVersionNumber?: number }>();
+    if (!submission?._id || !submission.currentVersionId) return null;
+    const version = await VendorSubmissionVersion.findOne({
+      _id: submission.currentVersionId,
+      organizationId: scope.organizationId,
+      proposalId: scope.proposalId,
+      submissionId: submission._id,
+    })
+      .select("_id versionNumber receivedAt responseSchemaVersion")
+      .lean<{ _id?: unknown; versionNumber?: number; receivedAt?: Date | string; responseSchemaVersion?: string | null }>();
+    if (!version?._id || !version.receivedAt) return null;
+    return {
+      submissionId: String(submission._id),
+      versionId: String(version._id),
+      versionNumber: Number(version.versionNumber ?? submission.currentVersionNumber ?? 1),
+      receivedAt: iso(version.receivedAt),
+      format: version.responseSchemaVersion === "vendor-response.v1"
+        ? "structured_v1"
+        : "legacy_unstructured",
+    };
+  },
+
   async findActive(scope, now) {
     const row = await VendorSubmissionDraft.findOne({
       ...scopeFilter(scope),

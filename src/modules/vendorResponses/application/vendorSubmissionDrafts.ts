@@ -724,12 +724,18 @@ export const createVendorSubmissionDraftService = (dependencies: {
       workspace: VendorResponseWorkspaceV1,
       scope: VendorSubmissionDraftScope,
     ): Promise<VendorResponseWorkspaceV1> {
-      const draft = await dependencies.repository.findActive(scope, now());
-      if (!draft) return workspace;
+      const [draft, currentSubmission] = await Promise.all([
+        dependencies.repository.findActive(scope, now()),
+        dependencies.repository.findCurrentSubmission(scope),
+      ]);
+      if (!draft && !currentSubmission) return workspace;
       const hydrated: VendorResponseWorkspaceV1 = {
         ...workspace,
-        questionnaire: draft.questionnaire,
-        draft: toVendorSubmissionDraftDto(draft),
+        ...(draft ? {
+          questionnaire: draft.questionnaire,
+          draft: toVendorSubmissionDraftDto(draft),
+        } : {}),
+        currentSubmission,
       };
       if (!validateVendorResponseWorkspaceV1(hydrated)) {
         throw new VendorSubmissionDraftError(
