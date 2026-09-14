@@ -34,6 +34,7 @@ export default tseslint.config(
       "scripts/backfillPostgresProposalReferences.ts",
       "scripts/backfillIdentityProjections.ts",
       "scripts/backfillVendorSubmissionVersions.ts",
+      "scripts/backfillVendorResponseFormatMarkers.ts",
       "scripts/cleanupAssistantRetention.ts",
       "scripts/checkAssistantReleaseReadiness.ts",
       "scripts/verifyAuthRefreshE2E.ts",

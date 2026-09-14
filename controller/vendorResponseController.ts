@@ -4,6 +4,7 @@ import type { AuthRequest } from "../middleware/auth";
 import type { PublicGrantRequest } from "../middleware/publicAccess";
 import {
   checkVendorResponse,
+  configureVendorResponseCapability,
   getVendorSubmissionReceipt,
   getOwnedVendorSubmissionDetail,
   getOwnedVendorResponse,
@@ -12,7 +13,6 @@ import {
   recordManualVendorResponse,
   submitPublicVendorResponse,
   getPublicVendorResponseWorkspace,
-  publishVendorResponseQuestionnaire,
   abandonPublicVendorResponseDraft,
   createOrResumePublicVendorResponseDraft,
   createOrResumePublicVendorResponseRevisionDraft,
@@ -442,19 +442,68 @@ export const publishVendorQuestionnaire = async (
       res.status(400).json({ success: false, message: "Valid proposal id is required." });
       return;
     }
-    const result = await publishVendorResponseQuestionnaire({
+    const configured = await configureVendorResponseCapability({
       organizationId,
       proposalId,
       actorId: userId,
       ownerUserId: userId,
+      responseFormat: "structured_v1",
     });
-    res.status(result.publication.created ? 201 : 200).json({
+    const publication = configured.publication;
+    if (!publication) throw new Error("Structured questionnaire was not published");
+    res.status(publication.created ? 201 : 200).json({
       success: true,
-      created: result.publication.created,
-      data: result.publication.questionnaire,
+      created: publication.created,
+      data: publication.questionnaire,
     });
   } catch (error) {
     sendWorkspaceError(res, error, "Vendor questionnaire could not be published.");
+  }
+};
+
+export const configureVendorResponseRollout = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const proposalId = typeof req.body?.proposalId === "string"
+      ? req.body.proposalId
+      : "";
+    const responseFormat = req.body?.responseFormat;
+    const userId = req.user?.userId;
+    const organizationId = req.user?.organizationId;
+    if (!userId || !organizationId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+    if (!mongoose.isValidObjectId(proposalId)) {
+      res.status(400).json({ success: false, message: "Valid proposal id is required." });
+      return;
+    }
+    if (responseFormat !== "structured_v1" && responseFormat !== "legacy_unstructured") {
+      res.status(400).json({
+        success: false,
+        message: "responseFormat must be structured_v1 or legacy_unstructured.",
+      });
+      return;
+    }
+    const configured = await configureVendorResponseCapability({
+      organizationId,
+      proposalId,
+      actorId: userId,
+      ownerUserId: userId,
+      responseFormat,
+    });
+    res.status(200).json({
+      success: true,
+      data: {
+        responseFormat: configured.responseFormat,
+        questionnaireVersion:
+          configured.publication?.questionnaire.questionnaireVersion ?? null,
+      },
+    });
+  } catch (error) {
+    sendWorkspaceError(res, error, "Vendor response rollout could not be configured.");
   }
 };
 

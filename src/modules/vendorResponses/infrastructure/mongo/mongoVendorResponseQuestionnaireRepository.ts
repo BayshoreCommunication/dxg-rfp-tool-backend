@@ -9,6 +9,7 @@ import type {
   VendorResponseQuestionnairePublication,
   VendorResponseQuestionnaireRepository,
 } from "../../domain/ports/vendorResponseQuestionnaireRepository";
+import { configuredVendorResponseFormat } from "../../domain/rollout";
 
 const proposalSelection = [
   "organizationId",
@@ -77,6 +78,7 @@ export const mongoVendorResponseQuestionnaireRepository: VendorResponseQuestionn
       isActive: row.isActive !== false,
       isOpen: row.isOpen !== false,
       isArchived: row.isArchived === true,
+      responseFormat: configuredVendorResponseFormat(row.proposalSettings),
       legacyProposal: {
         ...row,
         _id: String(row._id),
@@ -84,6 +86,22 @@ export const mongoVendorResponseQuestionnaireRepository: VendorResponseQuestionn
         userId: String(row.userId),
       },
     };
+  },
+
+  async setResponseFormat(input) {
+    const result = await Proposal.updateOne(
+      {
+        _id: input.proposalId,
+        organizationId: input.organizationId,
+        userId: input.ownerUserId,
+      },
+      {
+        $set: {
+          "proposalSettings.vendorResponseFormat": input.responseFormat,
+        },
+      },
+    );
+    return result.matchedCount === 1;
   },
 
   async publish(input) {
@@ -115,6 +133,7 @@ export const mongoVendorResponseQuestionnaireRepository: VendorResponseQuestionn
           sourceChecksum: input.sourceChecksum,
           schemaVersion: questionnaire.schemaVersion,
           projectionVersion: VENDOR_RESPONSE_QUESTIONNAIRE_PROJECTION_VERSION,
+          responseFormat: "structured_v1",
           status: "published",
           questionnaire,
           publishedByActorId: input.publishedByActorId,

@@ -4,9 +4,23 @@
   "title": "VendorResponseWorkspaceV1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "access", "questionnaire", "draft", "currentSubmission"],
+  "required": ["schemaVersion", "proposalTitle", "capabilities", "access", "questionnaire", "draft", "currentSubmission"],
   "properties": {
     "schemaVersion": { "const": "vendor-response-workspace.v1" },
+    "proposalTitle": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["structuredResponse", "responseFormat", "reason"],
+      "properties": {
+        "structuredResponse": { "type": "boolean" },
+        "responseFormat": { "type": "string", "enum": ["structured_v1", "legacy_unstructured"] },
+        "reason": {
+          "type": "string",
+          "enum": ["enabled", "global_flag_disabled", "proposal_not_enabled"]
+        }
+      }
+    },
     "access": {
       "type": "object",
       "additionalProperties": false,
@@ -18,7 +32,12 @@
         "message": { "type": "string", "maxLength": 1000 }
       }
     },
-    "questionnaire": { "$ref": "vendor-response-questionnaire.v1.schema.json" },
+    "questionnaire": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "vendor-response-questionnaire.v1.schema.json" }
+      ]
+    },
     "draft": {
       "oneOf": [
         { "type": "null" },

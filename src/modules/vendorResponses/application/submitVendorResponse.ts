@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { VendorSubmissionVersionReason } from "../../../../modal/vendorSubmissionVersionModel";
-import { safeLog } from "../../../shared/observability/safeTelemetry";
+import { pseudonym, safeLog } from "../../../shared/observability/safeTelemetry";
 import type {
   VendorSubmissionRepository,
   VendorDocument,
@@ -207,6 +207,15 @@ export const createSubmitVendorResponse = (dependencies: {
       versionId: replay.versionId,
       email: replay.email,
     });
+    safeLog("info", "vendor_response_submission_finalized", {
+      organizationPseudonym: pseudonym(replay.organizationId),
+      proposalPseudonym: pseudonym(replay.proposalId),
+      submissionPseudonym: pseudonym(replay.submissionId),
+      responseFormat: "legacy_unstructured",
+      versionNumber: replay.versionNumber,
+      documentCount: replay.documents.length,
+      outcome: "duplicate",
+    });
     return {
       kind: "duplicate" as const,
       response: replay.response,
@@ -289,6 +298,15 @@ export const createSubmitVendorResponse = (dependencies: {
     dependencies.sourceRegistry,
     saved.record,
   );
+  safeLog("info", "vendor_response_submission_finalized", {
+    organizationPseudonym: pseudonym(saved.record.organizationId),
+    proposalPseudonym: pseudonym(saved.record.proposalId),
+    submissionPseudonym: pseudonym(saved.record.submissionId),
+    responseFormat: "legacy_unstructured",
+    versionNumber: saved.record.versionNumber,
+    documentCount: saved.record.documents.length,
+    outcome: saved.created ? "created" : "duplicate",
+  });
 
   // Planner-entered responses skip both notifications: the planner is the actor,
   // and the vendor never submitted anything here, so a "we received your

@@ -36,6 +36,7 @@ const questionnaireService = createVendorResponseQuestionnaireService(
   mongoVendorResponseQuestionnaireRepository,
 );
 export const publishVendorResponseQuestionnaire = questionnaireService.publish;
+export const configureVendorResponseCapability = questionnaireService.configure;
 
 const configuredDraftRetentionDays = Number.parseInt(
   process.env.VENDOR_DRAFT_RETENTION_DAYS ?? "",
@@ -55,15 +56,23 @@ type DraftGrantInput = VendorSubmissionDraftScope & { grantActorId: string };
 
 export const getPublicVendorResponseWorkspace = async (
   input: DraftGrantInput,
-) => draftService.hydrateWorkspace(
-  await questionnaireService.workspace(input),
-  input,
-);
+) => {
+  const workspace = await questionnaireService.workspace(input);
+  if (!workspace.capabilities.structuredResponse) return workspace;
+  return draftService.hydrateWorkspace(workspace, input);
+};
 
 export const createOrResumePublicVendorResponseDraft = async (
   input: DraftGrantInput & { submissionId?: string | null },
 ) => {
   const workspace = await questionnaireService.workspace(input);
+  if (!workspace.capabilities.structuredResponse || !workspace.questionnaire) {
+    throw new VendorSubmissionDraftError(
+      "DRAFT_INACTIVE",
+      409,
+      "Structured vendor responses are not enabled for this proposal",
+    );
+  }
   if (!workspace.access.canEdit) {
     throw new VendorSubmissionDraftError(
       "DRAFT_INACTIVE",
@@ -82,6 +91,13 @@ export const createOrResumePublicVendorResponseRevisionDraft = async (
   input: DraftGrantInput & { submissionId: string },
 ) => {
   const workspace = await questionnaireService.workspace(input);
+  if (!workspace.capabilities.structuredResponse) {
+    throw new VendorSubmissionDraftError(
+      "DRAFT_INACTIVE",
+      409,
+      "Structured vendor responses are not enabled for this proposal",
+    );
+  }
   if (!workspace.access.canEdit) {
     throw new VendorSubmissionDraftError(
       "DRAFT_INACTIVE",
@@ -92,11 +108,32 @@ export const createOrResumePublicVendorResponseRevisionDraft = async (
   return draftService.createOrResumeRevision(input);
 };
 
-export const getPublicVendorResponseDraft = draftService.get;
-export const savePublicVendorResponseDraft = draftService.save;
-export const uploadPublicVendorResponseDraftDocuments = draftService.uploadDocuments;
-export const retirePublicVendorResponseDraftDocument = draftService.retireDocument;
-export const abandonPublicVendorResponseDraft = draftService.abandon;
+const requireStructuredDraftAccess = async (input: VendorSubmissionDraftScope) => {
+  await questionnaireService.assertStructuredEnabled(input);
+};
+
+export const getPublicVendorResponseDraft: typeof draftService.get = async (...args) => {
+  await requireStructuredDraftAccess(args[0]);
+  return draftService.get(...args);
+};
+export const savePublicVendorResponseDraft: typeof draftService.save = async (input) => {
+  await requireStructuredDraftAccess(input);
+  return draftService.save(input);
+};
+export const uploadPublicVendorResponseDraftDocuments:
+  typeof draftService.uploadDocuments = async (input) => {
+    await requireStructuredDraftAccess(input);
+    return draftService.uploadDocuments(input);
+  };
+export const retirePublicVendorResponseDraftDocument:
+  typeof draftService.retireDocument = async (input) => {
+    await requireStructuredDraftAccess(input);
+    return draftService.retireDocument(input);
+  };
+export const abandonPublicVendorResponseDraft: typeof draftService.abandon = async (input) => {
+  await requireStructuredDraftAccess(input);
+  return draftService.abandon(input);
+};
 export const cleanupExpiredVendorResponseDrafts = draftService.cleanupExpired;
 
 export const listOwnedVendorResponses = createListOwnedVendorResponses(
@@ -146,7 +183,7 @@ export const finalizePublicVendorResponseDraft = async (
   },
 ) => {
   const workspace = await questionnaireService.workspace(input);
-  if (!workspace.access.canSubmit) {
+  if (!workspace.capabilities.structuredResponse || !workspace.access.canSubmit) {
     throw new VendorSubmissionFinalizationError(
       workspace.access.state === "expired" ? "DRAFT_EXPIRED" : "DRAFT_INACTIVE",
       workspace.access.state === "expired" ? 410 : 409,
