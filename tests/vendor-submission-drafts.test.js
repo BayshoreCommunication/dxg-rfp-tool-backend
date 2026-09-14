@@ -15,6 +15,7 @@ const {
   mongoVendorSubmissionDraftRepository,
 } = require("../src/modules/vendorResponses/infrastructure/mongo/mongoVendorSubmissionDraftRepository");
 const {
+  buildCompleteVendorResponse,
   buildVendorResponseQuestionnaire,
 } = require("./fixtures/vendorResponseV1");
 
@@ -38,6 +39,7 @@ const memoryRepository = () => {
   return {
     records,
     submittedDocumentIds,
+    revisionSeed: null,
     async findActive(input, now) {
       return records.find((record) =>
         sameScope(record, input)
@@ -58,7 +60,7 @@ const memoryRepository = () => {
         ...input,
         draftId: `507f1f77bcf86cd799439${nextId}`,
         submissionId: input.submissionId ?? null,
-        documents: [],
+        documents: input.documents ?? [],
         draftRevision: 1,
         status: "active",
         lastSavedAt: input.now.toISOString(),
@@ -71,6 +73,9 @@ const memoryRepository = () => {
     },
     async revisionSubmissionIsAuthorized(input) {
       return input.submissionId === "507f1f77bcf86cd799439099";
+    },
+    async loadRevisionSeed() {
+      return this.revisionSeed;
     },
     async updateActive(input) {
       const draft = records.find((record) =>
@@ -112,7 +117,9 @@ const memoryRepository = () => {
       if (draft && draft.status === "active" && new Date(draft.expiresAt) <= now) {
         draft.status = "abandoned";
         draft.abandonedAt = now.toISOString();
+        return true;
       }
+      return false;
     },
     async documentIsSubmitted(_organizationId, documentId) {
       return submittedDocumentIds.has(documentId);
@@ -470,6 +477,45 @@ test("workspace resumes the questionnaire snapshot pinned by its active draft", 
   assert.equal(hydrated.draft.documentManifest, undefined);
 });
 
+test("revision drafts seed the current structured version and inherited documents", async () => {
+  const harness = serviceHarness();
+  const questionnaire = buildVendorResponseQuestionnaire();
+  questionnaire.proposalId = scope.proposalId;
+  const response = buildCompleteVendorResponse(questionnaire);
+  harness.repository.revisionSeed = {
+    questionnaire,
+    response,
+    documents: [{
+      documentId: "document-dei-1",
+      sourceId: "source-dei-1",
+      purposeId: "dei-policy",
+      scopeType: "proposal",
+      name: "dei.pdf",
+      url: "rfpilot-private:private%2Fdei.pdf",
+      objectKey: "private/dei.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 100,
+      sha256: "a".repeat(64),
+      scanStatus: "clean",
+      inheritedFromVersionId: "507f1f77bcf86cd799439098",
+      status: "active",
+      uploadedAt: "2026-09-14T10:00:00.000Z",
+      retiredAt: null,
+      objectDeletedAt: null,
+    }],
+  };
+
+  const result = await harness.service.createOrResumeRevision({
+    ...scope,
+    submissionId: "507f1f77bcf86cd799439099",
+  });
+
+  assert.equal(result.created, true);
+  assert.equal(result.draft.response.identity.vendorName, "Example AV");
+  assert.equal(result.draft.documentManifest[0].disposition, "inherited");
+  assert.equal(JSON.stringify(result.draft).includes("objectKey"), false);
+});
+
 test("Mongo draft saves compare-and-swap within the full grant and tenant scope", async () => {
   const original = VendorSubmissionDraft.findOneAndUpdate;
   let capturedFilter;
@@ -506,26 +552,20 @@ test("Mongo draft saves compare-and-swap within the full grant and tenant scope"
   }
 });
 
-test("revision authorization is tenant scoped and bound to the grant subject", async () => {
+test("revision authorization is tenant scoped and bound to the original public grant", async () => {
   const original = VendorSubmission.findOne;
   let capturedFilter;
   VendorSubmission.findOne = (filter) => {
     capturedFilter = filter;
     return {
-      select: () => ({ lean: async () => ({ primaryEmail: "vendor@example.com" }) }),
+      select: () => ({ lean: async () => ({ _id: "507f1f77bcf86cd799439099" }) }),
     };
   };
 
   try {
-    const crypto = require("node:crypto");
-    const grantSubjectHash = crypto
-      .createHash("sha256")
-      .update("vendor@example.com")
-      .digest("hex");
     const authorized = await mongoVendorSubmissionDraftRepository
       .revisionSubmissionIsAuthorized({
         ...scope,
-        grantSubjectHash,
         submissionId: "507f1f77bcf86cd799439099",
       });
     assert.equal(authorized, true);
@@ -533,6 +573,7 @@ test("revision authorization is tenant scoped and bound to the grant subject", a
       _id: "507f1f77bcf86cd799439099",
       organizationId: scope.organizationId,
       proposalId: scope.proposalId,
+      publicGrantIds: scope.grantId,
     });
   } finally {
     VendorSubmission.findOne = original;

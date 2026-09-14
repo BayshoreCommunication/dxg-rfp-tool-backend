@@ -8,7 +8,9 @@ import VendorSubmissionVersion from "../../../../../modal/vendorSubmissionVersio
 import { spacesObjectKeyFromUrl } from "../../../../../utils/uploadToSpaces";
 import type {
   VendorDocument,
+  VendorRetiredDocument,
   VendorResponseRecord,
+  StructuredVendorSubmissionSnapshot,
   VendorSubmissionRepository,
   VendorSubmissionVersionRecord,
 } from "../../domain/ports/vendorSubmissionRepository";
@@ -35,6 +37,7 @@ export const vendorSubmissionManifestChecksum = (input: {
   email: string;
   message: string;
   documents: VendorDocument[];
+  structured?: StructuredVendorSubmissionSnapshot;
 }) =>
   checksum({
     proposalId: input.proposalId,
@@ -55,7 +58,31 @@ export const vendorSubmissionManifestChecksum = (input: {
       sha256: document.sha256,
       scanStatus: document.scanStatus,
       inheritedFromVersionId: document.inheritedFromVersionId ?? null,
+      ...(input.structured
+        ? {
+            purposeId: document.purposeId ?? null,
+            scopeType: document.scopeType ?? null,
+            scopeId: document.scopeId ?? null,
+            versionDisposition: document.versionDisposition ?? null,
+          }
+        : {}),
     })),
+    ...(input.structured
+      ? {
+          responseSchemaVersion: "vendor-response.v1",
+          questionnaire: {
+            questionnaireId: input.structured.questionnaire.questionnaireId,
+            questionnaireVersion:
+              input.structured.questionnaire.questionnaireVersion,
+            questionnaireChecksum:
+              input.structured.questionnaire.questionnaireChecksum,
+            proposalVersion: input.structured.questionnaire.proposalVersion,
+          },
+          structuredResponse: input.structured.response,
+          calculationSnapshot: input.structured.calculation,
+          retiredDocuments: input.structured.retiredDocuments,
+        }
+      : {}),
   });
 
 const documentRecord = (
@@ -97,6 +124,26 @@ const documentRecord = (
       record.scanStatus === "clean" || record.scanStatus === "skipped"
         ? record.scanStatus
         : "legacy_unknown",
+    purposeId:
+      typeof record.purposeId === "string" && record.purposeId
+        ? record.purposeId
+        : null,
+    scopeType:
+      record.scopeType === "proposal"
+      || record.scopeType === "room"
+      || record.scopeType === "crew_member"
+      || record.scopeType === "reference"
+        ? record.scopeType
+        : null,
+    scopeId:
+      typeof record.scopeId === "string" && record.scopeId
+        ? record.scopeId
+        : null,
+    versionDisposition:
+      record.versionDisposition === "added"
+      || record.versionDisposition === "inherited"
+        ? record.versionDisposition
+        : "legacy",
     inheritedFromVersionId:
       inheritedFromVersionId ??
       (typeof record.inheritedFromVersionId === "string"
@@ -109,6 +156,17 @@ const documentRecords = (value: unknown, inheritedFromVersionId?: string | null)
   (Array.isArray(value) ? value : []).flatMap((document) => {
     const mapped = documentRecord(document, inheritedFromVersionId);
     return mapped ? [mapped] : [];
+  });
+
+const retiredDocumentRecords = (value: unknown): VendorRetiredDocument[] =>
+  (Array.isArray(value) ? value : []).flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    if (!record.documentId || !record.retiredFromVersionId) return [];
+    return [{
+      documentId: String(record.documentId),
+      retiredFromVersionId: String(record.retiredFromVersionId),
+    }];
   });
 
 const responseRecord = async (responseId: string): Promise<VendorResponseRecord> => {
@@ -140,6 +198,24 @@ const toVersionRecord = (
   email: String(version.email),
   message: String(version.message || ""),
   documents: documentRecords(version.documents),
+  retiredDocuments: retiredDocumentRecords(version.retiredDocuments),
+  responseSchemaVersion: version.responseSchemaVersion === "vendor-response.v1"
+    ? "vendor-response.v1"
+    : null,
+  questionnaire: version.responseSchemaVersion === "vendor-response.v1"
+    ? {
+        questionnaireId: String(version.questionnaireId),
+        questionnaireVersion: Number(version.questionnaireVersion),
+        questionnaireChecksum: String(version.questionnaireChecksum),
+        proposalVersion: Number(version.proposalVersion),
+      }
+    : null,
+  questionnaireSnapshot: version.questionnaireSnapshot ?? null,
+  structuredResponse: version.structuredResponse ?? null,
+  calculationSnapshot: version.calculationSnapshot ?? null,
+  finalizedDraftId: version.finalizedDraftId
+    ? String(version.finalizedDraftId)
+    : null,
   response,
 });
 
@@ -152,10 +228,19 @@ const ensureSubmission = async (input: {
   vendorName: string;
   email: string;
   trackingId?: string | null;
+  publicGrantId?: string | null;
 }) => {
   if (input.response.submissionId) {
     const current = await VendorSubmission.findById(input.response.submissionId).lean<any>();
-    if (current) return current;
+    if (current) {
+      if (input.publicGrantId) {
+        await VendorSubmission.updateOne(
+          { _id: current._id },
+          { $addToSet: { publicGrantIds: input.publicGrantId } },
+        );
+      }
+      return current;
+    }
   }
   const key = identityKey(input.vendorName, input.email);
   let submission = await VendorSubmission.findOne({
@@ -180,6 +265,7 @@ const ensureSubmission = async (input: {
           vendorName: input.vendorName,
           primaryEmail: input.email,
           trackingIds: input.trackingId ? [input.trackingId] : [],
+          publicGrantIds: input.publicGrantId ? [input.publicGrantId] : [],
           legacyVendorResponseId: input.response._id,
           currentVersionNumber: 0,
           isRead: input.response.isRead === true,
@@ -199,6 +285,12 @@ const ensureSubmission = async (input: {
     { _id: input.response._id },
     { $set: { submissionId: submission._id } },
   );
+  if (input.publicGrantId) {
+    await VendorSubmission.updateOne(
+      { _id: submission._id },
+      { $addToSet: { publicGrantIds: input.publicGrantId } },
+    );
+  }
   return submission;
 };
 
@@ -377,6 +469,21 @@ export const mongoVendorSubmissionRepository: VendorSubmissionRepository & {
     );
   },
 
+  async findVersionByFinalizedDraft({ organizationId, draftId }) {
+    const version = await VendorSubmissionVersion.findOne({
+      organizationId: new mongoose.Types.ObjectId(organizationId),
+      finalizedDraftId: new mongoose.Types.ObjectId(draftId),
+    }).lean<any>();
+    if (!version) return null;
+    const submission = await VendorSubmission.findById(version.submissionId).lean<any>();
+    if (!submission) return null;
+    return toVersionRecord(
+      version,
+      submission,
+      await responseRecord(String(submission.legacyVendorResponseId)),
+    );
+  },
+
   async findProposal(proposalId) {
     const proposal = await Proposal.findById(proposalId)
       .select("_id organizationId userId event.eventName")
@@ -391,7 +498,23 @@ export const mongoVendorSubmissionRepository: VendorSubmissionRepository & {
   },
 
   async saveVersion(input) {
-    let legacy = input.existingResponse?._id
+    const selectedSubmission = input.submissionId
+      ? await VendorSubmission.findOne({
+          _id: input.submissionId,
+          organizationId: input.organizationId,
+          proposalId: input.proposalId,
+          status: "active",
+          ...(input.publicGrantId
+            ? { publicGrantIds: input.publicGrantId }
+            : {}),
+        }).lean<any>()
+      : null;
+    if (input.submissionId && !selectedSubmission) {
+      throw new Error("Structured revision submission is unavailable");
+    }
+    let legacy = selectedSubmission
+      ? await VendorResponse.findById(selectedSubmission.legacyVendorResponseId).lean<any>()
+      : input.existingResponse?._id
       ? await VendorResponse.findById(input.existingResponse._id).lean<any>()
       : null;
     if (!legacy) {
@@ -416,22 +539,51 @@ export const mongoVendorSubmissionRepository: VendorSubmissionRepository & {
         )
       ).toObject();
     }
-    const submission = await ensureSubmission({
-      response: legacy,
-      organizationId: input.organizationId,
-      proposalId: input.proposalId,
-      ownerUserId: input.ownerUserId,
-      proposalTitle: input.proposalTitle,
-      vendorName: input.vendorName,
-      email: input.email,
+    const submission = selectedSubmission ?? await ensureSubmission({
+        response: legacy,
+        organizationId: input.organizationId,
+        proposalId: input.proposalId,
+        ownerUserId: input.ownerUserId,
+        proposalTitle: input.proposalTitle,
+        vendorName: input.vendorName,
+        email: input.email,
       trackingId: input.trackingId,
+      publicGrantId: input.publicGrantId,
     });
+
+    const finalizedReplay = input.structured
+      ? await VendorSubmissionVersion.findOne({
+          organizationId: input.organizationId,
+          finalizedDraftId: input.structured.finalizedDraftId,
+        }).lean<any>()
+      : null;
+    if (finalizedReplay) {
+      const current = await projectLatest({
+        submission,
+        version: finalizedReplay,
+        trackingId: input.trackingId,
+      });
+      return {
+        record: toVersionRecord(
+          finalizedReplay,
+          current,
+          await responseRecord(String(current.legacyVendorResponseId)),
+        ),
+        created: false,
+      };
+    }
 
     const replay = await VendorSubmissionVersion.findOne({
       organizationId: input.organizationId,
       idempotencyKey: input.idempotencyKey,
     }).lean<any>();
     if (replay) {
+      if (
+        input.structured
+        && String(replay.finalizedDraftId ?? "") !== input.structured.finalizedDraftId
+      ) {
+        throw new Error("Submission idempotency key is already in use");
+      }
       const current = await projectLatest({
         submission,
         version: replay,
@@ -461,7 +613,9 @@ export const mongoVendorSubmissionRepository: VendorSubmissionRepository & {
       const inherited = parent
         ? documentRecords(parent.documents, String(parent._id))
         : documentRecords(legacy.documents);
-      const documents = [...inherited, ...input.newDocuments];
+      const documents = input.structured
+        ? documentRecords(input.newDocuments)
+        : [...inherited, ...input.newDocuments];
       const manifestChecksum = vendorSubmissionManifestChecksum({
         proposalId: input.proposalId,
         submissionId: String(current._id),
@@ -472,6 +626,7 @@ export const mongoVendorSubmissionRepository: VendorSubmissionRepository & {
         email: input.email,
         message: input.message,
         documents,
+        structured: input.structured,
       });
       try {
         const version = (
@@ -488,6 +643,24 @@ export const mongoVendorSubmissionRepository: VendorSubmissionRepository & {
             email: input.email,
             message: input.message,
             documents,
+            ...(input.structured
+              ? {
+                  retiredDocuments: input.structured.retiredDocuments,
+                  responseSchemaVersion: "vendor-response.v1",
+                  questionnaireId:
+                    input.structured.questionnaire.questionnaireId,
+                  questionnaireVersion:
+                    input.structured.questionnaire.questionnaireVersion,
+                  questionnaireChecksum:
+                    input.structured.questionnaire.questionnaireChecksum,
+                  proposalVersion:
+                    input.structured.questionnaire.proposalVersion,
+                  questionnaireSnapshot: input.structured.questionnaire,
+                  structuredResponse: input.structured.response,
+                  calculationSnapshot: input.structured.calculation,
+                  finalizedDraftId: input.structured.finalizedDraftId,
+                }
+              : {}),
             manifestChecksum,
             idempotencyKey: input.idempotencyKey,
             sourceSystem: input.sourceSystem,
@@ -511,9 +684,26 @@ export const mongoVendorSubmissionRepository: VendorSubmissionRepository & {
         if ((error as { code?: number }).code !== 11000) throw error;
         const duplicate = await VendorSubmissionVersion.findOne({
           organizationId: input.organizationId,
-          idempotencyKey: input.idempotencyKey,
+          ...(input.structured
+            ? {
+                $or: [
+                  { finalizedDraftId: input.structured.finalizedDraftId },
+                  { idempotencyKey: input.idempotencyKey },
+                ],
+              }
+            : { idempotencyKey: input.idempotencyKey }),
         }).lean<any>();
         if (duplicate) {
+          if (
+            input.structured
+            && String(duplicate.finalizedDraftId ?? "")
+              !== input.structured.finalizedDraftId
+          ) {
+            throw Object.assign(
+              new Error("Submission idempotency key is already in use"),
+              { cause: error },
+            );
+          }
           const projected = await projectLatest({
             submission: current,
             version: duplicate,
@@ -557,7 +747,24 @@ export const mongoVendorSubmissionRepository: VendorSubmissionRepository & {
       submittedBy: record.submittedBy,
       email: record.email,
       message: record.message,
-      documents: record.documents,
+      documents: record.documents.map((document) => ({
+        documentId: document.documentId,
+        sourceId: document.sourceId,
+        name: document.name,
+        mimeType: document.mimeType,
+        sizeBytes: document.sizeBytes,
+        sha256: document.sha256,
+        scanStatus: document.scanStatus,
+        purposeId: document.purposeId,
+        scopeType: document.scopeType,
+        scopeId: document.scopeId,
+        versionDisposition: document.versionDisposition,
+      })),
+      retiredDocuments: record.retiredDocuments,
+      responseSchemaVersion: record.responseSchemaVersion,
+      questionnaire: record.questionnaire,
+      calculationSnapshot: record.calculationSnapshot,
+      finalizedDraftId: record.finalizedDraftId,
     };
   },
 

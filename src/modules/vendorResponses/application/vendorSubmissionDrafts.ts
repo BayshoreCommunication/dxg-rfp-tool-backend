@@ -357,6 +357,63 @@ export const createVendorSubmissionDraftService = (dependencies: {
       return toVendorSubmissionDraftDetailDto(draft);
     },
 
+    async createOrResumeRevision(input: VendorSubmissionDraftScope & {
+      submissionId: string;
+    }): Promise<{ draft: VendorSubmissionDraftDetailDto; created: boolean }> {
+      const at = now();
+      const existing = await dependencies.repository.findActive(input, at);
+      if (existing) {
+        if (existing.submissionId !== input.submissionId) {
+          throw new VendorSubmissionDraftError(
+            "DRAFT_CONFLICT",
+            409,
+            "This invitation already has an active draft for a different submission context",
+            existing.draftRevision,
+          );
+        }
+        return {
+          draft: toVendorSubmissionDraftDetailDto(existing),
+          created: false,
+        };
+      }
+      const seed = await dependencies.repository.loadRevisionSeed(input);
+      if (
+        !seed
+        || validateVendorResponseQuestionnaire(seed.questionnaire).length > 0
+        || validateStructuredVendorResponse(
+          seed.questionnaire,
+          seed.response,
+          "draft",
+        ).length > 0
+      ) {
+        throw new VendorSubmissionDraftError(
+          "REVISION_NOT_AUTHORIZED",
+          404,
+          "Structured submission was not found for this invitation",
+        );
+      }
+      const result = await dependencies.repository.createActive({
+        ...input,
+        questionnaire: structuredClone(seed.questionnaire),
+        response: structuredClone(seed.response),
+        documents: structuredClone(seed.documents),
+        now: at,
+        expiresAt: vendorDraftExpiresAt(at, retentionDays),
+      });
+      if (result.draft.submissionId !== input.submissionId) {
+        throw new VendorSubmissionDraftError(
+          "DRAFT_CONFLICT",
+          409,
+          "This invitation already has an active draft for a different submission context",
+          result.draft.draftRevision,
+        );
+      }
+      return {
+        draft: toVendorSubmissionDraftDetailDto(result.draft),
+        created: result.created,
+      };
+    },
+
     async save(input: VendorSubmissionDraftScope & {
       draftId: string;
       expectedRevision: number;
@@ -703,7 +760,11 @@ export const createVendorSubmissionDraftService = (dependencies: {
       let failedDocuments = 0;
       for (const draft of drafts) {
         if (draft.status === "active") {
-          await dependencies.repository.markExpiredAbandoned(draft.draftId, at);
+          const abandoned = await dependencies.repository.markExpiredAbandoned(
+            draft.draftId,
+            at,
+          );
+          if (!abandoned) continue;
         }
         const result = await cleanupDraft(draft, at);
         deletedDocuments += result.deleted;

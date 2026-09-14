@@ -15,6 +15,7 @@ type VendorDraftDocument = {
   sizeBytes: number;
   sha256: string;
   scanStatus: "clean" | "skipped";
+  inheritedFromVersionId?: mongoose.Types.ObjectId | null;
   status: "active" | "retired";
   uploadedAt: Date;
   retiredAt?: Date | null;
@@ -40,6 +41,10 @@ export interface IVendorSubmissionDraft extends Document {
   expiresAt: Date;
   abandonedAt?: Date | null;
   cleanupCompletedAt?: Date | null;
+  finalizationKeyHash?: string | null;
+  finalizationStartedAt?: Date | null;
+  submittedVersionId?: mongoose.Types.ObjectId | null;
+  submittedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -71,6 +76,11 @@ const draftDocumentSchema = new Schema<VendorDraftDocument>(
     sizeBytes: { type: Number, required: true, min: 1 },
     sha256: checksum,
     scanStatus: { type: String, enum: ["clean", "skipped"], required: true },
+    inheritedFromVersionId: {
+      type: Schema.Types.ObjectId,
+      ref: "VendorSubmissionVersion",
+      default: null,
+    },
     status: { type: String, enum: ["active", "retired"], required: true },
     uploadedAt: { type: Date, required: true },
     retiredAt: { type: Date, default: null },
@@ -136,6 +146,22 @@ const vendorSubmissionDraftSchema = new Schema<IVendorSubmissionDraft>(
     expiresAt: { type: Date, required: true, index: true },
     abandonedAt: { type: Date, default: null },
     cleanupCompletedAt: { type: Date, default: null },
+    finalizationKeyHash: {
+      type: String,
+      default: null,
+      validate: {
+        validator: (value: string | null) =>
+          value === null || /^[0-9a-f]{64}$/.test(value),
+        message: "Finalization key hash must be SHA-256",
+      },
+    },
+    finalizationStartedAt: { type: Date, default: null },
+    submittedVersionId: {
+      type: Schema.Types.ObjectId,
+      ref: "VendorSubmissionVersion",
+      default: null,
+    },
+    submittedAt: { type: Date, default: null },
   },
   { timestamps: true },
 );
@@ -146,6 +172,7 @@ vendorSubmissionDraftSchema.index(
 );
 vendorSubmissionDraftSchema.index({ status: 1, expiresAt: 1, cleanupCompletedAt: 1 });
 vendorSubmissionDraftSchema.index({ submissionId: 1 }, { sparse: true });
+vendorSubmissionDraftSchema.index({ submittedVersionId: 1 }, { sparse: true });
 
 const pinnedFields = new Set([
   "organizationId",

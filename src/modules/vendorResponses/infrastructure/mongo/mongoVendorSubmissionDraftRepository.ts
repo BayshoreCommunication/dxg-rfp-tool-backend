@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import VendorSubmission from "../../../../../modal/vendorSubmissionModel";
 import VendorSubmissionDraft from "../../../../../modal/vendorSubmissionDraftModel";
 import VendorSubmissionVersion from "../../../../../modal/vendorSubmissionVersionModel";
@@ -27,6 +26,10 @@ type DraftRow = {
   expiresAt: Date | string;
   abandonedAt?: Date | string | null;
   cleanupCompletedAt?: Date | string | null;
+  finalizationKeyHash?: string | null;
+  finalizationStartedAt?: Date | string | null;
+  submittedVersionId?: unknown;
+  submittedAt?: Date | string | null;
 };
 
 const iso = (value: Date | string): string => new Date(value).toISOString();
@@ -49,6 +52,9 @@ const mapDocument = (value: Record<string, unknown>): VendorDraftDocument => ({
   sizeBytes: Number(value.sizeBytes),
   sha256: String(value.sha256),
   scanStatus: value.scanStatus as VendorDraftDocument["scanStatus"],
+  inheritedFromVersionId: value.inheritedFromVersionId
+    ? String(value.inheritedFromVersionId)
+    : null,
   status: value.status as VendorDraftDocument["status"],
   uploadedAt: iso(value.uploadedAt as Date | string),
   retiredAt: optionalIso(value.retiredAt as Date | string | null | undefined),
@@ -73,6 +79,12 @@ const toRecord = (row: DraftRow): VendorSubmissionDraftRecord => ({
   expiresAt: iso(row.expiresAt),
   abandonedAt: optionalIso(row.abandonedAt),
   cleanupCompletedAt: optionalIso(row.cleanupCompletedAt),
+  finalizationKeyHash: row.finalizationKeyHash ?? null,
+  finalizationStartedAt: optionalIso(row.finalizationStartedAt),
+  submittedVersionId: row.submittedVersionId
+    ? String(row.submittedVersionId)
+    : null,
+  submittedAt: optionalIso(row.submittedAt),
 });
 
 const scopeFilter = (scope: VendorSubmissionDraftScope) => ({
@@ -84,9 +96,6 @@ const scopeFilter = (scope: VendorSubmissionDraftScope) => ({
 
 const duplicateKey = (error: unknown): boolean =>
   (error as { code?: number } | null)?.code === 11000;
-
-const recipientHash = (email: string): string =>
-  crypto.createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
 
 export const mongoVendorSubmissionDraftRepository: VendorSubmissionDraftRepository = {
   async findActive(scope, now) {
@@ -130,7 +139,7 @@ export const mongoVendorSubmissionDraftRepository: VendorSubmissionDraftReposito
         proposalVersion: input.questionnaire.proposalVersion,
         questionnaire: input.questionnaire,
         response: input.response,
-        documents: [],
+        documents: input.documents ?? [],
         draftRevision: 1,
         status: "active",
         lastSavedAt: input.now,
@@ -153,13 +162,53 @@ export const mongoVendorSubmissionDraftRepository: VendorSubmissionDraftReposito
       _id: input.submissionId,
       organizationId: input.organizationId,
       proposalId: input.proposalId,
+      publicGrantIds: input.grantId,
     })
-      .select("primaryEmail")
-      .lean<{ primaryEmail?: string }>();
-    return Boolean(
-      submission?.primaryEmail
-      && recipientHash(submission.primaryEmail) === input.grantSubjectHash,
-    );
+      .select("_id")
+      .lean<{ _id?: unknown }>();
+    return Boolean(submission?._id);
+  },
+
+  async loadRevisionSeed(input) {
+    const submission = await VendorSubmission.findOne({
+      _id: input.submissionId,
+      organizationId: input.organizationId,
+      proposalId: input.proposalId,
+      status: "active",
+      publicGrantIds: input.grantId,
+    })
+      .select("currentVersionId")
+      .lean<{ currentVersionId?: unknown }>();
+    if (
+      !submission?.currentVersionId
+    ) return null;
+    const version = await VendorSubmissionVersion.findOne({
+      _id: submission.currentVersionId,
+      organizationId: input.organizationId,
+      proposalId: input.proposalId,
+      submissionId: input.submissionId,
+      responseSchemaVersion: "vendor-response.v1",
+    }).lean<Record<string, unknown>>();
+    if (
+      !version?.questionnaireSnapshot
+      || !version.structuredResponse
+      || !Array.isArray(version.documents)
+    ) return null;
+    const uploadedAt = iso(version.receivedAt as Date | string);
+    return {
+      questionnaire: version.questionnaireSnapshot as VendorResponseQuestionnaireV1,
+      response: version.structuredResponse as VendorResponseV1,
+      documents: (version.documents as Array<Record<string, unknown>>).map(
+        (document) => mapDocument({
+          ...document,
+          inheritedFromVersionId: version._id,
+          status: "active",
+          uploadedAt,
+          retiredAt: null,
+          objectDeletedAt: null,
+        }),
+      ),
+    };
   },
 
   async updateActive(input) {
@@ -170,6 +219,7 @@ export const mongoVendorSubmissionDraftRepository: VendorSubmissionDraftReposito
         status: "active",
         draftRevision: input.expectedRevision,
         expiresAt: { $gt: input.now },
+        finalizationKeyHash: null,
       },
       {
         $set: {
@@ -192,11 +242,77 @@ export const mongoVendorSubmissionDraftRepository: VendorSubmissionDraftReposito
         ...scopeFilter(input),
         status: "active",
         draftRevision: input.expectedRevision,
+        finalizationKeyHash: null,
       },
       {
         $set: {
           status: "abandoned",
           abandonedAt: input.now,
+          lastSavedAt: input.now,
+        },
+        $inc: { draftRevision: 1 },
+      },
+      { new: true, runValidators: true },
+    ).lean<DraftRow>();
+    return row ? toRecord(row) : null;
+  },
+
+  async claimFinalization(input) {
+    const row = await VendorSubmissionDraft.findOneAndUpdate(
+      {
+        _id: input.draftId,
+        ...scopeFilter(input),
+        status: "active",
+        draftRevision: input.expectedRevision,
+        expiresAt: { $gt: input.now },
+        $or: [
+          { finalizationKeyHash: null },
+          { finalizationKeyHash: input.finalizationKeyHash },
+        ],
+      },
+      {
+        $set: {
+          finalizationKeyHash: input.finalizationKeyHash,
+          finalizationStartedAt: input.now,
+        },
+      },
+      { new: true, runValidators: true },
+    ).lean<DraftRow>();
+    return row ? toRecord(row) : null;
+  },
+
+  async releaseFinalization(input) {
+    await VendorSubmissionDraft.updateOne(
+      {
+        _id: input.draftId,
+        ...scopeFilter(input),
+        status: "active",
+        draftRevision: input.expectedRevision,
+        finalizationKeyHash: input.finalizationKeyHash,
+      },
+      {
+        $set: {
+          finalizationKeyHash: null,
+          finalizationStartedAt: null,
+        },
+      },
+    );
+  },
+
+  async completeFinalization(input) {
+    const row = await VendorSubmissionDraft.findOneAndUpdate(
+      {
+        _id: input.draftId,
+        ...scopeFilter(input),
+        status: "active",
+        draftRevision: input.expectedRevision,
+        finalizationKeyHash: input.finalizationKeyHash,
+      },
+      {
+        $set: {
+          status: "submitted",
+          submittedVersionId: input.submittedVersionId,
+          submittedAt: input.now,
           lastSavedAt: input.now,
         },
         $inc: { draftRevision: 1 },
@@ -221,10 +337,20 @@ export const mongoVendorSubmissionDraftRepository: VendorSubmissionDraftReposito
   },
 
   async markExpiredAbandoned(draftId, now) {
-    await VendorSubmissionDraft.updateOne(
-      { _id: draftId, status: "active", expiresAt: { $lte: now } },
+    const staleLock = new Date(now.getTime() - 60 * 60 * 1000);
+    const result = await VendorSubmissionDraft.updateOne(
+      {
+        _id: draftId,
+        status: "active",
+        expiresAt: { $lte: now },
+        $or: [
+          { finalizationKeyHash: null },
+          { finalizationStartedAt: { $lte: staleLock } },
+        ],
+      },
       { $set: { status: "abandoned", abandonedAt: now } },
     );
+    return result.modifiedCount === 1;
   },
 
   async documentIsSubmitted(organizationId, documentId) {

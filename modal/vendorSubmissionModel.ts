@@ -11,6 +11,7 @@ export interface IVendorSubmission extends Document {
   vendorName: string;
   primaryEmail: string;
   trackingIds: string[];
+  publicGrantIds: mongoose.Types.ObjectId[];
   legacyVendorResponseId: mongoose.Types.ObjectId;
   currentVersionId?: mongoose.Types.ObjectId | null;
   currentVersionNumber: number;
@@ -46,6 +47,10 @@ const vendorSubmissionSchema = new Schema<IVendorSubmission>(
     vendorName: { type: String, required: true, trim: true },
     primaryEmail: { type: String, required: true, trim: true, lowercase: true },
     trackingIds: { type: [String], default: [] },
+    publicGrantIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "PublicAccessGrant" }],
+      default: [],
+    },
     legacyVendorResponseId: {
       type: Schema.Types.ObjectId,
       ref: "VendorResponse",
@@ -76,6 +81,7 @@ vendorSubmissionSchema.index(
 );
 vendorSubmissionSchema.index({ proposalId: 1, primaryEmail: 1 });
 vendorSubmissionSchema.index({ trackingIds: 1 }, { sparse: true });
+vendorSubmissionSchema.index({ publicGrantIds: 1 }, { sparse: true });
 vendorSubmissionSchema.index({ proposalOwnerId: 1, lastSubmittedAt: -1 });
 
 const VendorSubmission = mongoose.model<IVendorSubmission>(

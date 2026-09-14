@@ -27,6 +27,10 @@ import {
 } from "./application/vendorSubmissionDrafts";
 import { mongoVendorSubmissionDraftRepository } from "./infrastructure/mongo/mongoVendorSubmissionDraftRepository";
 import type { VendorSubmissionDraftScope } from "./domain/draft";
+import {
+  createFinalizeVendorSubmissionDraft,
+  VendorSubmissionFinalizationError,
+} from "./application/finalizeVendorSubmissionDraft";
 
 const questionnaireService = createVendorResponseQuestionnaireService(
   mongoVendorResponseQuestionnaireRepository,
@@ -74,6 +78,20 @@ export const createOrResumePublicVendorResponseDraft = async (
   });
 };
 
+export const createOrResumePublicVendorResponseRevisionDraft = async (
+  input: DraftGrantInput & { submissionId: string },
+) => {
+  const workspace = await questionnaireService.workspace(input);
+  if (!workspace.access.canEdit) {
+    throw new VendorSubmissionDraftError(
+      "DRAFT_INACTIVE",
+      409,
+      workspace.access.message ?? "This proposal is not accepting draft changes",
+    );
+  }
+  return draftService.createOrResumeRevision(input);
+};
+
 export const getPublicVendorResponseDraft = draftService.get;
 export const savePublicVendorResponseDraft = draftService.save;
 export const uploadPublicVendorResponseDraftDocuments = draftService.uploadDocuments;
@@ -111,6 +129,32 @@ const submitVendorResponseVersion = createSubmitVendorResponse({
   folderName: process.env.DO_FOLDER_NAME || "rfp-tool",
   malwareScan: vendorUploadMalwareScan,
 });
+
+const finalizeVendorResponseDraft = createFinalizeVendorSubmissionDraft({
+  draftRepository: mongoVendorSubmissionDraftRepository,
+  submissionRepository: mongoVendorSubmissionRepository,
+  notifier: vendorResponseNotificationAdapter,
+  confirmation: vendorConfirmationEmailAdapter,
+  sourceRegistry: postgresVendorSubmissionSourceRegistry,
+});
+
+export const finalizePublicVendorResponseDraft = async (
+  input: DraftGrantInput & {
+    draftId: string;
+    expectedRevision: number;
+    idempotencyKey?: unknown;
+  },
+) => {
+  const workspace = await questionnaireService.workspace(input);
+  if (!workspace.access.canSubmit) {
+    throw new VendorSubmissionFinalizationError(
+      workspace.access.state === "expired" ? "DRAFT_EXPIRED" : "DRAFT_INACTIVE",
+      workspace.access.state === "expired" ? 410 : 409,
+      workspace.access.message ?? "This proposal is not accepting responses",
+    );
+  }
+  return finalizeVendorResponseDraft(input);
+};
 
 type SubmitInput = Parameters<typeof submitVendorResponseVersion>[0];
 

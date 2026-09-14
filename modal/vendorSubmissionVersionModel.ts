@@ -1,4 +1,7 @@
 import mongoose, { Schema, type Document } from "mongoose";
+import type { VendorResponseCalculationV1 } from "../contracts/generated/vendor-response-calculation-v1";
+import type { VendorResponseQuestionnaireV1 } from "../contracts/generated/vendor-response-questionnaire-v1";
+import type { VendorResponseV1 } from "../contracts/generated/vendor-response-v1";
 
 export type VendorSubmissionVersionReason =
   | "initial"
@@ -18,7 +21,16 @@ export type VendorSubmissionDocument = {
   sizeBytes: number | null;
   sha256: string | null;
   scanStatus: "clean" | "skipped" | "legacy_unknown";
+  purposeId?: string | null;
+  scopeType?: "proposal" | "room" | "crew_member" | "reference" | null;
+  scopeId?: string | null;
+  versionDisposition?: "added" | "inherited" | "legacy";
   inheritedFromVersionId?: mongoose.Types.ObjectId | null;
+};
+
+export type VendorSubmissionRetiredDocument = {
+  documentId: string;
+  retiredFromVersionId: mongoose.Types.ObjectId;
 };
 
 export interface IVendorSubmissionVersion extends Document {
@@ -34,6 +46,16 @@ export interface IVendorSubmissionVersion extends Document {
   email: string;
   message: string;
   documents: VendorSubmissionDocument[];
+  retiredDocuments: VendorSubmissionRetiredDocument[];
+  responseSchemaVersion?: "vendor-response.v1" | null;
+  questionnaireId?: string | null;
+  questionnaireVersion?: number | null;
+  questionnaireChecksum?: string | null;
+  proposalVersion?: number | null;
+  questionnaireSnapshot?: VendorResponseQuestionnaireV1 | null;
+  structuredResponse?: VendorResponseV1 | null;
+  calculationSnapshot?: VendorResponseCalculationV1 | null;
+  finalizedDraftId?: mongoose.Types.ObjectId | null;
   manifestChecksum: string;
   idempotencyKey: string;
   sourceSystem: "public_portal" | "planner_upload" | "legacy_migration" | "api";
@@ -64,6 +86,18 @@ const vendorSubmissionDocumentSchema = new Schema<VendorSubmissionDocument>(
       enum: ["clean", "skipped", "legacy_unknown"],
       required: true,
     },
+    purposeId: { type: String, trim: true, default: null },
+    scopeType: {
+      type: String,
+      enum: ["proposal", "room", "crew_member", "reference", null],
+      default: null,
+    },
+    scopeId: { type: String, trim: true, default: null },
+    versionDisposition: {
+      type: String,
+      enum: ["added", "inherited", "legacy"],
+      default: "legacy",
+    },
     inheritedFromVersionId: {
       type: Schema.Types.ObjectId,
       ref: "VendorSubmissionVersion",
@@ -72,6 +106,28 @@ const vendorSubmissionDocumentSchema = new Schema<VendorSubmissionDocument>(
   },
   { _id: false },
 );
+
+const retiredDocumentSchema = new Schema<VendorSubmissionRetiredDocument>(
+  {
+    documentId: { type: String, required: true },
+    retiredFromVersionId: {
+      type: Schema.Types.ObjectId,
+      ref: "VendorSubmissionVersion",
+      required: true,
+    },
+  },
+  { _id: false },
+);
+
+const nullableChecksum = {
+  type: String,
+  default: null,
+  validate: {
+    validator: (value: string | null) =>
+      value === null || /^[0-9a-f]{64}$/.test(value),
+    message: "Questionnaire checksum must be SHA-256",
+  },
+} as const;
 
 const vendorSubmissionVersionSchema = new Schema<IVendorSubmissionVersion>(
   {
@@ -122,6 +178,24 @@ const vendorSubmissionVersionSchema = new Schema<IVendorSubmissionVersion>(
     email: { type: String, required: true, trim: true, lowercase: true },
     message: { type: String, trim: true, default: "" },
     documents: { type: [vendorSubmissionDocumentSchema], default: [] },
+    retiredDocuments: { type: [retiredDocumentSchema], default: [] },
+    responseSchemaVersion: {
+      type: String,
+      enum: ["vendor-response.v1", null],
+      default: null,
+    },
+    questionnaireId: { type: String, trim: true, default: null },
+    questionnaireVersion: { type: Number, min: 1, default: null },
+    questionnaireChecksum: nullableChecksum,
+    proposalVersion: { type: Number, min: 1, default: null },
+    questionnaireSnapshot: { type: Schema.Types.Mixed, default: null },
+    structuredResponse: { type: Schema.Types.Mixed, default: null },
+    calculationSnapshot: { type: Schema.Types.Mixed, default: null },
+    finalizedDraftId: {
+      type: Schema.Types.ObjectId,
+      ref: "VendorSubmissionDraft",
+      default: undefined,
+    },
     manifestChecksum: {
       type: String,
       required: true,
@@ -150,6 +224,10 @@ vendorSubmissionVersionSchema.index(
   { unique: true },
 );
 vendorSubmissionVersionSchema.index({ proposalId: 1, receivedAt: -1 });
+vendorSubmissionVersionSchema.index(
+  { finalizedDraftId: 1 },
+  { unique: true, sparse: true },
+);
 
 vendorSubmissionVersionSchema.pre("save", function rejectExistingVersionSave() {
   if (!this.isNew) {
