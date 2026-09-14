@@ -21,12 +21,65 @@ import { vendorConfirmationEmailAdapter } from "./infrastructure/email/vendorCon
 import { postgresVendorSubmissionSourceRegistry } from "./infrastructure/postgres/postgresVendorSubmissionSourceRegistry";
 import { createVendorResponseQuestionnaireService } from "./application/vendorResponseWorkspace";
 import { mongoVendorResponseQuestionnaireRepository } from "./infrastructure/mongo/mongoVendorResponseQuestionnaireRepository";
+import {
+  createVendorSubmissionDraftService,
+  VendorSubmissionDraftError,
+} from "./application/vendorSubmissionDrafts";
+import { mongoVendorSubmissionDraftRepository } from "./infrastructure/mongo/mongoVendorSubmissionDraftRepository";
+import type { VendorSubmissionDraftScope } from "./domain/draft";
 
 const questionnaireService = createVendorResponseQuestionnaireService(
   mongoVendorResponseQuestionnaireRepository,
 );
-export const getPublicVendorResponseWorkspace = questionnaireService.workspace;
 export const publishVendorResponseQuestionnaire = questionnaireService.publish;
+
+const configuredDraftRetentionDays = Number.parseInt(
+  process.env.VENDOR_DRAFT_RETENTION_DAYS ?? "",
+  10,
+);
+const draftService = createVendorSubmissionDraftService({
+  repository: mongoVendorSubmissionDraftRepository,
+  storage: spacesVendorDocumentStorage,
+  malwareScan: vendorUploadMalwareScan,
+  folderName: process.env.DO_FOLDER_NAME || "rfp-tool",
+  retentionDays: Number.isFinite(configuredDraftRetentionDays)
+    ? configuredDraftRetentionDays
+    : undefined,
+});
+
+type DraftGrantInput = VendorSubmissionDraftScope & { grantActorId: string };
+
+export const getPublicVendorResponseWorkspace = async (
+  input: DraftGrantInput,
+) => draftService.hydrateWorkspace(
+  await questionnaireService.workspace(input),
+  input,
+);
+
+export const createOrResumePublicVendorResponseDraft = async (
+  input: DraftGrantInput & { submissionId?: string | null },
+) => {
+  const workspace = await questionnaireService.workspace(input);
+  if (!workspace.access.canEdit) {
+    throw new VendorSubmissionDraftError(
+      "DRAFT_INACTIVE",
+      409,
+      workspace.access.message ?? "This proposal is not accepting draft changes",
+    );
+  }
+  return draftService.createOrResume({
+    ...input,
+    submissionId: input.submissionId,
+    questionnaire: workspace.questionnaire,
+  });
+};
+
+export const getPublicVendorResponseDraft = draftService.get;
+export const savePublicVendorResponseDraft = draftService.save;
+export const uploadPublicVendorResponseDraftDocuments = draftService.uploadDocuments;
+export const retirePublicVendorResponseDraftDocument = draftService.retireDocument;
+export const abandonPublicVendorResponseDraft = draftService.abandon;
+export const cleanupExpiredVendorResponseDrafts = draftService.cleanupExpired;
 
 export const listOwnedVendorResponses = createListOwnedVendorResponses(
   mongoVendorResponseReadRepository,

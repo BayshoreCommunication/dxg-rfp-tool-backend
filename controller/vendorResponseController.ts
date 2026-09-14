@@ -13,8 +13,19 @@ import {
   submitPublicVendorResponse,
   getPublicVendorResponseWorkspace,
   publishVendorResponseQuestionnaire,
+  abandonPublicVendorResponseDraft,
+  createOrResumePublicVendorResponseDraft,
+  getPublicVendorResponseDraft,
+  retirePublicVendorResponseDraftDocument,
+  savePublicVendorResponseDraft,
+  uploadPublicVendorResponseDraftDocuments,
 } from "../src/modules/vendorResponses/composition";
 import { VendorResponseWorkspaceError } from "../src/modules/vendorResponses/application/vendorResponseWorkspace";
+import { VendorSubmissionDraftError } from "../src/modules/vendorResponses/application/vendorSubmissionDrafts";
+import type {
+  VendorDraftDocumentScopeType,
+  VendorSubmissionDraftScope,
+} from "../src/modules/vendorResponses/domain/draft";
 
 const sendWorkspaceError = (
   res: Response,
@@ -30,6 +41,79 @@ const sendWorkspaceError = (
     return;
   }
   res.status(500).json({ success: false, message: fallback });
+};
+
+const sendDraftError = (
+  res: Response,
+  error: unknown,
+  fallback: string,
+): void => {
+  if (error instanceof VendorSubmissionDraftError) {
+    res.status(error.status).json({
+      success: false,
+      code: error.code.toLowerCase(),
+      message: error.message,
+      ...(error.latestDraftRevision === undefined
+        ? {}
+        : { latestDraftRevision: error.latestDraftRevision }),
+      ...(error.issues ? { errors: error.issues } : {}),
+    });
+    return;
+  }
+  sendWorkspaceError(res, error, fallback);
+};
+
+const proposalIdFrom = (req: Request): string => {
+  if (typeof req.query.proposalId === "string") return req.query.proposalId;
+  if (typeof req.body?.proposalId === "string") return req.body.proposalId;
+  return "";
+};
+
+const draftRevisionFrom = (req: Request): number | null => {
+  const value = req.body?.draftRevision ?? req.query.draftRevision;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : null;
+};
+
+const draftScopeFrom = (
+  req: PublicGrantRequest,
+  proposalId: string,
+): VendorSubmissionDraftScope | null => {
+  const grant = req.publicGrant;
+  if (
+    !grant
+    || grant.purpose !== "vendor:submit"
+    || grant.resourceId !== proposalId
+    || !mongoose.isValidObjectId(grant.id)
+    || typeof grant.recipientHash !== "string"
+    || !/^[0-9a-f]{64}$/.test(grant.recipientHash)
+  ) return null;
+  return {
+    organizationId: grant.organizationId,
+    proposalId,
+    grantId: grant.id,
+    grantSubjectHash: grant.recipientHash,
+  };
+};
+
+const validDraftRequest = (
+  req: PublicGrantRequest,
+  res: Response,
+): VendorSubmissionDraftScope | null => {
+  const proposalId = proposalIdFrom(req);
+  if (!mongoose.isValidObjectId(proposalId)) {
+    res.status(400).json({ success: false, message: "Valid proposal id is required." });
+    return null;
+  }
+  const scope = draftScopeFrom(req, proposalId);
+  if (!scope) {
+    res.status(403).json({
+      success: false,
+      message: "Vendor draft access is unavailable.",
+    });
+    return null;
+  }
+  return scope;
 };
 
 export const getVendorResponseWorkspace = async (
@@ -53,10 +137,180 @@ export const getVendorResponseWorkspace = async (
       organizationId: grant.organizationId,
       proposalId,
       grantActorId: grant.createdByUserId,
+      grantId: grant.id,
+      grantSubjectHash: grant.recipientHash ?? "",
     });
     res.status(200).json({ success: true, data: workspace });
   } catch (error) {
     sendWorkspaceError(res, error, "Vendor workspace is temporarily unavailable.");
+  }
+};
+
+export const createVendorResponseDraft = async (
+  req: PublicGrantRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const scope = validDraftRequest(req, res);
+    if (!scope || !req.publicGrant) return;
+    const result = await createOrResumePublicVendorResponseDraft({
+      ...scope,
+      grantActorId: req.publicGrant.createdByUserId,
+    });
+    res.status(result.created ? 201 : 200).json({
+      success: true,
+      created: result.created,
+      data: result.draft,
+    });
+  } catch (error) {
+    sendDraftError(res, error, "Vendor response draft could not be created.");
+  }
+};
+
+export const getVendorResponseDraft = async (
+  req: PublicGrantRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const scope = validDraftRequest(req, res);
+    if (!scope) return;
+    if (!mongoose.isValidObjectId(req.params.draftId)) {
+      res.status(400).json({ success: false, message: "Valid draft id is required." });
+      return;
+    }
+    const draft = await getPublicVendorResponseDraft(scope, req.params.draftId);
+    res.status(200).json({ success: true, data: draft });
+  } catch (error) {
+    sendDraftError(res, error, "Vendor response draft could not be loaded.");
+  }
+};
+
+export const saveVendorResponseDraft = async (
+  req: PublicGrantRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const scope = validDraftRequest(req, res);
+    if (!scope) return;
+    const draftRevision = draftRevisionFrom(req);
+    if (!mongoose.isValidObjectId(req.params.draftId) || draftRevision === null) {
+      res.status(400).json({
+        success: false,
+        message: "Valid draft id and draft revision are required.",
+      });
+      return;
+    }
+    const draft = await savePublicVendorResponseDraft({
+      ...scope,
+      draftId: req.params.draftId,
+      expectedRevision: draftRevision,
+      response: req.body?.response,
+    });
+    res.status(200).json({ success: true, data: draft });
+  } catch (error) {
+    sendDraftError(res, error, "Vendor response draft could not be saved.");
+  }
+};
+
+const documentScopeTypes = new Set<VendorDraftDocumentScopeType>([
+  "proposal",
+  "room",
+  "crew_member",
+  "reference",
+]);
+
+export const uploadVendorResponseDraftDocuments = async (
+  req: PublicGrantRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const scope = validDraftRequest(req, res);
+    if (!scope) return;
+    const draftRevision = draftRevisionFrom(req);
+    const purposeId = typeof req.body?.purposeId === "string"
+      ? req.body.purposeId.trim()
+      : "";
+    const scopeType = req.body?.scopeType as VendorDraftDocumentScopeType;
+    const scopeId = typeof req.body?.scopeId === "string" && req.body.scopeId.trim()
+      ? req.body.scopeId.trim()
+      : undefined;
+    if (
+      !mongoose.isValidObjectId(req.params.draftId)
+      || draftRevision === null
+      || !purposeId
+      || !documentScopeTypes.has(scopeType)
+    ) {
+      res.status(400).json({
+        success: false,
+        message: "Valid draft revision, document purpose, and scope are required.",
+      });
+      return;
+    }
+    const result = await uploadPublicVendorResponseDraftDocuments({
+      ...scope,
+      draftId: req.params.draftId,
+      expectedRevision: draftRevision,
+      purposeId,
+      scopeType,
+      scopeId,
+      files: uploadedVendorDocuments(req),
+    });
+    res.status(201).json({ success: true, data: result });
+  } catch (error) {
+    sendDraftError(res, error, "Vendor response documents could not be uploaded.");
+  }
+};
+
+export const retireVendorResponseDraftDocument = async (
+  req: PublicGrantRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const scope = validDraftRequest(req, res);
+    if (!scope) return;
+    const draftRevision = draftRevisionFrom(req);
+    if (!mongoose.isValidObjectId(req.params.draftId) || draftRevision === null) {
+      res.status(400).json({
+        success: false,
+        message: "Valid draft id and draft revision are required.",
+      });
+      return;
+    }
+    const draft = await retirePublicVendorResponseDraftDocument({
+      ...scope,
+      draftId: req.params.draftId,
+      documentId: req.params.documentId,
+      expectedRevision: draftRevision,
+    });
+    res.status(200).json({ success: true, data: draft });
+  } catch (error) {
+    sendDraftError(res, error, "Vendor response document could not be retired.");
+  }
+};
+
+export const abandonVendorResponseDraft = async (
+  req: PublicGrantRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const scope = validDraftRequest(req, res);
+    if (!scope) return;
+    const draftRevision = draftRevisionFrom(req);
+    if (!mongoose.isValidObjectId(req.params.draftId) || draftRevision === null) {
+      res.status(400).json({
+        success: false,
+        message: "Valid draft id and draft revision are required.",
+      });
+      return;
+    }
+    const draft = await abandonPublicVendorResponseDraft({
+      ...scope,
+      draftId: req.params.draftId,
+      expectedRevision: draftRevision,
+    });
+    res.status(200).json({ success: true, data: draft });
+  } catch (error) {
+    sendDraftError(res, error, "Vendor response draft could not be abandoned.");
   }
 };
 

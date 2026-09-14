@@ -162,6 +162,26 @@ the public-access boundary before the workspace service runs. Authenticated
 proposal owners can explicitly publish through `POST
 /api/vendor-responses/questionnaires/publish`.
 
+### Vendor response draft lifecycle (Task 3, 2026-09-14)
+
+Structured vendor responses now have one active MongoDB draft per tenant,
+proposal, and durable invitation ID. Drafts pin the exact questionnaire
+snapshot and grant-subject hash, accept contract-shaped partial responses, and
+use `draftRevision` compare-and-swap for every response or document mutation.
+The public DTO exposes only the response and safe document metadata; raw grants,
+private URLs, object keys, and payload values are excluded from telemetry.
+
+Categorized uploads are authorized before multipart intake, then validated
+against the pinned questionnaire for purpose, response scope, filename
+extension, detected content type, size, category count, and global count. Files
+must pass the existing fail-closed malware boundary before entering private
+storage. Successful and failed requests remove local temporary files, and stale
+write failures remove newly uploaded orphan objects. Retirement and the daily
+expiry/abandonment cleanup check immutable submission versions before deleting
+objects, retaining submitted evidence and retrying provider failures. Final
+validation, calculation snapshots, immutable structured versions, and revision
+draft inheritance remain Task 4.
+
 ### Planner-entered vendor responses (2026-08-25)
 
 Not every vendor replies through the portal. `POST
