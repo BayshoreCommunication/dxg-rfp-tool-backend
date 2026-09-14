@@ -178,9 +178,33 @@ must pass the existing fail-closed malware boundary before entering private
 storage. Successful and failed requests remove local temporary files, and stale
 write failures remove newly uploaded orphan objects. Retirement and the daily
 expiry/abandonment cleanup check immutable submission versions before deleting
-objects, retaining submitted evidence and retrying provider failures. Final
-validation, calculation snapshots, immutable structured versions, and revision
-draft inheritance remain Task 4.
+objects, retaining submitted evidence and retrying provider failures. Task 4,
+documented below, adds final validation, calculation snapshots, immutable
+structured versions, and revision-draft inheritance.
+
+### Vendor response structured finalization (Task 4, 2026-09-14)
+
+An active draft can now be finalized through a grant-scoped, revision-aware
+transaction. The server checks the live proposal lifecycle, validates the
+complete response against the draft's immutable questionnaire, verifies that
+response document references exactly match active stored documents, supplies
+acknowledgement timestamps, and freezes a reproducible
+`vendor-response-calculation.v1` snapshot. `VendorSubmissionVersion` stores the
+questionnaire and response snapshots, calculation, structured document
+metadata, retired-document provenance, and an expanded manifest checksum while
+its existing update guards continue to reject mutation.
+
+Finalization uses a draft claim and a unique `finalizedDraftId`, so concurrent
+or repeated requests converge on one version and the original safe receipt.
+After persistence, the legacy `VendorResponse` projection, PostgreSQL source
+registration, first-version planner notification, and vendor confirmation keep
+their existing behavior. Revision drafts can be created only for a current
+structured submission associated with the same public grant. They seed the
+previous immutable questionnaire, response, and document manifest, explicitly
+distinguishing inherited and added documents and recording retired inherited
+documents without deleting submitted storage objects. The planner rendering of
+these structured fields remains Task 7; the vendor workspace UI begins in Task
+5.
 
 ### Planner-entered vendor responses (2026-08-25)
 

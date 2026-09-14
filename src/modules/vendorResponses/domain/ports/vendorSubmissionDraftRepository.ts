@@ -19,12 +19,20 @@ export interface VendorSubmissionDraftRepository {
     submissionId?: string | null;
     questionnaire: VendorResponseQuestionnaireV1;
     response: VendorResponseV1;
+    documents?: VendorDraftDocument[];
     now: Date;
     expiresAt: Date;
   }): Promise<{ draft: VendorSubmissionDraftRecord; created: boolean }>;
   revisionSubmissionIsAuthorized(input: VendorSubmissionDraftScope & {
     submissionId: string;
   }): Promise<boolean>;
+  loadRevisionSeed(input: VendorSubmissionDraftScope & {
+    submissionId: string;
+  }): Promise<{
+    questionnaire: VendorResponseQuestionnaireV1;
+    response: VendorResponseV1;
+    documents: VendorDraftDocument[];
+  } | null>;
   updateActive(input: VendorSubmissionDraftScope & {
     draftId: string;
     expectedRevision: number;
@@ -38,8 +46,26 @@ export interface VendorSubmissionDraftRepository {
     expectedRevision: number;
     now: Date;
   }): Promise<VendorSubmissionDraftRecord | null>;
+  claimFinalization(input: VendorSubmissionDraftScope & {
+    draftId: string;
+    expectedRevision: number;
+    finalizationKeyHash: string;
+    now: Date;
+  }): Promise<VendorSubmissionDraftRecord | null>;
+  releaseFinalization(input: VendorSubmissionDraftScope & {
+    draftId: string;
+    expectedRevision: number;
+    finalizationKeyHash: string;
+  }): Promise<void>;
+  completeFinalization(input: VendorSubmissionDraftScope & {
+    draftId: string;
+    expectedRevision: number;
+    finalizationKeyHash: string;
+    submittedVersionId: string;
+    now: Date;
+  }): Promise<VendorSubmissionDraftRecord | null>;
   listCleanupCandidates(now: Date, limit: number): Promise<VendorSubmissionDraftRecord[]>;
-  markExpiredAbandoned(draftId: string, now: Date): Promise<void>;
+  markExpiredAbandoned(draftId: string, now: Date): Promise<boolean>;
   documentIsSubmitted(organizationId: string, documentId: string): Promise<boolean>;
   markDocumentDeleted(draftId: string, documentId: string, deletedAt: Date): Promise<void>;
   markCleanupComplete(draftId: string, completedAt: Date): Promise<void>;

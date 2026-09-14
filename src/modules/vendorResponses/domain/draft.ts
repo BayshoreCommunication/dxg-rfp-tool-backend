@@ -23,6 +23,7 @@ export type VendorDraftDocument = {
   sizeBytes: number;
   sha256: string;
   scanStatus: "clean" | "skipped";
+  inheritedFromVersionId?: string | null;
   status: "active" | "retired";
   uploadedAt: string;
   retiredAt?: string | null;
@@ -48,6 +49,10 @@ export type VendorSubmissionDraftRecord = VendorSubmissionDraftScope & {
   expiresAt: string;
   abandonedAt?: string | null;
   cleanupCompletedAt?: string | null;
+  finalizationKeyHash?: string | null;
+  finalizationStartedAt?: string | null;
+  submittedVersionId?: string | null;
+  submittedAt?: string | null;
 };
 
 export type VendorSubmissionDraftDto = {
@@ -64,8 +69,13 @@ export type VendorSubmissionDraftDetailDto = VendorSubmissionDraftDto & {
 
 export type VendorDraftDocumentDto = Omit<
   VendorDraftDocument,
-  "url" | "objectKey" | "status" | "retiredAt" | "objectDeletedAt"
->;
+  | "url"
+  | "objectKey"
+  | "inheritedFromVersionId"
+  | "status"
+  | "retiredAt"
+  | "objectDeletedAt"
+> & { disposition: "added" | "inherited" };
 
 export const createEmptyStructuredVendorResponse = (
   questionnaire: VendorResponseQuestionnaireV1,
@@ -129,6 +139,7 @@ export const toVendorDraftDocumentDto = (
   sha256: document.sha256,
   scanStatus: document.scanStatus,
   uploadedAt: document.uploadedAt,
+  disposition: document.inheritedFromVersionId ? "inherited" : "added",
 });
 
 export const toVendorSubmissionDraftDetailDto = (

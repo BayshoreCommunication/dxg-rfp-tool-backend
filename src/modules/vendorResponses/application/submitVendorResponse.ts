@@ -68,7 +68,7 @@ const fallbackIdempotencyKey = (input: {
     )
     .digest("hex")}`;
 
-const reconcileSources = async (
+export const reconcileVendorSubmissionSources = async (
   registry: VendorSubmissionSourceRegistry | undefined,
   record: VendorSubmissionVersionRecord,
 ) => {
@@ -200,7 +200,7 @@ export const createSubmitVendorResponse = (dependencies: {
   });
   if (replay) {
     await Promise.all(input.files.map((file) => dependencies.storage.cleanup(file.path)));
-    const sourceRegistration = await reconcileSources(dependencies.sourceRegistry, replay);
+    const sourceRegistration = await reconcileVendorSubmissionSources(dependencies.sourceRegistry, replay);
     return {
       kind: "duplicate" as const,
       response: replay.response,
@@ -278,7 +278,7 @@ export const createSubmitVendorResponse = (dependencies: {
     sourceSystem: channel,
     receivedAt: new Date((dependencies.now ?? Date.now)()),
   });
-  const sourceRegistration = await reconcileSources(
+  const sourceRegistration = await reconcileVendorSubmissionSources(
     dependencies.sourceRegistry,
     saved.record,
   );

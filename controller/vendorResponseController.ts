@@ -15,6 +15,8 @@ import {
   publishVendorResponseQuestionnaire,
   abandonPublicVendorResponseDraft,
   createOrResumePublicVendorResponseDraft,
+  createOrResumePublicVendorResponseRevisionDraft,
+  finalizePublicVendorResponseDraft,
   getPublicVendorResponseDraft,
   retirePublicVendorResponseDraftDocument,
   savePublicVendorResponseDraft,
@@ -22,6 +24,7 @@ import {
 } from "../src/modules/vendorResponses/composition";
 import { VendorResponseWorkspaceError } from "../src/modules/vendorResponses/application/vendorResponseWorkspace";
 import { VendorSubmissionDraftError } from "../src/modules/vendorResponses/application/vendorSubmissionDrafts";
+import { VendorSubmissionFinalizationError } from "../src/modules/vendorResponses/application/finalizeVendorSubmissionDraft";
 import type {
   VendorDraftDocumentScopeType,
   VendorSubmissionDraftScope,
@@ -49,6 +52,18 @@ const sendDraftError = (
   fallback: string,
 ): void => {
   if (error instanceof VendorSubmissionDraftError) {
+    res.status(error.status).json({
+      success: false,
+      code: error.code.toLowerCase(),
+      message: error.message,
+      ...(error.latestDraftRevision === undefined
+        ? {}
+        : { latestDraftRevision: error.latestDraftRevision }),
+      ...(error.issues ? { errors: error.issues } : {}),
+    });
+    return;
+  }
+  if (error instanceof VendorSubmissionFinalizationError) {
     res.status(error.status).json({
       success: false,
       code: error.code.toLowerCase(),
@@ -164,6 +179,32 @@ export const createVendorResponseDraft = async (
     });
   } catch (error) {
     sendDraftError(res, error, "Vendor response draft could not be created.");
+  }
+};
+
+export const createVendorResponseRevisionDraft = async (
+  req: PublicGrantRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const scope = validDraftRequest(req, res);
+    if (!scope || !req.publicGrant) return;
+    if (!mongoose.isValidObjectId(req.params.submissionId)) {
+      res.status(400).json({ success: false, message: "Valid submission id is required." });
+      return;
+    }
+    const result = await createOrResumePublicVendorResponseRevisionDraft({
+      ...scope,
+      grantActorId: req.publicGrant.createdByUserId,
+      submissionId: req.params.submissionId,
+    });
+    res.status(result.created ? 201 : 200).json({
+      success: true,
+      created: result.created,
+      data: result.draft,
+    });
+  } catch (error) {
+    sendDraftError(res, error, "Vendor response revision draft could not be created.");
   }
 };
 
@@ -311,6 +352,70 @@ export const abandonVendorResponseDraft = async (
     res.status(200).json({ success: true, data: draft });
   } catch (error) {
     sendDraftError(res, error, "Vendor response draft could not be abandoned.");
+  }
+};
+
+export const finalizeVendorResponseDraft = async (
+  req: PublicGrantRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const scope = validDraftRequest(req, res);
+    if (!scope || !req.publicGrant) return;
+    const draftRevision = draftRevisionFrom(req);
+    if (!mongoose.isValidObjectId(req.params.draftId) || draftRevision === null) {
+      res.status(400).json({
+        success: false,
+        message: "Valid draft id and draft revision are required.",
+      });
+      return;
+    }
+    const result = await finalizePublicVendorResponseDraft({
+      ...scope,
+      grantActorId: req.publicGrant.createdByUserId,
+      draftId: req.params.draftId,
+      expectedRevision: draftRevision,
+      idempotencyKey:
+        req.body?.submissionIdempotencyKey ?? req.headers["idempotency-key"],
+    });
+    res.status(result.kind === "duplicate" ? 200 : 201).json({
+      success: true,
+      isReplay: result.kind === "duplicate",
+      message: result.kind === "duplicate"
+        ? "This draft was already submitted. The original receipt is shown below."
+        : result.receipt.versionNumber > 1
+          ? `Version ${result.receipt.versionNumber} of your response has been received.`
+          : "Your response has been submitted successfully.",
+      data: {
+        submissionId: result.receipt.submissionId,
+        versionId: result.receipt.versionId,
+        versionNumber: result.receipt.versionNumber,
+        parentVersionId: result.receipt.parentVersionId,
+        reason: result.receipt.reason,
+        receivedAt: result.receipt.receivedAt,
+        manifestChecksum: result.receipt.manifestChecksum,
+        responseSchemaVersion: result.receipt.responseSchemaVersion,
+        questionnaire: result.receipt.questionnaire,
+        calculation: result.receipt.calculationSnapshot,
+        retiredDocuments: result.receipt.retiredDocuments,
+        documents: result.receipt.documents.map((document) => ({
+          documentId: document.documentId,
+          sourceId: document.sourceId,
+          name: document.name,
+          mimeType: document.mimeType,
+          sizeBytes: document.sizeBytes,
+          sha256: document.sha256,
+          scanStatus: document.scanStatus,
+          purposeId: document.purposeId,
+          scopeType: document.scopeType,
+          scopeId: document.scopeId,
+          disposition: document.versionDisposition,
+        })),
+        sourceRegistration: result.sourceRegistration,
+      },
+    });
+  } catch (error) {
+    sendDraftError(res, error, "Vendor response draft could not be finalized.");
   }
 };
 

@@ -15,6 +15,8 @@ import {
   publishVendorQuestionnaire,
   abandonVendorResponseDraft,
   createVendorResponseDraft,
+  createVendorResponseRevisionDraft,
+  finalizeVendorResponseDraft,
   getVendorResponseDraft,
   retireVendorResponseDraftDocument,
   saveVendorResponseDraft,
@@ -117,6 +119,12 @@ router.patch(
   requirePublicGrant("vendor:submit", alternateVendorContact),
   saveVendorResponseDraft,
 );
+router.post(
+  "/drafts/:draftId/finalize",
+  publicGrantLimit,
+  requirePublicGrant("vendor:submit", alternateVendorContact),
+  finalizeVendorResponseDraft,
+);
 /* Grant validation runs before multipart processing so unauthorized callers
    cannot stream draft files onto local disk. proposalId and the grant must be
    supplied in the query string or request headers for this endpoint. */
@@ -138,6 +146,12 @@ router.delete(
   publicGrantLimit,
   requirePublicGrant("vendor:submit", alternateVendorContact),
   abandonVendorResponseDraft,
+);
+router.post(
+  "/:submissionId/revision-drafts",
+  publicGrantLimit,
+  requirePublicGrant("vendor:submit", alternateVendorContact),
+  createVendorResponseRevisionDraft,
 );
 router.post(
   "/",

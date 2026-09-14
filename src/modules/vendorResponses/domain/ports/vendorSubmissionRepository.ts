@@ -1,4 +1,7 @@
 import type { VendorSubmissionVersionReason } from "../../../../../modal/vendorSubmissionVersionModel";
+import type { VendorResponseCalculationV1 } from "../../../../../contracts/generated/vendor-response-calculation-v1";
+import type { VendorResponseQuestionnaireV1 } from "../../../../../contracts/generated/vendor-response-questionnaire-v1";
+import type { VendorResponseV1 } from "../../../../../contracts/generated/vendor-response-v1";
 
 export type VendorDocument = {
   documentId: string;
@@ -10,7 +13,24 @@ export type VendorDocument = {
   sizeBytes: number | null;
   sha256: string | null;
   scanStatus: "clean" | "skipped" | "legacy_unknown";
+  purposeId?: string | null;
+  scopeType?: "proposal" | "room" | "crew_member" | "reference" | null;
+  scopeId?: string | null;
+  versionDisposition?: "added" | "inherited" | "legacy";
   inheritedFromVersionId?: string | null;
+};
+
+export type VendorRetiredDocument = {
+  documentId: string;
+  retiredFromVersionId: string;
+};
+
+export type StructuredVendorSubmissionSnapshot = {
+  finalizedDraftId: string;
+  questionnaire: VendorResponseQuestionnaireV1;
+  response: VendorResponseV1;
+  calculation: VendorResponseCalculationV1;
+  retiredDocuments: VendorRetiredDocument[];
 };
 
 export type VendorResponseRecord = Record<string, unknown> & {
@@ -46,7 +66,34 @@ export type VendorSubmissionVersionRecord = {
   email: string;
   message: string;
   documents: VendorDocument[];
+  retiredDocuments: VendorRetiredDocument[];
+  responseSchemaVersion: "vendor-response.v1" | null;
+  questionnaire: {
+    questionnaireId: string;
+    questionnaireVersion: number;
+    questionnaireChecksum: string;
+    proposalVersion: number;
+  } | null;
+  questionnaireSnapshot: VendorResponseQuestionnaireV1 | null;
+  structuredResponse: VendorResponseV1 | null;
+  calculationSnapshot: VendorResponseCalculationV1 | null;
+  finalizedDraftId: string | null;
   response: VendorResponseRecord;
+};
+
+export type VendorSubmissionReceipt = Omit<
+  VendorSubmissionVersionRecord,
+  | "response"
+  | "organizationId"
+  | "ownerUserId"
+  | "questionnaireSnapshot"
+  | "structuredResponse"
+  | "documents"
+> & {
+  documents: Array<Omit<
+    VendorDocument,
+    "url" | "objectKey" | "inheritedFromVersionId"
+  >>;
 };
 
 export interface VendorSubmissionRepository {
@@ -64,25 +111,32 @@ export interface VendorSubmissionRepository {
     organizationId: string;
     idempotencyKey: string;
   }): Promise<VendorSubmissionVersionRecord | null>;
+  findVersionByFinalizedDraft(input: {
+    organizationId: string;
+    draftId: string;
+  }): Promise<VendorSubmissionVersionRecord | null>;
   findProposal(proposalId: string): Promise<VendorProposalReference | null>;
   saveVersion(input: VendorProposalReference & {
     existingResponse: VendorResponseRecord | null;
+    submissionId?: string | null;
     vendorName: string;
     submittedBy: string;
     email: string;
     message: string;
     newDocuments: VendorDocument[];
     trackingId: string | null;
+    publicGrantId?: string | null;
     idempotencyKey: string;
     reason: VendorSubmissionVersionReason;
     sourceSystem: "public_portal" | "planner_upload" | "legacy_migration" | "api";
     receivedAt: Date;
+    structured?: StructuredVendorSubmissionSnapshot;
   }): Promise<{ record: VendorSubmissionVersionRecord; created: boolean }>;
   getReceipt(input: {
     proposalId: string;
     versionId: string;
     email: string;
-  }): Promise<Omit<VendorSubmissionVersionRecord, "response" | "organizationId" | "ownerUserId"> | null>;
+  }): Promise<VendorSubmissionReceipt | null>;
 }
 
 export interface VendorSubmissionSourceRegistry {
