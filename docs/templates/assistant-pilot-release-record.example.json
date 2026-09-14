@@ -6,8 +6,8 @@
   "rollbackAuthority": "",
   "supportOwner": "",
   "application": {
-    "backendCommit": "",
-    "dashboardCommit": "",
+    "backendCommit": "0000000",
+    "dashboardCommit": "0000000",
     "promptVersion": "platform-assistant-prompt.v6",
     "migrationsAppliedThrough": "036"
   },

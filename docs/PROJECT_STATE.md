@@ -142,6 +142,70 @@ reconciles eligible sources, and journals checksummed outcomes. Comparison,
 requirement mapping, extraction, evaluator scoring, and decision UX remain later
 explicitly approved tasks.
 
+### Vendor response questionnaire publication (Task 2, 2026-09-14)
+
+The vendor response workspace now starts from an immutable, tenant-scoped
+questionnaire version rather than exposing the proposal document directly. A
+deterministic canonical-proposal projection retains the vendor-safe event,
+venue, deadline, currency, room, and specification context; every room and
+specification receives a stable identifier and exact proposal source reference.
+Publishing unchanged source data is idempotent. A changed projection creates
+version `n + 1`, records its actor and checksums, and supersedes the prior
+published version without mutating it.
+
+`GET /api/vendor-responses/workspace` validates the scoped public grant and
+returns only the allowlisted workspace contract. It never includes raw access
+tokens, organization or owner identifiers, private upload URLs, internal flags,
+or unrelated proposal fields. Access state is derived from the published/open
+lifecycle and deadline; revoked, expired, or otherwise invalid grants fail in
+the public-access boundary before the workspace service runs. Authenticated
+proposal owners can explicitly publish through `POST
+/api/vendor-responses/questionnaires/publish`.
+
+### Vendor response draft lifecycle (Task 3, 2026-09-14)
+
+Structured vendor responses now have one active MongoDB draft per tenant,
+proposal, and durable invitation ID. Drafts pin the exact questionnaire
+snapshot and grant-subject hash, accept contract-shaped partial responses, and
+use `draftRevision` compare-and-swap for every response or document mutation.
+The public DTO exposes only the response and safe document metadata; raw grants,
+private URLs, object keys, and payload values are excluded from telemetry.
+
+Categorized uploads are authorized before multipart intake, then validated
+against the pinned questionnaire for purpose, response scope, filename
+extension, detected content type, size, category count, and global count. Files
+must pass the existing fail-closed malware boundary before entering private
+storage. Successful and failed requests remove local temporary files, and stale
+write failures remove newly uploaded orphan objects. Retirement and the daily
+expiry/abandonment cleanup check immutable submission versions before deleting
+objects, retaining submitted evidence and retrying provider failures. Task 4,
+documented below, adds final validation, calculation snapshots, immutable
+structured versions, and revision-draft inheritance.
+
+### Vendor response structured finalization (Task 4, 2026-09-14)
+
+An active draft can now be finalized through a grant-scoped, revision-aware
+transaction. The server checks the live proposal lifecycle, validates the
+complete response against the draft's immutable questionnaire, verifies that
+response document references exactly match active stored documents, supplies
+acknowledgement timestamps, and freezes a reproducible
+`vendor-response-calculation.v1` snapshot. `VendorSubmissionVersion` stores the
+questionnaire and response snapshots, calculation, structured document
+metadata, retired-document provenance, and an expanded manifest checksum while
+its existing update guards continue to reject mutation.
+
+Finalization uses a draft claim and a unique `finalizedDraftId`, so concurrent
+or repeated requests converge on one version and the original safe receipt.
+After persistence, the legacy `VendorResponse` projection, PostgreSQL source
+registration, first-version planner notification, and vendor confirmation keep
+their existing behavior. Revision drafts can be created only for a current
+structured submission associated with the same public grant. They seed the
+previous immutable questionnaire, response, and document manifest, explicitly
+distinguishing inherited and added documents and recording retired inherited
+documents without deleting submitted storage objects. The planner rendering of
+these structured fields remains Task 7; the vendor workspace UI begins in Task
+5.
+
 ### Planner-entered vendor responses (2026-08-25)
 
 Not every vendor replies through the portal. `POST
@@ -216,8 +280,10 @@ roles now applied as append-only `$addToSet` writes and manual review/apply
 endpoints retained.
 
 Originally: a review-first, deterministic room recommendation capability behind
-`ROOM_RECOMMENDATIONS_ENABLED` / `NEXT_PUBLIC_ROOM_RECOMMENDATIONS_ENABLED`
-(both default off). Confirmed room/event facts plus approved synthetic
+`ROOM_RECOMMENDATIONS_ENABLED`. The dashboard Smart Fill surface and its
+`NEXT_PUBLIC_ROOM_RECOMMENDATIONS_ENABLED` flag were removed on 2026-09-07;
+the backend endpoints and governed audit history remain available but are no
+longer exposed by the planner dashboard. Confirmed room/event facts plus approved synthetic
 knowledge fixtures produce a strictly validated `room-recommendation.v1`
 payload (migration 030) in which every value is classified
 (`deterministic_derivation` / `recommended_assumption` / questions for

@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rfpilot.com/contracts/vendor-response.v1.schema.json",
+  "title": "VendorResponseV1",
+  "description": "Draftable structured vendor response. Final requiredness is questionnaire-driven.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "questionnaire", "identity", "acknowledgements", "companyProfile", "platformIntegrationPlan", "rooms", "crew", "travel", "pricing", "alternates", "references", "documents", "valueAdds"],
+  "properties": {
+    "schemaVersion": { "const": "vendor-response.v1" },
+    "questionnaire": { "$ref": "#/$defs/questionnaireReference" },
+    "identity": { "$ref": "#/$defs/identity" },
+    "acknowledgements": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/acknowledgementResponse" } },
+    "companyProfile": { "$ref": "#/$defs/companyProfile" },
+    "platformIntegrationPlan": { "type": "string", "maxLength": 20000 },
+    "rooms": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/roomResponse" } },
+    "crew": { "type": "array", "maxItems": 500, "items": { "$ref": "#/$defs/crewMember" } },
+    "travel": { "$ref": "#/$defs/travel" },
+    "pricing": { "$ref": "#/$defs/pricing" },
+    "alternates": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/alternate" } },
+    "references": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/reference" } },
+    "documents": { "type": "array", "maxItems": 500, "items": { "$ref": "#/$defs/documentReference" } },
+    "valueAdds": { "type": "string", "maxLength": 50000 }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "checksum": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amountMinor", "currency"],
+      "properties": {
+        "amountMinor": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "signedMoney": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amountMinor", "currency"],
+      "properties": {
+        "amountMinor": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "questionnaireReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["questionnaireId", "questionnaireVersion", "questionnaireChecksum", "proposalId", "proposalVersion"],
+      "properties": {
+        "questionnaireId": { "$ref": "#/$defs/identifier" },
+        "questionnaireVersion": { "type": "integer", "minimum": 1 },
+        "questionnaireChecksum": { "$ref": "#/$defs/checksum" },
+        "proposalId": { "$ref": "#/$defs/identifier" },
+        "proposalVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vendorName", "submittedBy", "email"],
+      "properties": {
+        "vendorName": { "type": "string", "maxLength": 300 },
+        "submittedBy": { "type": "string", "maxLength": 300 },
+        "email": { "type": "string", "maxLength": 320 }
+      }
+    },
+    "acknowledgementResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acknowledgementId", "accepted", "textChecksum"],
+      "properties": {
+        "acknowledgementId": { "$ref": "#/$defs/identifier" },
+        "accepted": { "type": "boolean" },
+        "acceptedAt": { "type": "string", "format": "date-time" },
+        "textChecksum": { "$ref": "#/$defs/checksum" }
+      }
+    },
+    "clientMixEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["categoryId", "percent"],
+      "properties": {
+        "categoryId": { "$ref": "#/$defs/identifier" },
+        "percent": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "companyProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["legalName", "headquarters", "largestComparableEvent", "clientMix"],
+      "properties": {
+        "legalName": { "type": "string", "maxLength": 300 },
+        "headquarters": { "type": "string", "maxLength": 300 },
+        "yearsInBusiness": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "staffCount": { "type": "integer", "minimum": 0, "maximum": 10000000 },
+        "largestComparableEvent": { "type": "string", "maxLength": 4000 },
+        "clientMix": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/clientMixEntry" } }
+      }
+    },
+    "specResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["specId", "status", "note"],
+      "properties": {
+        "specId": { "$ref": "#/$defs/identifier" },
+        "status": { "type": "string", "enum": ["comply", "substitute", "exception"] },
+        "note": { "type": "string", "maxLength": 4000 }
+      }
+    },
+    "equipmentLine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["equipmentLineId", "categoryId", "description", "quantity"],
+      "properties": {
+        "equipmentLineId": { "$ref": "#/$defs/identifier" },
+        "categoryId": { "$ref": "#/$defs/identifier" },
+        "description": { "type": "string", "maxLength": 1000 },
+        "quantity": { "type": "integer", "minimum": 1, "maximum": 1000000 }
+      }
+    },
+    "categoryTotal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["categoryId", "amount"],
+      "properties": {
+        "categoryId": { "$ref": "#/$defs/identifier" },
+        "amount": { "$ref": "#/$defs/money" }
+      }
+    },
+    "laborLine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["laborLineId", "roleId", "days", "regularHours", "overtimeHours", "travel", "notes"],
+      "properties": {
+        "laborLineId": { "$ref": "#/$defs/identifier" },
+        "roleId": { "$ref": "#/$defs/identifier" },
+        "days": { "type": "integer", "minimum": 1, "maximum": 3660 },
+        "regularHours": { "type": "number", "minimum": 0, "maximum": 100000 },
+        "overtimeHours": { "type": "number", "minimum": 0, "maximum": 100000 },
+        "travel": { "type": "boolean" },
+        "notes": { "type": "string", "maxLength": 2000 }
+      }
+    },
+    "hybridResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["feedHandoff", "redundancy", "virtualAudienceExperience"],
+      "properties": {
+        "feedHandoff": { "type": "string", "maxLength": 20000 },
+        "redundancy": { "type": "string", "maxLength": 20000 },
+        "virtualAudienceExperience": { "type": "string", "maxLength": 20000 }
+      }
+    },
+    "roomResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roomId", "specResponses", "equipmentLines", "categoryTotals", "laborLines", "laborSubtotal"],
+      "properties": {
+        "roomId": { "$ref": "#/$defs/identifier" },
+        "specResponses": { "type": "array", "maxItems": 500, "items": { "$ref": "#/$defs/specResponse" } },
+        "equipmentLines": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/equipmentLine" } },
+        "categoryTotals": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/categoryTotal" } },
+        "laborLines": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/laborLine" } },
+        "laborSubtotal": { "$ref": "#/$defs/money" },
+        "hybrid": { "$ref": "#/$defs/hybridResponse" }
+      }
+    },
+    "crewMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["crewMemberId", "name", "roleId", "bio"],
+      "properties": {
+        "crewMemberId": { "$ref": "#/$defs/identifier" },
+        "name": { "type": "string", "maxLength": 300 },
+        "roleId": { "$ref": "#/$defs/identifier" },
+        "bio": { "type": "string", "maxLength": 30000 },
+        "headshotDocumentId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "lodgingRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["laborLineId", "roomId", "clientProvidedRoom"],
+      "properties": {
+        "laborLineId": { "$ref": "#/$defs/identifier" },
+        "roomId": { "$ref": "#/$defs/identifier" },
+        "clientProvidedRoom": { "type": "boolean" },
+        "checkIn": { "type": "string", "format": "date" },
+        "checkOut": { "type": "string", "format": "date" }
+      }
+    },
+    "travel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lodgingRequests"],
+      "properties": {
+        "lodgingRequests": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/lodgingRequest" } }
+      }
+    },
+    "feeAmount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["feeId", "amount"],
+      "properties": {
+        "feeId": { "$ref": "#/$defs/identifier" },
+        "amount": { "$ref": "#/$defs/money" }
+      }
+    },
+    "pricing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["travelSubtotal", "fees", "discount", "assumptionsExclusions"],
+      "properties": {
+        "travelSubtotal": { "$ref": "#/$defs/money" },
+        "fees": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/feeAmount" } },
+        "discount": { "$ref": "#/$defs/money" },
+        "assumptionsExclusions": { "type": "array", "maxItems": 200, "items": { "type": "string", "minLength": 1, "maxLength": 2000 } }
+      }
+    },
+    "alternateScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "enum": ["project", "room"] },
+        "roomId": { "$ref": "#/$defs/identifier" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "room" } }, "required": ["type"] },
+          "then": {
+            "properties": { "roomId": { "$ref": "#/$defs/identifier" } },
+            "required": ["roomId"]
+          },
+          "else": { "properties": { "roomId": false } }
+        }
+      ]
+    },
+    "alternate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alternateId", "scope", "title", "tradeoff", "costDelta", "recommended"],
+      "properties": {
+        "alternateId": { "$ref": "#/$defs/identifier" },
+        "scope": { "$ref": "#/$defs/alternateScope" },
+        "title": { "type": "string", "maxLength": 500 },
+        "tradeoff": { "type": "string", "maxLength": 4000 },
+        "costDelta": { "$ref": "#/$defs/signedMoney" },
+        "recommended": { "type": "boolean" }
+      }
+    },
+    "referenceContact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "email", "phone"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 300 },
+        "email": { "type": "string", "maxLength": 320 },
+        "phone": { "type": "string", "maxLength": 100 }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["referenceId", "clientName", "contact", "eventName", "servicesProvided", "currentStatus", "comparable", "visualDocumentIds"],
+      "properties": {
+        "referenceId": { "$ref": "#/$defs/identifier" },
+        "clientName": { "type": "string", "maxLength": 300 },
+        "contact": { "$ref": "#/$defs/referenceContact" },
+        "eventName": { "type": "string", "maxLength": 300 },
+        "attendance": { "type": "integer", "minimum": 0, "maximum": 100000000 },
+        "servicesProvided": { "type": "string", "maxLength": 4000 },
+        "startDate": { "type": "string", "format": "date" },
+        "endDate": { "type": "string", "format": "date" },
+        "currentStatus": { "type": "string", "maxLength": 500 },
+        "comparable": { "type": "boolean" },
+        "visualDocumentIds": { "type": "array", "maxItems": 20, "uniqueItems": true, "items": { "$ref": "#/$defs/identifier" } }
+      }
+    },
+    "documentReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["documentId", "purposeId", "scopeType"],
+      "properties": {
+        "documentId": { "$ref": "#/$defs/identifier" },
+        "purposeId": { "$ref": "#/$defs/identifier" },
+        "scopeType": { "type": "string", "enum": ["proposal", "room", "crew_member", "reference"] },
+        "scopeId": { "$ref": "#/$defs/identifier" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "scopeType": { "const": "proposal" } }, "required": ["scopeType"] },
+          "then": { "properties": { "scopeId": false } },
+          "else": {
+            "properties": { "scopeId": { "$ref": "#/$defs/identifier" } },
+            "required": ["scopeId"]
+          }
+        }
+      ]
+    }
+  }
+}

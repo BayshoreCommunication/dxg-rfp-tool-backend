@@ -1,4 +1,5 @@
 import { sendCustomEmail } from "../../../../../utils/emailService";
+import VendorConfirmationDelivery from "../../../../../modal/vendorConfirmationDeliveryModel";
 import type { VendorConfirmationSender } from "../../domain/ports/vendorSubmissionPorts";
 
 const escapeHtml = (value: string) =>
@@ -14,6 +15,14 @@ const buildHtml = (input: {
   submittedBy: string;
   proposalTitle: string;
   isUpdate: boolean;
+  versionNumber: number;
+  receivedAt: string;
+  manifestChecksum: string;
+  questionnaireVersion: number | null;
+  grandTotalMinor: number | null;
+  currency: string | null;
+  currencyDecimalPrecision: number;
+  fileCount: number;
 }) => `
   <div style="font-family:Inter,Arial,sans-serif;max-width:580px;margin:0 auto;padding:24px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
     <div style="text-align:center;margin-bottom:20px;">
@@ -34,7 +43,13 @@ const buildHtml = (input: {
     <div style="margin:0 0 18px;padding:14px;background:#ffffff;border:1px solid #dbeafe;border-radius:10px;">
       <p style="margin:0 0 6px;color:#64748b;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;">Submission Details</p>
       <p style="margin:0 0 4px;color:#0f172a;font-size:13px;"><strong>Submitted by:</strong> ${escapeHtml(input.submittedBy)}</p>
-      <p style="margin:0;color:#0f172a;font-size:13px;"><strong>For proposal:</strong> ${escapeHtml(input.proposalTitle)}</p>
+      <p style="margin:0 0 4px;color:#0f172a;font-size:13px;"><strong>For proposal:</strong> ${escapeHtml(input.proposalTitle)}</p>
+      <p style="margin:0 0 4px;color:#0f172a;font-size:13px;"><strong>Submission version:</strong> ${input.versionNumber}</p>
+      ${input.questionnaireVersion === null ? "" : `<p style="margin:0 0 4px;color:#0f172a;font-size:13px;"><strong>Questionnaire version:</strong> ${input.questionnaireVersion}</p>`}
+      <p style="margin:0 0 4px;color:#0f172a;font-size:13px;"><strong>Received:</strong> ${escapeHtml(input.receivedAt)}</p>
+      ${input.grandTotalMinor === null || !input.currency ? "" : `<p style="margin:0 0 4px;color:#0f172a;font-size:13px;"><strong>Calculated total:</strong> ${escapeHtml(new Intl.NumberFormat("en-US", { style: "currency", currency: input.currency }).format(input.grandTotalMinor / (10 ** input.currencyDecimalPrecision)))}</p>`}
+      <p style="margin:0 0 4px;color:#0f172a;font-size:13px;"><strong>Files received:</strong> ${input.fileCount}</p>
+      <p style="margin:0;color:#64748b;font-size:11px;word-break:break-all;"><strong>Manifest checksum:</strong> ${escapeHtml(input.manifestChecksum)}</p>
     </div>
     <p style="color:#64748b;font-size:13px;margin:0 0 8px;">
       The event planner will review your response and reach out if they are interested.
@@ -49,18 +64,72 @@ const buildHtml = (input: {
 export const vendorConfirmationEmailAdapter: VendorConfirmationSender = {
   async send(input) {
     const action = input.isUpdate ? "updated" : "submitted";
+    const attemptedAt = new Date();
     try {
       await sendCustomEmail({
         to: input.email,
         subject: `Your response has been ${action} — ${input.proposalTitle}`,
         html: buildHtml(input),
-        text: `Hi ${input.vendorName},\n\nYour proposal response for "${input.proposalTitle}" has been ${action} successfully.\n\nSubmitted by: ${input.submittedBy}\n\nThe event planner will review your response and reach out if they are interested.\n\nDXG RFP Tool`,
+        text: `Hi ${input.vendorName},\n\nYour proposal response for "${input.proposalTitle}" has been ${action} successfully.\n\nSubmitted by: ${input.submittedBy}\nSubmission version: ${input.versionNumber}\n${input.questionnaireVersion === null ? "" : `Questionnaire version: ${input.questionnaireVersion}\n`}Received: ${input.receivedAt}\n${input.grandTotalMinor === null || !input.currency ? "" : `Calculated total: ${new Intl.NumberFormat("en-US", { style: "currency", currency: input.currency }).format(input.grandTotalMinor / (10 ** input.currencyDecimalPrecision))}\n`}Files received: ${input.fileCount}\nManifest checksum: ${input.manifestChecksum}\n\nThe event planner will review your response and reach out if they are interested.\n\nDXG RFP Tool`,
       });
     } catch (error) {
       console.error(
         `[VendorConfirmation] Failed to send confirmation to ${input.email}:`,
         error,
       );
+      await VendorConfirmationDelivery.findOneAndUpdate(
+        { versionId: input.versionId },
+        {
+          $setOnInsert: {
+            organizationId: input.organizationId,
+            proposalId: input.proposalId,
+            submissionId: input.submissionId,
+            versionId: input.versionId,
+          },
+          $set: {
+            status: "failed",
+            attemptedAt,
+            acceptedAt: null,
+            safeErrorCode: "CONFIRMATION_SEND_FAILED",
+          },
+        },
+        { upsert: true },
+      ).catch(() => undefined);
+      return {
+        status: "failed",
+        attemptedAt: attemptedAt.toISOString(),
+        acceptedAt: null,
+      };
     }
+
+    const acceptedAt = new Date();
+    await VendorConfirmationDelivery.findOneAndUpdate(
+      { versionId: input.versionId },
+      {
+        $setOnInsert: {
+          organizationId: input.organizationId,
+          proposalId: input.proposalId,
+          submissionId: input.submissionId,
+          versionId: input.versionId,
+        },
+        $set: {
+          status: "accepted",
+          attemptedAt,
+          acceptedAt,
+          safeErrorCode: null,
+        },
+      },
+      { upsert: true },
+    ).catch((error) => {
+      console.error(
+        `[VendorConfirmation] Delivery was accepted but its status could not be recorded for version ${input.versionId}:`,
+        error,
+      );
+    });
+    return {
+      status: "accepted",
+      attemptedAt: attemptedAt.toISOString(),
+      acceptedAt: acceptedAt.toISOString(),
+    };
   },
 };

@@ -1,3 +1,62 @@
+import type { VendorResponseCalculationV1 } from "../../../../../contracts/generated/vendor-response-calculation-v1";
+import type { VendorResponseQuestionnaireV1 } from "../../../../../contracts/generated/vendor-response-questionnaire-v1";
+import type { VendorResponseV1 } from "../../../../../contracts/generated/vendor-response-v1";
+
+export type VendorResponseFormat = "structured_v1" | "legacy_unstructured";
+
+export type StructuredResponseSummary = {
+  questionnaire: {
+    questionnaireId: string;
+    questionnaireVersion: number;
+    questionnaireChecksum: string;
+    proposalVersion: number;
+    decimalPrecision: number;
+  };
+  calculation: VendorResponseCalculationV1;
+  roomCoverage: { total: number; responded: number };
+  crewCount: number;
+  alternateCount: number;
+  referenceCount: number;
+  documentCounts: Array<{ purposeId: string; count: number }>;
+};
+
+export type VendorSubmissionTimelineVersion = {
+  versionId: string;
+  versionNumber: number;
+  parentVersionId: string | null;
+  reason: string;
+  sourceSystem: string;
+  format: VendorResponseFormat;
+  receivedAt: string;
+  manifestChecksum: string;
+  vendorName: string;
+  submittedBy: string;
+  email: string;
+  message: string;
+  questionnaire: VendorResponseQuestionnaireV1 | null;
+  structuredResponse: VendorResponseV1 | null;
+  calculationSnapshot: VendorResponseCalculationV1 | null;
+  retiredDocuments: Array<{
+    documentId: string;
+    retiredFromVersionId: string;
+  }>;
+  documents: Array<{
+    documentId: string;
+    sourceId: string;
+    name: string;
+    url: string;
+    mimeType: string;
+    sizeBytes: number | null;
+    sha256: string | null;
+    scanStatus: "clean" | "skipped" | "legacy_unknown";
+    purposeId: string | null;
+    scopeType: "proposal" | "room" | "crew_member" | "reference" | null;
+    scopeId: string | null;
+    versionDisposition: "added" | "inherited" | "legacy";
+    inheritedFromVersionId: string | null;
+  }>;
+};
+
 export interface VendorResponseReadRepository {
   listOwnedProposalSummaries(input: {
     ownerUserId: string;
@@ -47,30 +106,7 @@ export interface VendorResponseReadRepository {
       createdAt: string;
       updatedAt: string;
     } | null;
-    versions: Array<{
-      versionId: string;
-      versionNumber: number;
-      parentVersionId: string | null;
-      reason: string;
-      sourceSystem: string;
-      receivedAt: string;
-      manifestChecksum: string;
-      vendorName: string;
-      submittedBy: string;
-      email: string;
-      message: string;
-      documents: Array<{
-        documentId: string;
-        sourceId: string;
-        name: string;
-        url: string;
-        mimeType: string;
-        sizeBytes: number | null;
-        sha256: string | null;
-        scanStatus: "clean" | "skipped" | "legacy_unknown";
-        inheritedFromVersionId: string | null;
-      }>;
-    }>;
+    versions: VendorSubmissionTimelineVersion[];
   } | null>;
 }
 

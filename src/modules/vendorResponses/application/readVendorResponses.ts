@@ -130,12 +130,18 @@ export const createGetOwnedVendorSubmissionDetail =
     const versions = await Promise.all(
       timeline.versions.map(async (version) => {
         const signed = await withSignedDocumentUrls(version, documentUrlSigner);
-        return { ...version, documents: signed.documents ?? [] };
+        return {
+          ...version,
+          documents: Array.isArray(signed.documents)
+            ? signed.documents as typeof version.documents
+            : [],
+        };
       }),
     );
     return {
       kind: "found" as const,
       detail: {
+        historyTruncated: timeline.historyTruncated,
         response: await withSignedDocumentUrls(response, documentUrlSigner),
         submission: timeline.submission,
         versions,

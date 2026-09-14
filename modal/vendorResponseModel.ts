@@ -16,6 +16,23 @@ const vendorDocumentSchema = new Schema(
     sizeBytes: { type: Number, min: 0, default: null },
     sha256: { type: String, trim: true, default: null },
     scanStatus: { type: String, trim: true },
+    purposeId: { type: String, trim: true, default: null },
+    scopeType: {
+      type: String,
+      enum: ["proposal", "room", "crew_member", "reference", null],
+      default: null,
+    },
+    scopeId: { type: String, trim: true, default: null },
+    versionDisposition: {
+      type: String,
+      enum: ["added", "inherited", "legacy"],
+      default: "legacy",
+    },
+    inheritedFromVersionId: {
+      type: Schema.Types.ObjectId,
+      ref: "VendorSubmissionVersion",
+      default: null,
+    },
   },
   { _id: false },
 );

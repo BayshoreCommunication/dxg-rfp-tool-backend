@@ -19,6 +19,122 @@ import { vendorUploadMalwareScan } from "./infrastructure/security/vendorUploadM
 import { vendorResponseNotificationAdapter } from "./infrastructure/notifications/vendorResponseNotificationAdapter";
 import { vendorConfirmationEmailAdapter } from "./infrastructure/email/vendorConfirmationEmailAdapter";
 import { postgresVendorSubmissionSourceRegistry } from "./infrastructure/postgres/postgresVendorSubmissionSourceRegistry";
+import { createVendorResponseQuestionnaireService } from "./application/vendorResponseWorkspace";
+import { mongoVendorResponseQuestionnaireRepository } from "./infrastructure/mongo/mongoVendorResponseQuestionnaireRepository";
+import {
+  createVendorSubmissionDraftService,
+  VendorSubmissionDraftError,
+} from "./application/vendorSubmissionDrafts";
+import { mongoVendorSubmissionDraftRepository } from "./infrastructure/mongo/mongoVendorSubmissionDraftRepository";
+import type { VendorSubmissionDraftScope } from "./domain/draft";
+import {
+  createFinalizeVendorSubmissionDraft,
+  VendorSubmissionFinalizationError,
+} from "./application/finalizeVendorSubmissionDraft";
+
+const questionnaireService = createVendorResponseQuestionnaireService(
+  mongoVendorResponseQuestionnaireRepository,
+);
+export const publishVendorResponseQuestionnaire = questionnaireService.publish;
+export const configureVendorResponseCapability = questionnaireService.configure;
+
+const configuredDraftRetentionDays = Number.parseInt(
+  process.env.VENDOR_DRAFT_RETENTION_DAYS ?? "",
+  10,
+);
+const draftService = createVendorSubmissionDraftService({
+  repository: mongoVendorSubmissionDraftRepository,
+  storage: spacesVendorDocumentStorage,
+  malwareScan: vendorUploadMalwareScan,
+  folderName: process.env.DO_FOLDER_NAME || "rfp-tool",
+  retentionDays: Number.isFinite(configuredDraftRetentionDays)
+    ? configuredDraftRetentionDays
+    : undefined,
+});
+
+type DraftGrantInput = VendorSubmissionDraftScope & { grantActorId: string };
+
+export const getPublicVendorResponseWorkspace = async (
+  input: DraftGrantInput,
+) => {
+  const workspace = await questionnaireService.workspace(input);
+  if (!workspace.capabilities.structuredResponse) return workspace;
+  return draftService.hydrateWorkspace(workspace, input);
+};
+
+export const createOrResumePublicVendorResponseDraft = async (
+  input: DraftGrantInput & { submissionId?: string | null },
+) => {
+  const workspace = await questionnaireService.workspace(input);
+  if (!workspace.capabilities.structuredResponse || !workspace.questionnaire) {
+    throw new VendorSubmissionDraftError(
+      "DRAFT_INACTIVE",
+      409,
+      "Structured vendor responses are not enabled for this proposal",
+    );
+  }
+  if (!workspace.access.canEdit) {
+    throw new VendorSubmissionDraftError(
+      "DRAFT_INACTIVE",
+      409,
+      workspace.access.message ?? "This proposal is not accepting draft changes",
+    );
+  }
+  return draftService.createOrResume({
+    ...input,
+    submissionId: input.submissionId,
+    questionnaire: workspace.questionnaire,
+  });
+};
+
+export const createOrResumePublicVendorResponseRevisionDraft = async (
+  input: DraftGrantInput & { submissionId: string },
+) => {
+  const workspace = await questionnaireService.workspace(input);
+  if (!workspace.capabilities.structuredResponse) {
+    throw new VendorSubmissionDraftError(
+      "DRAFT_INACTIVE",
+      409,
+      "Structured vendor responses are not enabled for this proposal",
+    );
+  }
+  if (!workspace.access.canEdit) {
+    throw new VendorSubmissionDraftError(
+      "DRAFT_INACTIVE",
+      409,
+      workspace.access.message ?? "This proposal is not accepting draft changes",
+    );
+  }
+  return draftService.createOrResumeRevision(input);
+};
+
+const requireStructuredDraftAccess = async (input: VendorSubmissionDraftScope) => {
+  await questionnaireService.assertStructuredEnabled(input);
+};
+
+export const getPublicVendorResponseDraft: typeof draftService.get = async (...args) => {
+  await requireStructuredDraftAccess(args[0]);
+  return draftService.get(...args);
+};
+export const savePublicVendorResponseDraft: typeof draftService.save = async (input) => {
+  await requireStructuredDraftAccess(input);
+  return draftService.save(input);
+};
+export const uploadPublicVendorResponseDraftDocuments:
+  typeof draftService.uploadDocuments = async (input) => {
+    await requireStructuredDraftAccess(input);
+    return draftService.uploadDocuments(input);
+  };
+export const retirePublicVendorResponseDraftDocument:
+  typeof draftService.retireDocument = async (input) => {
+    await requireStructuredDraftAccess(input);
+    return draftService.retireDocument(input);
+  };
+export const abandonPublicVendorResponseDraft: typeof draftService.abandon = async (input) => {
+  await requireStructuredDraftAccess(input);
+  return draftService.abandon(input);
+};
+export const cleanupExpiredVendorResponseDrafts = draftService.cleanupExpired;
 
 export const listOwnedVendorResponses = createListOwnedVendorResponses(
   mongoVendorResponseReadRepository,
@@ -50,6 +166,32 @@ const submitVendorResponseVersion = createSubmitVendorResponse({
   folderName: process.env.DO_FOLDER_NAME || "rfp-tool",
   malwareScan: vendorUploadMalwareScan,
 });
+
+const finalizeVendorResponseDraft = createFinalizeVendorSubmissionDraft({
+  draftRepository: mongoVendorSubmissionDraftRepository,
+  submissionRepository: mongoVendorSubmissionRepository,
+  notifier: vendorResponseNotificationAdapter,
+  confirmation: vendorConfirmationEmailAdapter,
+  sourceRegistry: postgresVendorSubmissionSourceRegistry,
+});
+
+export const finalizePublicVendorResponseDraft = async (
+  input: DraftGrantInput & {
+    draftId: string;
+    expectedRevision: number;
+    idempotencyKey?: unknown;
+  },
+) => {
+  const workspace = await questionnaireService.workspace(input);
+  if (!workspace.capabilities.structuredResponse || !workspace.access.canSubmit) {
+    throw new VendorSubmissionFinalizationError(
+      workspace.access.state === "expired" ? "DRAFT_EXPIRED" : "DRAFT_INACTIVE",
+      workspace.access.state === "expired" ? 410 : 409,
+      workspace.access.message ?? "This proposal is not accepting responses",
+    );
+  }
+  return finalizeVendorResponseDraft(input);
+};
 
 type SubmitInput = Parameters<typeof submitVendorResponseVersion>[0];
 

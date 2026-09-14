@@ -5,22 +5,28 @@ import process from "node:process";
 import { compileFromFile } from "json-schema-to-typescript";
 
 const root = process.cwd();
-const schemaDir = path.join(root, "contracts", "proposal", "v1");
 const outputDir = path.join(root, "contracts", "generated");
 const checkOnly = process.argv.includes("--check");
 
 const contracts = [
-  ["proposal.v1.schema.json", "proposal-v1.ts"],
-  ["proposal-extraction-patch.v1.schema.json", "proposal-extraction-patch-v1.ts"],
-  ["proposal-public.v1.schema.json", "proposal-public-v1.ts"],
+  ["proposal/v1", "proposal.v1.schema.json", "proposal-v1.ts"],
+  ["proposal/v1", "proposal-extraction-patch.v1.schema.json", "proposal-extraction-patch-v1.ts"],
+  ["proposal/v1", "proposal-public.v1.schema.json", "proposal-public-v1.ts"],
+  ["vendor-response/v1", "vendor-response-questionnaire.v1.schema.json", "vendor-response-questionnaire-v1.ts"],
+  ["vendor-response/v1", "vendor-response.v1.schema.json", "vendor-response-v1.ts"],
+  ["vendor-response/v1", "vendor-response-calculation.v1.schema.json", "vendor-response-calculation-v1.ts"],
+  ["vendor-response/v1", "vendor-response-validation-error.v1.schema.json", "vendor-response-validation-error-v1.ts"],
+  ["vendor-response/v1", "vendor-response-workspace.v1.schema.json", "vendor-response-workspace-v1.ts"],
 ];
-const metadataContracts = ["proposal-form-ui.v1.json"];
+const metadataContracts = [["proposal/v1", "proposal-form-ui.v1.json"]];
+const manifestSchemaKey = (contractDir, name) =>
+  contractDir === "proposal/v1" ? name : `${contractDir}/${name}`;
 
-const compileOptions = {
-  bannerComment:
-    "/* AUTO-GENERATED from contracts/proposal/v1. Do not edit directly. */",
+const compileOptions = (schemaDir, contractDir) => ({
+  bannerComment: `/* AUTO-GENERATED from contracts/${contractDir}. Do not edit directly. */`,
   cwd: schemaDir,
   additionalProperties: false,
+  ignoreMinAndMaxItems: contractDir === "vendor-response/v1",
   style: {
     bracketSpacing: true,
     printWidth: 100,
@@ -30,20 +36,21 @@ const compileOptions = {
     trailingComma: "all",
     useTabs: false,
   },
-};
+});
 
 await mkdir(outputDir, { recursive: true });
 
 let stale = false;
 const schemaHashes = {};
-for (const [schemaName, outputName] of contracts) {
+for (const [contractDir, schemaName, outputName] of contracts) {
+  const schemaDir = path.join(root, "contracts", contractDir);
   const schemaContent = await readFile(path.join(schemaDir, schemaName));
-  schemaHashes[schemaName] = createHash("sha256")
+  schemaHashes[manifestSchemaKey(contractDir, schemaName)] = createHash("sha256")
     .update(schemaContent)
     .digest("hex");
   const generated = await compileFromFile(
     path.join(schemaDir, schemaName),
-    compileOptions,
+    compileOptions(schemaDir, contractDir),
   );
   const outputPath = path.join(outputDir, outputName);
 
@@ -57,15 +64,15 @@ for (const [schemaName, outputName] of contracts) {
     await writeFile(outputPath, generated, "utf8");
   }
 }
-for (const contractName of metadataContracts) {
-  const contractContent = await readFile(path.join(schemaDir, contractName));
-  schemaHashes[contractName] = createHash("sha256")
+for (const [contractDir, contractName] of metadataContracts) {
+  const contractContent = await readFile(path.join(root, "contracts", contractDir, contractName));
+  schemaHashes[manifestSchemaKey(contractDir, contractName)] = createHash("sha256")
     .update(contractContent)
     .digest("hex");
 }
 
 const manifest = `${JSON.stringify({
-  contractRelease: "proposal.v1",
+  contractRelease: "proposal.v1+vendor-response.v1",
   generatedAt: null,
   schemas: schemaHashes,
 }, null, 2)}\n`;

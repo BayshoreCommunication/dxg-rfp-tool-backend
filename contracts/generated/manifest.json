@@ -1,10 +1,15 @@
 {
-  "contractRelease": "proposal.v1",
+  "contractRelease": "proposal.v1+vendor-response.v1",
   "generatedAt": null,
   "schemas": {
     "proposal.v1.schema.json": "699ded53fed4a7f7c727a650125c20e3e74b2f7b8e6336e253e89dd40ec389c0",
     "proposal-extraction-patch.v1.schema.json": "086fc8c0b863fcce2f9da5ae9e69cd0d4081aaf8b5fcb24bb6525f9f2e70a09a",
     "proposal-public.v1.schema.json": "a9f70d0dba5ab4a453e1469eccc5b3f2a78291e53ada915b28bad041bd82c3aa",
+    "vendor-response/v1/vendor-response-questionnaire.v1.schema.json": "a74677eed70b3dfe437f16aa18693f10f0c14820a068a84cab2d188696440ab6",
+    "vendor-response/v1/vendor-response.v1.schema.json": "bc0e8128085d094237db2bf6b004c4883887448b938a517db9dd5c4ad1d237ac",
+    "vendor-response/v1/vendor-response-calculation.v1.schema.json": "0b6a40c7ea5ef6204d6381624e16acfd190e9518abdc1033dd4fb6279f887804",
+    "vendor-response/v1/vendor-response-validation-error.v1.schema.json": "f3196cb363fd090b7a2dc755b13927499a300a9ac7a980621d8180a739491128",
+    "vendor-response/v1/vendor-response-workspace.v1.schema.json": "371dbc573f77a0f5fea518f6cf3a06be82d98a7529c34d2e25d42aea748d6758",
     "proposal-form-ui.v1.json": "877106869f8fda1c9fbbf22e0da8f2ef5717bec2c15f8ae7ef23feb19a53d46f"
   }
 }

@@ -44,11 +44,12 @@ The backend is a transitional modular monolith. The API creates authoritative re
 
 ## Vendor submission flow
 
-1. A scoped public grant admits a vendor response; every file is size/count bounded, scanned, and stored privately.
-2. The client supplies a stable submission idempotency key. A retry returns the original receipt before scanning or uploading again.
-3. The API resolves a stable vendor submission and creates an immutable version with parent, reason, ordered source manifest, and checksum.
-4. The latest version is projected into the legacy vendor-response record for current inbox and analysis compatibility.
-5. Eligible file metadata is registered in PostgreSQL under the governed `vendor_submission` source purpose. Registration is idempotent and may be reconciled by the backfill when the data foundation was temporarily unavailable.
+1. A scoped public grant admits a vendor workspace and one active draft; every categorized file is size/count bounded, content-checked, scanned, and stored privately.
+2. The draft pins an immutable questionnaire and uses `draftRevision` compare-and-swap. Finalization claims that exact revision and rejects expired, incomplete, stale, or document-mismatched state.
+3. The server stamps acknowledgement acceptance, calculates authoritative totals, and freezes the questionnaire, structured response, calculation, document disposition, and checksum in one immutable submission version.
+4. A unique finalized-draft reference and stable idempotency key make retries converge on the original receipt. Revision drafts remain bound to the original public grant and inherit the current version without copying its stored objects.
+5. The latest version is projected into the legacy vendor-response record for current inbox and analysis compatibility.
+6. Eligible file metadata is registered in PostgreSQL under the governed `vendor_submission` source purpose. Registration is idempotent and may be reconciled by the backfill when the data foundation was temporarily unavailable.
 
 ## Requirement registry flow
 

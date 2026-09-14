@@ -1,0 +1,355 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rfpilot.com/contracts/vendor-response-questionnaire.v1.schema.json",
+  "title": "VendorResponseQuestionnaireV1",
+  "description": "Immutable proposal-specific questionnaire presented to a vendor.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "questionnaireId",
+    "questionnaireVersion",
+    "questionnaireChecksum",
+    "proposalId",
+    "proposalVersion",
+    "status",
+    "context",
+    "identity",
+    "sections",
+    "acknowledgements",
+    "companyProfile",
+    "rooms",
+    "hybrid",
+    "crew",
+    "pricing",
+    "alternates",
+    "references",
+    "documents",
+    "valueAdds",
+    "publishedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "vendor-response-questionnaire.v1" },
+    "questionnaireId": { "$ref": "#/$defs/identifier" },
+    "questionnaireVersion": { "type": "integer", "minimum": 1 },
+    "questionnaireChecksum": { "$ref": "#/$defs/checksum" },
+    "proposalId": { "$ref": "#/$defs/identifier" },
+    "proposalVersion": { "type": "integer", "minimum": 1 },
+    "status": { "type": "string", "enum": ["published", "superseded"] },
+    "context": { "$ref": "#/$defs/context" },
+    "identity": { "$ref": "#/$defs/identityConfiguration" },
+    "sections": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 11,
+      "items": { "$ref": "#/$defs/section" }
+    },
+    "acknowledgements": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "$ref": "#/$defs/acknowledgement" }
+    },
+    "companyProfile": { "$ref": "#/$defs/companyProfileConfiguration" },
+    "rooms": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/room" }
+    },
+    "hybrid": { "$ref": "#/$defs/hybridConfiguration" },
+    "crew": { "$ref": "#/$defs/crewConfiguration" },
+    "pricing": { "$ref": "#/$defs/pricingConfiguration" },
+    "alternates": { "$ref": "#/$defs/alternateConfiguration" },
+    "references": { "$ref": "#/$defs/referenceConfiguration" },
+    "documents": { "$ref": "#/$defs/documentConfiguration" },
+    "valueAdds": { "$ref": "#/$defs/valueAddConfiguration" },
+    "publishedAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "checksum": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "boundedText": { "type": "string", "maxLength": 10000 },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proposalTitle", "currency", "decimalPrecision"],
+      "properties": {
+        "proposalTitle": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "eventFormat": { "type": "string", "enum": ["in_person", "hybrid", "virtual"] },
+        "venueName": { "type": "string", "maxLength": 300 },
+        "venueLocation": { "type": "string", "maxLength": 300 },
+        "eventStartDate": { "type": "string", "format": "date" },
+        "eventEndDate": { "type": "string", "format": "date" },
+        "proposalDueDate": { "type": "string", "format": "date" },
+        "plannerOrganizationName": { "type": "string", "maxLength": 300 },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "decimalPrecision": { "type": "integer", "minimum": 0, "maximum": 4 }
+      }
+    },
+    "identityConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vendorNameRequired", "submittedByRequired", "emailRequired"],
+      "properties": {
+        "vendorNameRequired": { "type": "boolean" },
+        "submittedByRequired": { "type": "boolean" },
+        "emailRequired": { "type": "boolean" }
+      }
+    },
+    "sectionId": {
+      "type": "string",
+      "enum": [
+        "compliance",
+        "company_profile",
+        "rooms",
+        "crew",
+        "travel",
+        "pricing",
+        "alternates",
+        "references",
+        "documents",
+        "value_adds",
+        "review"
+      ]
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sectionId", "title", "order", "enabled", "required", "condition", "evaluationMappings"],
+      "properties": {
+        "sectionId": { "$ref": "#/$defs/sectionId" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "helperText": { "type": "string", "maxLength": 2000 },
+        "order": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "enabled": { "type": "boolean" },
+        "required": { "type": "boolean" },
+        "condition": { "type": "string", "enum": ["always", "travel_flagged"] },
+        "evaluationMappings": {
+          "type": "array",
+          "maxItems": 20,
+          "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+        }
+      }
+    },
+    "acknowledgement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acknowledgementId", "label", "text", "textChecksum", "required"],
+      "properties": {
+        "acknowledgementId": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "textChecksum": { "$ref": "#/$defs/checksum" },
+        "required": { "type": "boolean" }
+      }
+    },
+    "clientMixCategory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["categoryId", "label"],
+      "properties": {
+        "categoryId": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 }
+      }
+    },
+    "companyProfileConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "legalNameRequired",
+        "headquartersRequired",
+        "yearsInBusinessEnabled",
+        "staffCountEnabled",
+        "largestComparableEventEnabled",
+        "clientMix",
+        "deiPolicyRequired",
+        "sustainabilityPolicyRequired"
+      ],
+      "properties": {
+        "legalNameRequired": { "type": "boolean" },
+        "headquartersRequired": { "type": "boolean" },
+        "yearsInBusinessEnabled": { "type": "boolean" },
+        "staffCountEnabled": { "type": "boolean" },
+        "largestComparableEventEnabled": { "type": "boolean" },
+        "clientMix": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "required", "categories"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "required": { "type": "boolean" },
+            "categories": {
+              "type": "array",
+              "maxItems": 20,
+              "items": { "$ref": "#/$defs/clientMixCategory" }
+            }
+          }
+        },
+        "deiPolicyRequired": { "type": "boolean" },
+        "sustainabilityPolicyRequired": { "type": "boolean" }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["specId", "category", "label", "requirementText", "sourcePath", "allowedResponses", "noteMaxLength"],
+      "properties": {
+        "specId": { "$ref": "#/$defs/identifier" },
+        "category": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "requirementText": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "sourcePath": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "allowedResponses": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["comply", "substitute", "exception"] }
+        },
+        "noteMaxLength": { "type": "integer", "minimum": 1, "maximum": 4000 }
+      }
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roomId", "name", "streamingApplicable", "specs"],
+      "properties": {
+        "roomId": { "$ref": "#/$defs/identifier" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "location": { "type": "string", "maxLength": 300 },
+        "setup": { "type": "string", "maxLength": 300 },
+        "scheduleSummary": { "type": "string", "maxLength": 1000 },
+        "estimatedAttendees": { "type": "integer", "minimum": 0 },
+        "streamingApplicable": { "type": "boolean" },
+        "specs": {
+          "type": "array",
+          "maxItems": 500,
+          "items": { "$ref": "#/$defs/spec" }
+        }
+      }
+    },
+    "hybridConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platformPlanRequired", "platformPlanMaxWords", "roomPlanMaxWords", "externalUrlsAllowed"],
+      "properties": {
+        "platformPlanRequired": { "type": "boolean" },
+        "platformPlanMaxWords": { "type": "integer", "minimum": 1, "maximum": 2000 },
+        "roomPlanMaxWords": { "type": "integer", "minimum": 1, "maximum": 2000 },
+        "externalUrlsAllowed": { "type": "boolean" }
+      }
+    },
+    "namedOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 }
+      }
+    },
+    "crewConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roles", "requiredRoleIds", "bioMaxWords", "headshotAllowed", "headshotRequired"],
+      "properties": {
+        "roles": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/$defs/namedOption" } },
+        "requiredRoleIds": { "type": "array", "maxItems": 100, "uniqueItems": true, "items": { "$ref": "#/$defs/identifier" } },
+        "bioMaxWords": { "type": "integer", "minimum": 1, "maximum": 2000 },
+        "headshotAllowed": { "type": "boolean" },
+        "headshotRequired": { "type": "boolean" }
+      }
+    },
+    "feeLine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["feeId", "label", "kind", "required"],
+      "properties": {
+        "feeId": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "kind": { "type": "string", "enum": ["fee", "tax"] },
+        "required": { "type": "boolean" }
+      }
+    },
+    "pricingConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "decimalPrecision", "equipmentCategories", "feeLines", "travelSubtotalRequired", "discountRequired", "assumptionsAllowed"],
+      "properties": {
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "decimalPrecision": { "type": "integer", "minimum": 0, "maximum": 4 },
+        "equipmentCategories": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/$defs/namedOption" } },
+        "feeLines": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/feeLine" } },
+        "travelSubtotalRequired": { "type": "boolean" },
+        "discountRequired": { "type": "boolean" },
+        "assumptionsAllowed": { "type": "boolean" }
+      }
+    },
+    "alternateConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "minimumCount", "maximumCount"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minimumCount": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "maximumCount": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "referenceConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "minimumCount", "maximumCount", "maxAgeMonths", "maxVisualsPerReference"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minimumCount": { "type": "integer", "minimum": 0, "maximum": 50 },
+        "maximumCount": { "type": "integer", "minimum": 0, "maximum": 50 },
+        "maxAgeMonths": { "type": "integer", "minimum": 0, "maximum": 240 },
+        "maxVisualsPerReference": { "type": "integer", "minimum": 0, "maximum": 20 }
+      }
+    },
+    "documentCategory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["purposeId", "label", "required", "minimumFiles", "maximumFiles", "maximumFileBytes", "allowedMimeTypes"],
+      "properties": {
+        "purposeId": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "helperText": { "type": "string", "maxLength": 1000 },
+        "required": { "type": "boolean" },
+        "minimumFiles": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "maximumFiles": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "maximumFileBytes": { "type": "integer", "minimum": 1, "maximum": 104857600 },
+        "allowedMimeTypes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 30,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 3, "maxLength": 120 }
+        }
+      }
+    },
+    "documentConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["categories", "globalMaximumFiles"],
+      "properties": {
+        "categories": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/documentCategory" } },
+        "globalMaximumFiles": { "type": "integer", "minimum": 1, "maximum": 500 }
+      }
+    },
+    "valueAddConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "required", "maxWords"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "required": { "type": "boolean" },
+        "maxWords": { "type": "integer", "minimum": 1, "maximum": 5000 }
+      }
+    }
+  }
+}

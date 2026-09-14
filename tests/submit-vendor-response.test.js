@@ -175,11 +175,15 @@ test("new submission normalizes data, scopes storage, and notifies planner", asy
     vendorName: "AV Partners",
     submittedBy: "Avery Vendor",
     email: "sales@av.example",
+    versionNumber: 1,
+    responseFormat: "legacy_unstructured",
+    grandTotalMinor: null,
+    currency: null,
   });
   assert.equal(capture.confirmation.isUpdate, false);
 });
 
-test("existing submission creates an immutable next version without creating planner notification", async () => {
+test("existing submission creates an immutable next version and notifies the planner", async () => {
   const capture = {};
   const deps = dependencies(capture);
   deps.repository.findExisting = async () => ({
@@ -204,7 +208,20 @@ test("existing submission creates an immutable next version without creating pla
   assert.equal(result.submission.versionNumber, 2);
   assert.equal(capture.save.existingResponse._id, "response-existing");
   assert.equal(capture.save.trackingId, "new-campaign");
-  assert.equal(capture.notification, undefined);
+  assert.deepEqual(capture.notification, {
+    proposalId: "proposal-001",
+    organizationId: "507f1f77bcf86cd799439011",
+    ownerUserId: "planner-001",
+    proposalTitle: "DXG Summit",
+    responseId: "response-existing",
+    vendorName: "AV Partners",
+    submittedBy: "Avery",
+    email: "vendor@example.com",
+    versionNumber: 2,
+    responseFormat: "legacy_unstructured",
+    grandTotalMinor: null,
+    currency: null,
+  });
   assert.equal(capture.confirmation.isUpdate, true);
   assert.equal(capture.confirmation.proposalTitle, "DXG Summit");
 });
