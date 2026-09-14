@@ -31,15 +31,35 @@ export interface VendorResponseNotifier {
     vendorName: string;
     submittedBy: string;
     email: string;
+    versionNumber: number;
+    responseFormat: "structured_v1" | "legacy_unstructured";
+    grandTotalMinor: number | null;
+    currency: string | null;
   }): Promise<void>;
 }
 
 export interface VendorConfirmationSender {
   send(input: {
+    organizationId: string;
+    proposalId: string;
+    submissionId: string;
+    versionId: string;
+    versionNumber: number;
     email: string;
     vendorName: string;
     submittedBy: string;
     proposalTitle: string;
     isUpdate: boolean;
-  }): Promise<void>;
+    receivedAt: string;
+    manifestChecksum: string;
+    questionnaireVersion: number | null;
+    grandTotalMinor: number | null;
+    currency: string | null;
+    currencyDecimalPrecision: number;
+    fileCount: number;
+  }): Promise<{
+    status: "accepted" | "failed";
+    attemptedAt: string;
+    acceptedAt: string | null;
+  }>;
 }

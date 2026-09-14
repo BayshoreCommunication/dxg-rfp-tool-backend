@@ -119,6 +119,9 @@ const harness = (draftInput = buildDraft()) => {
     },
   };
   const submissionRepository = {
+    async getReceipt() {
+      return null;
+    },
     async findVersionByFinalizedDraft(input) {
       return versions.find((entry) =>
         entry.organizationId === input.organizationId

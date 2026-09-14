@@ -79,6 +79,11 @@ const receiptFrom = (
   questionnaire: record.questionnaire,
   calculationSnapshot: record.calculationSnapshot,
   finalizedDraftId: record.finalizedDraftId,
+  confirmationDelivery: {
+    status: "unknown",
+    attemptedAt: null,
+    acceptedAt: null,
+  },
 });
 
 const activeDocuments = (draft: VendorSubmissionDraftRecord) =>
@@ -202,6 +207,13 @@ export const createFinalizeVendorSubmissionDraft = (dependencies: {
     );
   }
 
+  const receiptFor = async (record: VendorSubmissionVersionRecord) =>
+    await dependencies.submissionRepository.getReceipt({
+      proposalId: record.proposalId,
+      versionId: record.versionId,
+      email: record.email,
+    }) ?? receiptFrom(record);
+
   const alreadyFinalized = async () => {
     const replay = await dependencies.submissionRepository.findVersionByFinalizedDraft({
       organizationId: input.organizationId,
@@ -218,7 +230,7 @@ export const createFinalizeVendorSubmissionDraft = (dependencies: {
     }
     return {
       kind: "duplicate" as const,
-      receipt: receiptFrom(replay),
+      receipt: await receiptFor(replay),
       sourceRegistration: await reconcileVendorSubmissionSources(
         dependencies.sourceRegistry,
         replay,
@@ -416,7 +428,7 @@ export const createFinalizeVendorSubmissionDraft = (dependencies: {
       if (replay) {
         return {
           kind: "duplicate" as const,
-          receipt: receiptFrom(replay),
+          receipt: await receiptFor(replay),
           sourceRegistration: await reconcileVendorSubmissionSources(
             dependencies.sourceRegistry,
             replay,
@@ -435,27 +447,50 @@ export const createFinalizeVendorSubmissionDraft = (dependencies: {
       dependencies.sourceRegistry,
       saved.record,
     );
-    if (saved.created && saved.record.versionNumber === 1) {
+    if (saved.created) {
       await dependencies.notifier.notifyPlanner({
         ...proposal,
         responseId: String(saved.record.response._id),
         vendorName: saved.record.vendorName,
         submittedBy: saved.record.submittedBy,
         email: saved.record.email,
+        versionNumber: saved.record.versionNumber,
+        responseFormat: "structured_v1",
+        grandTotalMinor: saved.record.calculationSnapshot?.grandTotalMinor ?? null,
+        currency: saved.record.calculationSnapshot?.currency ?? null,
       });
     }
+    let confirmationDelivery = saved.created
+      ? receiptFrom(saved.record).confirmationDelivery
+      : (await receiptFor(saved.record)).confirmationDelivery;
     if (saved.created) {
-      void dependencies.confirmation.send({
+      confirmationDelivery = await dependencies.confirmation.send({
+        organizationId: saved.record.organizationId,
+        proposalId: saved.record.proposalId,
+        submissionId: saved.record.submissionId,
+        versionId: saved.record.versionId,
+        versionNumber: saved.record.versionNumber,
         email: saved.record.email,
         vendorName: saved.record.vendorName,
         submittedBy: saved.record.submittedBy,
         proposalTitle: saved.record.proposalTitle,
         isUpdate: saved.record.versionNumber > 1,
+        receivedAt: saved.record.receivedAt,
+        manifestChecksum: saved.record.manifestChecksum,
+        questionnaireVersion: saved.record.questionnaire?.questionnaireVersion ?? null,
+        grandTotalMinor: saved.record.calculationSnapshot?.grandTotalMinor ?? null,
+        currency: saved.record.calculationSnapshot?.currency ?? null,
+        currencyDecimalPrecision:
+          saved.record.questionnaireSnapshot?.context.decimalPrecision ?? 2,
+        fileCount: saved.record.documents.length,
       });
     }
     return {
       kind: saved.created ? ("created" as const) : ("duplicate" as const),
-      receipt: receiptFrom(saved.record),
+      receipt: {
+        ...receiptFrom(saved.record),
+        confirmationDelivery,
+      },
       sourceRegistration,
     };
   } catch (error) {

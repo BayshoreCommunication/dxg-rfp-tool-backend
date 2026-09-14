@@ -4,6 +4,7 @@ import { safeLog } from "../../../shared/observability/safeTelemetry";
 import type {
   VendorSubmissionRepository,
   VendorDocument,
+  VendorSubmissionReceipt,
   VendorSubmissionSourceRegistry,
   VendorSubmissionVersionRecord,
 } from "../domain/ports/vendorSubmissionRepository";
@@ -201,11 +202,17 @@ export const createSubmitVendorResponse = (dependencies: {
   if (replay) {
     await Promise.all(input.files.map((file) => dependencies.storage.cleanup(file.path)));
     const sourceRegistration = await reconcileVendorSubmissionSources(dependencies.sourceRegistry, replay);
+    const receipt = await dependencies.repository.getReceipt({
+      proposalId: replay.proposalId,
+      versionId: replay.versionId,
+      email: replay.email,
+    });
     return {
       kind: "duplicate" as const,
       response: replay.response,
       submission: replay,
       sourceRegistration,
+      confirmationDelivery: receipt?.confirmationDelivery,
     };
   }
 
@@ -287,24 +294,58 @@ export const createSubmitVendorResponse = (dependencies: {
   // and the vendor never submitted anything here, so a "we received your
   // response" confirmation to them would be a false receipt.
   if (channel === "public_portal") {
-    if (saved.created && saved.record.versionNumber === 1) {
+    if (saved.created) {
       await dependencies.notifier.notifyPlanner({
         ...proposal,
         responseId: String(saved.record.response._id),
         vendorName,
         submittedBy,
         email,
+        versionNumber: saved.record.versionNumber,
+        responseFormat: "legacy_unstructured",
+        grandTotalMinor: null,
+        currency: null,
       });
     }
+    let confirmationDelivery: VendorSubmissionReceipt["confirmationDelivery"] | undefined;
     if (saved.created) {
-      void dependencies.confirmation.send({
+      confirmationDelivery = await dependencies.confirmation.send({
+        organizationId: saved.record.organizationId,
+        proposalId: saved.record.proposalId,
+        submissionId: saved.record.submissionId,
+        versionId: saved.record.versionId,
+        versionNumber: saved.record.versionNumber,
         email,
         vendorName,
         submittedBy,
         proposalTitle: proposal.proposalTitle,
         isUpdate: saved.record.versionNumber > 1,
+        receivedAt: saved.record.receivedAt,
+        manifestChecksum: saved.record.manifestChecksum,
+        questionnaireVersion: null,
+        grandTotalMinor: null,
+        currency: null,
+        currencyDecimalPrecision: 2,
+        fileCount: saved.record.documents.length,
       });
+    } else {
+      confirmationDelivery = (await dependencies.repository.getReceipt({
+        proposalId: saved.record.proposalId,
+        versionId: saved.record.versionId,
+        email: saved.record.email,
+      }))?.confirmationDelivery;
     }
+    return {
+      kind: saved.created
+        ? saved.record.versionNumber === 1
+          ? ("created" as const)
+          : ("version_created" as const)
+        : ("duplicate" as const),
+      response: saved.record.response,
+      submission: saved.record,
+      sourceRegistration,
+      confirmationDelivery,
+    };
   }
 
   return {
