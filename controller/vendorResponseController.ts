@@ -29,6 +29,10 @@ import type {
   VendorDraftDocumentScopeType,
   VendorSubmissionDraftScope,
 } from "../src/modules/vendorResponses/domain/draft";
+import {
+  renderVendorResponsePrintHtml,
+  vendorResponseExportPayload,
+} from "../src/modules/vendorResponses/application/vendorResponseExport";
 
 const sendWorkspaceError = (
   res: Response,
@@ -412,6 +416,7 @@ export const finalizeVendorResponseDraft = async (
           disposition: document.versionDisposition,
         })),
         sourceRegistration: result.sourceRegistration,
+        confirmationDelivery: result.receipt.confirmationDelivery,
       },
     });
   } catch (error) {
@@ -613,6 +618,11 @@ const sendSubmissionOutcome = (
       receivedAt: result.submission.receivedAt,
       manifestChecksum: result.submission.manifestChecksum,
       sourceRegistration: result.sourceRegistration,
+      confirmationDelivery: result.confirmationDelivery ?? {
+        status: "unknown",
+        attemptedAt: null,
+        acceptedAt: null,
+      },
     },
   });
 };
@@ -802,12 +812,21 @@ export const getVendorResponseReceipt = async (
         vendorName: receipt.vendorName,
         submittedBy: receipt.submittedBy,
         email: receipt.email,
+        responseSchemaVersion: receipt.responseSchemaVersion,
+        questionnaire: receipt.questionnaire,
+        calculation: receipt.calculationSnapshot,
+        fileCount: receipt.documents.length,
+        confirmationDelivery: receipt.confirmationDelivery,
         documents: receipt.documents.map((document) => ({
           documentId: document.documentId,
           name: document.name,
           sizeBytes: document.sizeBytes,
           sha256: document.sha256,
           scanStatus: document.scanStatus,
+          purposeId: document.purposeId,
+          scopeType: document.scopeType,
+          scopeId: document.scopeId,
+          disposition: document.versionDisposition,
         })),
       },
     });
@@ -989,6 +1008,72 @@ export const getVendorSubmissionDetail = async (
       success: false,
       message: "Error fetching vendor submission detail",
       error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+export const exportVendorSubmissionVersion = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const result = await getOwnedVendorSubmissionDetail({
+      responseId: req.params.id,
+      ownerUserId: userId,
+    });
+    if (result.kind === "not_found") {
+      res.status(404).json({ success: false, message: "Vendor response not found" });
+      return;
+    }
+    const requestedVersion = typeof req.query.versionId === "string"
+      ? req.query.versionId
+      : result.detail.submission?.currentVersionId;
+    const version = result.detail.versions.find((item) =>
+      item.versionId === requestedVersion,
+    );
+    if (!version) {
+      res.status(404).json({ success: false, message: "Submission version not found" });
+      return;
+    }
+    const fileBase = `${version.vendorName || "vendor"}-response-v${version.versionNumber}`
+      .replace(/[^a-z0-9_-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase();
+    if (req.query.format === "json") {
+      res
+        .status(200)
+        .set({
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${fileBase}.json"`,
+          "Cache-Control": "private, no-store",
+        })
+        .send(JSON.stringify(vendorResponseExportPayload({
+          proposalTitle: String(result.detail.response.proposalTitle ?? "Proposal"),
+          version,
+        }), null, 2));
+      return;
+    }
+    res
+      .status(200)
+      .set({
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${fileBase}.html"`,
+        "Cache-Control": "private, no-store",
+      })
+      .send(renderVendorResponsePrintHtml({
+        proposalTitle: String(result.detail.response.proposalTitle ?? "Proposal"),
+        version,
+      }));
+  } catch (error) {
+    console.error("Export vendor submission version error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Vendor response export is temporarily unavailable",
     });
   }
 };

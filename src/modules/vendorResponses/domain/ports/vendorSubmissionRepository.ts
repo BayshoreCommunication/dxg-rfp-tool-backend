@@ -94,6 +94,11 @@ export type VendorSubmissionReceipt = Omit<
     VendorDocument,
     "url" | "objectKey" | "inheritedFromVersionId"
   >>;
+  confirmationDelivery: {
+    status: "accepted" | "failed" | "unknown";
+    attemptedAt: string | null;
+    acceptedAt: string | null;
+  };
 };
 
 export interface VendorSubmissionRepository {

@@ -5,6 +5,7 @@ import Proposal from "../../../../../modal/proposalsModel";
 import VendorResponse from "../../../../../modal/vendorResponseModel";
 import VendorSubmission from "../../../../../modal/vendorSubmissionModel";
 import VendorSubmissionVersion from "../../../../../modal/vendorSubmissionVersionModel";
+import VendorConfirmationDelivery from "../../../../../modal/vendorConfirmationDeliveryModel";
 import { spacesObjectKeyFromUrl } from "../../../../../utils/uploadToSpaces";
 import type {
   VendorDocument,
@@ -724,11 +725,13 @@ export const mongoVendorSubmissionRepository: VendorSubmissionRepository & {
   },
 
   async getReceipt({ proposalId, versionId, email }) {
-    const version = await VendorSubmissionVersion.findOne({
+    const [version, delivery] = await Promise.all([VendorSubmissionVersion.findOne({
       _id: versionId,
       proposalId,
       email: email.trim().toLowerCase(),
-    }).lean<any>();
+    }).lean<any>(), VendorConfirmationDelivery.findOne({ versionId, proposalId })
+      .select("status attemptedAt acceptedAt")
+      .lean<any>()]);
     if (!version) return null;
     const submission = await VendorSubmission.findById(version.submissionId).lean<any>();
     if (!submission) return null;
@@ -765,6 +768,17 @@ export const mongoVendorSubmissionRepository: VendorSubmissionRepository & {
       questionnaire: record.questionnaire,
       calculationSnapshot: record.calculationSnapshot,
       finalizedDraftId: record.finalizedDraftId,
+      confirmationDelivery: delivery
+        ? {
+            status: delivery.status === "accepted" ? "accepted" : "failed",
+            attemptedAt: delivery.attemptedAt
+              ? new Date(delivery.attemptedAt).toISOString()
+              : null,
+            acceptedAt: delivery.acceptedAt
+              ? new Date(delivery.acceptedAt).toISOString()
+              : null,
+          }
+        : { status: "unknown", attemptedAt: null, acceptedAt: null },
     };
   },
 

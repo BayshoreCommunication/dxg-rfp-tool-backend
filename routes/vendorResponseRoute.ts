@@ -9,6 +9,7 @@ import {
   getVendorResponseProposals,
   getVendorResponseById,
   getVendorSubmissionDetail,
+  exportVendorSubmissionVersion,
   markVendorResponseRead,
   recordVendorResponseOnBehalf,
   getVendorResponseWorkspace,
@@ -197,6 +198,13 @@ router.get(
   authorizeAction("vendor-response:read"),
   validateResponseId,
   getVendorSubmissionDetail,
+);
+router.get(
+  "/:id/submission-export",
+  authenticate,
+  authorizeAction("vendor-response:read"),
+  validateResponseId,
+  exportVendorSubmissionVersion,
 );
 router.get(
   "/:id",
