@@ -13,6 +13,7 @@ export interface IVendorResponseQuestionnaireVersion extends Document {
   sourceChecksum: string;
   schemaVersion: "vendor-response-questionnaire.v1";
   projectionVersion: string;
+  responseFormat: "structured_v1";
   status: VendorResponseQuestionnaireLifecycleStatus;
   questionnaire: VendorResponseQuestionnaireV1;
   publishedByActorId: string;
@@ -57,6 +58,12 @@ const questionnaireVersionSchema = new Schema<IVendorResponseQuestionnaireVersio
       required: true,
     },
     projectionVersion: { type: String, required: true, trim: true },
+    responseFormat: {
+      type: String,
+      enum: ["structured_v1"],
+      required: true,
+      default: "structured_v1",
+    },
     status: {
       type: String,
       enum: ["published", "superseded"],

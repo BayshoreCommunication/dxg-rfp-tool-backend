@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import type { Request, Response, NextFunction } from "express";
 import {
   checkVendorResponseExists,
+  configureVendorResponseRollout,
   getVendorResponseReceipt,
   submitVendorResponse,
   getVendorResponses,
@@ -171,6 +172,13 @@ router.post(
   authorizeAction("vendor-response:write"),
   plannerWriteLimit,
   publishVendorQuestionnaire,
+);
+router.patch(
+  "/questionnaires/capability",
+  authenticate,
+  authorizeAction("vendor-response:write"),
+  plannerWriteLimit,
+  configureVendorResponseRollout,
 );
 router.post(
   "/manual",

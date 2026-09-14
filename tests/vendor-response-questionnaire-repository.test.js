@@ -44,6 +44,7 @@ test("proposal loading scopes Mongo reads by tenant, proposal, and optional owne
           isActive: true,
           isOpen: true,
           isArchived: false,
+          proposalSettings: { vendorResponseFormat: "structured_v1" },
         }),
       }),
     };
@@ -58,9 +59,41 @@ test("proposal loading scopes Mongo reads by tenant, proposal, and optional owne
     });
     assert.equal(result.organizationId, organizationId);
     assert.equal(result.ownerUserId, ownerUserId);
+    assert.equal(result.responseFormat, "structured_v1");
     assert.equal(result.legacyProposal._id, proposalId);
   } finally {
     Proposal.findOne = original;
+  }
+});
+
+test("proposal rollout marker updates are tenant and owner scoped", async () => {
+  const original = Proposal.updateOne;
+  let capturedFilter;
+  let capturedUpdate;
+  Proposal.updateOne = async (filter, update) => {
+    capturedFilter = filter;
+    capturedUpdate = update;
+    return { matchedCount: 1 };
+  };
+  try {
+    const updated = await repository.setResponseFormat({
+      organizationId,
+      proposalId,
+      ownerUserId,
+      responseFormat: "legacy_unstructured",
+    });
+    assert.equal(updated, true);
+    assert.deepEqual(capturedFilter, {
+      _id: proposalId,
+      organizationId,
+      userId: ownerUserId,
+    });
+    assert.equal(
+      capturedUpdate.$set["proposalSettings.vendorResponseFormat"],
+      "legacy_unstructured",
+    );
+  } finally {
+    Proposal.updateOne = original;
   }
 });
 
@@ -142,6 +175,7 @@ test("changed publication creates version n plus one and supersedes only older p
     assert.equal(createdInput.questionnaireVersion, 4);
     assert.equal(createdInput.questionnaire.questionnaireVersion, 4);
     assert.equal(createdInput.status, "published");
+    assert.equal(createdInput.responseFormat, "structured_v1");
     assert.deepEqual(updateFilter, {
       organizationId,
       proposalId,

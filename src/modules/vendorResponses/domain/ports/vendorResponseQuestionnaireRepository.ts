@@ -1,5 +1,6 @@
 import type { VendorResponseQuestionnaireV1 } from "../../../../../contracts/generated/vendor-response-questionnaire-v1";
 import type { VendorResponseQuestionnaireProjection } from "../questionnaire";
+import type { VendorResponseFormat } from "../rollout";
 
 export type VendorResponseQuestionnaireProposalSnapshot = {
   organizationId: string;
@@ -10,6 +11,7 @@ export type VendorResponseQuestionnaireProposalSnapshot = {
   isActive: boolean;
   isOpen: boolean;
   isArchived: boolean;
+  responseFormat: VendorResponseFormat;
   legacyProposal: Record<string, unknown>;
 };
 
@@ -24,6 +26,12 @@ export interface VendorResponseQuestionnaireRepository {
     proposalId: string;
     ownerUserId?: string;
   }): Promise<VendorResponseQuestionnaireProposalSnapshot | null>;
+  setResponseFormat(input: {
+    organizationId: string;
+    proposalId: string;
+    ownerUserId: string;
+    responseFormat: VendorResponseFormat;
+  }): Promise<boolean>;
   publish(input: {
     organizationId: string;
     proposalId: string;

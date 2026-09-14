@@ -22,6 +22,7 @@ const proposalId = "507f1f77bcf86cd799439011";
 const organizationId = "507f1f77bcf86cd799439012";
 const ownerUserId = "507f1f77bcf86cd799439013";
 const fixedNow = new Date("2026-09-14T12:00:00.000Z");
+process.env.VENDOR_STRUCTURED_RESPONSES_ENABLED = "true";
 
 const legacyProposal = (overrides = {}) => ({
   _id: proposalId,
@@ -91,6 +92,7 @@ const sourceSnapshot = (overrides = {}) => ({
   isActive: true,
   isOpen: true,
   isArchived: false,
+  responseFormat: "structured_v1",
   legacyProposal: legacyProposal(),
   ...overrides,
 });
@@ -103,6 +105,14 @@ const inMemoryRepository = (snapshot = sourceSnapshot()) => {
       if (input.organizationId !== organizationId || input.proposalId !== proposalId) return null;
       if (input.ownerUserId && input.ownerUserId !== ownerUserId) return null;
       return snapshot;
+    },
+    async setResponseFormat(input) {
+      snapshot.responseFormat = input.responseFormat;
+      snapshot.legacyProposal.proposalSettings = {
+        ...(snapshot.legacyProposal.proposalSettings ?? {}),
+        vendorResponseFormat: input.responseFormat,
+      };
+      return true;
     },
     async publish(input) {
       const existing = publications.find((entry) => entry.sourceChecksum === input.sourceChecksum);
@@ -187,6 +197,12 @@ test("workspace returns only the contract DTO and derives open, closed, and expi
   const openService = createVendorResponseQuestionnaireService(inMemoryRepository(), () => fixedNow);
   const open = await openService.workspace({ organizationId, proposalId, grantActorId: ownerUserId });
   assert.equal(validateVendorResponseWorkspaceV1(open), true);
+  assert.equal(open.proposalTitle, "Annual Leadership Summit");
+  assert.deepEqual(open.capabilities, {
+    structuredResponse: true,
+    responseFormat: "structured_v1",
+    reason: "enabled",
+  });
   assert.deepEqual(open.access, { state: "open", canEdit: true, canSubmit: true });
   assert.equal(open.draft, null);
   assert.equal(open.currentSubmission, null);
@@ -210,6 +226,65 @@ test("workspace returns only the contract DTO and derives open, closed, and expi
   assert.equal(expired.access.canEdit, false);
 });
 
+test("global and proposal rollout gates return a legacy bootstrap without publishing", async () => {
+  const original = process.env.VENDOR_STRUCTURED_RESPONSES_ENABLED;
+  const repository = inMemoryRepository();
+  process.env.VENDOR_STRUCTURED_RESPONSES_ENABLED = "false";
+  const globallyDisabled = await createVendorResponseQuestionnaireService(
+    repository,
+    () => fixedNow,
+  ).workspace({ organizationId, proposalId, grantActorId: ownerUserId });
+  assert.equal(globallyDisabled.capabilities.reason, "global_flag_disabled");
+  assert.equal(globallyDisabled.questionnaire, null);
+  assert.equal(repository.publications.length, 0);
+
+  process.env.VENDOR_STRUCTURED_RESPONSES_ENABLED = "true";
+  const proposalRepository = inMemoryRepository(sourceSnapshot({
+    responseFormat: "legacy_unstructured",
+  }));
+  const proposalDisabled = await createVendorResponseQuestionnaireService(
+    proposalRepository,
+    () => fixedNow,
+  ).workspace({ organizationId, proposalId, grantActorId: ownerUserId });
+  assert.equal(proposalDisabled.capabilities.reason, "proposal_not_enabled");
+  assert.equal(proposalDisabled.questionnaire, null);
+  assert.equal(proposalRepository.publications.length, 0);
+  if (original === undefined) delete process.env.VENDOR_STRUCTURED_RESPONSES_ENABLED;
+  else process.env.VENDOR_STRUCTURED_RESPONSES_ENABLED = original;
+});
+
+test("proposal capability can be enabled and rolled back without removing publications", async () => {
+  const repository = inMemoryRepository(sourceSnapshot({
+    responseFormat: "legacy_unstructured",
+  }));
+  const service = createVendorResponseQuestionnaireService(repository, () => fixedNow);
+  const enabled = await service.configure({
+    organizationId,
+    proposalId,
+    actorId: ownerUserId,
+    ownerUserId,
+    responseFormat: "structured_v1",
+  });
+  assert.equal(enabled.publication.created, true);
+  assert.equal(repository.publications.length, 1);
+  const disabled = await service.configure({
+    organizationId,
+    proposalId,
+    actorId: ownerUserId,
+    ownerUserId,
+    responseFormat: "legacy_unstructured",
+  });
+  assert.equal(disabled.publication, null);
+  assert.equal(repository.publications.length, 1);
+  const workspace = await service.workspace({
+    organizationId,
+    proposalId,
+    grantActorId: ownerUserId,
+  });
+  assert.equal(workspace.capabilities.responseFormat, "legacy_unstructured");
+  assert.equal(workspace.questionnaire, null);
+});
+
 test("publication remains tenant and owner scoped and fails closed for an invalid source", async () => {
   const repository = inMemoryRepository();
   const service = createVendorResponseQuestionnaireService(repository, () => fixedNow);
@@ -231,6 +306,25 @@ test("publication remains tenant and owner scoped and fails closed for an invali
     (error) => error instanceof VendorResponseWorkspaceError
       && error.code === "QUESTIONNAIRE_SOURCE_INVALID",
   );
+
+  const invalidConfigureSource = sourceSnapshot({
+    responseFormat: "legacy_unstructured",
+    legacyProposal: legacyProposal({ contact: {} }),
+  });
+  const invalidConfigureRepository = inMemoryRepository(invalidConfigureSource);
+  await assert.rejects(
+    () => createVendorResponseQuestionnaireService(invalidConfigureRepository, () => fixedNow)
+      .configure({
+        organizationId,
+        proposalId,
+        actorId: ownerUserId,
+        ownerUserId,
+        responseFormat: "structured_v1",
+      }),
+    (error) => error instanceof VendorResponseWorkspaceError
+      && error.code === "QUESTIONNAIRE_SOURCE_INVALID",
+  );
+  assert.equal(invalidConfigureSource.responseFormat, "legacy_unstructured");
 });
 
 test("Mongo questionnaire storage declares version uniqueness and immutable content", () => {
@@ -243,6 +337,7 @@ test("Mongo questionnaire storage declares version uniqueness and immutable cont
       && options.unique === true));
   assert.ok(model.schema.path("questionnaireChecksum"));
   assert.ok(model.schema.path("sourceChecksum"));
+  assert.equal(model.schema.path("responseFormat").options.default, "structured_v1");
 
   const repositorySource = fs.readFileSync(
     path.join(__dirname, "../src/modules/vendorResponses/infrastructure/mongo/mongoVendorResponseQuestionnaireRepository.ts"),
@@ -271,5 +366,9 @@ test("workspace and publication routes retain grant, rate-limit, and authorizati
   assert.match(
     routeSource,
     /"\/questionnaires\/publish",\s*authenticate,\s*authorizeAction\("vendor-response:write"\),\s*plannerWriteLimit/,
+  );
+  assert.match(
+    routeSource,
+    /"\/questionnaires\/capability",\s*authenticate,\s*authorizeAction\("vendor-response:write"\),\s*plannerWriteLimit/,
   );
 });

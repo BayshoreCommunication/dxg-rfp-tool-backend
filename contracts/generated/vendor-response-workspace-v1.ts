@@ -17,13 +17,19 @@ export type DocumentReference = {
 
 export interface VendorResponseWorkspaceV1 {
   schemaVersion: "vendor-response-workspace.v1";
+  proposalTitle: string;
+  capabilities: {
+    structuredResponse: boolean;
+    responseFormat: "structured_v1" | "legacy_unstructured";
+    reason: "enabled" | "global_flag_disabled" | "proposal_not_enabled";
+  };
   access: {
     state: "open" | "closed" | "expired" | "revoked" | "unavailable";
     canEdit: boolean;
     canSubmit: boolean;
     message?: string;
   };
-  questionnaire: VendorResponseQuestionnaireV1;
+  questionnaire: null | VendorResponseQuestionnaireV1;
   draft: null | {
     draftId: string;
     draftRevision: number;

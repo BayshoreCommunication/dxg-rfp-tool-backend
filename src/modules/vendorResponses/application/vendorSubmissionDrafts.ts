@@ -4,7 +4,7 @@ import type { VendorResponseV1 } from "../../../../contracts/generated/vendor-re
 import type { VendorResponseWorkspaceV1 } from "../../../../contracts/generated/vendor-response-workspace-v1";
 import { validateVendorResponseWorkspaceV1 } from "../../../../contracts/vendor-response/v1/validators";
 import { safeFilename } from "../../documentIngestion/domain";
-import { safeLog } from "../../../shared/observability/safeTelemetry";
+import { pseudonym, safeLog } from "../../../shared/observability/safeTelemetry";
 import {
   createEmptyStructuredVendorResponse,
   toVendorDraftDocumentDto,
@@ -321,6 +321,13 @@ export const createVendorSubmissionDraftService = (dependencies: {
             existing.draftRevision,
           );
         }
+        safeLog("info", "vendor_response_draft_ready", {
+          organizationPseudonym: pseudonym(input.organizationId),
+          proposalPseudonym: pseudonym(input.proposalId),
+          draftPseudonym: pseudonym(existing.draftId),
+          responseFormat: "structured_v1",
+          outcome: "resumed",
+        });
         return {
           draft: toVendorSubmissionDraftDetailDto(existing),
           created: false,
@@ -341,6 +348,13 @@ export const createVendorSubmissionDraftService = (dependencies: {
           result.draft.draftRevision,
         );
       }
+      safeLog("info", "vendor_response_draft_ready", {
+        organizationPseudonym: pseudonym(input.organizationId),
+        proposalPseudonym: pseudonym(input.proposalId),
+        draftPseudonym: pseudonym(result.draft.draftId),
+        responseFormat: "structured_v1",
+        outcome: result.created ? "created" : "resumed",
+      });
       return {
         draft: toVendorSubmissionDraftDetailDto(result.draft),
         created: result.created,
@@ -450,6 +464,15 @@ export const createVendorSubmissionDraftService = (dependencies: {
         draft.documents,
         at,
       );
+      safeLog("info", "vendor_response_draft_saved", {
+        organizationPseudonym: pseudonym(input.organizationId),
+        proposalPseudonym: pseudonym(input.proposalId),
+        draftPseudonym: pseudonym(updated.draftId),
+        responseFormat: "structured_v1",
+        roomCount: updated.response.rooms.length,
+        documentCount: activeDocumentCount(updated),
+        outcome: "success",
+      });
       return toVendorSubmissionDraftDetailDto(updated);
     },
 

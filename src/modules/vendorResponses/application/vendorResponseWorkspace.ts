@@ -1,12 +1,18 @@
 import type { VendorResponseWorkspaceV1 } from "../../../../contracts/generated/vendor-response-workspace-v1";
 import { validateVendorResponseWorkspaceV1 } from "../../../../contracts/vendor-response/v1/validators";
 import { mapLegacyProposalToV1 } from "../../../../contracts/proposal/v1/legacyAdapter";
+import { pseudonym, safeLog } from "../../../shared/observability/safeTelemetry";
 import {
   projectProposalToVendorResponseQuestionnaire,
   questionnaireProjectionChecksum,
 } from "../domain/questionnaire";
+import type { VendorResponseFormat } from "../domain/rollout";
+import { resolveVendorStructuredResponseRollout } from "../domain/rollout";
 import { validateVendorResponseQuestionnaire } from "../domain/structuredResponse";
-import type { VendorResponseQuestionnaireRepository } from "../domain/ports/vendorResponseQuestionnaireRepository";
+import type {
+  VendorResponseQuestionnaireProposalSnapshot,
+  VendorResponseQuestionnaireRepository,
+} from "../domain/ports/vendorResponseQuestionnaireRepository";
 
 export class VendorResponseWorkspaceError extends Error {
   constructor(
@@ -14,6 +20,7 @@ export class VendorResponseWorkspaceError extends Error {
       | "PROPOSAL_NOT_FOUND"
       | "QUESTIONNAIRE_SOURCE_INVALID"
       | "QUESTIONNAIRE_INVALID"
+      | "STRUCTURED_RESPONSE_DISABLED"
       | "WORKSPACE_INVALID",
     public readonly status: number,
     message: string,
@@ -24,22 +31,63 @@ export class VendorResponseWorkspaceError extends Error {
 
 const dateOnly = (date: Date): string => date.toISOString().slice(0, 10);
 
+const nestedString = (
+  value: Record<string, unknown>,
+  parent: string,
+  child: string,
+): string => {
+  const record = value[parent];
+  return record && typeof record === "object"
+    && typeof (record as Record<string, unknown>)[child] === "string"
+    ? String((record as Record<string, unknown>)[child]).trim()
+    : "";
+};
+
+const proposalTitle = (
+  source: VendorResponseQuestionnaireProposalSnapshot,
+): string => nestedString(source.legacyProposal, "event", "eventName")
+  || "Vendor response";
+
+const accessFor = (
+  source: VendorResponseQuestionnaireProposalSnapshot,
+  dueDate: string,
+  at: Date,
+): VendorResponseWorkspaceV1["access"] => {
+  const expired = Boolean(dueDate && dueDate < dateOnly(at));
+  const closed = source.isArchived
+    || !source.isActive
+    || !source.isOpen
+    || source.isDraft
+    || source.status === "unsubmitted";
+  if (expired) {
+    return {
+      state: "expired",
+      canEdit: false,
+      canSubmit: false,
+      message: "The response deadline has passed.",
+    };
+  }
+  if (closed) {
+    return {
+      state: "closed",
+      canEdit: false,
+      canSubmit: false,
+      message: "This proposal is not accepting vendor responses.",
+    };
+  }
+  return { state: "open", canEdit: true, canSubmit: true };
+};
+
 export const createVendorResponseQuestionnaireService = (
   repository: VendorResponseQuestionnaireRepository,
   now: () => Date = () => new Date(),
 ) => {
-  const publish = async (input: {
+  const loadProposal = async (input: {
     organizationId: string;
     proposalId: string;
-    actorId: string;
     ownerUserId?: string;
   }) => {
-    const publicationTime = now();
-    const source = await repository.loadProposal({
-      organizationId: input.organizationId,
-      proposalId: input.proposalId,
-      ownerUserId: input.ownerUserId,
-    });
+    const source = await repository.loadProposal(input);
     if (!source) {
       throw new VendorResponseWorkspaceError(
         "PROPOSAL_NOT_FOUND",
@@ -47,6 +95,14 @@ export const createVendorResponseQuestionnaireService = (
         "Proposal not found",
       );
     }
+    return source;
+  };
+
+  const publishSource = async (
+    source: VendorResponseQuestionnaireProposalSnapshot,
+    input: { actorId: string },
+  ) => {
+    const publicationTime = now();
     const mapped = mapLegacyProposalToV1(source.legacyProposal, {
       organizationId: source.organizationId,
       ownerUserId: source.ownerUserId,
@@ -87,47 +143,103 @@ export const createVendorResponseQuestionnaireService = (
     };
   };
 
+  const publish = async (input: {
+    organizationId: string;
+    proposalId: string;
+    actorId: string;
+    ownerUserId?: string;
+  }) => publishSource(await loadProposal(input), input);
+
+  const assertStructuredEnabled = async (input: {
+    organizationId: string;
+    proposalId: string;
+    ownerUserId?: string;
+  }) => {
+    const source = await loadProposal(input);
+    const capabilities = resolveVendorStructuredResponseRollout(source.responseFormat);
+    if (!capabilities.structuredResponse) {
+      throw new VendorResponseWorkspaceError(
+        "STRUCTURED_RESPONSE_DISABLED",
+        409,
+        "Structured vendor responses are not enabled for this proposal",
+      );
+    }
+    return source;
+  };
+
   return {
     publish,
+    assertStructuredEnabled,
+    async configure(input: {
+      organizationId: string;
+      proposalId: string;
+      actorId: string;
+      ownerUserId: string;
+      responseFormat: VendorResponseFormat;
+    }) {
+      const source = await loadProposal(input);
+      const publication = input.responseFormat === "structured_v1"
+        ? (await publishSource(
+            { ...source, responseFormat: input.responseFormat },
+            input,
+          )).publication
+        : null;
+      const updated = await repository.setResponseFormat(input);
+      if (!updated) {
+        throw new VendorResponseWorkspaceError(
+          "PROPOSAL_NOT_FOUND",
+          404,
+          "Proposal not found",
+        );
+      }
+      safeLog("info", "vendor_response_rollout_configured", {
+        organizationPseudonym: pseudonym(source.organizationId),
+        proposalPseudonym: pseudonym(source.proposalId),
+        responseFormat: input.responseFormat,
+        operation: "configure",
+        outcome: "success",
+      });
+      return { responseFormat: input.responseFormat, publication };
+    },
     async workspace(input: {
       organizationId: string;
       proposalId: string;
       grantActorId: string;
     }): Promise<VendorResponseWorkspaceV1> {
-      const { source, publication } = await publish({
-        organizationId: input.organizationId,
-        proposalId: input.proposalId,
-        actorId: input.grantActorId,
-      });
-      const dueDate = publication.questionnaire.context.proposalDueDate;
-      const expired = Boolean(dueDate && dueDate < dateOnly(now()));
-      const closed = source.isArchived
-        || !source.isActive
-        || !source.isOpen
-        || source.isDraft
-        || source.status === "unsubmitted";
-      const access = expired
-        ? {
-            state: "expired" as const,
-            canEdit: false,
-            canSubmit: false,
-            message: "The response deadline has passed.",
-          }
-        : closed
-          ? {
-              state: "closed" as const,
-              canEdit: false,
-              canSubmit: false,
-              message: "This proposal is not accepting vendor responses.",
-            }
-          : { state: "open" as const, canEdit: true, canSubmit: true };
+      const source = await loadProposal(input);
+      const capabilities = resolveVendorStructuredResponseRollout(source.responseFormat);
+      const at = now();
+      const fallbackDueDate = nestedString(
+        source.legacyProposal,
+        "budget",
+        "proposalSubmissionDueDate",
+      );
+      let questionnaire: VendorResponseWorkspaceV1["questionnaire"] = null;
+      if (capabilities.structuredResponse) {
+        questionnaire = (await publishSource(source, {
+          actorId: input.grantActorId,
+        })).publication.questionnaire;
+      }
       const workspace: VendorResponseWorkspaceV1 = {
         schemaVersion: "vendor-response-workspace.v1",
-        access,
-        questionnaire: publication.questionnaire,
+        proposalTitle: questionnaire?.context.proposalTitle ?? proposalTitle(source),
+        capabilities,
+        access: accessFor(
+          source,
+          questionnaire?.context.proposalDueDate ?? fallbackDueDate,
+          at,
+        ),
+        questionnaire,
         draft: null,
         currentSubmission: null,
       };
+      safeLog("info", "vendor_response_workspace_resolved", {
+        organizationPseudonym: pseudonym(source.organizationId),
+        proposalPseudonym: pseudonym(source.proposalId),
+        responseFormat: capabilities.responseFormat,
+        rolloutReason: capabilities.reason,
+        outcome: workspace.access.state,
+      });
       if (!validateVendorResponseWorkspaceV1(workspace)) {
         throw new VendorResponseWorkspaceError(
           "WORKSPACE_INVALID",

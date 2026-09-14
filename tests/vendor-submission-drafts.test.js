@@ -468,6 +468,12 @@ test("workspace resumes the questionnaire snapshot pinned by its active draft", 
   newer.questionnaireChecksum = "c".repeat(64);
   const workspace = {
     schemaVersion: "vendor-response-workspace.v1",
+    proposalTitle: "Vendor response fixture",
+    capabilities: {
+      structuredResponse: true,
+      responseFormat: "structured_v1",
+      reason: "enabled",
+    },
     access: { state: "open", canEdit: true, canSubmit: true },
     questionnaire: newer,
     draft: null,
@@ -485,6 +491,12 @@ test("workspace exposes the current submission so a returning vendor starts a re
   const harness = serviceHarness();
   const workspace = {
     schemaVersion: "vendor-response-workspace.v1",
+    proposalTitle: "Vendor response fixture",
+    capabilities: {
+      structuredResponse: true,
+      responseFormat: "structured_v1",
+      reason: "enabled",
+    },
     access: { state: "open", canEdit: true, canSubmit: true },
     questionnaire: buildVendorResponseQuestionnaire(),
     draft: null,

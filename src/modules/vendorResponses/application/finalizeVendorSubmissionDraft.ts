@@ -23,6 +23,7 @@ import {
   type VendorResponseValidationIssue,
 } from "../domain/structuredResponse";
 import { reconcileVendorSubmissionSources } from "./submitVendorResponse";
+import { pseudonym, safeLog } from "../../../shared/observability/safeTelemetry";
 
 export class VendorSubmissionFinalizationError extends Error {
   constructor(
@@ -228,6 +229,18 @@ export const createFinalizeVendorSubmissionDraft = (dependencies: {
         now: at,
       });
     }
+    safeLog("info", "vendor_response_submission_finalized", {
+      organizationPseudonym: pseudonym(replay.organizationId),
+      proposalPseudonym: pseudonym(replay.proposalId),
+      submissionPseudonym: pseudonym(replay.submissionId),
+      draftPseudonym: pseudonym(input.draftId),
+      responseFormat: "structured_v1",
+      versionNumber: replay.versionNumber,
+      roomCount: replay.structuredResponse?.rooms.length ?? 0,
+      documentCount: replay.documents.length,
+      specCount: replay.calculationSnapshot?.specCounts.total ?? 0,
+      outcome: "duplicate",
+    });
     return {
       kind: "duplicate" as const,
       receipt: await receiptFor(replay),
@@ -485,6 +498,18 @@ export const createFinalizeVendorSubmissionDraft = (dependencies: {
         fileCount: saved.record.documents.length,
       });
     }
+    safeLog("info", "vendor_response_submission_finalized", {
+      organizationPseudonym: pseudonym(saved.record.organizationId),
+      proposalPseudonym: pseudonym(saved.record.proposalId),
+      submissionPseudonym: pseudonym(saved.record.submissionId),
+      draftPseudonym: pseudonym(draft.draftId),
+      responseFormat: "structured_v1",
+      versionNumber: saved.record.versionNumber,
+      roomCount: saved.record.structuredResponse?.rooms.length ?? 0,
+      documentCount: saved.record.documents.length,
+      specCount: saved.record.calculationSnapshot?.specCounts.total ?? 0,
+      outcome: saved.created ? "created" : "duplicate",
+    });
     return {
       kind: saved.created ? ("created" as const) : ("duplicate" as const),
       receipt: {
