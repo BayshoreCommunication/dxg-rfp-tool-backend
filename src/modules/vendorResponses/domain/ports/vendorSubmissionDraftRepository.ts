@@ -1,5 +1,6 @@
 import type { VendorResponseQuestionnaireV1 } from "../../../../../contracts/generated/vendor-response-questionnaire-v1";
 import type { VendorResponseV1 } from "../../../../../contracts/generated/vendor-response-v1";
+import type { VendorResponseWorkspaceV1 } from "../../../../../contracts/generated/vendor-response-workspace-v1";
 import type {
   VendorDraftDocument,
   VendorSubmissionDraftRecord,
@@ -7,6 +8,9 @@ import type {
 } from "../draft";
 
 export interface VendorSubmissionDraftRepository {
+  findCurrentSubmission(
+    scope: VendorSubmissionDraftScope,
+  ): Promise<VendorResponseWorkspaceV1["currentSubmission"]>;
   findActive(
     scope: VendorSubmissionDraftScope,
     now: Date,
