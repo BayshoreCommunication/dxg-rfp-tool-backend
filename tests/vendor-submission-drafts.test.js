@@ -687,7 +687,7 @@ test("cleanup checks immutable submission versions before deleting draft objects
   }
 });
 
-test("draft HTTP routes validate grants before multipart intake and keep legacy submission", () => {
+test("draft HTTP routes validate grants before multipart intake and retire legacy submission", () => {
   const routeSource = fs.readFileSync(
     path.join(__dirname, "../routes/vendorResponseRoute.ts"),
     "utf8",
@@ -697,5 +697,5 @@ test("draft HTTP routes validate grants before multipart intake and keep legacy 
     routeSource,
     /"\/drafts\/:draftId\/documents",\s*publicGrantLimit,\s*requirePublicGrant\("vendor:submit", alternateVendorContact\),\s*receiveVendorDocuments/,
   );
-  assert.match(routeSource, /router\.post\(\s*"\/",\s*publicGrantLimit,\s*receiveVendorDocuments/);
+  assert.doesNotMatch(routeSource, /router\.post\(\s*"\/",\s*publicGrantLimit,\s*receiveVendorDocuments/);
 });
