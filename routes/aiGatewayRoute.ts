@@ -10,6 +10,7 @@ import {
   listRuns,
   listSchemas,
   pilotStatus,
+  providerAvailability,
   usageReport,
 } from "../controller/aiGatewayController";
 const router = Router();
@@ -60,6 +61,12 @@ router.get(
   authenticate,
   authorizeAction("security:admin"),
   pilotStatus,
+);
+router.get(
+  "/ai/availability",
+  authenticate,
+  authorizeAction("proposal:read"),
+  providerAvailability,
 );
 router.get(
   "/ai/usage-report",
