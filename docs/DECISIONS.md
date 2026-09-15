@@ -1,6 +1,6 @@
 # Architectural Decisions
 
-> Purpose: concise register of accepted, durable decisions. Last updated: 2026-08-10. Owner: engineering/product.
+> Purpose: concise register of accepted, durable decisions. Last updated: 2026-09-09. Owner: engineering/product.
 
 | Decision | Rationale / consequence |
 |---|---|
@@ -10,7 +10,7 @@
 | Canonical `proposal.v1` contract with generated types. | One validated shape across API, AI, UI, and tests while legacy adapters preserve compatibility. |
 | Canonical migration uses immutable snapshots, not in-place rewrites. | Dry-run, review, idempotency, and rollback without touching legacy records. |
 | AI provider access uses a governed port and pinned model snapshot. | Provider replacement, deterministic release evidence, budget controls, and no hidden legacy endpoint. |
-| Extracted field candidates never auto-apply. | Every candidate remains read-only until the owner reviews individual current/proposed values and explicitly confirms application. The client-side auto-apply hook was removed; the backend's `automatic` path still exists behind `AUTO_APPLY_MIN_CONFIDENCE` but is uncalled. |
+| Assistant-workspace extracted defaults apply automatically (2026-09-09). | Normalized, non-conflicting values attached to open guided fields are written through the canonical question-answer path without a separate confirmation click. Automatic writes fill empty targets only, remain visible with field-level Edit, and never publish or send the proposal. The separate governed candidate-review/application surface retains its explicit review controls. |
 | Room recommendations are the one unattended application path. | Deterministic room suggestions fill **empty** allowlisted room fields without prior approval, so the planner adjusts values in the form instead of approving each. Bounded by: filled fields never overwritten, allowlisted paths only, crew appends only, version CAS plus per-room identity checks, and an audit row per application. Pending explicit DXG confirmation — see `architecture/ROOM_RECOMMENDATIONS.md`. |
 | Publication is always human-controlled. | AI assistance must not become autonomous procurement action. |
 | Investment guidance is deterministic and may refuse. | No fabricated numbers; disclose baseline provenance and unsupported categories. |

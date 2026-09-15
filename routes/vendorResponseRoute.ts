@@ -3,6 +3,8 @@ import mongoose from "mongoose";
 import type { Request, Response, NextFunction } from "express";
 import {
   checkVendorResponseExists,
+  deleteSelectedVendorResponses,
+  deleteVendorResponse,
   getVendorResponseReceipt,
   submitVendorResponse,
   getVendorResponses,
@@ -110,6 +112,13 @@ router.get(
   authorizeAction("vendor-response:read"),
   getVendorResponses,
 );
+router.delete(
+  "/",
+  authenticate,
+  authorizeAction("vendor-response:write"),
+  plannerWriteLimit,
+  deleteSelectedVendorResponses,
+);
 router.get(
   "/proposals",
   authenticate,
@@ -136,6 +145,14 @@ router.patch(
   authorizeAction("vendor-response:read"),
   validateResponseId,
   markVendorResponseRead,
+);
+router.delete(
+  "/:id",
+  authenticate,
+  authorizeAction("vendor-response:write"),
+  plannerWriteLimit,
+  validateResponseId,
+  deleteVendorResponse,
 );
 
 export default router;

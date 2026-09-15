@@ -23,23 +23,6 @@ export const conversationExtractionEnabled = (): boolean =>
 
 export const IDLE_MS = Math.max(5_000, Number(process.env.CONVERSATION_EXTRACT_IDLE_MS) || 45_000);
 export const MAX_TURNS = Math.max(1, Math.min(Number(process.env.CONVERSATION_EXTRACT_MAX_TURNS) || 6, 25));
-/**
- * Minimum substance before a segment is worth a provider call, counted with
- * whitespace stripped. Low deliberately: one clear requirement sentence — "We
- * need 6 breakout rooms at the Chicago Hilton with audio and projection" — is
- * about 67 dense characters and must qualify. The keyword/digit test below is
- * what actually distinguishes a requirement from chatter; this only keeps very
- * short filler out.
- */
-export const MIN_SEGMENT_CHARS = 40;
-// A single detailed brief is already a complete unit of intent. Closing it
-// immediately gives the planner ChatGPT-style prompt handling, while shorter
-// turns still batch so later corrections stay in the same extraction run.
-export const RICH_TURN_CHARS = Math.max(
-  MIN_SEGMENT_CHARS,
-  Number(process.env.CONVERSATION_EXTRACT_RICH_TURN_CHARS) || 240,
-);
-
 // Words that indicate event requirements rather than conversational filler.
 // Deliberately broad and cheap: this only decides whether a segment is worth
 // extracting, and a false positive costs one call while a false negative loses
@@ -47,19 +30,20 @@ export const RICH_TURN_CHARS = Math.max(
 //
 // Note the trailing \w* is applied per-alternative, not to the group: "av" must
 // stand alone or it matches "available", "average", and most of a thank-you.
-const REQUIREMENT_HINTS = new RegExp(
+const REQUIREMENT_HINT_WORDS = [
+  "attend", "guest", "room", "venue", "stage", "screen", "audio", "video", "record",
+  "stream", "hybrid", "virtual", "rig", "power", "budget", "union",
+  "breakout", "keynote", "session", "load[- ]?in", "strike", "camera",
+  "caption", "mic", "projector", "projection", "lighting", "crew", "date", "deadline",
+] as const;
+const requirementHints = (flags: string) => new RegExp(
   "\\b(?:" +
-    [
-      "attend", "room", "venue", "stage", "screen", "audio", "video", "record",
-      "stream", "hybrid", "virtual", "rig", "power", "budget", "union",
-      "breakout", "keynote", "session", "load[- ]?in", "strike", "camera",
-      "caption", "mic", "projector", "lighting", "crew", "date", "deadline",
-    ]
-      .map((word) => `${word}\\w*`)
-      .join("|") +
+    REQUIREMENT_HINT_WORDS.map((word) => `${word}\\w*`).join("|") +
     "|av)\\b",
-  "i",
+  flags,
 );
+const REQUIREMENT_HINTS = requirementHints("i");
+const DATE_HINT = /\b(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2})\b/i;
 
 export type SegmentTurn = { id: string; content: string; createdAt: Date };
 export type SegmentReason = "idle" | "turns" | "explicit" | "rich_turn";
@@ -75,13 +59,24 @@ export const segmentText = (turns: SegmentTurn[]): string =>
     .join("\n\n");
 
 /**
- * Worth extracting? Length alone is a poor signal — a long anecdote is not a
- * requirement — so a segment must also mention something the schema can hold.
+ * Worth extracting? Length is deliberately irrelevant: a concise requirement
+ * is still useful, while a long anecdote is not. The text must mention an event
+ * requirement or a recognizable date.
  */
 export const isSubstantive = (text: string): boolean => {
-  const dense = text.replace(/\s+/g, "");
-  if (dense.length < MIN_SEGMENT_CHARS) return false;
-  return /\d/.test(text) || REQUIREMENT_HINTS.test(text);
+  return REQUIREMENT_HINTS.test(text) || DATE_HINT.test(text);
+};
+
+/**
+ * A single turn can close immediately when it contains several independent
+ * requirement signals. This replaces the old fixed character threshold and
+ * keeps one-value corrections such as "350 attendees" open for batching.
+ */
+export const isSelfContainedBrief = (text: string): boolean => {
+  const hints = new Set(
+    [...text.matchAll(requirementHints("gi"))].map((match) => match[0].toLowerCase()),
+  );
+  return hints.size >= 3 || (hints.size >= 2 && /\d/.test(text)) || (hints.size >= 1 && DATE_HINT.test(text));
 };
 
 /**
@@ -108,7 +103,7 @@ export const evaluateSegment = (input: {
   const idleFor = input.now.getTime() - last.createdAt.getTime();
   const reason: SegmentReason | null = input.explicit
     ? "explicit"
-    : turns.length === 1 && text.length >= RICH_TURN_CHARS
+    : turns.length === 1 && isSelfContainedBrief(text)
       ? "rich_turn"
     : turns.length >= MAX_TURNS
       ? "turns"

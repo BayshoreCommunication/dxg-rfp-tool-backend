@@ -19,6 +19,12 @@ import { vendorUploadMalwareScan } from "./infrastructure/security/vendorUploadM
 import { vendorResponseNotificationAdapter } from "./infrastructure/notifications/vendorResponseNotificationAdapter";
 import { vendorConfirmationEmailAdapter } from "./infrastructure/email/vendorConfirmationEmailAdapter";
 import { postgresVendorSubmissionSourceRegistry } from "./infrastructure/postgres/postgresVendorSubmissionSourceRegistry";
+import {
+  createDeleteOwnedVendorResponse,
+  createDeleteSelectedOwnedVendorResponses,
+} from "./application/deleteVendorResponses";
+import { mongoVendorResponseDeleteRepository } from "./infrastructure/mongo/mongoVendorResponseDeleteRepository";
+import type { VendorResponseDeletionTarget } from "./domain/ports/vendorResponseDeleteRepository";
 
 export const listOwnedVendorResponses = createListOwnedVendorResponses(
   mongoVendorResponseReadRepository,
@@ -35,6 +41,23 @@ export const getOwnedVendorSubmissionDetail =
     mongoVendorResponseReadRepository,
     spacesVendorDocumentUrlSigner,
   );
+const purgeDeletedVendorResponseArtifacts = async (
+  targets: VendorResponseDeletionTarget[],
+) => {
+  if (!targets.length) return;
+  const { purgeVendorResponseArtifacts } = await import(
+    "./infrastructure/postgres/purgeVendorResponseArtifacts"
+  );
+  await purgeVendorResponseArtifacts(targets);
+};
+export const deleteOwnedVendorResponse = createDeleteOwnedVendorResponse(
+  mongoVendorResponseDeleteRepository,
+  purgeDeletedVendorResponseArtifacts,
+);
+export const deleteSelectedOwnedVendorResponses = createDeleteSelectedOwnedVendorResponses(
+  mongoVendorResponseDeleteRepository,
+  purgeDeletedVendorResponseArtifacts,
+);
 export const checkVendorResponse = createCheckVendorResponse(
   mongoVendorSubmissionRepository,
 );

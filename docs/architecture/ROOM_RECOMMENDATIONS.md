@@ -32,15 +32,12 @@ once per physical room.
 > review-first gate for `recommended_assumption` values, and includes
 > assumptions below the 0.8 automatic confidence bar.
 >
-> **Scope note (2026-07-29):** this is now the platform's *only* unattended
-> application path. Extracted field candidates no longer auto-apply — the
-> dashboard's `useAutoApply` was removed in "require explicit field change
-> review", and `applyCandidatesAction` sends explicit `operationIds`. The
-> backend still accepts `automatic` for candidates behind
-> `AUTO_APPLY_MIN_CONFIDENCE`, but nothing calls it. So room recommendations no
-> longer *extend* a shared boundary, as this record previously said; they are
-> the deliberate exception to it, and **that should be flagged to DXG
-> explicitly.** The invariants that remain non-negotiable:
+> **Scope note (updated 2026-09-09):** assistant-workspace extraction now also
+> applies normalized, non-conflicting defaults to empty guided fields and keeps
+> them available for field-level editing. The governed candidate-review surface
+> still requires explicit operation selection. Room recommendations remain a
+> separate deterministic application path with their own narrow allowlist. The
+> invariants that remain non-negotiable:
 > filled fields are never overwritten (skipped and reported), only allowlisted
 > fields can be written, crew changes are `$addToSet` appends (never removals),
 > version CAS and per-room identity checks still gate every write, and every

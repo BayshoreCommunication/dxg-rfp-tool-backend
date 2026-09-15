@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-08-12 · **Branch:** proposal-intelligence delivery branches · **Status:** audit roadmap M1–M6 complete, governed proposal creation and Platform Assistant shipped, and Proposal Intelligence Task 2 submission versioning implemented for review.
+**Last updated:** 2026-09-09 · **Branch:** proposal-intelligence delivery branches · **Status:** audit roadmap M1–M6 complete, governed proposal creation and Platform Assistant shipped, and Proposal Intelligence Task 2 submission versioning implemented for review.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -158,6 +158,23 @@ dashboard reads are scoped to. The dashboard exposes it as "Add response
 manually" on a proposal's responses page; reusing a vendor's email adds the next
 version to that vendor's existing response rather than creating a second one.
 
+### Vendor-response deletion (2026-09-10)
+
+Planners can permanently delete one vendor response or an explicit selection
+of 1–100 responses from a proposal's response list. There is no global
+delete-all operation. The protected delete routes require
+`vendor-response:write` and repeat tenant plus proposal-owner scoping in the
+repository. Selected deletion fails closed before purging anything if any
+requested response is unavailable. Deletion removes the Mongo compatibility
+response, submission, and immutable version chain; private objects are removed
+from storage and registered document sources are tombstoned. Governed analysis
+and audit records remain subject to their existing retention policy. The
+dashboard requires a destructive confirmation before invoking either the
+single or selected operation and refreshes counts and lists after success. The
+proposal-summary read exposes the exact owned response IDs for each paginated
+group, allowing the main inbox to select proposal groups without restoring a
+global delete-all operation.
+
 ### The DXG pricing engine (client workbook)
 
 The founder supplied `RFPilot_AV_Pricing_Engine` (baseline v3): 433 line items
@@ -243,8 +260,9 @@ Lives at **`/proposals/{id}/assistant`** (one surface, one implementation).
 a proposal exists. The editor keeps its stepper and review panels and links to
 the assistant.
 
-Flow: type or attach → sources scan → extraction auto-runs → cited candidates
-remain read-only and link to explicit per-field review → guided key questions
+Flow: type or attach → sources scan → extraction auto-runs → normalized,
+non-conflicting defaults fill empty guided fields automatically and stay visible
+with field-level Edit → guided questions ask only for missing or unclear details
 with typed controls (date picker, time, choice pills, number) → progress card with
 real completeness → generate cited draft → readiness and investment guidance.
 
@@ -256,8 +274,9 @@ call targets only high-value paths whose concepts appear in evidence but remain
 absent. Dates, attendance, and event format receive conservative field-aware
 normalization; recording or remote presenters alone never imply Hybrid.
 Candidates are canonical-normalized and deduplicated before persistence, while
-genuine disagreements remain separate and create blocking conflicts. Extracted
-values remain suggestions until the planner explicitly confirms them.
+genuine disagreements remain separate and create blocking conflicts. In the
+assistant workspace, usable defaults are applied only to empty fields and remain
+editable; publication and vendor delivery remain explicitly human-controlled.
 
 ### The Platform AI Assistant
 
@@ -278,6 +297,24 @@ The runtime baseline remains `gpt-5.4-mini-2026-03-17`; promoting the evaluated
 candidate still requires an explicit Product Owner decision. Production
 internal/cohort rollout also remains blocked until an organization-scoped
 entitlement or deployment allowlist exists.
+
+### Onboarding funnel report (2026-09-13)
+
+`GET /api/dashboard/onboarding-funnel` (security-admin) answers two questions
+about accounts that started in a date window: what share sent a first
+proposal-assistant message and generated a first draft within seven days, and
+how long each took from account start (p50/p90 hours). No new event stream
+was added: both milestones already exist as durable rows (user-role
+`conversation_messages` and succeeded `proposal_draft_runs`, each stamped
+with the acting user) and account start is `rfpilot.users.created_at`, the
+tenant projection written at first sign-in. The report is organization-scoped
+under RLS, aggregate-only with the same five-observation floor as Assistant
+Quality, audited as `onboarding_funnel_report_viewed`, and excludes accounts
+whose activity predates their projection (backfilled legacy users). Rates
+are measured only over accounts old enough for the full window to have
+elapsed. The admin AI Operations page shows it beside Assistant Quality
+(`components/ai/OnboardingFunnelSection.tsx`). Module:
+`src/modules/dashboard/application/onboardingFunnelReport.ts`.
 
 ---
 
@@ -449,3 +486,32 @@ rules are registered in `DECISIONS.md`.
 - **Backfilling `evaluationMatrixConfirmed` on existing proposals.** Product
   decision (2026-07-29): old data is being deleted, so only new proposals matter.
   Every pre-existing proposal therefore reads as unconfirmed.
+
+---
+
+## 9. Conversation provider recovery (2026-09-13)
+
+- A self-contained one-message event brief now closes into proposal-context
+  extraction based on requirement signals rather than a fixed character count.
+  Concise requirements qualify, filler does not, and one-value corrections stay
+  open for batching so conflicts can be detected safely.
+- Temporary live-chat provider failures retain the durable job's retry budget.
+  When that budget is exhausted, the assistant placeholder completes with an
+  honest service-unavailable message instead of becoming the generic red
+  failure turn. It does not claim that fields were saved or extracted.
+- `CONVERSATION_EXTRACTION_ENABLED` was already active in `.env.local`; the
+  observed extraction failure was provider-side HTTP 429
+  `credit_balance_exhausted` (`insufficient_quota`), not a disabled feature.
+  Extraction will resume without another code change after provider credit is
+  restored.
+- Verification: conversation suites 51/51, TypeScript type-check, focused
+  ESLint, and `git diff --check` passed. The affected local proposal was repaired
+  in place and the browser confirmed the red failure was replaced by the new
+  recovery copy.
+- Proposal conversation writes retain the 60-per-IP/15-minute limit and now
+  also enforce 60 writes per authenticated organization/user across IP changes.
+  Message text is capped at 8,000 characters and stored through parameterized
+  PostgreSQL statements.
+- The room-specifications/template guidance now appears immediately after the
+  “How many event rooms are required?” question is answered or skipped, rather
+  than waiting for every guided question to be resolved.

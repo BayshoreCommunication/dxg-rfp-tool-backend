@@ -3,6 +3,8 @@ import mongoose from "mongoose";
 import type { AuthRequest } from "../middleware/auth";
 import {
   checkVendorResponse,
+  deleteOwnedVendorResponse,
+  deleteSelectedOwnedVendorResponses,
   getVendorSubmissionReceipt,
   getOwnedVendorSubmissionDetail,
   getOwnedVendorResponse,
@@ -593,6 +595,101 @@ export const markVendorResponseRead = async (
     res.status(500).json({
       success: false,
       message: "Error updating vendor response",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+export const deleteVendorResponse = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      res
+        .status(401)
+        .json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const result = await deleteOwnedVendorResponse({
+      responseId: req.params.id,
+      ownerUserId: userId,
+    });
+    if (result.kind === "not_found") {
+      res
+        .status(404)
+        .json({ success: false, message: "Vendor response not found" });
+      return;
+    }
+    res.status(200).json({
+      success: true,
+      message: "Vendor response deleted",
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    console.error("Delete vendor response error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error deleting vendor response",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+export const deleteSelectedVendorResponses = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      res
+        .status(401)
+        .json({ success: false, message: "Authentication required" });
+      return;
+    }
+    const responseIds = Array.isArray(req.body?.responseIds)
+      ? [...new Set(req.body.responseIds)]
+      : [];
+    if (
+      responseIds.length === 0 ||
+      responseIds.length > 100 ||
+      responseIds.some(
+        (responseId) =>
+          typeof responseId !== "string" || !mongoose.isValidObjectId(responseId),
+      )
+    ) {
+      res.status(400).json({
+        success: false,
+        message: "Select between 1 and 100 valid vendor responses",
+      });
+      return;
+    }
+    const result = await deleteSelectedOwnedVendorResponses({
+      ownerUserId: userId,
+      responseIds: responseIds as string[],
+    });
+    if (result.kind === "not_found") {
+      res.status(404).json({
+        success: false,
+        message: "One or more vendor responses were not found",
+      });
+      return;
+    }
+    res.status(200).json({
+      success: true,
+      message:
+        result.deletedCount === 1
+          ? "1 vendor response deleted"
+          : `${result.deletedCount} vendor responses deleted`,
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    console.error("Delete selected vendor responses error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error deleting vendor responses",
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }

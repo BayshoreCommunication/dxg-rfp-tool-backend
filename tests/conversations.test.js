@@ -119,11 +119,17 @@ test("room schedule help selects only allowlisted assistant actions", () => {
 });
 
 test("question updates require an answer only when marking answered", () => {
-  assert.deepEqual(parseQuestionUpdate({ status: "dismissed" }), { status: "dismissed", answer: "" });
-  assert.deepEqual(parseQuestionUpdate({ status: "answered", answer: "300 guests" }), { status: "answered", answer: "300 guests" });
+  assert.deepEqual(parseQuestionUpdate({ status: "dismissed" }), { status: "dismissed", answer: "", useOnlyIfEmpty: false });
+  assert.deepEqual(parseQuestionUpdate({ status: "answered", answer: "300 guests" }), { status: "answered", answer: "300 guests", useOnlyIfEmpty: false });
+  assert.deepEqual(parseQuestionUpdate({ status: "answered", answer: "300 guests", useOnlyIfEmpty: true }), {
+    status: "answered",
+    answer: "300 guests",
+    useOnlyIfEmpty: true,
+  });
   assert.deepEqual(parseQuestionUpdate({ status: "answered", answer: { date: "2026-09-01", time: "07:30" } }), {
     status: "answered",
     answer: { date: "2026-09-01", time: "07:30" },
+    useOnlyIfEmpty: false,
   });
   assert.equal(questionAnswerText({ date: "2026-09-01", time: "07:30" }), "2026-09-01 at 07:30");
   assert.throws(() => parseQuestionUpdate({ status: "answered", answer: { date: "2026-09-01" } }), ConversationError);
@@ -452,7 +458,7 @@ test("catch-all explosion and answer field writing are wired into repository and
   const controller = fs.readFileSync(path.join(root, "controller/conversationsController.ts"), "utf8");
   assert.ok(controller.includes("applyAnswersToProposalFields"), "controller must write typed answers into the proposal");
   assert.ok(controller.indexOf("applyAnswersToProposalFields") < controller.indexOf("updateQuestion"), "field writes must precede resolving the question so invalid values re-ask");
-  assert.ok(controller.includes("appendRoomScheduleSuggestionWhenReady"), "finishing guided intake must offer the room schedule workflow");
+  assert.ok(controller.includes("appendRoomScheduleSuggestionWhenReady"), "resolving guided intake must offer the room schedule workflow at the right point");
   const writer = fs.readFileSync(path.join(root, "src/modules/conversations/answerFieldWriter.ts"), "utf8");
   for (const guard of ["normalizeCandidate", "status: \"unsubmitted\"", "isDraft: true", "$ifNull: [\"$version\", 1]", "$cond", "$eq"])
     assert.ok(writer.includes(guard), guard);
@@ -462,7 +468,7 @@ test("catch-all explosion and answer field writing are wired into repository and
     assert.ok(repository.includes(recoveryGuard), recoveryGuard);
   for (const compositeGuard of ["applyAnswersToProposalFields", "questionAnswerText", "appliedFields"])
     assert.ok(controller.includes(compositeGuard), compositeGuard);
-  for (const delayedSuggestionGuard of ["questions_open", "already_suggested", "actions @>", "ROOM_SCHEDULE_GUIDANCE_MESSAGE"])
+  for (const delayedSuggestionGuard of ["/content/venueSchedule/numberOfEventRooms", "room_question_open", "status IN ('answered','dismissed')", "already_suggested", "actions @>", "ROOM_SCHEDULE_GUIDANCE_MESSAGE"])
     assert.ok(repository.includes(delayedSuggestionGuard), delayedSuggestionGuard);
 });
 
@@ -557,7 +563,7 @@ test("conversation migration enforces tenancy, ordinals and question lifecycle",
 
 test("SSE endpoint and message route are wired with authentication", () => {
   const route = fs.readFileSync(path.join(root, "routes/conversationsRoute.ts"), "utf8");
-  for (const value of ["conversation/events", "conversation/messages", "authenticate", "authorizeAction(\"proposal:write\")"])
+  for (const value of ["conversation/events", "conversation/messages", "authenticate", "authorizeAction(\"proposal:write\")", "conversation-user-write", "userWriteLimit"])
     assert.ok(route.includes(value), value);
   const controller = fs.readFileSync(path.join(root, "controller/conversationsController.ts"), "utf8");
   assert.ok(controller.includes("text/event-stream"));
@@ -639,7 +645,7 @@ test("deterministic chat fallbacks welcome the planner without false persistence
   assert.match(replySource, /Answer the first question below/);
   assert.match(replySource, /uploaded TXT, PDF, or DOC file/);
   assert.match(replySource, /keep existing values unchanged/);
-  assert.ok(replySource.includes("latestContent.length >= RICH_TURN_CHARS"));
+  assert.ok(replySource.includes("isSelfContainedBrief(latestContent)"));
   assert.doesNotMatch(replySource, /I've saved that to this proposal/);
   assert.doesNotMatch(replySource, /I’ve saved that to this proposal/);
 });
@@ -714,18 +720,30 @@ test("every non-null suggestion round-trips through the candidate normalizer", (
   }
 });
 
-test("the conversation read payload pre-fills open questions from the latest extraction run", () => {
+test("the conversation read payload keeps extracted defaults editable after automatic use", () => {
   const repository = fs.readFileSync(path.join(root, "src/modules/conversations/postgresConversationRepository.ts"), "utf8");
+  const controller = fs.readFileSync(path.join(root, "controller/conversationsController.ts"), "utf8");
   // The suggestion is sourced from the newest succeeded run's operations,
-  // keyed by path (field-gap questions carry no run id), and conflict
-  // questions are excluded because their candidates disagree by definition.
+  // keyed by path (field-gap questions carry no run id), retained after it is
+  // automatically answered, and replaced by the planner's revised value.
   for (const value of [
     "suggestedAnswerFor",
     "latestSucceededContextRun(c, proposalRefId)",
     "suggestedAnswer:",
+    "reviewAnswer: answeredValue ?? extractedValue",
+    "q.status === \"answered\" && typeof q.answered_content === \"string\"",
+    'q.status === "answered"',
+    "q.answered_content",
+    "revisingAnswer",
+    "supersededByThisAnswer",
+    "(revisingAnswer || supersededByThisAnswer) && row.answered_message_id",
     'q.issue_code !== "CROSS_SOURCE_CONFLICT"',
   ])
     assert.ok(repository.includes(value), value);
+  assert.ok(controller.includes('question.status === "answered"'));
+  assert.ok(controller.includes('question.status === "superseded"'));
+  assert.ok(repository.includes("q.status='superseded' AND q.answered_message_id IS NOT NULL"));
+  assert.ok(repository.includes("THEN 'answered'"));
 });
 
 test("a prose count from live extraction still seeds the number question", () => {
