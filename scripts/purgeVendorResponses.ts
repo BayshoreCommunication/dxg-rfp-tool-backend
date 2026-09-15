@@ -78,14 +78,41 @@ const setPostgresTenant = async (
   if (!organization.rows[0]) return 0;
   const organizationId = organization.rows[0].id;
   await client.query("SELECT set_config('app.organization_id',$1,true)", [organizationId]);
-  const result = await client.query(
-    `UPDATE rfpilot.document_sources
-        SET deleted_at=now(),status='deleted',updated_at=now()
-      WHERE organization_id=$1 AND deleted_at IS NULL
+  const sourcePredicate = `organization_id=$1 AND deleted_at IS NULL
         AND (
           vendor_submission_mongo_id = ANY($2::varchar[])
           OR id::text = ANY($3::varchar[])
+        )`;
+  const blocked = await client.query<{ count: number }>(
+    `SELECT count(*)::int AS count
+       FROM rfpilot.document_sources
+      WHERE ${sourcePredicate}
+        AND (
+          legal_hold
+          OR retention_until > now()
+          OR status NOT IN (
+            'pending_upload','uploaded','scan_failed','ready','blocked','deletion_pending'
+          )
         )`,
+    [organizationId, submissionIds, sourceIds],
+  );
+  if ((blocked.rows[0]?.count ?? 0) > 0) {
+    throw new Error(
+      `Apply refused because ${blocked.rows[0].count} registered response source(s) are protected or not deletable`,
+    );
+  }
+  await client.query(
+    `UPDATE rfpilot.document_sources
+        SET status='deletion_pending',updated_at=now()
+      WHERE ${sourcePredicate}
+        AND status <> 'deletion_pending'`,
+    [organizationId, submissionIds, sourceIds],
+  );
+  const result = await client.query(
+    `UPDATE rfpilot.document_sources
+        SET deleted_at=now(),status='deleted',updated_at=now()
+      WHERE ${sourcePredicate}
+        AND status='deletion_pending'`,
     [organizationId, submissionIds, sourceIds],
   );
   await client.query(

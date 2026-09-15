@@ -97,10 +97,11 @@ jobs:
           TASK_ID=${TASK##*/}
           LOG_STREAM="api/api/${TASK_ID}"
           for attempt in 1 2 3 4 5; do
-            if aws logs get-log-events \
+            if LOG_EVENTS=$(aws logs get-log-events \
               --log-group-name "/rfpilot/${ENV_NAME}/api" \
               --log-stream-name "$LOG_STREAM" \
-              --query 'events[].message' --output text; then
+              --query 'events[].message' --output json); then
+              jq -r '.[] | select(startswith("{\"phase\":"))' <<< "$LOG_EVENTS"
               break
             fi
             sleep 2
