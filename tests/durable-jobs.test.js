@@ -69,3 +69,45 @@ test("open dead letters are listable by an operator",()=>{
   const line=route.slice(route.indexOf("dead-letters"));
   assert.match(line.slice(0,160),/authorizeAction\("security:admin"\)/,"admin-only");
 });
+
+const {pseudonym,sanitizeTelemetry}=require("../src/shared/observability/safeTelemetry");
+test("every attempt logs its start, outcome and timings, whatever the job type",()=>{
+ // The regression: only five of thirteen handlers logged their own failure, and
+ // the worker's catch settled the row and returned without a line, so a failed
+ // requirement extraction produced NOTHING in CloudWatch and the reason could
+ // only be read out of proposal_context_runs.safe_error_code.
+ const worker=readSrc("src/modules/durableJobs/worker.ts");
+ const failure=worker.slice(worker.indexOf("const failed = await repository.fail("));
+ assert.match(failure.slice(0,1200),/safeLog\("error", "job\.attempt\.failed"/,"the generic catch logs");
+ assert.match(failure.slice(0,1200),/errorCode: code/,"carries the diagnostic code it just persisted");
+ assert.match(failure.slice(0,1200),/outcome: failed\.status/,"separates a scheduled retry from a terminal failure");
+
+ // Start and success close the lifecycle: without them a missing completion
+ // cannot be told apart from a job that was never delivered, and queue backlog
+ // is invisible until durations move.
+ assert.match(worker,/safeLog\("info", "job\.attempt\.started"/,"an attempt announces itself");
+ assert.match(worker,/queueWaitMs: Math\.max\(0, startedAt - job\.timestamp\)/,"enqueue-to-start latency is measured");
+ assert.match(worker,/safeLog\("info", "job\.attempt\.completed"/,"a successful attempt is logged");
+ const started=worker.indexOf('"job.attempt.started"'),claim=worker.indexOf("repository.claim(");
+ assert.ok(claim<started,"the start line follows the claim, so it means started and not merely delivered");
+
+ // Attributes outside the allowlist are dropped silently, so assert the record
+ // an operator greps for actually survives sanitisation.
+ const emitted=sanitizeTelemetry({
+  queueWaitMs:57,
+  jobId:"01900000-0000-7000-8000-000000000001",
+  jobType:"proposal_context_extract",
+  runId:"01900000-0000-7000-8000-000000000002",
+  correlationId:"correlation",
+  organizationPseudonym:pseudonym("507f1f77bcf86cd799439011"),
+  attempt:2,
+  errorCode:"LIVE_AI_PROVIDER_TEMPORARY",
+  retryable:true,
+  outcome:"retry_scheduled",
+  durationMs:1234,
+ });
+ for(const key of ["jobId","jobType","runId","correlationId","organizationPseudonym","attempt","errorCode","retryable","outcome","durationMs","queueWaitMs"])
+  assert.ok(key in emitted,`${key} reaches the log line`);
+ assert.equal(emitted.errorCode,"LIVE_AI_PROVIDER_TEMPORARY");
+ assert.equal(emitted.organizationPseudonym.length,16,"the tenant is pseudonymised, never logged raw");
+});
