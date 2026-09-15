@@ -158,6 +158,16 @@ export const pilotStatus = async (req: AuthRequest, res: Response) => {
   } catch (error) { handle(res, error); }
 };
 
+/* Unlike pilot-status (admin, configuration) this is the operational answer a
+   planner's composer needs, so it is scoped to proposal:read. */
+export const providerAvailability = async (req: AuthRequest, res: Response) => {
+  try {
+    const ctx = context(req);
+    const { aiProviderAvailability } = await import("../src/modules/aiGateway/providerAvailability");
+    res.json({ data: await aiProviderAvailability({ organizationMongoId: ctx.organizationMongoId }) });
+  } catch (error) { handle(res, error); }
+};
+
 export const usageReport = async (req: AuthRequest, res: Response) => {
   try {
     const ctx = context(req);
