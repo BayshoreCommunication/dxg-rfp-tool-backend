@@ -70,7 +70,13 @@ test("production purge is dry-run by default and requires two destructive gates"
   assert.match(source, /process\.env\.NODE_ENV !== "production"/);
   assert.match(source, /DELETE_ALL_VENDOR_RESPONSES/);
   assert.match(source, /externalDocumentsWithoutCurrentKey > 0/);
+  assert.match(source, /legal_hold/);
+  assert.match(source, /retention_until > now\(\)/);
+  const deletionPending = source.indexOf("SET status='deletion_pending'");
+  const deleted = source.indexOf("SET deleted_at=now(),status='deleted'");
+  assert.ok(deletionPending >= 0 && deleted > deletionPending);
   assert.match(workflow, /environment: production/);
   assert.match(workflow, /Assume production deploy role via OIDC/);
   assert.match(workflow, /DELETE_ALL_VENDOR_RESPONSES/);
+  assert.match(workflow, /select\(startswith\("\{\\"phase\\":"\)\)/);
 });
