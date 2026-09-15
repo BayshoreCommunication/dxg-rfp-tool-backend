@@ -170,6 +170,10 @@ export class AppStack extends cdk.Stack {
       ASSET_STORAGE_BUCKET: assetsBucket.bucketName,
       ASSET_STORAGE_REGION: this.region,
       VENDOR_UPLOAD_SCAN_REQUIRED: 'true',
+      // The legacy public submission route has been retired. Existing
+      // proposal markers are migrated to structured_v1 by the audited
+      // production cutover task.
+      VENDOR_STRUCTURED_RESPONSES_ENABLED: 'true',
       CLAMAV_HOST: 'clamav',
       CLAMAV_PORT: '3310',
       ...(frontendUrl ? { FRONTEND_URL: frontendUrl } : {}),
