@@ -19,6 +19,7 @@ import { conversationRepository } from "../conversations/postgresConversationRep
 import { comparisonOrchestrationRepository } from "../comparisonOrchestration/postgresComparisonOrchestrationRepository";
 import { vendorIntelligenceRepository } from "../vendorIntelligence/postgresVendorIntelligenceRepository";
 import { proposalDraftRepository } from "../proposalDraft/postgresProposalDraftRepository";
+import { pseudonym, safeLog } from "../../shared/observability/safeTelemetry";
 
 const stageFor = (type: QueueMessage["jobType"]) => ({
   knowledge_parse: "deterministic_parse",
@@ -71,10 +72,28 @@ export const createSourceSecurityWorker = (repository: JobRepository) => {
   const maxAttempts = Number(process.env.JOB_MAX_ATTEMPTS || 5);
   return new Worker<QueueMessage>(SOURCE_SECURITY_QUEUE, async (job: Job<QueueMessage>) => {
     const attempt = job.attemptsMade + 1;
+    const startedAt = Date.now();
+    // Identity of this attempt, shared by all three lifecycle lines so one
+    // correlationId (or jobId) grep returns the whole story of a job.
+    const labels = {
+      jobId: job.data.jobId,
+      jobType: job.data.jobType,
+      runId: job.data.inputReference,
+      correlationId: job.data.correlationId,
+      organizationPseudonym: pseudonym(job.data.organizationMongoId),
+      attempt,
+    };
     const claimed = await repository.claim({ message: job.data, workerId, attempt, leaseSeconds });
     if (claimed.cancelled) return { cancelled: true };
     const alive = await repository.heartbeat({ message: job.data, workerId, leaseSeconds, progress: 10, stage: stageFor(job.data.jobType) });
     if (!alive) return { cancelled: true };
+    // Logged after the claim, so a line here means the job really began rather
+    // than that it was merely delivered. queueWaitMs is the enqueue-to-start
+    // latency: a backlog shows up here long before job durations move.
+    safeLog("info", "job.attempt.started", {
+      ...labels,
+      queueWaitMs: Math.max(0, startedAt - job.timestamp),
+    });
     let progress = 10;
     let stage = stageFor(job.data.jobType);
     let renewal: Promise<void> | null = null;
@@ -118,6 +137,11 @@ export const createSourceSecurityWorker = (repository: JobRepository) => {
       if (renewal) await renewal;
       if (leaseFailure) throw leaseFailure;
       await repository.complete({ message: job.data, workerId, attempt, resultReference: result.resultReference });
+      safeLog("info", "job.attempt.completed", {
+        ...labels,
+        outcome: "success",
+        durationMs: Date.now() - startedAt,
+      });
       await settleComparison(job.data);
       return result;
     } catch (error) {
@@ -126,6 +150,19 @@ export const createSourceSecurityWorker = (repository: JobRepository) => {
       const retryable = Boolean((error as { retryable?: boolean }).retryable);
       const code = String((error as { code?: string }).code || "JOB_HANDLER_FAILED");
       const failed = await repository.fail({ message: job.data, workerId, attempt, diagnosticCode: code, retryable, maxAttempts });
+      // Only this frame knows the retry decision, and several job types settle
+      // their run row without logging anything, so an operator investigating a
+      // failed run would otherwise find no line at all in CloudWatch. `outcome`
+      // carries the post-decision job status, which separates a transient
+      // attempt (`retry_scheduled`) from a terminal one (`failed`,
+      // `dead_letter`) even though both leave the run marked failed.
+      safeLog("error", "job.attempt.failed", {
+        ...labels,
+        errorCode: code,
+        retryable,
+        outcome: failed.status,
+        durationMs: Date.now() - startedAt,
+      });
       // The job repository owns the retry budget. Settle the linked draft only
       // after it says no retry remains; a version conflict was already recorded
       // as `conflict` by the draft repository and must not be downgraded.
