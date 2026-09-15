@@ -18,7 +18,13 @@ export const configuredVendorResponseFormat = (
     && (proposalSettings as Record<string, unknown>).vendorResponseFormat
       === "structured_v1"
   ) return "structured_v1";
-  return "legacy_unstructured";
+  if (
+    proposalSettings
+    && typeof proposalSettings === "object"
+    && (proposalSettings as Record<string, unknown>).vendorResponseFormat
+      === "legacy_unstructured"
+  ) return "legacy_unstructured";
+  return "structured_v1";
 };
 
 export const resolveVendorStructuredResponseRollout = (

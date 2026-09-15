@@ -1,16 +1,14 @@
-# Structured vendor response rollout
+# Structured vendor response production operation
 
-The structured vendor workspace is deny-by-default and requires both gates:
+The structured vendor workspace is the production default. New proposals are
+treated as `structured_v1`; production explicitly sets
+`VENDOR_STRUCTURED_RESPONSES_ENABLED=true`.
 
-1. `VENDOR_STRUCTURED_RESPONSES_ENABLED=true` enables the backend capability.
-2. `proposalSettings.vendorResponseFormat` must equal `structured_v1` for the
-   individual proposal.
-
-Unmarked proposals resolve to `legacy_unstructured`. The public workspace DTO
-always returns the effective `capabilities.responseFormat` and a safe reason.
-When either gate is off, no questionnaire is published and all structured draft
-endpoints reject writes. The legacy `POST /api/vendor-responses` path remains
-available.
+The legacy public `POST /api/vendor-responses` and `/check` routes are retired.
+All emailed vendor links use the workspace bootstrap, draft, categorized upload,
+and finalization APIs. The global switch and explicit per-proposal legacy marker
+remain emergency fail-closed controls; they make the structured workspace
+unavailable and never restore the retired form.
 
 ## Per-proposal operation
 
@@ -25,10 +23,24 @@ format through `PATCH /api/vendor-responses/questionnaires/capability`:
 }
 ```
 
-Set `responseFormat` to `legacy_unstructured` to roll back that proposal. This
-changes only the proposal marker. Existing drafts, questionnaires, immutable
-versions, documents, and planner response projections are retained, so
-re-enabling resumes the structured state.
+Set `responseFormat` to `legacy_unstructured` only to stop submissions for one
+proposal during an incident. This changes only the proposal marker. Existing
+drafts, questionnaires, immutable versions, documents, and planner response
+projections are retained, so re-enabling resumes the structured state.
+
+## Production cutover purge
+
+`scripts/purgeVendorResponses.ts` inventories or permanently deletes all
+vendor-response projections, submissions, versions, drafts, confirmation
+delivery records, response notifications, and current private response objects.
+It also tombstones registered PostgreSQL document sources and marks every proposal
+`structured_v1`. Questionnaire publications and invitation grants are retained
+so existing links open the new workspace.
+
+The GitHub Actions workflow `Purge production vendor responses` is the only
+supported production entry point. Run `dry-run` first. Apply requires the exact
+confirmation `DELETE_ALL_VENDOR_RESPONSES` and records sanitized counts without
+logging response text, contact data, filenames, URLs, or grant values.
 
 ## Marker backfill
 

@@ -15,7 +15,7 @@ const help = () => process.stdout.write(`Usage:
   npm run backfill:vendor-response-format-markers
   npm run backfill:vendor-response-format-markers -- --apply
 
-Default mode is dry-run. Unmarked proposals receive legacy_unstructured and
+Default mode is dry-run. Unmarked proposals receive structured_v1 and
 unmarked questionnaire versions receive structured_v1. No vendor response data
 is inspected or changed.
 `);
@@ -49,7 +49,7 @@ const main = async () => {
                     {},
                   ],
                 },
-                { vendorResponseFormat: "legacy_unstructured" },
+                { vendorResponseFormat: "structured_v1" },
               ],
             },
           },

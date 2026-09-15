@@ -2,10 +2,8 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import type { Request, Response, NextFunction } from "express";
 import {
-  checkVendorResponseExists,
   configureVendorResponseRollout,
   getVendorResponseReceipt,
-  submitVendorResponse,
   getVendorResponses,
   getVendorResponseProposals,
   getVendorResponseById,
@@ -92,12 +90,6 @@ router.get(
   getVendorResponseWorkspace,
 );
 router.get(
-  "/check",
-  publicGrantLimit,
-  requirePublicGrant("vendor:submit", alternateVendorContact),
-  checkVendorResponseExists,
-);
-router.get(
   "/receipt/:versionId",
   publicGrantLimit,
   requirePublicGrant("vendor:submit", alternateVendorContact),
@@ -155,14 +147,6 @@ router.post(
   requirePublicGrant("vendor:submit", alternateVendorContact),
   createVendorResponseRevisionDraft,
 );
-router.post(
-  "/",
-  publicGrantLimit,
-  receiveVendorDocuments,
-  requirePublicGrant("vendor:submit", alternateVendorContact),
-  submitVendorResponse,
-);
-
 /* Protected routes — planner dashboard */
 /* Authentication runs before the upload middleware so an anonymous caller can
    never stream files onto disk. */

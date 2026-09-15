@@ -1,0 +1,109 @@
+name: Purge production vendor responses
+
+run-name: Purge production vendor responses (${{ inputs.mode }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Inventory only or permanently apply the purge
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - apply
+        default: dry-run
+      confirmation:
+        description: Apply requires DELETE_ALL_VENDOR_RESPONSES
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-vendor-response-purge
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-2
+  ENV_NAME: production
+
+jobs:
+  purge:
+    name: ${{ inputs.mode == 'apply' && 'Apply permanent purge' || 'Dry-run inventory' }}
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Validate destructive confirmation
+        env:
+          PURGE_MODE: ${{ inputs.mode }}
+          PURGE_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ "$PURGE_MODE" = "apply" ] && [ "$PURGE_CONFIRMATION" != "DELETE_ALL_VENDOR_RESPONSES" ]; then
+            echo "Apply requires the exact DELETE_ALL_VENDOR_RESPONSES confirmation."
+            exit 1
+          fi
+
+      - name: Assume production deploy role via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/rfpilot-${{ env.ENV_NAME }}-github-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run guarded purge task
+        env:
+          PURGE_MODE: ${{ inputs.mode }}
+          PURGE_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          output() {
+            aws cloudformation describe-stacks --stack-name "Rfpilot-${ENV_NAME}-App" \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
+          }
+          CLUSTER=$(output ClusterName)
+          SUBNETS=$(output PrivateSubnetIds)
+          SECURITY_GROUP=$(output MigrateSecurityGroupId)
+          TASK_DEFINITION=$(aws ecs describe-services \
+            --cluster "$CLUSTER" --services api \
+            --query 'services[0].taskDefinition' --output text)
+
+          if [ "$PURGE_MODE" = "apply" ]; then
+            COMMAND=$(jq -cn --arg confirmation "$PURGE_CONFIRMATION" \
+              '["node","dist/scripts/purgeVendorResponses.js","--apply",("--confirm=" + $confirmation)]')
+          else
+            COMMAND='["node","dist/scripts/purgeVendorResponses.js"]'
+          fi
+          OVERRIDES=$(jq -cn --argjson command "$COMMAND" \
+            '{containerOverrides:[{name:"api",command:$command}]}')
+          TASK=$(aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --task-definition "$TASK_DEFINITION" \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$(echo "$SUBNETS" | tr ',' ',')],securityGroups=[$SECURITY_GROUP],assignPublicIp=DISABLED}" \
+            --overrides "$OVERRIDES" \
+            --query 'tasks[0].taskArn' --output text)
+          if [ -z "$TASK" ] || [ "$TASK" = "None" ]; then
+            echo "ECS did not start the purge task."
+            exit 1
+          fi
+          echo "Purge task: $TASK"
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK"
+          EXIT_CODE=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+            --query 'tasks[0].containers[?name==`api`].exitCode | [0]' --output text)
+          TASK_ID=${TASK##*/}
+          LOG_STREAM="api/api/${TASK_ID}"
+          for attempt in 1 2 3 4 5; do
+            if aws logs get-log-events \
+              --log-group-name "/rfpilot/${ENV_NAME}/api" \
+              --log-stream-name "$LOG_STREAM" \
+              --query 'events[].message' --output text; then
+              break
+            fi
+            sleep 2
+          done
+          echo "Purge task exit code: $EXIT_CODE"
+          [ "$EXIT_CODE" = "0" ]

@@ -35,6 +35,7 @@ export default tseslint.config(
       "scripts/backfillIdentityProjections.ts",
       "scripts/backfillVendorSubmissionVersions.ts",
       "scripts/backfillVendorResponseFormatMarkers.ts",
+      "scripts/purgeVendorResponses.ts",
       "scripts/cleanupAssistantRetention.ts",
       "scripts/checkAssistantReleaseReadiness.ts",
       "scripts/verifyAuthRefreshE2E.ts",
