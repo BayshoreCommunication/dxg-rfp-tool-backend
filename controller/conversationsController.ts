@@ -206,7 +206,17 @@ export const patchConversationQuestion = async (req: AuthRequest, res: Response)
             questionId: targetQuestionId,
           }),
       );
-      const targetPaths = question.status === "open" ? answerTargetPaths(question.paths) : [];
+      // Answered questions remain editable in the extracted-details review.
+      // A live snapshot can briefly supersede the row after Mongo is updated;
+      // accepting that state lets the same request restore it to the review.
+      // Reusing the canonical writer keeps every revision subject to the same
+      // validation and proposal lifecycle guards as the first save.
+      const targetPaths =
+        question.status === "open" ||
+        question.status === "answered" ||
+        question.status === "superseded"
+          ? answerTargetPaths(question.paths)
+          : [];
       if (targetPaths.length > 0) {
         if (targetPaths.length === 1 && isDateTimeQuestionAnswer(update.answer))
           throw new ConversationError("INVALID_QUESTION_ANSWER", "This question requires one answer.", 422);
@@ -223,6 +233,7 @@ export const patchConversationQuestion = async (req: AuthRequest, res: Response)
           actorUserMongoId: ctx.actorUserMongoId,
           proposalMongoId,
           answers,
+          onlyIfEmpty: update.useOnlyIfEmpty,
         })) ?? [];
       }
     }

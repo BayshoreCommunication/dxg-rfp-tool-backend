@@ -88,9 +88,10 @@ export const questionAnswerText = (answer: QuestionAnswer): string =>
 
 export const parseQuestionUpdate = (value: Record<string, unknown>) => {
   const status = String(value.status || "");
+  const useOnlyIfEmpty = value.useOnlyIfEmpty === true;
   if (!["answered", "dismissed"].includes(status))
     throw new ConversationError("INVALID_QUESTION_STATUS", "Question status must be answered or dismissed.", 422);
-  if (status === "dismissed") return { status: "dismissed" as const, answer: "" as QuestionAnswer };
+  if (status === "dismissed") return { status: "dismissed" as const, answer: "" as QuestionAnswer, useOnlyIfEmpty: false };
   let answer: QuestionAnswer;
   if (typeof value.answer === "string") {
     answer = value.answer.trim();
@@ -107,7 +108,7 @@ export const parseQuestionUpdate = (value: Record<string, unknown>) => {
     throw new ConversationError("INVALID_QUESTION_ANSWER", "Answer exceeds 4000 characters.", 422);
   if ((typeof answer === "string" && !answer) || (isDateTimeQuestionAnswer(answer) && (!answer.date || !answer.time)))
     throw new ConversationError("INVALID_QUESTION_ANSWER", "An answer is required to mark a question answered.", 422);
-  return { status: "answered" as const, answer };
+  return { status: "answered" as const, answer, useOnlyIfEmpty };
 };
 
 // Ordered whitelist of high-impact fields the assistant proactively asks about
@@ -284,16 +285,15 @@ export const questionAnswerType = (paths: string[]): { answerType: ImportantFiel
   return field.options ? { answerType: field.answerType, options: field.options } : { answerType: field.answerType };
 };
 
-// A pre-filled answer for a question, sourced from an extraction candidate for
-// the same field, converted into a string the question's answer control can
-// submit as-is. Extracted values are never written without the planner's
-// confirmation — this only saves the retyping when the guided flow asks for
-// something the planner's own message already contained.
+// An answer default for a question, sourced from an extraction candidate for
+// the same field and converted into a string the question flow can persist or
+// revise as-is. The assistant workspace uses valid, non-conflicting defaults
+// automatically; the planner only needs to act when a value should change.
 //
 // Returns null whenever a faithful, submittable representation cannot be
 // produced (unknown path, value the field normalizer rejects, or a choice
 // value that matches none of the offered options): a wrong or unconfirmable
-// prefill is worse than none, because confirming it would 422.
+// default is worse than none, because applying it would 422.
 export const suggestedAnswerFor = (paths: string[], rawValue: unknown): string | null => {
   if (paths.length !== 1) return null;
   const { answerType, options } = questionAnswerType(paths);
