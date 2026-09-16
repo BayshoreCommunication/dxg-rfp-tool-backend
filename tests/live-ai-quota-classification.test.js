@@ -37,3 +37,38 @@ test("a quota outage closes the composer's circuit", () => {
   });
   assert.equal(evaluateLedger([quotaFailure(1), quotaFailure(4)], Date.now()).failing, true);
 });
+
+test("one set drives every outage reaction", () => {
+  // The chat fallback and the composer's availability circuit must agree about
+  // what counts as an outage. They disagreed once already: the fallback keyed
+  // on a literal LIVE_AI_PROVIDER_TEMPORARY and stopped covering quota
+  // exhaustion the moment that code was introduced — both shipped in the same
+  // deploy, written weeks apart.
+  const { PROVIDER_UNAVAILABLE_CODES } = require("../src/modules/liveAi/openAiProvider");
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const read = (rel) => fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+
+  assert.match(
+    read("src/modules/aiGateway/providerAvailability.ts"),
+    /PROVIDER_FAILURE_CODES = PROVIDER_UNAVAILABLE_CODES/,
+    "the availability circuit reads the shared set rather than keeping a copy",
+  );
+  assert.match(
+    read("src/modules/durableJobs/worker.ts"),
+    /PROVIDER_UNAVAILABLE_CODES\.has\(code\)/,
+    "the chat fallback reads the shared set rather than a literal",
+  );
+
+  // Every terminal code the provider raises for an unservable call belongs to
+  // the set; a new one must be added here deliberately, not forgotten.
+  for (const code of [
+    "LIVE_AI_PROVIDER_TEMPORARY",
+    "LIVE_AI_PROVIDER_FAILED",
+    "LIVE_AI_CREDENTIAL_UNAVAILABLE",
+    "LIVE_AI_EMPTY_OUTPUT",
+    "LIVE_AI_QUOTA_EXHAUSTED",
+  ])
+    assert.ok(PROVIDER_UNAVAILABLE_CODES.has(code), code);
+  assert.equal(PROVIDER_UNAVAILABLE_CODES.size, 5, "adding a code should be a deliberate, reviewed change");
+});

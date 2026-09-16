@@ -37,7 +37,17 @@ test("an exhausted temporary chat-provider failure uses a deterministic reply", 
     path.join(root, "src/modules/durableJobs/worker.ts"),
     "utf8",
   );
-  assert.match(worker, /code === "LIVE_AI_PROVIDER_TEMPORARY"/);
+  // The regression this replaces: the condition was the literal
+  // LIVE_AI_PROVIDER_TEMPORARY, so introducing LIVE_AI_QUOTA_EXHAUSTED
+  // silently stopped chat degrading during the outage that code was invented
+  // for. Assert the property — the fallback covers every provider-unavailable
+  // code — rather than pinning another literal that can drift the same way.
+  assert.match(worker, /PROVIDER_UNAVAILABLE_CODES\.has\(code\)/);
+  const { PROVIDER_UNAVAILABLE_CODES } = require("../src/modules/liveAi/openAiProvider");
+  for (const code of ["LIVE_AI_PROVIDER_TEMPORARY", "LIVE_AI_QUOTA_EXHAUSTED"])
+    assert.ok(PROVIDER_UNAVAILABLE_CODES.has(code), code + " must degrade chat, not fail it");
+  for (const contentCode of ["LIVE_AI_MALFORMED_OUTPUT", "LIVE_AI_CITATION_INVALID", "LIVE_AI_INPUT_TOO_LARGE"])
+    assert.ok(!PROVIDER_UNAVAILABLE_CODES.has(contentCode), contentCode + " is a content problem, not an outage");
   assert.match(worker, /CHAT_PROVIDER_UNAVAILABLE_REPLY/);
   assert.match(worker, /conversationRepository\.completeChatJob/);
   assert.match(worker, /conversation_chat_degraded/);
