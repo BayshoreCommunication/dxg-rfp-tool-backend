@@ -5,6 +5,7 @@ import type { QueueMessage } from "./domain";
 import { redisConnection } from "./redis";
 import { SOURCE_SECURITY_QUEUE } from "./queue";
 import { handleSourceSecurity } from "./sourceSecurityHandler";
+import { CHAT_PROVIDER_UNAVAILABLE_REPLY } from "../conversations/chatReply";
 import { handleKnowledgeParse } from "./knowledgeParseHandler";
 import { handleKnowledgeIndex } from "./knowledgeIndexHandler";
 import { handleProposalContext } from "./proposalContextHandler";
@@ -19,7 +20,7 @@ import { conversationRepository } from "../conversations/postgresConversationRep
 import { comparisonOrchestrationRepository } from "../comparisonOrchestration/postgresComparisonOrchestrationRepository";
 import { vendorIntelligenceRepository } from "../vendorIntelligence/postgresVendorIntelligenceRepository";
 import { proposalDraftRepository } from "../proposalDraft/postgresProposalDraftRepository";
-import { pseudonym, safeLog } from "../../shared/observability/safeTelemetry";
+import { pseudonym, safeErrorCode, safeLog } from "../../shared/observability/safeTelemetry";
 
 const stageFor = (type: QueueMessage["jobType"]) => ({
   knowledge_parse: "deterministic_parse",
@@ -184,10 +185,39 @@ export const createSourceSecurityWorker = (repository: JobRepository) => {
           code,
         });
       await settleComparison(job.data);
-      if (job.data.jobType === "conversation_chat" && ["failed", "dead_letter", "cancelled"].includes(failed.status))
-        await conversationRepository.failChatJob({ organizationMongoId: job.data.organizationMongoId, actorUserMongoId: job.data.actorUserMongoId, correlationId: job.data.correlationId, jobId: job.data.jobId, errorCode: code }).catch(() => undefined);
-      if (retryable) throw error;
-      return { failed: true, code };
+      let chatFallbackCompleted = false;
+      if (job.data.jobType === "conversation_chat" && ["failed", "dead_letter", "cancelled"].includes(failed.status)) {
+        if (code === "LIVE_AI_PROVIDER_TEMPORARY") {
+          try {
+            await conversationRepository.completeChatJob({
+              organizationMongoId: job.data.organizationMongoId,
+              actorUserMongoId: job.data.actorUserMongoId,
+              correlationId: job.data.correlationId,
+              jobId: job.data.jobId,
+              content: CHAT_PROVIDER_UNAVAILABLE_REPLY,
+              actions: [],
+            });
+            safeLog("warn", "conversation_chat_degraded", {
+              jobId: job.data.jobId,
+              correlationId: job.data.correlationId,
+              errorCode: code,
+              outcome: "deterministic_fallback",
+            });
+            chatFallbackCompleted = true;
+          } catch (fallbackError) {
+            safeLog("error", "conversation_chat_fallback_failed", {
+              jobId: job.data.jobId,
+              correlationId: job.data.correlationId,
+              errorCode: safeErrorCode(fallbackError),
+              outcome: "failure",
+            });
+          }
+        }
+        if (!chatFallbackCompleted)
+          await conversationRepository.failChatJob({ organizationMongoId: job.data.organizationMongoId, actorUserMongoId: job.data.actorUserMongoId, correlationId: job.data.correlationId, jobId: job.data.jobId, errorCode: code }).catch(() => undefined);
+      }
+      if (retryable && !chatFallbackCompleted) throw error;
+      return { failed: true, code, degraded: chatFallbackCompleted };
     }
   }, { connection: redisConnection(), concurrency: Number(process.env.SOURCE_SECURITY_CONCURRENCY || 2), lockDuration: leaseSeconds * 1000, stalledInterval: 15000, maxStalledCount: 2 });
 };

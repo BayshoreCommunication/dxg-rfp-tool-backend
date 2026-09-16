@@ -5,10 +5,9 @@ const {
   isSubstantive,
   segmentText,
   conversationExtractionEnabled,
-  MIN_SEGMENT_CHARS,
   MAX_TURNS,
   IDLE_MS,
-  RICH_TURN_CHARS,
+  isSelfContainedBrief,
 } = require("../src/modules/conversations/segmentation");
 
 const withEnv = (overrides, fn) => {
@@ -64,17 +63,17 @@ test("filler never opens a segment, so chatter costs no provider call", () =>
       false,
       "a long thank-you is not a requirement",
     );
-    // Substance needs length AND something the schema could hold.
-    assert.equal(isSubstantive("6 rooms"), false, "too short even with a number");
+    // Substance is semantic, not based on a fixed character threshold.
+    assert.equal(isSubstantive("6 rooms"), true, "short requirements remain usable");
     assert.equal(isSubstantive(REQUIREMENT), true, "one clear requirement sentence qualifies");
   }));
 
 test("a segment closes on idle, on turn count, or when the planner asks", () =>
   enabled(() => {
-    const fresh = [turn("m1", REQUIREMENT, 1)];
+    const fresh = [turn("m1", "300 attendees", 1)];
     assert.equal(evaluateSegment({ turns: fresh, now: NOW }).extract, false, "still being typed into");
 
-    const idle = [turn("m1", REQUIREMENT, IDLE_MS / 1000 + 1)];
+    const idle = [turn("m1", "300 attendees", IDLE_MS / 1000 + 1)];
     assert.equal(evaluateSegment({ turns: idle, now: NOW }).reason, "idle");
 
     // Explicit intent beats the timer.
@@ -84,18 +83,18 @@ test("a segment closes on idle, on turn count, or when the planner asks", () =>
     assert.equal(evaluateSegment({ turns: many, now: NOW }).reason, "turns");
   }));
 
-test("one detailed brief closes immediately while a short requirement still batches", () =>
+test("one self-contained brief closes immediately while a one-value correction still batches", () =>
   enabled(() => {
-    const detailed = `${REQUIREMENT} ${"Include staging, lighting, livestreaming, recording, crew, schedule, and budget details. ".repeat(4)}`;
-    assert.ok(detailed.length >= RICH_TURN_CHARS);
+    const detailed = "Need audio, video and lighting.";
+    assert.equal(isSelfContainedBrief(detailed), true);
     assert.equal(
       evaluateSegment({ turns: [turn("m1", detailed)], now: NOW }).reason,
       "rich_turn",
     );
     assert.equal(
-      evaluateSegment({ turns: [turn("m2", REQUIREMENT)], now: NOW }).extract,
+      evaluateSegment({ turns: [turn("m2", "350 attendees")], now: NOW }).extract,
       false,
-      "short requirements remain open for corrections",
+      "one-value corrections remain open for batching",
     );
   }));
 
@@ -136,7 +135,6 @@ test("whitespace-only turns are dropped without breaking the segment", () =>
     assert.equal(decision.extract, true);
     assert.equal(decision.turns.length, 1, "only turns with content are carried");
     assert.equal(segmentText([turn("a", " x "), turn("b", "")]), "x");
-    assert.equal(MIN_SEGMENT_CHARS, 40);
   }));
 
 const fs = require("node:fs"), path = require("node:path");

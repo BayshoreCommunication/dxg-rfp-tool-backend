@@ -6,7 +6,7 @@ import {
 import type { AssistantUiContext } from "./domain";
 import { normalizeCommonAssistantTypos } from "./queryNormalization";
 
-export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v7";
+export const PLATFORM_KNOWLEDGE_VERSION = "rfpilot-platform-map.v8";
 
 type PlatformFact = Omit<AssistantPromptEvidence, "sourceType" | "trust" | "releaseId"> & {
   keywords: readonly string[];
@@ -111,7 +111,7 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = Object.freeze([
     id: "platform:navigation:create-proposal",
     title: "Create a proposal",
     content:
-      "Open Proposals, choose New Proposal, and continue at /proposals/add-new-proposal. Use this guided intake route to record general event and proposal details before generating an RFP. Depending on the enabled rollout, the route opens either the chat-first proposal workspace or the guided intake form. The guided form can optionally pre-fill fields from an uploaded PDF, DOC, DOCX, or CSV; users can also continue without an upload.",
+      "Open Proposals and choose New Proposal, or go to /proposals/add-new-proposal. It is a chat workspace: describe the event in plain language, or attach a brief, agenda, or old RFP (PDF, DOCX, XLSX, CSV, or TXT; up to three files per message) by dragging it onto the page, using the paperclip, or choosing the Upload starter. A Try an example brief starter loads a fictional summit brief so a new user can watch extraction work. Nothing is created until the first message is sent; the proposal is then created at /proposals/{id}/assistant. Details found in attached documents are filled in automatically and stay editable, and the assistant asks only for what is still missing (up to 19 short guided questions, each skippable). The user can then say Generate draft, Run readiness check, or Show investment guidance, open the full editor with Edit all details, and publish. Publishing does not email anyone; vendors are emailed separately from the Email page.",
     href: "/proposals/add-new-proposal",
     keywords: [
       "create proposal",

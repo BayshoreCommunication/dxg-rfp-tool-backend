@@ -167,6 +167,7 @@ export const mongoVendorResponseReadRepository: VendorResponseReadRepository = {
           _id: mongoose.Types.ObjectId;
           proposalTitle: string;
           responseCount: number;
+          responseIds: mongoose.Types.ObjectId[];
           unreadCount: number;
           latestResponseAt: Date;
           latestVendorName: string;
@@ -180,6 +181,7 @@ export const mongoVendorResponseReadRepository: VendorResponseReadRepository = {
             _id: "$proposalId",
             proposalTitle: { $first: "$proposalTitle" },
             responseCount: { $sum: 1 },
+            responseIds: { $push: "$_id" },
             unreadCount: {
               $sum: { $cond: [{ $eq: ["$isRead", false] }, 1, 0] },
             },
@@ -215,6 +217,9 @@ export const mongoVendorResponseReadRepository: VendorResponseReadRepository = {
         proposalId: String(proposal._id),
         proposalTitle: String(proposal.proposalTitle || "Untitled proposal"),
         responseCount: Number(proposal.responseCount || 0),
+        responseIds: (proposal.responseIds ?? []).map((responseId) =>
+          String(responseId),
+        ),
         unreadCount: Number(proposal.unreadCount || 0),
         latestResponseAt: new Date(proposal.latestResponseAt).toISOString(),
         latestVendorName: String(proposal.latestVendorName || "Unknown vendor"),
