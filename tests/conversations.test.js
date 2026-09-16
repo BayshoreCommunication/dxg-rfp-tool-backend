@@ -119,12 +119,19 @@ test("room schedule help selects only allowlisted assistant actions", () => {
 });
 
 test("question updates require an answer only when marking answered", () => {
-  assert.deepEqual(parseQuestionUpdate({ status: "dismissed" }), { status: "dismissed", answer: "" });
-  assert.deepEqual(parseQuestionUpdate({ status: "answered", answer: "300 guests" }), { status: "answered", answer: "300 guests" });
+  assert.deepEqual(parseQuestionUpdate({ status: "dismissed" }), { status: "dismissed", answer: "", useOnlyIfEmpty: false });
+  assert.deepEqual(parseQuestionUpdate({ status: "answered", answer: "300 guests" }), { status: "answered", answer: "300 guests", useOnlyIfEmpty: false });
   assert.deepEqual(parseQuestionUpdate({ status: "answered", answer: { date: "2026-09-01", time: "07:30" } }), {
     status: "answered",
     answer: { date: "2026-09-01", time: "07:30" },
+    useOnlyIfEmpty: false,
   });
+  // The workspace applies extracted defaults with useOnlyIfEmpty, so a later
+  // automatic application can never overwrite what the planner typed. Anything
+  // other than an explicit true means "write it".
+  assert.equal(parseQuestionUpdate({ status: "answered", answer: "300 guests", useOnlyIfEmpty: true }).useOnlyIfEmpty, true);
+  for (const value of ["true", 1, null, undefined])
+    assert.equal(parseQuestionUpdate({ status: "answered", answer: "300 guests", useOnlyIfEmpty: value }).useOnlyIfEmpty, false, String(value));
   assert.equal(questionAnswerText({ date: "2026-09-01", time: "07:30" }), "2026-09-01 at 07:30");
   assert.throws(() => parseQuestionUpdate({ status: "answered", answer: { date: "2026-09-01" } }), ConversationError);
   assert.throws(() => parseQuestionUpdate({ status: "answered", answer: { time: "07:30" } }), ConversationError);
@@ -737,4 +744,32 @@ test("a prose count from live extraction still seeds the number question", () =>
   // No digits, still no guess — and non-number fields never get the retry.
   assert.equal(suggestedAnswerFor(["/content/event/attendees"], "several hundred"), null);
   assert.equal(suggestedAnswerFor(["/content/event/startDate"], "week 42 of 2026"), null);
+});
+
+test("the proposal-details review survives a question being answered", () => {
+  // The regression: the dashboard's persistent "Proposal details" card reads
+  // question.reviewAnswer ?? question.suggestedAnswer, and the backend sent
+  // suggestedAnswer only while status was "open" and never sent reviewAnswer
+  // at all. The moment extraction's auto-apply answered the extracted
+  // questions every row failed the filter and the whole section vanished —
+  // the planner lost the only place they could edit what was extracted.
+  const root = path.join(__dirname, "..");
+  const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8");
+  const repository = read("src/modules/conversations/postgresConversationRepository.ts");
+
+  assert.match(repository, /reviewAnswer: answeredValue \?\? extractedValue/,
+    "an answered question keeps a value the review can display and edit");
+  assert.match(repository, /answer\.content answered_content/,
+    "the answer message is joined so an answered question reports its value");
+  assert.match(repository, /q\.status === "open" \|\| q\.status === "answered"/,
+    "extraction-backed values stay attached after the question is answered");
+
+  // Editing a detail re-answers a question that is no longer open, which the
+  // write path used to reject outright with QUESTION_NOT_OPEN.
+  assert.match(repository, /revisingAnswer/, "an answered question can be revised");
+  const controller = read("controller/conversationsController.ts");
+  assert.match(controller, /question\.status === "answered"/,
+    "a revision still writes through to the proposal fields");
+  assert.match(controller, /onlyIfEmpty: update\.useOnlyIfEmpty/,
+    "automatic application never clobbers an answer the planner edited");
 });
