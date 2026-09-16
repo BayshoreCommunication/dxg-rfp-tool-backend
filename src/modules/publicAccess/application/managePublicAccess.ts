@@ -53,7 +53,15 @@ export const createPublicAccessManager = (repository: PublicAccessRepository) =>
       && !input.allowRecipientlessVendorProposalRead
       && !input.allowAlternateVendorContact
     ) return Promise.resolve(null);
-    const recipientHash = input.purpose === "vendor:submit" && input.allowAlternateVendorContact
+    // Three states, and the repository tells them apart: a hash must match the
+    // invited vendor, null means the route explicitly accepts any recipient,
+    // and undefined means the caller never decided — which fails closed.
+    // A recipientless read is an explicit decision, so it must send null;
+    // sending undefined would be rejected before the grant is ever looked up.
+    const unboundRecipient = input.purpose === "vendor:submit"
+      && (input.allowAlternateVendorContact === true
+        || (!recipient && input.allowRecipientlessVendorProposalRead === true));
+    const recipientHash = unboundRecipient
       ? null
       : recipient
         ? hashRecipient(recipient)
