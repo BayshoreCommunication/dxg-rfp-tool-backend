@@ -480,6 +480,26 @@ const candidateValue = (
   return candidate.value;
 };
 
+/* Every date this pipeline can propose — event dates, the venue schedule, the
+   whole procurement timeline — describes something that must still happen. The
+   composer already refuses a past date when a planner types one
+   (isBeforeLocalToday in the dashboard), but extraction wrote them straight
+   through, so a brief with a lapsed deadline produced answers the form itself
+   would reject. Such a value is not actionable, so it becomes a question
+   instead of a silent answer, exactly as an unparseable value does.
+
+   A full day of slack keeps timezones out of it: the server compares in UTC
+   while the planner reads dates locally, and "yesterday" in UTC is still today
+   as far west as UTC-11. */
+export const isStaleCandidateDate = (
+  canonicalDate: string,
+  now = new Date(),
+): boolean => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(canonicalDate)) return false;
+  const earliestAcceptable = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+  return canonicalDate < earliestAcceptable;
+};
+
 export const normalizeAndDeduplicateExtractionCandidates = (
   candidates: ExtractionCandidate[],
   evidence: PreparedExtractionEvidence[],
@@ -488,11 +508,20 @@ export const normalizeAndDeduplicateExtractionCandidates = (
   const active = new Set(extractionPathEnum);
   const byIdentity = new Map<string, { candidate: ExtractionCandidate; canonicalValue: unknown }>();
   const invalidPaths = new Set<string>();
+  const stalePaths = new Set<string>();
   for (const candidate of candidates) {
     if (!active.has(candidate.path)) continue;
     try {
       const prepared = candidateValue(candidate, evidenceById);
       const normalized = normalizeCandidate(candidate.path, prepared);
+      if (
+        candidateFieldMetadata[candidate.path]?.valueKind === "date" &&
+        typeof normalized.canonicalValue === "string" &&
+        isStaleCandidateDate(normalized.canonicalValue)
+      ) {
+        stalePaths.add(candidate.path);
+        continue;
+      }
       const identity = `${candidate.path}\u0000${JSON.stringify(normalized.canonicalValue)}`;
       const existing = byIdentity.get(identity);
       const value = normalized.mongoValue;
@@ -511,7 +540,13 @@ export const normalizeAndDeduplicateExtractionCandidates = (
   }
   return {
     candidates: [...byIdentity.values()].map((item) => item.candidate),
-    issues: [...invalidPaths].map((path) => ({ code: "INVALID_CANDIDATE_VALUE", severity: "question", paths: [path] })),
+    issues: [
+      ...[...invalidPaths].map((path) => ({ code: "INVALID_CANDIDATE_VALUE", severity: "question" as const, paths: [path] })),
+      /* No prompt is registered for this code, so questionPrompt falls through
+         to the field's own question ("When does the event start?") rather than
+         a generic machine notice. */
+      ...[...stalePaths].map((path) => ({ code: "CANDIDATE_DATE_IN_PAST", severity: "question" as const, paths: [path] })),
+    ],
   };
 };
 
