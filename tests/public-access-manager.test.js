@@ -179,3 +179,106 @@ test("mongo consumption checks recipient hash atomically for vendor grants", asy
 
   assert.equal(capturedFilter.recipientHash, recipientHash("vendor@example.com"));
 });
+
+/* The manager and the mongo repository were each covered with the other stubbed
+   out, so nothing caught them disagreeing about what "no recipient" means. These
+   run the pair together — the seam where the vendor workspace 403'd. */
+
+test("recipientless vendor read reaches the real mongo repository instead of failing closed", async () => {
+  let queried = false;
+  const original = PublicAccessGrant.findOneAndUpdate;
+  PublicAccessGrant.findOneAndUpdate = () => {
+    queried = true;
+    return { select: () => ({ lean: async () => ({
+      _id: "grant-1", organizationId: "org-1", resourceId: "proposal-1",
+      createdByUserId: "planner-1", recipientHash: "x".repeat(64),
+      purpose: "vendor:submit", expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      maxUses: null, useCount: 1, revokedAt: null,
+    }) }) };
+  };
+
+  const manager = createPublicAccessManager(mongoPublicAccessRepository);
+  let result;
+  try {
+    // Exactly what GET /api/vendor-responses/workspace supplies: a grant and a
+    // proposal id, and no email anywhere, because the vendor has not typed one.
+    result = await manager.validateAndConsume({
+      token: "opaque-token",
+      purpose: "vendor:submit",
+      resourceId: "proposal-1",
+      allowRecipientlessVendorProposalRead: true,
+    });
+  } finally {
+    PublicAccessGrant.findOneAndUpdate = original;
+  }
+
+  assert.equal(queried, true);
+  assert.ok(result);
+});
+
+test("a recipientless vendor read leaves the recipient unfiltered rather than unset", async () => {
+  const original = PublicAccessGrant.findOneAndUpdate;
+  let capturedFilter;
+  PublicAccessGrant.findOneAndUpdate = (filter) => {
+    capturedFilter = filter;
+    return { select: () => ({ lean: async () => null }) };
+  };
+
+  try {
+    await createPublicAccessManager(mongoPublicAccessRepository).validateAndConsume({
+      token: "opaque-token",
+      purpose: "vendor:submit",
+      resourceId: "proposal-1",
+      allowRecipientlessVendorProposalRead: true,
+    });
+  } finally {
+    PublicAccessGrant.findOneAndUpdate = original;
+  }
+
+  assert.equal("recipientHash" in capturedFilter, false);
+  assert.equal(capturedFilter.purpose, "vendor:submit");
+  assert.equal(capturedFilter.revokedAt, null);
+});
+
+test("an email on a recipientless-read route still binds to the invited vendor", async () => {
+  const original = PublicAccessGrant.findOneAndUpdate;
+  let capturedFilter;
+  PublicAccessGrant.findOneAndUpdate = (filter) => {
+    capturedFilter = filter;
+    return { select: () => ({ lean: async () => null }) };
+  };
+
+  try {
+    await createPublicAccessManager(mongoPublicAccessRepository).validateAndConsume({
+      token: "opaque-token",
+      purpose: "vendor:submit",
+      resourceId: "proposal-1",
+      recipient: "  Vendor@Example.COM ",
+      allowRecipientlessVendorProposalRead: true,
+    });
+  } finally {
+    PublicAccessGrant.findOneAndUpdate = original;
+  }
+
+  assert.equal(capturedFilter.recipientHash, recipientHash("vendor@example.com"));
+});
+
+test("a vendor grant with no opt-in at all still fails closed before any lookup", async () => {
+  let queried = false;
+  const original = PublicAccessGrant.findOneAndUpdate;
+  PublicAccessGrant.findOneAndUpdate = () => { queried = true; return { select: () => ({ lean: async () => null }) }; };
+
+  let result;
+  try {
+    result = await createPublicAccessManager(mongoPublicAccessRepository).validateAndConsume({
+      token: "opaque-token",
+      purpose: "vendor:submit",
+      resourceId: "proposal-1",
+    });
+  } finally {
+    PublicAccessGrant.findOneAndUpdate = original;
+  }
+
+  assert.equal(result, null);
+  assert.equal(queried, false);
+});
