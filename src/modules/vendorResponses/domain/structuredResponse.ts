@@ -113,6 +113,21 @@ const isSectionApplicable = (
   return true;
 };
 
+/**
+ * Phrase a count requirement without the "between 3 and 3" the naive range
+ * wording produces when a questionnaire pins an exact number.
+ */
+export const countRequirement = (
+  verb: string,
+  minimum: number,
+  maximum: number,
+  noun: string,
+): string => {
+  const plural = (count: number) => (count === 1 ? noun : `${noun}s`);
+  if (minimum === maximum) return `${verb} ${minimum} ${plural(minimum)}`;
+  return `${verb} between ${minimum} and ${maximum} ${plural(maximum)}`;
+};
+
 export const validateVendorResponseQuestionnaire = (
   candidate: unknown,
 ): VendorResponseValidationIssue[] => {
@@ -512,7 +527,7 @@ export const validateStructuredVendorResponse = (
   }
   if (final && questionnaire.references.enabled && isSectionApplicable(questionnaire, response, "references") &&
     (response.references.length < questionnaire.references.minimumCount || response.references.length > questionnaire.references.maximumCount)) {
-    errors.push(issue("invalid_count", "/references", "references", `Provide between ${questionnaire.references.minimumCount} and ${questionnaire.references.maximumCount} references`));
+    errors.push(issue("invalid_count", "/references", "references", countRequirement("Provide", questionnaire.references.minimumCount, questionnaire.references.maximumCount, "reference")));
   }
 
   const documentCategories = new Map(questionnaire.documents.categories.map((entry) => [entry.purposeId, entry]));

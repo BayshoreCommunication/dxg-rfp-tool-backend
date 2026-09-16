@@ -6,6 +6,7 @@ const {
   roomNightsBetween,
   validateStructuredVendorResponse,
   validateVendorResponseQuestionnaire,
+  countRequirement,
 } = require("../src/modules/vendorResponses/domain/structuredResponse");
 const {
   validateVendorResponseCalculationV1,
@@ -190,4 +191,41 @@ test("date and room-count properties remain stable across a bounded generated sa
     const end = `2027-01-${String(day + 3).padStart(2, "0")}`;
     assert.equal(roomNightsBetween(start, end), 3);
   }
+});
+
+/* The reference minimum was not pinned by any test, so it silently sat at 1
+   while the product required three comparable references. */
+test("a response short of the reference minimum cannot be finalized", () => {
+  const questionnaire = buildVendorResponseQuestionnaire();
+  questionnaire.references = {
+    enabled: true,
+    minimumCount: 3,
+    maximumCount: 3,
+    maxAgeMonths: 36,
+    maxVisualsPerReference: 3,
+  };
+  const response = buildCompleteVendorResponse(questionnaire);
+  const template = cloneFixture(response.references[0]);
+  const reference = (id) => ({ ...cloneFixture(template), referenceId: id });
+
+  response.references = [reference("reference-1"), reference("reference-2")];
+  const shortOfMinimum = validateStructuredVendorResponse(questionnaire, response, "final");
+  assert.ok(
+    shortOfMinimum.some((error) => error.path === "/references" && error.code === "invalid_count"),
+    "two references must block a final submission when three are required",
+  );
+
+  response.references = [reference("reference-1"), reference("reference-2"), reference("reference-3")];
+  assert.deepEqual(
+    validateStructuredVendorResponse(questionnaire, response, "final")
+      .filter((error) => error.path === "/references"),
+    [],
+  );
+});
+
+test("an exact count requirement is phrased without a degenerate range", () => {
+  // "Provide between 3 and 3 references" is what the naive range wording gives.
+  assert.equal(countRequirement("Provide", 3, 3, "reference"), "Provide 3 references");
+  assert.equal(countRequirement("Provide", 1, 1, "reference"), "Provide 1 reference");
+  assert.equal(countRequirement("Provide", 1, 3, "reference"), "Provide between 1 and 3 references");
 });

@@ -372,3 +372,18 @@ test("workspace and publication routes retain grant, rate-limit, and authorizati
     /"\/questionnaires\/capability",\s*authenticate,\s*authorizeAction\("vendor-response:write"\),\s*plannerWriteLimit/,
   );
 });
+
+/* The reference minimum was not pinned by any test, so it silently sat at 1
+   while the product required three comparable references. */
+test("a published questionnaire demands three comparable references", () => {
+  const questionnaire = projectProposalToVendorResponseQuestionnaire(
+    require("../contracts/proposal/v1/legacyAdapter").mapLegacyProposalToV1(
+      legacyProposal(),
+      { organizationId, ownerUserId, now: fixedNow.toISOString() },
+    ).proposal,
+  );
+
+  assert.equal(questionnaire.references.enabled, true);
+  assert.equal(questionnaire.references.minimumCount, 3);
+  assert.equal(questionnaire.references.maximumCount, 3);
+});
