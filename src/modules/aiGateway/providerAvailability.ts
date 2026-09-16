@@ -1,5 +1,6 @@
 import { withPostgresTransaction } from "../../../config/postgres";
 import { aiRuntimeAuthorized } from "../../../config/aiEnvironment";
+import { PROVIDER_UNAVAILABLE_CODES } from "../liveAi/openAiProvider";
 
 /* Is live AI usable *right now*? `/ai/pilot-status` answers a different
    question — what the environment is configured to allow — and is admin-only.
@@ -22,17 +23,9 @@ export type AiAvailability = {
 
 /* Content problems (malformed output, bad citations) say nothing about the
    provider's health — one unparseable document must never halt the product.
-   Only codes meaning "the call itself could not be served" count. */
-const PROVIDER_FAILURE_CODES = new Set([
-  "LIVE_AI_PROVIDER_TEMPORARY",
-  "LIVE_AI_PROVIDER_FAILED",
-  "LIVE_AI_CREDENTIAL_UNAVAILABLE",
-  "LIVE_AI_EMPTY_OUTPUT",
-  /* An exhausted account is the outage this circuit exists for: it fails every
-     call, indefinitely, until somebody pays. Omitting it would leave the
-     composer cheerfully accepting sends throughout. */
-  "LIVE_AI_QUOTA_EXHAUSTED",
-]);
+   Only codes meaning "the call itself could not be served" count, and that list
+   lives with the provider that raises them. */
+const PROVIDER_FAILURE_CODES = PROVIDER_UNAVAILABLE_CODES;
 
 const positiveNumber = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);
