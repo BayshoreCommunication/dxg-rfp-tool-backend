@@ -278,7 +278,7 @@ export const projectProposalToVendorResponseQuestionnaire = (
     alternates: { enabled: true, minimumCount: 0, maximumCount: 20 },
     references: {
       enabled: true,
-      minimumCount: 1,
+      minimumCount: 3,
       maximumCount: 3,
       maxAgeMonths: 36,
       maxVisualsPerReference: 5,
