@@ -341,8 +341,13 @@ export const conversationRepository = {
       await reconcileQuestionDuplicates(c, proposalRefId, PROPOSAL_CONTEXT_INPUT_VERSION);
       const limit = Math.min(Math.max(ctx.limit ?? 200, 1), 500);
       const questions = await c.query<any>(
-        `SELECT q.id,q.issue_code,q.severity,q.canonical_paths,q.prompt,q.status,
-                q.answered_message_id,q.context_run_id,q.created_at,
+        `SELECT q.id,q.issue_code,q.severity,q.canonical_paths,q.prompt,
+                CASE
+                  WHEN q.status='superseded' AND q.answered_message_id IS NOT NULL THEN 'answered'
+                  ELSE q.status
+                END status,
+                q.answered_message_id,answer.content answered_content,
+                q.context_run_id,q.created_at,
                 (q.context_run_id IS NULL OR EXISTS(
                   SELECT 1 FROM rfpilot.proposal_context_runs r
                   JOIN rfpilot.ai_jobs j
@@ -350,7 +355,12 @@ export const conversationRepository = {
                   WHERE r.id=q.context_run_id
                 )) current_context
            FROM rfpilot.clarification_questions q
-          WHERE q.proposal_reference_id=$1 AND q.status IN('open','answered','dismissed')
+           LEFT JOIN rfpilot.conversation_messages answer
+             ON answer.id=q.answered_message_id
+          WHERE q.proposal_reference_id=$1 AND (
+            q.status IN('open','answered','dismissed') OR
+            (q.status='superseded' AND q.answered_message_id IS NOT NULL)
+          )
           ORDER BY q.created_at`,
         [proposalRefId, PROPOSAL_CONTEXT_INPUT_VERSION],
       );
@@ -437,24 +447,24 @@ export const conversationRepository = {
           if (!existing.includes(value)) conflictOptions.set(key, [...existing, value]);
         }
       }
-      // Pre-fill open questions with what the latest extraction run already
-      // captured for the same field, so the planner confirms instead of
-      // retyping. Values are only suggested, never written — the per-field
-      // review boundary is the answer confirmation itself. Conflict questions
-      // are excluded: their whole point is that the candidates disagree.
+      // Keep extraction-backed values attached to both open and answered
+      // questions. The assistant workspace applies safe defaults automatically,
+      // then continues to show them as an editable review instead of making the
+      // planner confirm every field. Conflict questions remain excluded: their
+      // whole point is that the candidates disagree.
       const suggestions = new Map<string, unknown>();
-      const openFieldPaths = [...new Set(
+      const reviewableFieldPaths = [...new Set(
         activeQuestions
-          .filter((q) => q.status === "open" && q.issue_code !== "CROSS_SOURCE_CONFLICT" && (q.canonical_paths || []).length === 1)
+          .filter((q) => (q.status === "open" || q.status === "answered") && q.issue_code !== "CROSS_SOURCE_CONFLICT" && (q.canonical_paths || []).length === 1)
           .map((q) => q.canonical_paths[0] as string),
       )];
-      if (openFieldPaths.length) {
+      if (reviewableFieldPaths.length) {
         const latestRunId = await latestSucceededContextRun(c, proposalRefId);
         if (latestRunId) {
           const candidateRows = await c.query<{ path: string; value: unknown }>(
             `SELECT path,value FROM rfpilot.proposal_context_operations
               WHERE run_id=$1 AND path=ANY($2::text[]) ORDER BY ordinal`,
-            [latestRunId, openFieldPaths],
+            [latestRunId, reviewableFieldPaths],
           );
           // Later operations win: within one run a later ordinal supersedes an
           // earlier value for the same path.
@@ -472,6 +482,25 @@ export const conversationRepository = {
             conflicting.length > 1
               ? { answerType: "choice" as const, options: conflicting }
               : questionAnswerType(paths);
+          const answeredValue =
+            q.status === "answered" && typeof q.answered_content === "string"
+              ? suggestedAnswerFor(paths, q.answered_content) ??
+                (paths.length > 1 && q.answered_content.trim()
+                  ? q.answered_content.trim()
+                  : null)
+              : null;
+          const extractedValue =
+            (q.status === "open" || q.status === "answered") &&
+            q.issue_code !== "CROSS_SOURCE_CONFLICT" &&
+            paths.length === 1 &&
+            suggestions.has(paths[0])
+              ? suggestedAnswerFor(
+                  paths,
+                  q.status === "answered" && typeof q.answered_content === "string"
+                    ? q.answered_content
+                    : suggestions.get(paths[0]),
+                )
+              : null;
           return {
             id: q.id,
             code: q.issue_code,
@@ -486,10 +515,11 @@ export const conversationRepository = {
             options: options ? [...options] : [],
             // Extraction-sourced prefill, already converted to a submittable
             // answer string (null when there is no faithful representation).
-            suggestedAnswer:
-              q.status === "open" && q.issue_code !== "CROSS_SOURCE_CONFLICT" && paths.length === 1 && suggestions.has(paths[0])
-                ? suggestedAnswerFor(paths, suggestions.get(paths[0]))
-                : null,
+            suggestedAnswer: extractedValue,
+            // The persistent review includes both extraction defaults and
+            // answers supplied through guided questions. Once answered, the
+            // answer message is authoritative so an edit updates in place.
+            reviewAnswer: answeredValue ?? extractedValue,
             // Pairs an answered question with the answer message it produced so
             // the thread can show what was asked above the answer.
             answeredMessageId: q.answered_message_id ?? null,
@@ -802,8 +832,8 @@ export const conversationRepository = {
     return withPostgresTransaction(async (c) => {
       await tenant(c, ctx.organizationMongoId);
       const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
-      const question = await c.query<{ id: string; issue_code: string; canonical_paths: string[]; status: string }>(
-        `SELECT q.id,q.issue_code,q.canonical_paths,q.status
+      const question = await c.query<{ id: string; issue_code: string; canonical_paths: string[]; status: string; answered_message_id: string | null }>(
+        `SELECT q.id,q.issue_code,q.canonical_paths,q.status,q.answered_message_id
            FROM rfpilot.clarification_questions q
            LEFT JOIN rfpilot.proposal_context_runs cr ON cr.id=q.context_run_id
            LEFT JOIN rfpilot.ai_jobs cj ON cj.id=cr.job_id AND cj.input_version=$3
@@ -816,7 +846,7 @@ export const conversationRepository = {
       const paths = Array.isArray(row.canonical_paths) ? row.canonical_paths : [];
       if (paths.some(isRetiredProposalWorkflowPath))
         throw new ConversationError("QUESTION_NOT_FOUND", "Clarification question was not found.", 404);
-      return { id: row.id, code: row.issue_code, paths, status: row.status };
+      return { id: row.id, code: row.issue_code, paths, status: row.status, answeredMessageId: row.answered_message_id };
     });
   },
 
@@ -848,21 +878,37 @@ export const conversationRepository = {
         && ctx.status === "answered"
         && appliedPaths.length > 0
         && appliedPaths.every((path) => questionPaths.includes(path));
-      if (row.status !== "open" && !supersededByThisAnswer)
+      const revisingAnswer = row.status === "answered"
+        && ctx.status === "answered"
+        && appliedPaths.length > 0
+        && appliedPaths.every((path) => questionPaths.includes(path));
+      if (row.status !== "open" && !supersededByThisAnswer && !revisingAnswer)
         throw new ConversationError("QUESTION_NOT_OPEN", "This question has already been resolved.", 409);
       let answeredMessageId: string | null = null;
       if (ctx.status === "answered") {
         const conversation = await getOrCreateConversation(c, org, proposalRefId, ctx.actorUserMongoId);
         await c.query("SELECT id FROM rfpilot.conversations WHERE id=$1 FOR UPDATE", [conversation.id]);
-        const count = await c.query<{ n: number }>("SELECT message_count n FROM rfpilot.conversations WHERE id=$1", [conversation.id]);
-        const ordinal = Number(count.rows[0]?.n ?? 0) + 1;
-        answeredMessageId = uuidv7();
-        await c.query(
-          `INSERT INTO rfpilot.conversation_messages(id,organization_id,conversation_id,ordinal,role,kind,content,intent,status,actor_external_user_id)
-           VALUES($1,$2,$3,$4,'user','question_answer',$5,'chat','complete',$6)`,
-          [answeredMessageId, org, conversation.id, ordinal, ctx.answer, ctx.actorUserMongoId],
-        );
-        await c.query("UPDATE rfpilot.conversations SET message_count=$2,updated_at=now() WHERE id=$1", [conversation.id, ordinal]);
+        if ((revisingAnswer || supersededByThisAnswer) && row.answered_message_id) {
+          answeredMessageId = row.answered_message_id;
+          await c.query(
+            "UPDATE rfpilot.conversation_messages SET content=$2 WHERE id=$1 AND conversation_id=$3",
+            [answeredMessageId, ctx.answer, conversation.id],
+          );
+          await c.query(
+            "UPDATE rfpilot.conversations SET updated_at=now() WHERE id=$1",
+            [conversation.id],
+          );
+        } else {
+          const count = await c.query<{ n: number }>("SELECT message_count n FROM rfpilot.conversations WHERE id=$1", [conversation.id]);
+          const ordinal = Number(count.rows[0]?.n ?? 0) + 1;
+          answeredMessageId = uuidv7();
+          await c.query(
+            `INSERT INTO rfpilot.conversation_messages(id,organization_id,conversation_id,ordinal,role,kind,content,intent,status,actor_external_user_id)
+             VALUES($1,$2,$3,$4,'user','question_answer',$5,'chat','complete',$6)`,
+            [answeredMessageId, org, conversation.id, ordinal, ctx.answer, ctx.actorUserMongoId],
+          );
+          await c.query("UPDATE rfpilot.conversations SET message_count=$2,updated_at=now() WHERE id=$1", [conversation.id, ordinal]);
+        }
       }
       await c.query(
         "UPDATE rfpilot.clarification_questions SET status=$2,answered_message_id=$3,answered_by_external_user_id=$4,updated_at=now() WHERE id=$1",
