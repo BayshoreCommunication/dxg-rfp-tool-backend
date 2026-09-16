@@ -20,6 +20,7 @@ import { conversationRepository } from "../conversations/postgresConversationRep
 import { comparisonOrchestrationRepository } from "../comparisonOrchestration/postgresComparisonOrchestrationRepository";
 import { vendorIntelligenceRepository } from "../vendorIntelligence/postgresVendorIntelligenceRepository";
 import { proposalDraftRepository } from "../proposalDraft/postgresProposalDraftRepository";
+import { PROVIDER_UNAVAILABLE_CODES } from "../liveAi/openAiProvider";
 import { pseudonym, safeErrorCode, safeLog } from "../../shared/observability/safeTelemetry";
 
 const stageFor = (type: QueueMessage["jobType"]) => ({
@@ -187,7 +188,7 @@ export const createSourceSecurityWorker = (repository: JobRepository) => {
       await settleComparison(job.data);
       let chatFallbackCompleted = false;
       if (job.data.jobType === "conversation_chat" && ["failed", "dead_letter", "cancelled"].includes(failed.status)) {
-        if (code === "LIVE_AI_PROVIDER_TEMPORARY") {
+        if (PROVIDER_UNAVAILABLE_CODES.has(code)) {
           try {
             await conversationRepository.completeChatJob({
               organizationMongoId: job.data.organizationMongoId,

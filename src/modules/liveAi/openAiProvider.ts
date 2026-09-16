@@ -33,6 +33,22 @@ export const assertLiveAiReady=(operation:"extractStructured"|"generateFromEvide
    attempt budget on an unwinnable call and told the planner to "try again",
    which could never work — production failed every AI request for a week on
    exactly this. Only the transient ones stay retryable. */
+/* "The provider could not serve this request" — as opposed to a content
+   problem (malformed output, bad citations, an oversized document), which says
+   nothing about the provider's health. Every consumer that reacts to an outage
+   reads this one set: the composer's availability circuit pauses on it, and the
+   chat worker degrades to a deterministic reply instead of failing the turn.
+   Adding a new provider failure code means adding it here, once — the chat
+   fallback previously hardcoded LIVE_AI_PROVIDER_TEMPORARY and silently stopped
+   covering outages the moment LIVE_AI_QUOTA_EXHAUSTED was introduced. */
+export const PROVIDER_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
+ "LIVE_AI_PROVIDER_TEMPORARY",
+ "LIVE_AI_PROVIDER_FAILED",
+ "LIVE_AI_CREDENTIAL_UNAVAILABLE",
+ "LIVE_AI_EMPTY_OUTPUT",
+ "LIVE_AI_QUOTA_EXHAUSTED",
+]);
+
 const QUOTA_CODES = new Set(["insufficient_quota", "billing_hard_limit_reached", "account_deactivated"]);
 
 export const classifyProviderFailure = (
