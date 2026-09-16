@@ -28,6 +28,10 @@ const PROVIDER_FAILURE_CODES = new Set([
   "LIVE_AI_PROVIDER_FAILED",
   "LIVE_AI_CREDENTIAL_UNAVAILABLE",
   "LIVE_AI_EMPTY_OUTPUT",
+  /* An exhausted account is the outage this circuit exists for: it fails every
+     call, indefinitely, until somebody pays. Omitting it would leave the
+     composer cheerfully accepting sends throughout. */
+  "LIVE_AI_QUOTA_EXHAUSTED",
 ]);
 
 const positiveNumber = (value: string | undefined, fallback: number) => {

@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import {aiRuntimeAuthorized} from "../../../config/aiEnvironment";
 import {beginProviderAttempt,completeProviderAttempt,type ProviderAttemptContext} from "./attemptLedger";
+import {safeLog} from "../../shared/observability/safeTelemetry";
 
 // Pinned dated snapshot: provider/model releases must be immutable. Changing
 // this default requires a new release record and gold-fixture evaluation.
@@ -26,6 +27,24 @@ export const assertLiveAiReady=(operation:"extractStructured"|"generateFromEvide
  if(!process.env.OPENAI_API_KEY)throw new LiveAiError("LIVE_AI_CREDENTIAL_UNAVAILABLE","The live provider credential is unavailable.",503);
 };
 
+/* OpenAI answers 429 for two unrelated situations: a rate limit, which clears
+   on its own, and insufficient_quota, which means the account cannot pay and
+   will answer 429 for ever. Treating both as retryable burned the whole
+   attempt budget on an unwinnable call and told the planner to "try again",
+   which could never work — production failed every AI request for a week on
+   exactly this. Only the transient ones stay retryable. */
+const QUOTA_CODES = new Set(["insufficient_quota", "billing_hard_limit_reached", "account_deactivated"]);
+
+export const classifyProviderFailure = (
+ status: number,
+ providerCode: string,
+ errorName = "",
+): "LIVE_AI_QUOTA_EXHAUSTED" | "LIVE_AI_PROVIDER_TEMPORARY" | "LIVE_AI_PROVIDER_FAILED" => {
+ if (QUOTA_CODES.has(providerCode)) return "LIVE_AI_QUOTA_EXHAUSTED";
+ if (status === 429 || status >= 500 || errorName.includes("Timeout")) return "LIVE_AI_PROVIDER_TEMPORARY";
+ return "LIVE_AI_PROVIDER_FAILED";
+};
+
 export type LiveAiResult<T>={output:T;inputTokens:number;outputTokens:number;providerRequestId:string|null;finishReason:string;model:string};
 
 export async function executeOpenAiJson<T>(input:{operation:"extractStructured"|"generateFromEvidence";classification:LiveAiClassification;instructions:string;evidence:unknown;schemaName:string;schema:Record<string,unknown>;timeoutMs?:number;ledger?:ProviderAttemptContext;idempotencyPhase?:string}):Promise<LiveAiResult<T>>{
@@ -46,8 +65,24 @@ export async function executeOpenAiJson<T>(input:{operation:"extractStructured"|
   return{output,inputTokens:usage?.input_tokens??inputTokens,outputTokens:usage?.output_tokens??estimatedTokens(response.output_text),providerRequestId:response.id||null,finishReason:String(response.status||"completed"),model:LIVE_AI_MODEL};
  }catch(error){
   if(error instanceof LiveAiError)throw error;
-  const status=Number((error as{status?:number}).status||0),retryable=status===429||status>=500||String((error as{name?:string}).name).includes("Timeout");
-  await settle({state:"failed",errorCode:retryable?"LIVE_AI_PROVIDER_TEMPORARY":"LIVE_AI_PROVIDER_FAILED"});
-  throw new LiveAiError(retryable?"LIVE_AI_PROVIDER_TEMPORARY":"LIVE_AI_PROVIDER_FAILED","The live AI provider request failed.",retryable?503:502,retryable);
+  const status=Number((error as{status?:number}).status||0);
+  const providerCode=String((error as{code?:unknown}).code??(error as{error?:{code?:unknown}}).error?.code??"");
+  const code=classifyProviderFailure(status,providerCode,String((error as{name?:string}).name??""));
+  const retryable=code==="LIVE_AI_PROVIDER_TEMPORARY";
+  // The provider's own status and code are not sensitive, and without them a
+  // failure is indistinguishable from any other: production spent a week
+  // failing every call with LIVE_AI_PROVIDER_TEMPORARY while the real cause
+  // (an exhausted account) could only be found by querying Postgres.
+  safeLog("error","live_ai.provider_failed",{
+   provider:"openai",
+   model:LIVE_AI_MODEL,
+   operation:input.operation,
+   errorCode:code,
+   statusClass:String(status||"none"),
+   retryable,
+   outcome:"failure",
+  });
+  await settle({state:"failed",errorCode:code});
+  throw new LiveAiError(code,"The live AI provider request failed.",retryable?503:502,retryable);
  }
 }
