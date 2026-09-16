@@ -68,6 +68,7 @@ export interface VendorResponseReadRepository {
       proposalId: string;
       proposalTitle: string;
       responseCount: number;
+      responseIds: string[];
       unreadCount: number;
       latestResponseAt: string;
       latestVendorName: string;

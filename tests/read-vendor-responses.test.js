@@ -18,6 +18,7 @@ test("proposal summary aggregation uses object identifiers for tenant matching",
     "utf8",
   );
   assert.match(source, /organizationId:\s*tenantObjectId\(\)/);
+  assert.match(source, /responseIds:\s*\{\s*\$push:\s*"\$_id"\s*\}/);
 });
 
 test("vendor-response proposal summaries normalize paging and preserve complete counts", async () => {
@@ -31,6 +32,12 @@ test("vendor-response proposal summaries normalize paging and preserve complete 
             proposalId: "proposal-001",
             proposalTitle: "Annual Summit",
             responseCount: 4,
+            responseIds: [
+              "64b7f1012f9f4a0012ab3401",
+              "64b7f1012f9f4a0012ab3402",
+              "64b7f1012f9f4a0012ab3403",
+              "64b7f1012f9f4a0012ab3404",
+            ],
             unreadCount: 2,
             latestResponseAt: "2026-08-16T10:00:00.000Z",
             latestVendorName: "Apex Events",
@@ -63,6 +70,7 @@ test("vendor-response proposal summaries normalize paging and preserve complete 
   assert.equal(result.responseCount, 45);
   assert.equal(result.unreadCount, 7);
   assert.equal(result.proposals[0].responseCount, 4);
+  assert.equal(result.proposals[0].responseIds.length, 4);
 });
 
 test("vendor-response list normalizes filters and carries planner ownership", async () => {
