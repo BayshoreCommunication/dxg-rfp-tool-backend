@@ -794,18 +794,25 @@ export const conversationRepository = {
     });
   },
 
-  // The spreadsheet workflow belongs after the minimum intake, not in the
-  // opening greeting. Append it once, immediately after the final open guided
-  // question is answered or skipped. Explicit user requests are still handled
-  // immediately by chatReply.ts.
+  // The spreadsheet workflow belongs directly after the room-count question,
+  // not after the entire intake. Append it once when that specific question is
+  // answered or skipped. Explicit user requests are still handled immediately
+  // by chatReply.ts.
   async appendRoomScheduleSuggestionWhenReady(ctx: Ctx & { proposalMongoId: string }) {
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, ctx.organizationMongoId);
       const proposalRefId = await proposal(c, ctx.proposalMongoId, ctx.actorUserMongoId);
       const conversation = await getOrCreateConversation(c, org, proposalRefId, ctx.actorUserMongoId);
       await c.query("SELECT id FROM rfpilot.conversations WHERE id=$1 FOR UPDATE", [conversation.id]);
-      const open = await activeQuestionCount(c, proposalRefId, "open");
-      if (open > 0) return { created: false, reason: "questions_open" };
+      const roomQuestion = await c.query<{ id: string }>(
+        `SELECT id FROM rfpilot.clarification_questions
+          WHERE proposal_reference_id=$1
+            AND status IN ('answered','dismissed')
+            AND canonical_paths @> $2::jsonb
+          LIMIT 1`,
+        [proposalRefId, JSON.stringify(["/content/venueSchedule/numberOfEventRooms"])],
+      );
+      if (!roomQuestion.rows[0]) return { created: false, reason: "room_question_open" };
       const existing = await c.query<{ id: string }>(
         `SELECT id FROM rfpilot.conversation_messages
           WHERE conversation_id=$1 AND actions @> '["download_room_schedule_template"]'::jsonb

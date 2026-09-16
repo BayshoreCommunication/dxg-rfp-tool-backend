@@ -21,7 +21,7 @@ export const ROOM_SCHEDULE_ASSISTANT_ACTIONS: readonly AssistantActionId[] = Obj
   "open_room_specifications",
 ]);
 export const ROOM_SCHEDULE_GUIDANCE_MESSAGE =
-  "Now that the key event details are covered, you can add room specifications. If you have a room schedule, download the sample sheet, add one row per function, and upload it in Room Specifications. Functions with the same Room Name will share AV specifications.";
+  "Next, add room specifications. If you have a room schedule, download the sample sheet, add one row per function, and upload it in Room Specifications. Functions with the same Room Name will share AV specifications.";
 
 export const parseAssistantActions = (value: unknown): AssistantActionId[] => {
   if (!Array.isArray(value)) return [];
