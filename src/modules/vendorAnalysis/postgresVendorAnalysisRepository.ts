@@ -7,6 +7,8 @@ import Proposal from "../../../modal/proposalsModel";
 import VendorResponse from "../../../modal/vendorResponseModel";
 import {spacesObjectKeyFromUrl} from "../../../utils/uploadToSpaces";
 import {s3PrivateDocumentStorage} from "../documentIngestion/s3PrivateDocumentStorage";
+import VendorSubmissionVersion from "../../../modal/vendorSubmissionVersionModel";
+import {buildStructuredVendorEvidence} from "./structuredEvidence";
 import {deterministicParser} from "../knowledgeIngestion/deterministicParser";
 import {liveVendorResponseAnalysis} from "../liveAi/operations";
 import {LIVE_AI_MODEL} from "../liveAi/openAiProvider";
@@ -117,7 +119,7 @@ export const vendorAnalysisRepository={
   });
   if(meta.status==="succeeded")return{resultReference:input.runId};
   const response=await VendorResponse.findOne({_id:meta.vendor_response_mongo_id})
-   .select("proposalId message documents")
+   .select("proposalId message documents currentVersionId")
    .lean<any>();
   if(!response||String(response.proposalId)!==String(meta.proposal)){
    await this.fail({organizationMongoId:input.organizationMongoId,runId:input.runId,code:"VENDOR_RESPONSE_NOT_FOUND",status:"failed"});
@@ -135,8 +137,25 @@ export const vendorAnalysisRepository={
   const requirements=buildRequirements(proposal);
   const vendorEvidence:Array<{id:string;text:string;origin:string;locator:unknown}>=[];
   let skippedDocuments=0;
+  // Structured submissions carry the answers as data, not prose. Reading only
+  // `message` and `documents` meant a structured response looked empty: the
+  // legacy free-text form was retired, so there is nothing in `message`, and
+  // pricing lives in the frozen calculation rather than an uploaded file.
+  const submissionVersion=response.currentVersionId
+   ? await VendorSubmissionVersion.findOne({_id:response.currentVersionId})
+      .select("structuredResponse questionnaireSnapshot calculationSnapshot")
+      .lean<any>()
+   : null;
+  for(const fragment of buildStructuredVendorEvidence({
+   response:submissionVersion?.structuredResponse??null,
+   questionnaire:submissionVersion?.questionnaireSnapshot??null,
+   calculation:submissionVersion?.calculationSnapshot??null,
+  })){
+   if(vendorEvidence.length>=MAX_EVIDENCE)break;
+   vendorEvidence.push({id:`vendor-fragment-${vendorEvidence.length}`,text:fragment.text.slice(0,8000),origin:fragment.origin,locator:fragment.locator});
+  }
   const message=String(response.message||"").trim();
-  if(message)vendorEvidence.push({id:`vendor-fragment-${vendorEvidence.length}`,text:message.slice(0,8000),origin:"message",locator:{kind:"message"}});
+  if(message&&vendorEvidence.length<MAX_EVIDENCE)vendorEvidence.push({id:`vendor-fragment-${vendorEvidence.length}`,text:message.slice(0,8000),origin:"message",locator:{kind:"message"}});
   for(const document of Array.isArray(response.documents)?response.documents:[]){
    if(vendorEvidence.length>=MAX_EVIDENCE)break;
    const url=String(document?.url||"");
