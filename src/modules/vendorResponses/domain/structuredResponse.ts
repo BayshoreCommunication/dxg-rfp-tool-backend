@@ -100,6 +100,21 @@ export const roomNightsBetween = (checkIn: string, checkOut: string): number => 
   return Math.floor((end - start) / 86_400_000);
 };
 
+/**
+ * Whether a date range runs backwards.
+ *
+ * Distinct from roomNightsBetween, which counts hotel nights and so returns 0
+ * for a same-day stay. Ordering a start and an end is a different question: a
+ * one-day event is ordinary and ends on the day it starts. Unparseable dates
+ * are not an ordering problem — the contract schema rejects those.
+ */
+export const endsBeforeStart = (startDate: string, endDate: string): boolean => {
+  const start = parseDateOnly(startDate);
+  const end = parseDateOnly(endDate);
+  if (start === null || end === null) return false;
+  return end < start;
+};
+
 const isSectionApplicable = (
   questionnaire: VendorResponseQuestionnaireV1,
   response: VendorResponseV1,
@@ -164,8 +179,8 @@ export const validateVendorResponseQuestionnaire = (
     errors.push(issue("precision_mismatch", "/pricing/decimalPrecision", "questionnaire", "Context and pricing must use the same decimal precision"));
   }
   if (questionnaire.context.eventStartDate && questionnaire.context.eventEndDate &&
-    roomNightsBetween(questionnaire.context.eventStartDate, questionnaire.context.eventEndDate) === 0) {
-    errors.push(issue("invalid_date_range", "/context", "questionnaire", "Event end date must be after event start date"));
+    endsBeforeStart(questionnaire.context.eventStartDate, questionnaire.context.eventEndDate)) {
+    errors.push(issue("invalid_date_range", "/context", "questionnaire", "Event end date cannot be before the event start date"));
   }
   if (questionnaire.alternates.minimumCount > questionnaire.alternates.maximumCount) {
     errors.push(issue("invalid_range", "/alternates", "questionnaire", "Alternate minimum cannot exceed maximum"));
@@ -516,8 +531,8 @@ export const validateStructuredVendorResponse = (
     if (reference.visualDocumentIds.length > questionnaire.references.maxVisualsPerReference) {
       errors.push(issue("invalid_count", `/references/${reference.referenceId}/visualDocumentIds`, "references", `Reference allows at most ${questionnaire.references.maxVisualsPerReference} visuals`));
     }
-    if (reference.startDate && reference.endDate && roomNightsBetween(reference.startDate, reference.endDate) === 0) {
-      errors.push(issue("invalid_date_range", `/references/${reference.referenceId}`, "references", "Reference end date must be after start date"));
+    if (reference.startDate && reference.endDate && endsBeforeStart(reference.startDate, reference.endDate)) {
+      errors.push(issue("invalid_date_range", `/references/${reference.referenceId}`, "references", "Reference end date cannot be before its start date"));
     }
     if (final) {
       requireText(errors, reference.clientName, `/references/${reference.referenceId}/clientName`, "references", "Client name");

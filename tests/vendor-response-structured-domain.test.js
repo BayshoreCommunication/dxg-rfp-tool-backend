@@ -7,6 +7,7 @@ const {
   validateStructuredVendorResponse,
   validateVendorResponseQuestionnaire,
   countRequirement,
+  endsBeforeStart,
 } = require("../src/modules/vendorResponses/domain/structuredResponse");
 const {
   validateVendorResponseCalculationV1,
@@ -228,4 +229,53 @@ test("an exact count requirement is phrased without a degenerate range", () => {
   assert.equal(countRequirement("Provide", 3, 3, "reference"), "Provide 3 references");
   assert.equal(countRequirement("Provide", 1, 1, "reference"), "Provide 1 reference");
   assert.equal(countRequirement("Provide", 1, 3, "reference"), "Provide between 1 and 3 references");
+});
+
+/* roomNightsBetween counts hotel nights, so it returns 0 for a same-day stay.
+   Reusing it to order a start and an end made every one-day event look like a
+   backwards range: references were unsubmittable, and a single-day RFP could
+   not produce a vendor questionnaire at all. */
+test("a one-day event is a valid date range, a backwards one is not", () => {
+  assert.equal(endsBeforeStart("2027-09-14", "2027-09-14"), false);
+  assert.equal(endsBeforeStart("2027-09-14", "2027-09-16"), false);
+  assert.equal(endsBeforeStart("2027-09-16", "2027-09-14"), true);
+  // Unparseable dates are the schema's problem, not an ordering failure.
+  assert.equal(endsBeforeStart("nonsense", "2027-09-14"), false);
+  // Room nights are unchanged: a same-day stay really is zero nights.
+  assert.equal(roomNightsBetween("2027-09-14", "2027-09-14"), 0);
+  assert.equal(roomNightsBetween("2027-09-14", "2027-09-16"), 2);
+});
+
+test("a single-day event still publishes a questionnaire", () => {
+  const questionnaire = buildVendorResponseQuestionnaire();
+  questionnaire.context.eventStartDate = "2027-09-14";
+  questionnaire.context.eventEndDate = "2027-09-14";
+  assert.deepEqual(validateVendorResponseQuestionnaire(questionnaire), []);
+
+  questionnaire.context.eventEndDate = "2027-09-13";
+  assert.ok(
+    validateVendorResponseQuestionnaire(questionnaire)
+      .some((error) => error.code === "invalid_date_range"),
+    "a backwards event range must still be rejected",
+  );
+});
+
+test("a single-day reference can be submitted", () => {
+  const questionnaire = buildVendorResponseQuestionnaire();
+  const response = buildCompleteVendorResponse(questionnaire);
+  const sameDay = { ...cloneFixture(response.references[0]), startDate: "2026-03-10", endDate: "2026-03-10" };
+
+  response.references = [sameDay];
+  assert.deepEqual(
+    validateStructuredVendorResponse(questionnaire, response, "final")
+      .filter((error) => error.code === "invalid_date_range"),
+    [],
+  );
+
+  response.references = [{ ...sameDay, endDate: "2026-03-09" }];
+  assert.ok(
+    validateStructuredVendorResponse(questionnaire, response, "final")
+      .some((error) => error.code === "invalid_date_range"),
+    "a backwards reference range must still be rejected",
+  );
 });
