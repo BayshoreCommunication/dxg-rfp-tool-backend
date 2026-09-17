@@ -462,3 +462,53 @@ test("each publish records whether it republished or reused the stored version",
   assert.equal(events[0].sourceChecksum, events[1].sourceChecksum);
   assert.equal(events[0].sourceChecksum, repository.publications[0].sourceChecksum);
 });
+
+/* The version row is the commit point. A failure in the bookkeeping that
+   follows it used to escape as a 500, so the vendor who happened to trigger a
+   republish got an error page for a publish that had already succeeded. */
+test("a publish survives a failure in the supersede bookkeeping", async () => {
+  const { mongoVendorResponseQuestionnaireRepository } = require("../src/modules/vendorResponses/infrastructure/mongo/mongoVendorResponseQuestionnaireRepository");
+  const VendorResponseQuestionnaireVersion = require("../modal/vendorResponseQuestionnaireVersionModel").default;
+
+  const originalFindOne = VendorResponseQuestionnaireVersion.findOne;
+  const originalCreate = VendorResponseQuestionnaireVersion.create;
+  const originalUpdateMany = VendorResponseQuestionnaireVersion.updateMany;
+
+  VendorResponseQuestionnaireVersion.findOne = () => ({
+    sort: () => ({ lean: async () => null }),
+  });
+  VendorResponseQuestionnaireVersion.create = async (row) => ({
+    toObject: () => ({ ...row, _id: "row-1" }),
+  });
+  VendorResponseQuestionnaireVersion.updateMany = async () => {
+    throw Object.assign(new Error("connection timed out"), { name: "MongoNetworkTimeoutError" });
+  };
+
+  const projection = projectProposalToVendorResponseQuestionnaire(
+    require("../contracts/proposal/v1/legacyAdapter").mapLegacyProposalToV1(
+      legacyProposal(),
+      { organizationId, ownerUserId, now: fixedNow.toISOString() },
+    ).proposal,
+  );
+
+  let result;
+  try {
+    result = await mongoVendorResponseQuestionnaireRepository.publish({
+      organizationId,
+      proposalId,
+      proposalVersion: 1,
+      projection,
+      sourceChecksum: "a".repeat(64),
+      publishedByActorId: ownerUserId,
+      publishedAt: fixedNow,
+    });
+  } finally {
+    VendorResponseQuestionnaireVersion.findOne = originalFindOne;
+    VendorResponseQuestionnaireVersion.create = originalCreate;
+    VendorResponseQuestionnaireVersion.updateMany = originalUpdateMany;
+  }
+
+  assert.equal(result.created, true);
+  assert.equal(result.questionnaire.questionnaireVersion, 1);
+  assert.equal(result.questionnaire.references.minimumCount, 3);
+});

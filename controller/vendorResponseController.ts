@@ -25,7 +25,7 @@ import {
   uploadPublicVendorResponseDraftDocuments,
 } from "../src/modules/vendorResponses/composition";
 import { VendorResponseWorkspaceError } from "../src/modules/vendorResponses/application/vendorResponseWorkspace";
-import { safeLog } from "../src/shared/observability/safeTelemetry";
+import { safeLog, telemetryErrorCode } from "../src/shared/observability/safeTelemetry";
 import { VendorSubmissionDraftError } from "../src/modules/vendorResponses/application/vendorSubmissionDrafts";
 import { VendorSubmissionFinalizationError } from "../src/modules/vendorResponses/application/finalizeVendorSubmissionDraft";
 import type {
@@ -45,15 +45,10 @@ import {
  * its spaces. Name plus driver code does survive, and is enough to tell a
  * duplicate key from a validation failure from a timeout.
  */
-export const workspaceErrorCode = (error: unknown): string => {
-  if (error instanceof VendorResponseWorkspaceError) return error.code;
-  const name = error instanceof Error && error.name ? error.name : "UnknownError";
-  const raw = (error as { code?: unknown })?.code;
-  const driverCode = typeof raw === "string" || typeof raw === "number" ? String(raw) : "";
-  return `${name}${driverCode ? `.${driverCode}` : ""}`
-    .replace(/[^A-Za-z0-9_.:-]/g, "_")
-    .slice(0, 200);
-};
+export const workspaceErrorCode = (error: unknown): string =>
+  error instanceof VendorResponseWorkspaceError
+    ? error.code
+    : telemetryErrorCode(error);
 
 const sendWorkspaceError = (
   res: Response,

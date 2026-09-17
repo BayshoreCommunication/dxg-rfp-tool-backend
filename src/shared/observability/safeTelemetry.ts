@@ -2,6 +2,25 @@ import crypto from "node:crypto";import {context,metrics,propagation,trace,SpanS
 const allowed=new Set(["timestamp","level","service","environment","event","applicationVersion","traceId","spanId","correlationId","requestId","organizationPseudonym","proposalPseudonym","submissionPseudonym","draftPseudonym","jobId","runId","sourceId","route","method","jobType","operation","workerType","outcome","statusClass","errorCode","retryable","durationMs","queueWaitMs","attempt","count","provider","model","promptVersion","schemaVersion","policyVersion","inputTokens","outputTokens","costMicros","validationOutcome","responseFormat","rolloutReason","documentCount","roomCount","specCount","versionNumber","sourceChecksum"]);
 const id=/^[A-Za-z0-9_.:-]{1,200}$/;const safeString=(key:string,value:string)=>key==="event"||key==="route"?value.replace(/[\r\n]/g,"_").slice(0,200):id.test(value)?value:undefined;
 export type SafeTelemetryRecord=Record<string,unknown>;
+
+/**
+ * Classify an error into a token sanitizeTelemetry will keep.
+ *
+ * Values outside /^[A-Za-z0-9_.:-]{1,200}$/ are dropped, so an error message
+ * never survives — a Mongo "E11000 duplicate key error" vanishes on its
+ * spaces. Name plus driver code does survive, and separates a duplicate key
+ * from a validation failure from a write timeout, without putting message
+ * contents into the logs.
+ */
+export const telemetryErrorCode = (error: unknown): string => {
+  const name = error instanceof Error && error.name ? error.name : "UnknownError";
+  const raw = (error as { code?: unknown })?.code;
+  const driverCode = typeof raw === "string" || typeof raw === "number" ? String(raw) : "";
+  return `${name}${driverCode ? `.${driverCode}` : ""}`
+    .replace(/[^A-Za-z0-9_.:-]/g, "_")
+    .slice(0, 200);
+};
+
 export const sanitizeTelemetry=(record:SafeTelemetryRecord)=>{const result:Record<string,string|number|boolean>={};for(const [key,value] of Object.entries(record)){if(!allowed.has(key)||value===undefined||value===null)continue;if(typeof value==="string"){const safe=safeString(key,value);if(safe!==undefined)result[key]=safe;}else if(typeof value==="number"&&Number.isFinite(value))result[key]=value;else if(typeof value==="boolean")result[key]=value;}return result;};
 if(process.env.NODE_ENV==="production"&&process.env.OBSERVABILITY_ENABLED==="true"&&!process.env.TELEMETRY_PSEUDONYM_KEY)throw new Error("TELEMETRY_PSEUDONYM_KEY is required when observability is enabled in production");
 export const pseudonym=(value:string)=>crypto.createHmac("sha256",process.env.TELEMETRY_PSEUDONYM_KEY||"test-only-observability-key").update(value).digest("hex").slice(0,16);
