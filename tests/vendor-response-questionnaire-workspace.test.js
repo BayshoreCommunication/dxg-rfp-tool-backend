@@ -387,3 +387,35 @@ test("a published questionnaire demands three comparable references", () => {
   assert.equal(questionnaire.references.minimumCount, 3);
   assert.equal(questionnaire.references.maximumCount, 3);
 });
+
+/* A 500 from the workspace route used to leave only a statusClass in the logs.
+   The telemetry allowlist drops any value that is not /^[A-Za-z0-9_.:-]{1,200}$/,
+   so the classification has to be a token, not a message — these pin both the
+   classification and the fact that it survives sanitisation. */
+test("an unexpected workspace failure is classified into a loggable token", () => {
+  const { workspaceErrorCode } = require("../controller/vendorResponseController");
+  const { sanitizeTelemetry } = require("../src/shared/observability/safeTelemetry");
+
+  const duplicateKey = Object.assign(new Error("E11000 duplicate key error collection: x"), {
+    name: "MongoServerError",
+    code: 11000,
+  });
+  assert.equal(workspaceErrorCode(duplicateKey), "MongoServerError.11000");
+  assert.equal(workspaceErrorCode(new Error("boom")), "Error");
+  assert.equal(
+    workspaceErrorCode(new VendorResponseWorkspaceError("QUESTIONNAIRE_INVALID", 422, "bad")),
+    "QUESTIONNAIRE_INVALID",
+  );
+  // Anything outside the allowed character class is neutralised, not dropped.
+  assert.equal(workspaceErrorCode(Object.assign(new Error("x"), { name: "Weird Name!" })), "Weird_Name_");
+
+  for (const error of [duplicateKey, new Error("boom")]) {
+    const record = sanitizeTelemetry({
+      event: "vendor_response_workspace_failed",
+      outcome: "failure",
+      statusClass: "5xx",
+      errorCode: workspaceErrorCode(error),
+    });
+    assert.equal(record.errorCode, workspaceErrorCode(error), "errorCode must survive sanitisation");
+  }
+});

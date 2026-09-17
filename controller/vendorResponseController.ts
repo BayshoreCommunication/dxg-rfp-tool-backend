@@ -25,6 +25,7 @@ import {
   uploadPublicVendorResponseDraftDocuments,
 } from "../src/modules/vendorResponses/composition";
 import { VendorResponseWorkspaceError } from "../src/modules/vendorResponses/application/vendorResponseWorkspace";
+import { safeLog } from "../src/shared/observability/safeTelemetry";
 import { VendorSubmissionDraftError } from "../src/modules/vendorResponses/application/vendorSubmissionDrafts";
 import { VendorSubmissionFinalizationError } from "../src/modules/vendorResponses/application/finalizeVendorSubmissionDraft";
 import type {
@@ -35,6 +36,24 @@ import {
   renderVendorResponsePrintHtml,
   vendorResponseExportPayload,
 } from "../src/modules/vendorResponses/application/vendorResponseExport";
+
+/**
+ * Classify an error into a token the telemetry allowlist will actually keep.
+ *
+ * safeLog drops any value that is not `/^[A-Za-z0-9_.:-]{1,200}$/`, so an error
+ * message never survives — a Mongo "E11000 duplicate key error" would vanish on
+ * its spaces. Name plus driver code does survive, and is enough to tell a
+ * duplicate key from a validation failure from a timeout.
+ */
+export const workspaceErrorCode = (error: unknown): string => {
+  if (error instanceof VendorResponseWorkspaceError) return error.code;
+  const name = error instanceof Error && error.name ? error.name : "UnknownError";
+  const raw = (error as { code?: unknown })?.code;
+  const driverCode = typeof raw === "string" || typeof raw === "number" ? String(raw) : "";
+  return `${name}${driverCode ? `.${driverCode}` : ""}`
+    .replace(/[^A-Za-z0-9_.:-]/g, "_")
+    .slice(0, 200);
+};
 
 const sendWorkspaceError = (
   res: Response,
@@ -49,6 +68,14 @@ const sendWorkspaceError = (
     });
     return;
   }
+  // An unexpected failure here used to leave no trace at all: CloudWatch
+  // recorded the 5xx and nothing about its cause, so a broken questionnaire
+  // publish looked identical to a healthy request that happened to fail.
+  safeLog("error", "vendor_response_workspace_failed", {
+    outcome: "failure",
+    statusClass: "5xx",
+    errorCode: workspaceErrorCode(error),
+  });
   res.status(500).json({ success: false, message: fallback });
 };
 
