@@ -1,3 +1,4 @@
+import { safeLog, telemetryErrorCode } from "../../../../shared/observability/safeTelemetry";
 import Proposal from "../../../../../modal/proposalsModel";
 import VendorResponseQuestionnaireVersion from "../../../../../modal/vendorResponseQuestionnaireVersionModel";
 import type { VendorResponseQuestionnaireV1 } from "../../../../../contracts/generated/vendor-response-questionnaire-v1";
@@ -139,20 +140,35 @@ export const mongoVendorResponseQuestionnaireRepository: VendorResponseQuestionn
           publishedByActorId: input.publishedByActorId,
           publishedAt: input.publishedAt,
         });
-        await VendorResponseQuestionnaireVersion.updateMany(
-          {
-            organizationId: input.organizationId,
-            proposalId: input.proposalId,
-            questionnaireVersion: { $lt: questionnaireVersion },
-            status: "published",
-          },
-          {
-            $set: {
-              status: "superseded",
-              supersededAt: input.publishedAt,
+        // The version row is the commit point: once it exists the publish has
+        // succeeded and the caller's questionnaire is correct. Marking older
+        // rows superseded is bookkeeping that changes nothing the caller
+        // receives — no read path selects the active version by status, and the
+        // next publish's sweep picks up any stragglers. Letting a failure here
+        // escape turned a successful publish into an error page for whichever
+        // vendor happened to trigger the republish.
+        try {
+          await VendorResponseQuestionnaireVersion.updateMany(
+            {
+              organizationId: input.organizationId,
+              proposalId: input.proposalId,
+              questionnaireVersion: { $lt: questionnaireVersion },
+              status: "published",
             },
-          },
-        );
+            {
+              $set: {
+                status: "superseded",
+                supersededAt: input.publishedAt,
+              },
+            },
+          );
+        } catch (error) {
+          safeLog("warn", "vendor_questionnaire_supersede_failed", {
+            versionNumber: questionnaireVersion,
+            outcome: "failure",
+            errorCode: telemetryErrorCode(error),
+          });
+        }
         return publication(created.toObject() as QuestionnaireRow, true);
       } catch (error) {
         if (!duplicateKey(error) || attempt === 1) throw error;
