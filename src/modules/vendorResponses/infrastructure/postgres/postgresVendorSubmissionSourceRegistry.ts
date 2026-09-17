@@ -6,11 +6,15 @@ import type {
   VendorSubmissionSourceRegistry,
   VendorSubmissionVersionRecord,
 } from "../../domain/ports/vendorSubmissionRepository";
+import {
+  describeStructuredFragment,
+  structuredFragmentLabels,
+} from "../../domain/structuredFragmentText";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const STRUCTURED_PROVENANCE_VERSION = "structured-response-provenance.v1";
+const STRUCTURED_PROVENANCE_VERSION = "structured-response-provenance.v2";
 
 type StructuredFragment = {
   path: string;
@@ -149,9 +153,23 @@ const registerStructuredProvenance = async (
       input.record.receivedAt,
     ],
   );
+  // A flattened leaf is precise but unreadable: `/calculation/grandTotalMinor:
+  // 7670000` gives a model no label, no currency and no hint it is a price,
+  // which is why the commercial analysis reported no total price while the
+  // total was present. The path still anchors the citation; only the rendered
+  // text changes.
+  const labels = structuredFragmentLabels(
+    input.record.questionnaireSnapshot ?? null,
+    input.record.calculationSnapshot?.currency ?? null,
+  );
   for (let ordinal = 0; ordinal < fragments.length; ordinal += 1) {
     const fragment = fragments[ordinal];
-    const content = `${fragment.path}: ${String(fragment.value)}`;
+    const content = describeStructuredFragment({
+      path: fragment.path,
+      value: fragment.value,
+      provenance: fragment.provenance,
+      labels,
+    });
     await client.query(
       `INSERT INTO rfpilot.evidence_fragments(
          id,organization_id,extraction_run_id,ordinal,kind,content,locator,
