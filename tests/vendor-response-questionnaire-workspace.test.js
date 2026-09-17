@@ -419,3 +419,46 @@ test("an unexpected workspace failure is classified into a loggable token", () =
     assert.equal(record.errorCode, workspaceErrorCode(error), "errorCode must survive sanitisation");
   }
 });
+
+/* Whether a projection change reaches vendors was unobservable: a republish and
+   a reuse of the stored version look identical from outside, so a projection
+   that silently never republishes leaves vendors on an old questionnaire with
+   nothing in the logs explaining why. */
+test("each publish records whether it republished or reused the stored version", async () => {
+  const repository = inMemoryRepository();
+  const service = createVendorResponseQuestionnaireService(repository, () => fixedNow);
+
+  const previousObservability = process.env.OBSERVABILITY_ENABLED;
+  process.env.OBSERVABILITY_ENABLED = "true";
+  const originalWrite = process.stdout.write.bind(process.stdout);
+  const lines = [];
+  process.stdout.write = (chunk, ...rest) => {
+    lines.push(String(chunk));
+    return originalWrite(chunk, ...rest);
+  };
+
+  try {
+    await service.workspace({ organizationId, proposalId, grantActorId: ownerUserId });
+    await service.workspace({ organizationId, proposalId, grantActorId: ownerUserId });
+  } finally {
+    process.stdout.write = originalWrite;
+    if (previousObservability === undefined) delete process.env.OBSERVABILITY_ENABLED;
+    else process.env.OBSERVABILITY_ENABLED = previousObservability;
+  }
+
+  const events = lines
+    .flatMap((line) => line.split("\n"))
+    .filter((line) => line.includes("vendor_questionnaire_publish_resolved"))
+    .map((line) => JSON.parse(line));
+
+  assert.equal(events.length, 2);
+  assert.equal(events[0].outcome, "published");
+  assert.equal(events[1].outcome, "reused");
+  assert.equal(events[0].versionNumber, 1);
+  assert.equal(events[1].versionNumber, 1);
+  // The checksum has to survive the telemetry allowlist, or the diagnostic is
+  // a log line that looks healthy and carries nothing.
+  assert.match(events[0].sourceChecksum, /^[0-9a-f]{64}$/);
+  assert.equal(events[0].sourceChecksum, events[1].sourceChecksum);
+  assert.equal(events[0].sourceChecksum, repository.publications[0].sourceChecksum);
+});
