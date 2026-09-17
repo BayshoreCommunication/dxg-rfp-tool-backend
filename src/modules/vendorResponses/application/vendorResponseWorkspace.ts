@@ -129,18 +129,28 @@ export const createVendorResponseQuestionnaireService = (
         "Generated vendor questionnaire is invalid",
       );
     }
-    return {
-      source,
-      publication: await repository.publish({
-        organizationId: source.organizationId,
-        proposalId: source.proposalId,
-        proposalVersion: mapped.proposal.version,
-        projection,
-        sourceChecksum: questionnaireProjectionChecksum(projection),
-        publishedByActorId: input.actorId,
-        publishedAt: publicationTime,
-      }),
-    };
+    const sourceChecksum = questionnaireProjectionChecksum(projection);
+    const publication = await repository.publish({
+      organizationId: source.organizationId,
+      proposalId: source.proposalId,
+      proposalVersion: mapped.proposal.version,
+      projection,
+      sourceChecksum,
+      publishedByActorId: input.actorId,
+      publishedAt: publicationTime,
+    });
+    // Whether a projection change actually reaches vendors was previously
+    // unobservable: a republish and a reuse of the stored version look
+    // identical from outside, and a projection that silently never republishes
+    // leaves vendors on an old questionnaire with no trace of why.
+    safeLog("info", "vendor_questionnaire_publish_resolved", {
+      organizationPseudonym: pseudonym(source.organizationId),
+      proposalPseudonym: pseudonym(source.proposalId),
+      versionNumber: publication.questionnaire.questionnaireVersion,
+      sourceChecksum,
+      outcome: publication.created ? "published" : "reused",
+    });
+    return { source, publication };
   };
 
   const publish = async (input: {
