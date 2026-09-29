@@ -6,7 +6,7 @@ import type {
 } from "../../../../contracts/generated/vendor-response-questionnaire-v1";
 
 export const VENDOR_RESPONSE_QUESTIONNAIRE_PROJECTION_VERSION =
-  "vendor-response-questionnaire-projection.v1";
+  "vendor-response-questionnaire-projection.v2";
 
 export type VendorResponseQuestionnaireProjection = Omit<
   VendorResponseQuestionnaireV1,
@@ -159,7 +159,10 @@ export const projectProposalToVendorResponseQuestionnaire = (
     proposal.content.venueSchedule.city,
     proposal.content.venueSchedule.region,
   ].filter(Boolean).join(", ");
-  const streamingApplicable = proposal.content.event.format !== "in_person";
+  const streamingApplicable = [
+    proposal.content.hybridVirtual?.streamingPlatform,
+    proposal.content.hybridVirtual?.streamingPlatformOther,
+  ].some((value) => Boolean(value?.trim()));
   const coiRequired = Boolean(proposal.content.venueTechnical?.coiRequirements?.trim());
 
   return {

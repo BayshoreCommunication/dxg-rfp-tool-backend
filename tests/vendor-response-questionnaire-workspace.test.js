@@ -167,6 +167,28 @@ test("projection creates a vendor-safe deterministic questionnaire from canonica
   assert.doesNotMatch(serialized, /organizationId|ownerUserId|accessGrant|sourceReferences/);
 });
 
+test("streaming delivery is included only when the proposal names a streaming service", () => {
+  const mapProposal = (legacy) =>
+    require("../contracts/proposal/v1/legacyAdapter").mapLegacyProposalToV1(
+      legacy,
+      { organizationId, ownerUserId, now: fixedNow.toISOString() },
+    ).proposal;
+
+  const withoutStreaming = projectProposalToVendorResponseQuestionnaire(
+    mapProposal(legacyProposal()),
+  );
+  assert.ok(withoutStreaming.rooms.every((room) => room.streamingApplicable === false));
+  assert.equal(withoutStreaming.hybrid.platformPlanRequired, false);
+
+  const withStreaming = projectProposalToVendorResponseQuestionnaire(
+    mapProposal(legacyProposal({
+      hybridVirtual: { streamingPlatform: "Zoom Events" },
+    })),
+  );
+  assert.ok(withStreaming.rooms.every((room) => room.streamingApplicable === true));
+  assert.equal(withStreaming.hybrid.platformPlanRequired, true);
+});
+
 test("a changed proposal projection publishes the next questionnaire version", async () => {
   const snapshot = sourceSnapshot();
   const repository = inMemoryRepository(snapshot);
