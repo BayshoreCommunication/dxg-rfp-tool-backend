@@ -92,6 +92,7 @@ export const createEmptyStructuredVendorResponse = (
   acknowledgements: [],
   companyProfile: {
     legalName: "",
+    dba: "",
     headquarters: "",
     largestComparableEvent: "",
     clientMix: [],

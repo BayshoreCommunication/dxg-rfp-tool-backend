@@ -30,6 +30,7 @@ const pointerSegments = (path: string): string[] =>
 
 /** `grandTotalMinor` -> `Grand total`, `legalName` -> `Legal name`. */
 const humanize = (segment: string): string => {
+  if (segment.toLowerCase() === "dba") return "DBA";
   const words = segment
     .replace(/Minor$/, "")
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")

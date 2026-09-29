@@ -75,6 +75,19 @@ test("response cannot answer rooms, specs, or categories outside its questionnai
   assert.ok(errors.filter((entry) => entry.code === "unknown_reference").length >= 3);
 });
 
+test("active drafts on older questionnaires can save the built-in medical client mix field", () => {
+  const questionnaire = buildVendorResponseQuestionnaire();
+  questionnaire.companyProfile.clientMix.categories = questionnaire.companyProfile.clientMix.categories
+    .filter((category) => category.categoryId !== "medical");
+  const response = buildCompleteVendorResponse(questionnaire);
+  response.companyProfile.clientMix.push({ categoryId: "medical", percent: 0 });
+
+  const errors = validateStructuredVendorResponse(questionnaire, response, "draft");
+  assert.ok(!errors.some((entry) =>
+    entry.code === "unknown_reference"
+    && entry.path === "/companyProfile/clientMix/medical"));
+});
+
 test("substitutions and exceptions require an explanatory note", () => {
   const questionnaire = buildVendorResponseQuestionnaire();
   const response = buildCompleteVendorResponse(questionnaire);

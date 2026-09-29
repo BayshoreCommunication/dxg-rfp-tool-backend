@@ -142,6 +142,10 @@ test("projection creates a vendor-safe deterministic questionnaire from canonica
   assert.equal(questionnaire.proposalVersion, 4);
   assert.equal(questionnaire.context.currency, "EUR");
   assert.equal(questionnaire.pricing.currency, "EUR");
+  assert.deepEqual(
+    questionnaire.companyProfile.clientMix.categories.map((category) => category.label),
+    ["Corporate", "Association", "Government", "Nonprofit", "Medical", "Other"],
+  );
   assert.deepEqual(questionnaire.rooms.map((room) => room.roomId), [
     "room-general-session",
     "room-breakout",

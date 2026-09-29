@@ -91,6 +91,7 @@
       "required": ["legalName", "headquarters", "largestComparableEvent", "clientMix"],
       "properties": {
         "legalName": { "type": "string", "maxLength": 300 },
+        "dba": { "type": "string", "maxLength": 4000 },
         "headquarters": { "type": "string", "maxLength": 300 },
         "yearsInBusiness": { "type": "integer", "minimum": 0, "maximum": 1000 },
         "staffCount": { "type": "integer", "minimum": 0, "maximum": 10000000 },

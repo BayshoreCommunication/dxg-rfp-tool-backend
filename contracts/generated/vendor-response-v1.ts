@@ -74,6 +74,7 @@ export interface AcknowledgementResponse {
 }
 export interface CompanyProfile {
   legalName: string;
+  dba?: string;
   headquarters: string;
   yearsInBusiness?: number;
   staffCount?: number;

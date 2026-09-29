@@ -95,6 +95,7 @@ export const buildVendorResponseQuestionnaire = (
       categories: [
         { categoryId: "corporate", label: "Corporate" },
         { categoryId: "association", label: "Association" },
+        { categoryId: "medical", label: "Medical" },
       ],
     },
     deiPolicyRequired: true,
@@ -171,7 +172,7 @@ export const buildEmptyVendorResponse = (
   },
   identity: { vendorName: "", submittedBy: "", email: "" },
   acknowledgements: [],
-  companyProfile: { legalName: "", headquarters: "", largestComparableEvent: "", clientMix: [] },
+  companyProfile: { legalName: "", dba: "", headquarters: "", largestComparableEvent: "", clientMix: [] },
   platformIntegrationPlan: "",
   rooms: [],
   crew: [],
@@ -206,6 +207,7 @@ export const buildCompleteVendorResponse = (
   }));
   response.companyProfile = {
     legalName: "Example AV LLC",
+    dba: "Broadcast production, staging, and hybrid-event services.",
     headquarters: "Chicago, IL",
     yearsInBusiness: 12,
     staffCount: 85,

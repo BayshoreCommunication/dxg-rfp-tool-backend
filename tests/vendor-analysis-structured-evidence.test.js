@@ -22,7 +22,7 @@ const questionnaire = () => ({
 
 const response = () => ({
   identity: { vendorName: "Harbour Point", submittedBy: "Sam" },
-  companyProfile: { legalName: "Harbour Point Inc.", headquarters: "Milwaukee, WI", yearsInBusiness: 8, clientMix: [] },
+  companyProfile: { legalName: "Harbour Point Inc.", dba: "Live production and hybrid-event services.", headquarters: "Milwaukee, WI", yearsInBusiness: 8, clientMix: [] },
   platformIntegrationPlan: "RTMP push per room.",
   rooms: [
     {
@@ -76,6 +76,19 @@ test("pricing is rendered from the frozen calculation, not from uploaded files",
   assert.match(pricing, /Travel subtotal: USD 2,600\.00/);
   assert.match(pricing, /Room Keynote total: USD 38,300\.00/);
   assert.match(pricing, /Excludes a teleprompter\./);
+});
+
+test("company profile evidence includes the optional DBA services detail", () => {
+  const fragments = buildStructuredVendorEvidence({
+    response: response(),
+    questionnaire: questionnaire(),
+    calculation: calculation(),
+  });
+
+  assert.match(
+    textFor(fragments, "structured:company-profile"),
+    /DBA: Live production and hybrid-event services\./,
+  );
 });
 
 test("spec verdicts carry the client requirement and the vendor's own note", () => {

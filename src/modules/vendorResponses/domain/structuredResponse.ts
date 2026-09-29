@@ -310,7 +310,10 @@ export const validateStructuredVendorResponse = (
 
   const clientMixCategoryIds = new Set(questionnaire.companyProfile.clientMix.categories.map((entry) => entry.categoryId));
   for (const entry of response.companyProfile.clientMix) {
-    if (!clientMixCategoryIds.has(entry.categoryId)) {
+    // Active drafts retain the questionnaire version they started with. Medical
+    // was added as a built-in category later, so older drafts must be able to
+    // save the new field without weakening arbitrary category validation.
+    if (!clientMixCategoryIds.has(entry.categoryId) && entry.categoryId !== "medical") {
       errors.push(issue("unknown_reference", `/companyProfile/clientMix/${entry.categoryId}`, "company_profile", "Client mix category is not part of this questionnaire"));
     }
   }

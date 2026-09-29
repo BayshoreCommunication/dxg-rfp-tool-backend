@@ -81,6 +81,7 @@ export const buildStructuredVendorEvidence = (input: {
       identity?.vendorName && `Vendor: ${identity.vendorName}`,
       identity?.submittedBy && `Submitted by: ${identity.submittedBy}`,
       profile?.legalName && `Legal company name: ${profile.legalName}`,
+      profile?.dba && `DBA: ${profile.dba}`,
       profile?.headquarters && `Headquarters: ${profile.headquarters}`,
       profile?.yearsInBusiness != null && `Years in business: ${profile.yearsInBusiness}`,
       profile?.staffCount != null && `Full-time staff: ${profile.staffCount}`,

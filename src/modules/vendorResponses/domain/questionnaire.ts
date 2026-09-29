@@ -219,6 +219,7 @@ export const projectProposalToVendorResponseQuestionnaire = (
           { categoryId: "association", label: "Association" },
           { categoryId: "government", label: "Government" },
           { categoryId: "nonprofit", label: "Nonprofit" },
+          { categoryId: "medical", label: "Medical" },
           { categoryId: "other", label: "Other" },
         ],
       },

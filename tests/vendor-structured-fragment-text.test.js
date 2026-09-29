@@ -83,6 +83,7 @@ test("unknown identifiers fall back to the raw value rather than being dropped",
 
 test("ordinary fields are humanized rather than left as camelCase paths", () => {
   assert.equal(describe("/response/companyProfile/legalName", "Harbour Point Inc."), "Legal name: Harbour Point Inc.");
+  assert.equal(describe("/response/companyProfile/dba", "Live production services"), "DBA: Live production services");
   assert.equal(describe("/response/identity/vendorName", "Harbour Point"), "Vendor name: Harbour Point");
 });
 
