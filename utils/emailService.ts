@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import nodemailer, { type SentMessageInfo, type Transporter } from "nodemailer";
 import { Resend } from "resend";
 
 // ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ const getResendClient = (): Resend | null => {
 // Nodemailer SMTP (production path on AWS via SES; also local dev)
 // ---------------------------------------------------------------------------
 
-let transporter: nodemailer.Transporter | null = null;
+let transporter: Transporter | null = null;
 let transporterInitPromise: Promise<void> | null = null;
 
 const initializeTransporter = async (): Promise<void> => {
@@ -80,7 +80,7 @@ const initializeTransporter = async (): Promise<void> => {
   }
 };
 
-const ensureTransporter = async (): Promise<nodemailer.Transporter> => {
+const ensureTransporter = async (): Promise<Transporter> => {
   if (transporter) return transporter;
   if (!transporterInitPromise) {
     transporterInitPromise = initializeTransporter();
@@ -217,7 +217,7 @@ export async function sendCustomEmail(params: {
   subject: string;
   html: string;
   text?: string;
-}): Promise<nodemailer.SentMessageInfo | void> {
+}): Promise<SentMessageInfo | void> {
   const fixedRecipients = parseEmailList(
     process.env.SMTP_FIXED_RECIPIENTS || process.env.SMTP_FIXED_RECIPIENT
   );
