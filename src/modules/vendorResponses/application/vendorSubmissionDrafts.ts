@@ -7,6 +7,8 @@ import { safeFilename } from "../../documentIngestion/domain";
 import { pseudonym, safeLog } from "../../../shared/observability/safeTelemetry";
 import {
   createEmptyStructuredVendorResponse,
+  draftQuestionnaireIsStale,
+  rebaseDraftResponse,
   toVendorDraftDocumentDto,
   toVendorSubmissionDraftDetailDto,
   toVendorSubmissionDraftDto,
@@ -227,6 +229,50 @@ export const createVendorSubmissionDraftService = (dependencies: {
     return updated ?? conflictFor(scope, draft.draftId, at);
   };
 
+  // Moves an active draft onto the latest published questionnaire by replacing it.
+  // If the carried response does not validate, the draft keeps its pinned version.
+  const rebaseToLatest = async (
+    scope: VendorSubmissionDraftScope,
+    draft: VendorSubmissionDraftRecord,
+    latest: VendorResponseQuestionnaireV1 | null,
+    at: Date,
+  ): Promise<VendorSubmissionDraftRecord> => {
+    if (!latest || !draftQuestionnaireIsStale(draft, latest)) return draft;
+    const response = rebaseDraftResponse(draft.response, latest);
+    const issues = validateStructuredVendorResponse(latest, response, "draft");
+    const logRebase = (outcome: string) => safeLog("info", "vendor_response_draft_rebased", {
+      organizationPseudonym: pseudonym(scope.organizationId),
+      proposalPseudonym: pseudonym(scope.proposalId),
+      draftPseudonym: pseudonym(draft.draftId),
+      responseFormat: "structured_v1",
+      versionNumber: latest.questionnaireVersion,
+      outcome,
+    });
+    if (issues.length > 0) {
+      logRebase("skipped_incompatible");
+      return draft;
+    }
+    let rebased: VendorSubmissionDraftRecord | null;
+    try {
+      rebased = await dependencies.repository.rebaseActive({
+        ...scope,
+        draft,
+        questionnaire: latest,
+        response,
+        now: at,
+      });
+    } catch {
+      logRebase("failed");
+      return (await dependencies.repository.findActive(scope, at)) ?? draft;
+    }
+    if (!rebased) {
+      logRebase("skipped_conflict");
+      return (await dependencies.repository.findActive(scope, at)) ?? draft;
+    }
+    logRebase("success");
+    return rebased;
+  };
+
   const deleteStoredDocuments = async (
     documents: readonly Pick<VendorDraftDocument, "objectKey">[],
   ): Promise<void> => {
@@ -311,16 +357,17 @@ export const createVendorSubmissionDraftService = (dependencies: {
           );
         }
       }
-      const existing = await dependencies.repository.findActive(input, at);
-      if (existing) {
-        if ((existing.submissionId ?? null) !== (input.submissionId ?? null)) {
+      const active = await dependencies.repository.findActive(input, at);
+      if (active) {
+        if ((active.submissionId ?? null) !== (input.submissionId ?? null)) {
           throw new VendorSubmissionDraftError(
             "DRAFT_CONFLICT",
             409,
             "This invitation already has an active draft for a different submission context",
-            existing.draftRevision,
+            active.draftRevision,
           );
         }
+        const existing = await rebaseToLatest(input, active, input.questionnaire, at);
         safeLog("info", "vendor_response_draft_ready", {
           organizationPseudonym: pseudonym(input.organizationId),
           proposalPseudonym: pseudonym(input.proposalId),
@@ -747,10 +794,14 @@ export const createVendorSubmissionDraftService = (dependencies: {
       workspace: VendorResponseWorkspaceV1,
       scope: VendorSubmissionDraftScope,
     ): Promise<VendorResponseWorkspaceV1> {
-      const [draft, currentSubmission] = await Promise.all([
-        dependencies.repository.findActive(scope, now()),
+      const at = now();
+      const [active, currentSubmission] = await Promise.all([
+        dependencies.repository.findActive(scope, at),
         dependencies.repository.findCurrentSubmission(scope),
       ]);
+      const draft = active
+        ? await rebaseToLatest(scope, active, workspace.questionnaire, at)
+        : null;
       if (!draft && !currentSubmission) return workspace;
       const hydrated: VendorResponseWorkspaceV1 = {
         ...workspace,

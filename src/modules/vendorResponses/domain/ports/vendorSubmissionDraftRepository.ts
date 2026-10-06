@@ -45,6 +45,14 @@ export interface VendorSubmissionDraftRepository {
     now: Date;
     expiresAt: Date;
   }): Promise<VendorSubmissionDraftRecord | null>;
+  // Retires the draft as abandoned (its objects move to the new draft) and opens a
+  // replacement pinned to the newer questionnaire. Null when the draft changed.
+  rebaseActive(input: VendorSubmissionDraftScope & {
+    draft: VendorSubmissionDraftRecord;
+    questionnaire: VendorResponseQuestionnaireV1;
+    response: VendorResponseV1;
+    now: Date;
+  }): Promise<VendorSubmissionDraftRecord | null>;
   abandon(input: VendorSubmissionDraftScope & {
     draftId: string;
     expectedRevision: number;

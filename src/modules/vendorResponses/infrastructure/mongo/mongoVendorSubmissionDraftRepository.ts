@@ -266,6 +266,53 @@ export const mongoVendorSubmissionDraftRepository: VendorSubmissionDraftReposito
     return row ? toRecord(row) : null;
   },
 
+  async rebaseActive(input) {
+    const retired = await VendorSubmissionDraft.findOneAndUpdate(
+      {
+        _id: input.draft.draftId,
+        ...scopeFilter(input),
+        status: "active",
+        draftRevision: input.draft.draftRevision,
+        finalizationKeyHash: null,
+      },
+      {
+        $set: {
+          status: "abandoned",
+          abandonedAt: input.now,
+          lastSavedAt: input.now,
+          cleanupCompletedAt: input.now,
+        },
+        $inc: { draftRevision: 1 },
+      },
+      { new: true, runValidators: true },
+    ).lean<DraftRow>();
+    if (!retired) return null;
+    try {
+      const created = await VendorSubmissionDraft.create({
+        ...scopeFilter(input),
+        submissionId: input.draft.submissionId ?? null,
+        questionnaireId: input.questionnaire.questionnaireId,
+        questionnaireVersion: input.questionnaire.questionnaireVersion,
+        questionnaireChecksum: input.questionnaire.questionnaireChecksum,
+        proposalVersion: input.questionnaire.proposalVersion,
+        questionnaire: input.questionnaire,
+        response: input.response,
+        documents: input.draft.documents,
+        draftRevision: 1,
+        status: "active",
+        lastSavedAt: input.now,
+        expiresAt: new Date(input.draft.expiresAt),
+      });
+      return toRecord(created.toObject() as unknown as DraftRow);
+    } catch (error) {
+      await VendorSubmissionDraft.updateOne(
+        { _id: input.draft.draftId, status: "abandoned" },
+        { $set: { status: "active", abandonedAt: null, cleanupCompletedAt: null } },
+      );
+      throw error;
+    }
+  },
+
   async abandon(input) {
     const row = await VendorSubmissionDraft.findOneAndUpdate(
       {

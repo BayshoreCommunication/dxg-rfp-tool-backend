@@ -97,6 +97,35 @@ const memoryRepository = () => {
       draft.draftRevision += 1;
       return draft;
     },
+    async rebaseActive(input) {
+      const draft = records.find((record) =>
+        record.draftId === input.draft.draftId && sameScope(record, input));
+      if (
+        !draft
+        || draft.status !== "active"
+        || draft.draftRevision !== input.draft.draftRevision
+        || draft.finalizationKeyHash
+      ) return null;
+      draft.status = "abandoned";
+      draft.abandonedAt = input.now.toISOString();
+      draft.cleanupCompletedAt = input.now.toISOString();
+      draft.draftRevision += 1;
+      nextId += 1;
+      const replacement = {
+        ...draft,
+        draftId: `507f1f77bcf86cd799439${nextId}`,
+        questionnaire: input.questionnaire,
+        response: input.response,
+        documents: draft.documents,
+        draftRevision: 1,
+        status: "active",
+        lastSavedAt: input.now.toISOString(),
+        abandonedAt: null,
+        cleanupCompletedAt: null,
+      };
+      records.push(replacement);
+      return replacement;
+    },
     async abandon(input) {
       const draft = records.find((record) =>
         record.draftId === input.draftId && sameScope(record, input));
@@ -458,29 +487,70 @@ test("expiry cleanup deletes only unsubmitted draft objects", async () => {
   assert.ok(harness.repository.records[0].cleanupCompletedAt);
 });
 
-test("workspace resumes the questionnaire snapshot pinned by its active draft", async () => {
+const workspaceFor = (questionnaire) => ({
+  schemaVersion: "vendor-response-workspace.v1",
+  proposalTitle: "Vendor response fixture",
+  capabilities: {
+    structuredResponse: true,
+    responseFormat: "structured_v1",
+    reason: "enabled",
+  },
+  access: { state: "open", canEdit: true, canSubmit: true },
+  questionnaire,
+  draft: null,
+  currentSubmission: null,
+});
+
+const newerQuestionnaire = (pinned) => {
+  const newer = structuredClone(pinned);
+  newer.questionnaireVersion = 2;
+  newer.questionnaireChecksum = "c".repeat(64);
+  newer.pricing.feeLines = [
+    { feeId: "freight-trucking", label: "Freight / trucking", kind: "fee", required: false },
+    { feeId: "service-fee", label: "Service charge", kind: "fee", required: false },
+  ];
+  return newer;
+};
+
+test("workspace rebases an active draft onto a newer questionnaire and keeps entered data", async () => {
   const harness = serviceHarness();
   const pinned = buildVendorResponseQuestionnaire();
   pinned.proposalId = scope.proposalId;
   const created = await harness.service.createOrResume({ ...scope, questionnaire: pinned });
-  const newer = structuredClone(pinned);
-  newer.questionnaireVersion = 2;
-  newer.questionnaireChecksum = "c".repeat(64);
-  const workspace = {
-    schemaVersion: "vendor-response-workspace.v1",
-    proposalTitle: "Vendor response fixture",
-    capabilities: {
-      structuredResponse: true,
-      responseFormat: "structured_v1",
-      reason: "enabled",
-    },
-    access: { state: "open", canEdit: true, canSubmit: true },
-    questionnaire: newer,
-    draft: null,
-    currentSubmission: null,
-  };
+  const response = structuredClone(created.draft.response);
+  response.identity.vendorName = "Acme AV";
+  response.pricing.fees = [
+    { feeId: "service-fee", amount: { amountMinor: 1_200, currency: "USD" } },
+    { feeId: "sales-tax", amount: { amountMinor: 300, currency: "USD" } },
+  ];
+  await harness.service.save({ ...scope, draftId: created.draft.draftId, expectedRevision: 1, response });
+  const newer = newerQuestionnaire(pinned);
 
-  const hydrated = await harness.service.hydrateWorkspace(workspace, scope);
+  const hydrated = await harness.service.hydrateWorkspace(workspaceFor(newer), scope);
+
+  assert.equal(hydrated.questionnaire.questionnaireVersion, 2);
+  assert.notEqual(hydrated.draft.draftId, created.draft.draftId);
+  assert.equal(hydrated.draft.response.questionnaire.questionnaireChecksum, newer.questionnaireChecksum);
+  assert.equal(hydrated.draft.response.identity.vendorName, "Acme AV");
+  assert.deepEqual(hydrated.draft.response.pricing.fees.map((fee) => fee.feeId), ["service-fee"]);
+  const retired = harness.repository.records.find((record) => record.draftId === created.draft.draftId);
+  assert.equal(retired.status, "abandoned");
+  assert.ok(retired.cleanupCompletedAt, "transferred objects are not cleaned up with the retired draft");
+
+  const resumed = await harness.service.createOrResume({ ...scope, questionnaire: newer });
+  assert.equal(resumed.created, false);
+  assert.equal(resumed.draft.draftId, hydrated.draft.draftId);
+});
+
+test("workspace keeps the pinned questionnaire when the draft cannot move to the newer one", async () => {
+  const harness = serviceHarness();
+  const pinned = buildVendorResponseQuestionnaire();
+  pinned.proposalId = scope.proposalId;
+  const created = await harness.service.createOrResume({ ...scope, questionnaire: pinned });
+  const newer = newerQuestionnaire(pinned);
+  newer.pricing.currency = "EUR";
+
+  const hydrated = await harness.service.hydrateWorkspace(workspaceFor(newer), scope);
 
   assert.equal(hydrated.questionnaire.questionnaireVersion, 1);
   assert.equal(hydrated.draft.draftId, created.draft.draftId);
@@ -588,6 +658,56 @@ test("Mongo draft saves compare-and-swap within the full grant and tenant scope"
     assert.deepEqual(capturedOptions, { new: true, runValidators: true });
   } finally {
     VendorSubmissionDraft.findOneAndUpdate = original;
+  }
+});
+
+test("Mongo rebase retires the draft by compare-and-swap and restores it if the replacement fails", async () => {
+  const originalUpdate = VendorSubmissionDraft.findOneAndUpdate;
+  const originalCreate = VendorSubmissionDraft.create;
+  const originalUpdateOne = VendorSubmissionDraft.updateOne;
+  let capturedFilter;
+  let capturedUpdate;
+  let restored;
+  VendorSubmissionDraft.findOneAndUpdate = (filter, update) => {
+    capturedFilter = filter;
+    capturedUpdate = update;
+    return { lean: async () => ({ _id: filter._id }) };
+  };
+  VendorSubmissionDraft.create = async () => {
+    throw new Error("duplicate active draft");
+  };
+  VendorSubmissionDraft.updateOne = async (filter, update) => {
+    restored = { filter, update };
+    return { matchedCount: 1 };
+  };
+
+  try {
+    const questionnaire = buildVendorResponseQuestionnaire();
+    await assert.rejects(mongoVendorSubmissionDraftRepository.rebaseActive({
+      ...scope,
+      draft: {
+        ...scope,
+        draftId: "507f1f77bcf86cd799439099",
+        draftRevision: 4,
+        documents: [],
+        expiresAt: "2026-10-14T12:00:00.000Z",
+      },
+      questionnaire,
+      response: {},
+      now: new Date("2026-09-14T12:00:00.000Z"),
+    }), /duplicate active draft/);
+    assert.equal(capturedFilter.grantSubjectHash, scope.grantSubjectHash);
+    assert.equal(capturedFilter.draftRevision, 4);
+    assert.equal(capturedFilter.status, "active");
+    assert.equal(capturedFilter.finalizationKeyHash, null);
+    assert.equal(capturedUpdate.$set.status, "abandoned");
+    assert.ok(capturedUpdate.$set.cleanupCompletedAt);
+    assert.equal(restored.filter._id, "507f1f77bcf86cd799439099");
+    assert.equal(restored.update.$set.status, "active");
+  } finally {
+    VendorSubmissionDraft.findOneAndUpdate = originalUpdate;
+    VendorSubmissionDraft.create = originalCreate;
+    VendorSubmissionDraft.updateOne = originalUpdateOne;
   }
 });
 

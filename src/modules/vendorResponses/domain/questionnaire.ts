@@ -272,7 +272,8 @@ export const projectProposalToVendorResponseQuestionnaire = (
         { id: "other", label: "Other" },
       ],
       feeLines: [
-        { feeId: "service-fee", label: "Service fee", kind: "fee", required: false },
+        { feeId: "freight-trucking", label: "Freight / trucking", kind: "fee", required: false },
+        { feeId: "service-fee", label: "Service charge", kind: "fee", required: false },
         { feeId: "sales-tax", label: "Sales tax", kind: "tax", required: false },
       ],
       travelSubtotalRequired: false,

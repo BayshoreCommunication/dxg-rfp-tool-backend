@@ -116,6 +116,38 @@ export const createEmptyStructuredVendorResponse = (
   valueAdds: "",
 });
 
+export const draftQuestionnaireIsStale = (
+  draft: Pick<VendorSubmissionDraftRecord, "questionnaire">,
+  latest: VendorResponseQuestionnaireV1,
+): boolean =>
+  draft.questionnaire.proposalId === latest.proposalId
+  && draft.questionnaire.questionnaireChecksum !== latest.questionnaireChecksum
+  && draft.questionnaire.questionnaireVersion < latest.questionnaireVersion;
+
+// Carries a draft response onto a newer questionnaire version. Entries the new
+// questionnaire no longer defines are dropped; the caller must validate the result.
+export const rebaseDraftResponse = (
+  response: VendorResponseV1,
+  questionnaire: VendorResponseQuestionnaireV1,
+): VendorResponseV1 => {
+  const feeIds = new Set(questionnaire.pricing.feeLines.map((fee) => fee.feeId));
+  const acknowledgementChecksums = new Map(
+    questionnaire.acknowledgements.map((entry) => [entry.acknowledgementId, entry.textChecksum]),
+  );
+  const rebased = structuredClone(response);
+  return {
+    ...rebased,
+    questionnaire: createEmptyStructuredVendorResponse(questionnaire).questionnaire,
+    acknowledgements: rebased.acknowledgements.filter(
+      (entry) => acknowledgementChecksums.get(entry.acknowledgementId) === entry.textChecksum,
+    ),
+    pricing: {
+      ...rebased.pricing,
+      fees: rebased.pricing.fees.filter((fee) => feeIds.has(fee.feeId)),
+    },
+  };
+};
+
 export const toVendorSubmissionDraftDto = (
   draft: VendorSubmissionDraftRecord,
 ): VendorSubmissionDraftDto => ({
