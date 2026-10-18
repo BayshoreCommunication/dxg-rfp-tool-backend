@@ -50,5 +50,6 @@ All routes are available by default without feature-flag environment variables. 
 - AI component endpoints and payload examples: the relevant file under `architecture/`.
 - Exact executable behavior: route/controller schemas in `src/`; code wins if an old slice example differs.
 - Operational health and dependencies: [runbooks/API_AND_DEPENDENCIES.md](runbooks/API_AND_DEPENDENCIES.md).
+- Helpdesk (support tickets): `routes/supportDeskRoute.ts` — planner routes under `/api/v1/support`, agent routes under `/api/v1/admin/support`; validation and status rules in `src/modules/supportDesk/domain.ts`.
 
 The repository does not currently publish a generated OpenAPI contract. Adding one from runtime schemas is a documentation gap; until then, avoid copying full endpoint catalogs into multiple documents.

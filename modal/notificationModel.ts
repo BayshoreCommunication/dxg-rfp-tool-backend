@@ -4,7 +4,8 @@ export type NotificationType =
   | "proposal_view"
   | "proposal_expiring_soon"
   | "proposal_expired"
-  | "vendor_response";
+  | "vendor_response"
+  | "support_ticket";
 
 export interface INotification extends Document {
   organizationId?: mongoose.Types.ObjectId;
@@ -37,7 +38,13 @@ const notificationSchema = new Schema<INotification>(
     },
     type: {
       type: String,
-      enum: ["proposal_view", "proposal_expiring_soon", "proposal_expired", "vendor_response"],
+      enum: [
+        "proposal_view",
+        "proposal_expiring_soon",
+        "proposal_expired",
+        "vendor_response",
+        "support_ticket",
+      ],
       required: true,
     },
     title: {

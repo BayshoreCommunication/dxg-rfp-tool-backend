@@ -1,6 +1,6 @@
 # Architectural Decisions
 
-> Purpose: concise register of accepted, durable decisions. Last updated: 2026-09-14. Owner: engineering/product.
+> Purpose: concise register of accepted, durable decisions. Last updated: 2026-10-18. Owner: engineering/product.
 
 | Decision | Rationale / consequence |
 |---|---|
@@ -15,6 +15,7 @@
 | AI provider access uses a governed port and pinned model snapshot. | Provider replacement, deterministic release evidence, budget controls, and no hidden legacy endpoint. |
 | Assistant-workspace extracted defaults apply automatically (2026-09-09). | Normalized, non-conflicting values attached to open guided fields are written through the canonical question-answer path without a separate confirmation click. Automatic writes fill empty targets only, remain visible with field-level Edit, and never publish or send the proposal. The separate governed candidate-review/application surface retains its explicit review controls. |
 | Room recommendations are the one unattended application path. | Deterministic room suggestions fill **empty** allowlisted room fields without prior approval, so the planner adjusts values in the form instead of approving each. Bounded by: filled fields never overwritten, allowlisted paths only, crew appends only, version CAS plus per-room identity checks, and an audit row per application. Pending explicit DXG confirmation — see `architecture/ROOM_RECOMMENDATIONS.md`. |
+| Human support is a separate in-app helpdesk; the AI Assistant is not the support channel (2026-10-18). | The client asked for "chatbot support" and clarified it as a CRM-style ticket inbox DXG answers from the admin app. The Platform Assistant stays exactly as shipped. The helpdesk is its own module (`src/modules/supportDesk`): MongoDB tickets/messages/canned replies, organization-scoped through the existing tenancy, planner routes under `/api/v1/support` for any active member and agent routes under `/api/v1/admin/support` for administrative roles only. Internal notes are stored as messages with `kind=internal_note` and are filtered out of every customer read path in the repository, not in the UI. Bell notifications fan out to all admins of the organization on customer activity and to the requester on agent activity; email is opt-in per environment. Unread counters live on the ticket so the sidebar badge is one count query. |
 | Publication is always human-controlled. | AI assistance must not become autonomous procurement action. |
 | Investment guidance is deterministic and may refuse. | No fabricated numbers; disclose baseline provenance and unsupported categories. |
 | Knowledge uses approved immutable releases. | Retrieval eligibility is tenant-scoped and excludes revoked/superseded content. |

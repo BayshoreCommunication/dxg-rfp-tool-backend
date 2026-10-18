@@ -19,6 +19,8 @@ export default tseslint.config(
       "controller/comparisonOrchestrationController.ts",
       "controller/proposalIntelligenceOperationsController.ts",
       "controller/vendorResponseController.ts",
+      "controller/supportDeskController.ts",
+      "routes/supportDeskRoute.ts",
       "routes/platformAssistantRoute.ts",
       "routes/historicalInsightsRoute.ts",
       "routes/requirementRegistryRoute.ts",
