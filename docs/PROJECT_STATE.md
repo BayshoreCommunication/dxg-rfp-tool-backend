@@ -362,6 +362,43 @@ candidate still requires an explicit Product Owner decision. Production
 internal/cohort rollout also remains blocked until an organization-scoped
 entitlement or deployment allowlist exists.
 
+### In-app helpdesk / support inbox (2026-10-18, local, unreleased)
+
+Client request from the 2026-10-15 review: a support channel inside the
+product, handled by DXG from the admin app. The AI Assistant is untouched.
+Plan and scope: `../rfpilot-chatbot-support-plan.md` ("Scope change").
+
+Backend `src/modules/supportDesk/` (domain + customer/agent application
+services + Mongo repository + notifier), models `modal/supportTicketModel.ts`
+(with a per-organization ticket counter), `supportMessageModel.ts`,
+`supportCannedReplyModel.ts`; routes `routes/supportDeskRoute.ts` mounted at
+`/api/v1`. Planner: create/list/get/reply/resolve/unread-count. Agent
+(admin roles): inbox with filters and pagination, ticket detail with requester
+card, reply (default status waiting-on-customer, auto-assign, first-response
+stamp), internal notes, assign/priority/category/status with a system-message
+audit trail, metrics, agent list, canned replies CRUD. Customer replies reopen
+resolved/closed tickets. Notification type `support_ticket` added;
+`SUPPORT_DESK_EMAIL_NOTIFICATIONS`, `SUPPORT_DESK_NOTIFY_EMAIL`,
+`ADMIN_FRONTEND_URL` in `.env.example`. Attachments: `POST /support/attachments`
+and `POST /admin/support/attachments` take multipart `files` (PNG/JPEG/GIF/WebP/
+PDF, 10 MB, 3 per message), run the same ClamAV fail-closed scan as vendor
+uploads, store the object privately with its MIME type, and record a `pending`
+`SupportAttachment` owned by the uploader; a message cites upload ids and the
+server claims them (same organization, same uploader, unused) before binding
+them to the message. Downloads go through
+`GET …/tickets/:ticketId/attachments/:attachmentId`, which authorizes the
+ticket (and hides internal-note attachments from customers) and returns a
+5-minute presigned URL; both web apps proxy that through a same-origin route
+that redirects.
+
+Admin app: sidebar **Support**, `/support` inbox (metrics, filters, unread
+dot), `/support/[ticketId]` workspace (thread, reply/internal-note composer,
+canned-reply insert, triage sidebar), `/support/canned-replies`; support
+metrics also on the admin dashboard. Dashboard: sidebar **Support** with
+unread badge, `/support` list + new-request form, `/support/[ticketId]`
+thread with reply and "This is solved"; `support_ticket` notifications link to
+the ticket; Help page lists Support.
+
 ### Onboarding funnel report (2026-09-13)
 
 `GET /api/dashboard/onboarding-funnel` (security-admin) answers two questions

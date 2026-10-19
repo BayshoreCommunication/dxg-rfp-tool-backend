@@ -39,6 +39,8 @@ const configuration = () => {
 export const uploadPrivateDocumentFile = async (input: {
   localPath: string;
   objectKey: string;
+  /** Stored as the object's Content-Type so presigned downloads render inline. */
+  contentType?: string;
 }) => {
   const { bucket, client } = configuration();
   const bytes = await fs.readFile(input.localPath);
@@ -47,7 +49,7 @@ export const uploadPrivateDocumentFile = async (input: {
     Key: input.objectKey,
     Body: bytes,
     ContentLength: bytes.length,
-    ContentType: "application/octet-stream",
+    ContentType: input.contentType || "application/octet-stream",
   }));
   await fs.unlink(input.localPath).catch(() => undefined);
 };

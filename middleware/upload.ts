@@ -158,3 +158,24 @@ const uploadVendorDocsMulter = multer({
 export const uploadVendorDocs = uploadVendorDocsMulter.fields([
   { name: "documents", maxCount: 10 },
 ]);
+
+// Helpdesk attachments: images and PDFs only, 10 MB each, three per message.
+// The MIME check here is a first filter; the support desk re-validates,
+// malware-scans, and stores each file privately before it can be attached.
+const supportAttachmentFilter = (_req: Request, file: any, cb: FileFilterCallback) => {
+  preserveLegacyMultipartFilename(file);
+  const allowed = ["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"];
+  if (allowed.includes(file.mimetype)) cb(null, true);
+  else cb(new Error("Only PNG, JPEG, GIF, WebP images and PDF files can be attached."));
+};
+
+export const uploadSupportAttachments = multer({
+  storage,
+  fileFilter: supportAttachmentFilter,
+  limits: {
+    ...FLAT_MULTIPART_FIELD_LIMITS,
+    fileSize: 10 * 1024 * 1024,
+    files: 3,
+  },
+}).array("files", 3);
+
