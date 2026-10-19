@@ -228,7 +228,15 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
         status: { $in: ["open", "waiting_on_customer"] },
       }),
       SupportTicket.aggregate<{ total: number }>([
-        { $match: { organizationId: organization, unreadForAgents: { $gt: 0 } } },
+        // Only active tickets count as "unread": a closed ticket's leftover
+        // counter must not contradict an inbox that shows nothing open.
+        {
+          $match: {
+            organizationId: organization,
+            unreadForAgents: { $gt: 0 },
+            status: { $in: ["open", "waiting_on_customer"] },
+          },
+        },
         { $group: { _id: null, total: { $sum: "$unreadForAgents" } } },
       ]),
       SupportTicket.aggregate<{ average: number }>([
