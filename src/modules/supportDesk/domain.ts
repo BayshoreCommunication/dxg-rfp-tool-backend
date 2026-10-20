@@ -275,9 +275,21 @@ export const parseUploadCandidate = (value: SupportUploadCandidate): SupportUplo
   return { ...value, mimeType, originalName: safeFileName(value.originalName) };
 };
 
+const LEGACY_INTERNAL_AUDIT_MARKERS = [
+  " assigned this ticket to ",
+  " unassigned this ticket.",
+  " set priority to ",
+  " changed the category to ",
+  " renamed the ticket.",
+] as const;
+
 export const canBeReadByRequester = (
-  message: Pick<SupportMessageRecord, "kind">,
-): boolean => message.kind !== "internal_note";
+  message: Pick<SupportMessageRecord, "kind"> & Partial<Pick<SupportMessageRecord, "body">>,
+): boolean => {
+  if (message.kind === "internal_note") return false;
+  if (message.kind !== "system" || !message.body) return true;
+  return !LEGACY_INTERNAL_AUDIT_MARKERS.some((marker) => message.body?.includes(marker));
+};
 
 export const ticketIsTerminal = (status: SupportTicketStatus): boolean =>
   status === "resolved" || status === "closed";
