@@ -7,7 +7,7 @@ const {
 const {
   createAgentSupportDesk,
 } = require("../src/modules/supportDesk/application/agentSupportDesk");
-const { SupportDeskError } = require("../src/modules/supportDesk/domain");
+const { SupportDeskError, canBeReadByRequester } = require("../src/modules/supportDesk/domain");
 
 const ORG = "aaaaaaaaaaaaaaaaaaaaaaaa";
 const PLANNER = "bbbbbbbbbbbbbbbbbbbbbbbb";
@@ -220,6 +220,22 @@ const rejects = async (work, code, status) => {
     return true;
   });
 };
+
+test("requester visibility hides legacy triage audit messages but keeps public status activity", () => {
+  assert.equal(
+    canBeReadByRequester({ kind: "system", body: "Dana DXG assigned this ticket to Eli DXG." }),
+    false,
+  );
+  assert.equal(
+    canBeReadByRequester({ kind: "system", body: "Dana DXG set priority to urgent." }),
+    false,
+  );
+  assert.equal(
+    canBeReadByRequester({ kind: "system", body: "Dana DXG changed the status to Resolved." }),
+    true,
+  );
+  assert.equal(canBeReadByRequester({ kind: "internal_note", body: "Private hand-off" }), false);
+});
 
 test("a planner opens a ticket with a numbered subject, first message, and agent notification", async () => {
   const { customer, notifier } = build();
@@ -434,8 +450,8 @@ test("agents can assign, prioritise, recategorise, and change status with an aud
   assert.equal(updated.priority, "urgent");
   assert.equal(updated.category, "bug");
   assert.equal(updated.status, "waiting_on_customer");
-  assert.equal(updated.messageCount, 5);
-  const trail = repository.messages.filter((m) => m.kind === "system").map((m) => m.body);
+  assert.equal(updated.messageCount, 2);
+  const trail = repository.messages.filter((m) => m.kind !== "message").map((m) => m.body);
   assert.deepEqual(trail, [
     "Dana DXG assigned this ticket to Eli DXG.",
     "Dana DXG set priority to urgent.",
@@ -443,6 +459,13 @@ test("agents can assign, prioritise, recategorise, and change status with an aud
     "Dana DXG changed the status to Waiting on customer.",
   ]);
   assert.equal(notifier.events.at(-1)[0], "statusChanged");
+
+  const customerDetail = await customer.getOwnTicket(planner, ticket.id);
+  assert.deepEqual(customerDetail.messages.map((message) => message.body), [
+    "Takes minutes.",
+    "Dana DXG changed the status to Waiting on customer.",
+  ]);
+  assert.equal(customerDetail.ticket.messageCount, 2);
 
   const closed = await desk.updateTicket(agent, ticket.id, { status: "closed", assigneeUserId: null });
   assert.equal(closed.status, "closed");

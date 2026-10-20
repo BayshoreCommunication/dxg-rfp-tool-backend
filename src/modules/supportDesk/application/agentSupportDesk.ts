@@ -80,18 +80,19 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
   const { repository, notifier } = dependencies;
   const clock = dependencies.clock ?? (() => new Date());
 
-  const systemMessage = async (
+  const auditMessage = async (
     actor: SupportActor,
     ticketId: string,
     body: string,
     now: Date,
+    customerVisible: boolean,
   ) =>
     repository.appendMessage({
       organizationId: actor.organizationId,
       ticketId,
       authorUserId: actor.userId,
       authorRole: "system",
-      kind: "system",
+      kind: customerVisible ? "system" : "internal_note",
       body,
       attachments: [],
       now,
@@ -283,7 +284,7 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
       const ticket = await requireTicket(repository, actor, ticketId);
       const now = clock();
       const patch: SupportTicketPatch & { subject?: string } = {};
-      const events: string[] = [];
+      const events: Array<{ body: string; customerVisible: boolean }> = [];
       const people = await summaries(repository, actor.organizationId, [actor.userId]);
       const agentName = people.get(actor.userId)?.name ?? "An agent";
 
@@ -303,30 +304,34 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
           const assigneeName = assigneeUserId
             ? (await summaries(repository, actor.organizationId, [assigneeUserId])).get(assigneeUserId)?.name ?? "an agent"
             : null;
-          events.push(
-            assigneeName ? `${agentName} assigned this ticket to ${assigneeName}.` : `${agentName} unassigned this ticket.`,
-          );
+          events.push({
+            body: assigneeName ? `${agentName} assigned this ticket to ${assigneeName}.` : `${agentName} unassigned this ticket.`,
+            customerVisible: false,
+          });
         }
       }
       if (input.priority !== undefined) {
         const priority = parsePriority(input.priority);
         if (priority !== ticket.priority) {
           patch.priority = priority;
-          events.push(`${agentName} set priority to ${priority}.`);
+          events.push({ body: `${agentName} set priority to ${priority}.`, customerVisible: false });
         }
       }
       if (input.category !== undefined) {
         const category = parseCategory(input.category);
         if (category !== ticket.category) {
           patch.category = category;
-          events.push(`${agentName} changed the category to ${category.replace(/_/g, " ")}.`);
+          events.push({
+            body: `${agentName} changed the category to ${category.replace(/_/g, " ")}.`,
+            customerVisible: false,
+          });
         }
       }
       if (input.subject !== undefined) {
         const subject = parseSubject(input.subject);
         if (subject !== ticket.subject) {
           patch.subject = subject;
-          events.push(`${agentName} renamed the ticket.`);
+          events.push({ body: `${agentName} renamed the ticket.`, customerVisible: false });
         }
       }
       let statusChanged: SupportTicketStatus | null = null;
@@ -336,23 +341,29 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
           patch.status = status;
           Object.assign(patch, timestampsForStatus(status, now));
           statusChanged = status;
-          events.push(`${agentName} changed the status to ${STATUS_LABEL[status]}.`);
+          events.push({
+            body: `${agentName} changed the status to ${STATUS_LABEL[status]}.`,
+            customerVisible: true,
+          });
         }
       }
       if (events.length === 0) return ticket;
       if (statusChanged) patch.lastMessageAt = now.toISOString();
       const updated = (await repository.updateTicket(actor.organizationId, ticket.id, patch)) ?? ticket;
       for (const event of events) {
-        await systemMessage(actor, ticket.id, event, now);
+        await auditMessage(actor, ticket.id, event.body, now, event.customerVisible);
       }
-      await repository.updateTicket(actor.organizationId, ticket.id, { messageCountDelta: events.length });
+      const publicEventCount = events.filter((event) => event.customerVisible).length;
+      if (publicEventCount > 0) {
+        await repository.updateTicket(actor.organizationId, ticket.id, { messageCountDelta: publicEventCount });
+      }
       if (statusChanged) {
         const requester = (await summaries(repository, actor.organizationId, [ticket.requesterUserId])).get(
           ticket.requesterUserId,
         ) ?? null;
         await notifier.statusChanged({ ticket: updated, requester, status: statusChanged, byAgent: true });
       }
-      return { ...updated, messageCount: updated.messageCount + events.length };
+      return { ...updated, messageCount: updated.messageCount + publicEventCount };
     },
 
     async metrics(actor: SupportActor) {
