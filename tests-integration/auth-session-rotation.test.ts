@@ -7,7 +7,7 @@ import RefreshSession from '../modal/refreshSessionModel';
 import { createSessionManager, hashOpaqueToken } from '../src/modules/auth/application/manageSessions';
 import { mongoRefreshSessionRepository as sessions } from '../src/modules/auth/infrastructure/mongo/mongoRefreshSessionRepository';
 
-const account = {userId:new mongoose.Types.ObjectId().toString(), organizationId:new mongoose.Types.ObjectId().toString(), email:'auth-cas@example.test', role:'customer', roles:['planner'], rolesVersion:1};
+const account = {userId:new mongoose.Types.ObjectId().toString(), organizationId:new mongoose.Types.ObjectId().toString(), email:'auth-cas@example.test', accountType:'planner' as const, role:'customer', roles:['planner'], rolesVersion:1};
 const makeManager = () => createSessionManager({ sessions, accounts:{load:async () => account},
   accessTokens:{issue:(_account, sessionId) => ({accessToken:`synthetic-${sessionId}`,expiresAt:Date.now()+60000,expiresIn:60})},
   audit:{append:async () => undefined},

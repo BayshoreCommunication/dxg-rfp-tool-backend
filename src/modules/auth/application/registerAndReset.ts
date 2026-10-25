@@ -3,7 +3,7 @@ import type {
   AccessTokenIssuer,
   AuthAccountRepository,
 } from "../domain/ports/authAccountPorts";
-import type { OtpRepository } from "../domain/ports/otpPorts";
+import type { OtpPurpose, OtpRepository } from "../domain/ports/otpPorts";
 
 type RegisterResult =
   | { kind: "validation" }
@@ -66,12 +66,14 @@ export const createResetPassword = (dependencies: {
   accounts: AuthAccountRepository;
   otps: OtpRepository;
   passwordHasher: PasswordHasher;
+  purpose?: OtpPurpose;
 }) => async (input: { email?: unknown; newPassword?: unknown }): Promise<ResetResult> => {
+  const purpose = dependencies.purpose ?? "forgot-password";
   const email = typeof input.email === "string" ? input.email.toLowerCase().trim() : "";
   const password = typeof input.newPassword === "string" ? input.newPassword : "";
   if (!email || !password) return { kind: "validation" };
   if (password.length < 8) return { kind: "invalid_password" };
-  if (!await dependencies.otps.hasVerified(email, "forgot-password")) {
+  if (!await dependencies.otps.hasVerified(email, purpose)) {
     return { kind: "unauthorized" };
   }
   const credentials = await dependencies.accounts.findCredentials(email);
@@ -81,7 +83,7 @@ export const createResetPassword = (dependencies: {
     await dependencies.passwordHasher.hash(password),
   );
   if (!updated) return { kind: "not_found" };
-  await dependencies.otps.consumeVerified(email, "forgot-password");
+  await dependencies.otps.consumeVerified(email, purpose);
   return {
     kind: "reset",
     userId: credentials.user.id,

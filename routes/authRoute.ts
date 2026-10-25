@@ -2,6 +2,8 @@ import { Router } from "express";
 import {
   getCurrentUser,
   resetPassword,
+  resetAdminForgotPassword,
+  sendAdminForgotPasswordOtp,
   sendForgotPasswordOtp,
   sendSignupOtp,
   signUpAdmin,
@@ -10,6 +12,7 @@ import {
   signInWithGoogle,
   signOut,
   signUp,
+  verifyAdminForgotPasswordOtp,
   verifyForgotPasswordOtp,
   verifySignupOtp,
   refreshSession,
@@ -52,6 +55,11 @@ router.post("/forgot-password/send-otp", otpLimit, sendForgotPasswordOtp);
 router.post("/forgot-password/verify-otp", authAttemptLimit, verifyForgotPasswordOtp);
 // Step 3: Set new password
 router.post("/forgot-password/reset", resetPassword);
+
+/* ─── Admin forgot password flow (admins collection only) ─── */
+router.post("/admin/forgot-password/send-otp", otpLimit, sendAdminForgotPasswordOtp);
+router.post("/admin/forgot-password/verify-otp", authAttemptLimit, verifyAdminForgotPasswordOtp);
+router.post("/admin/forgot-password/reset", resetAdminForgotPassword);
 
 /* ─── Protected ─── */
 router.get("/me", authenticate, getCurrentUser);

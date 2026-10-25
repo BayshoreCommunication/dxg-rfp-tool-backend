@@ -1,4 +1,4 @@
-import User from "../../../../../modal/userModel";
+import Admin from "../../../../../modal/adminModel";
 import { createNotification } from "../../../../../utils/notificationService";
 import { sendCustomEmail } from "../../../../../utils/emailService";
 import type { SupportDeskNotifier } from "../../domain/ports/supportDeskPorts";
@@ -56,7 +56,7 @@ const notifyAgents = async (
   message: string,
   dedupeSuffix: string,
 ): Promise<void> => {
-  const agents = await User.find({
+  const agents = await Admin.find({
     organizationId: ticket.organizationId,
     role: { $in: ADMIN_ROLES },
     isBlocked: { $ne: true },

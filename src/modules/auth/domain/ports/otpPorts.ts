@@ -1,4 +1,6 @@
-export type OtpPurpose = "signup" | "forgot-password";
+// Admin resets get their own purpose so a code verified for a planner reset
+// can never authorize resetting an admin account with the same email.
+export type OtpPurpose = "signup" | "forgot-password" | "admin-forgot-password";
 
 export type OtpChallenge = {
   id: string;

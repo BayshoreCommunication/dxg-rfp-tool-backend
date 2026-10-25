@@ -34,6 +34,8 @@ export interface TokenPayload {
   sessionId?: string;
   roles?: string[];
   rolesVersion?: number;
+  /** Set by the authenticate middleware from the stored account, never signed. */
+  accountType?: "planner" | "admin";
 }
 
 export interface TokenResponse {

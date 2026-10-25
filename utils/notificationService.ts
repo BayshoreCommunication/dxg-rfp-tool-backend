@@ -4,6 +4,7 @@ import { Duplex } from "stream";
 import Notification from "../modal/notificationModel";
 import RefreshSession from "../modal/refreshSessionModel";
 import User from "../modal/userModel";
+import Admin from "../modal/adminModel";
 import { verifyNotificationSocketTicket } from "../config/jwt";
 
 type SocketMessage =
@@ -262,7 +263,11 @@ export const createNotification = async ({
   dedupeKey,
 }: CreateNotificationInput) => {
   try {
-    const owner = await User.findById(userId).select("organizationId").lean();
+    // Planner notifications belong to `users`; support-desk agent
+    // notifications belong to administrators in `admins`.
+    const owner =
+      (await User.findById(userId).select("organizationId").lean()) ??
+      (await Admin.findById(userId).select("organizationId").lean());
     if (!owner?.organizationId) throw new Error("Notification owner has no organization membership");
     const notification = await Notification.create({
       organizationId: owner.organizationId,
