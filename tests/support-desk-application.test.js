@@ -3,6 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   createCustomerSupportDesk,
+  autoAcknowledgementBody,
 } = require("../src/modules/supportDesk/application/customerSupportDesk");
 const {
   createAgentSupportDesk,
@@ -249,10 +250,13 @@ test("a planner opens a ticket with a numbered subject, first message, and agent
   assert.equal(ticket.category, "bug");
   assert.equal(ticket.priority, "normal");
   assert.equal(ticket.status, "open");
-  assert.equal(ticket.messageCount, 1);
+  // The customer's message plus the automatic acknowledgement.
+  assert.equal(ticket.messageCount, 2);
   assert.equal(ticket.unreadForAgents, 1);
+  assert.equal(ticket.firstAgentResponseAt, null);
   assert.equal(message.authorRole, "customer");
   assert.equal(message.kind, "message");
+  // One notification only: the acknowledgement never alerts anyone.
   assert.equal(notifier.events.length, 1);
   assert.equal(notifier.events[0][0], "ticketCreated");
   assert.equal(notifier.events[0][1].requester.name, "Pat Planner");
@@ -326,7 +330,10 @@ test("planners see only their own tickets and never internal notes", async () =>
   await rejects(() => customer.getOwnTicket(planner, "not-an-id"), "SUPPORT_INVALID_ID", 400);
 
   const detail = await customer.getOwnTicket(planner, ticket.id);
-  assert.deepEqual(detail.messages.map((m) => m.kind), ["message"]);
+  assert.deepEqual(detail.messages.map((m) => [m.authorRole, m.kind]), [
+    ["customer", "message"],
+    ["system", "message"],
+  ]);
   assert.equal(repository.messages.filter((m) => m.kind === "internal_note").length, 1);
 
   function agent_() {
@@ -343,7 +350,7 @@ test("agent replies set waiting-on-customer, auto-assign, record first response,
   assert.equal(reply.ticket.assigneeUserId, AGENT);
   assert.ok(reply.ticket.firstAgentResponseAt);
   assert.equal(reply.ticket.unreadForRequester, 1);
-  assert.equal(reply.ticket.messageCount, 2);
+  assert.equal(reply.ticket.messageCount, 3);
   assert.equal(reply.message.authorRole, "agent");
   const kinds = notifier.events.map((e) => e[0]);
   assert.deepEqual(kinds, ["ticketCreated", "agentReplied"]);
@@ -438,7 +445,7 @@ test("agents can assign, prioritise, recategorise, and change status with an aud
     400,
   );
   const unchanged = await desk.updateTicket(agent, ticket.id, { priority: "normal" });
-  assert.equal(unchanged.messageCount, 1);
+  assert.equal(unchanged.messageCount, 2);
 
   const updated = await desk.updateTicket(agent, ticket.id, {
     assigneeUserId: AGENT_TWO,
@@ -450,7 +457,7 @@ test("agents can assign, prioritise, recategorise, and change status with an aud
   assert.equal(updated.priority, "urgent");
   assert.equal(updated.category, "bug");
   assert.equal(updated.status, "waiting_on_customer");
-  assert.equal(updated.messageCount, 2);
+  assert.equal(updated.messageCount, 3);
   const trail = repository.messages.filter((m) => m.kind !== "message").map((m) => m.body);
   assert.deepEqual(trail, [
     "Dana DXG assigned this ticket to Eli DXG.",
@@ -463,9 +470,10 @@ test("agents can assign, prioritise, recategorise, and change status with an aud
   const customerDetail = await customer.getOwnTicket(planner, ticket.id);
   assert.deepEqual(customerDetail.messages.map((message) => message.body), [
     "Takes minutes.",
+    autoAcknowledgementBody(ticket.ticketNumber, "Pat Planner"),
     "Dana DXG changed the status to Waiting on customer.",
   ]);
-  assert.equal(customerDetail.ticket.messageCount, 2);
+  assert.equal(customerDetail.ticket.messageCount, 3);
 
   const closed = await desk.updateTicket(agent, ticket.id, { status: "closed", assigneeUserId: null });
   assert.equal(closed.status, "closed");
@@ -502,4 +510,25 @@ test("canned replies are organization-owned and validated", async () => {
   await rejects(() => desk.createCannedReply(agent, { title: "", body: "x" }), "SUPPORT_INVALID_SUBJECT");
   await desk.deleteCannedReply(agent, created.id);
   await rejects(() => desk.deleteCannedReply(agent, created.id), "SUPPORT_CANNED_REPLY_NOT_FOUND", 404);
+});
+
+test("every new ticket gets an automatic acknowledgement that greets the planner by first name", async () => {
+  const { customer, repository } = build();
+  const { ticket } = await customer.createTicket(planner, { subject: "Need a date change", body: "Can I move my event?" });
+  const thread = repository.messages.filter((m) => String(m.ticketId) === String(ticket.id));
+  assert.equal(thread.length, 2);
+  const [first, ack] = thread;
+  assert.equal(first.authorRole, "customer");
+  assert.equal(ack.authorRole, "system");
+  assert.equal(ack.kind, "message");
+  assert.equal(ack.authorUserId, null);
+  assert.ok(new Date(ack.createdAt) > new Date(first.createdAt), "acknowledgement sorts after the request");
+  assert.match(ack.body, /^Hi Pat, thanks for contacting DXG support\./);
+  assert.match(ack.body, new RegExp(`ticket #${ticket.ticketNumber}\\)`));
+});
+
+test("the acknowledgement falls back to a plain greeting without a name", () => {
+  assert.match(autoAcknowledgementBody(7, null), /^Hi, thanks for contacting DXG support\./);
+  assert.match(autoAcknowledgementBody(7, "  "), /^Hi, thanks/);
+  assert.match(autoAcknowledgementBody(7, "Ana Maria Lopez"), /^Hi Ana, /);
 });
