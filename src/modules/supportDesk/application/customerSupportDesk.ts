@@ -62,6 +62,21 @@ const requesterSummary = async (
 ) => (await repository.findUserSummaries(actor.organizationId, [actor.userId])).get(actor.userId) ?? null;
 
 /**
+ * The automatic first reply on every new ticket, so the planner immediately
+ * sees that the request was received (like a hosting provider's helpdesk). It
+ * is authored by "system" so it never counts as the first agent response,
+ * never changes the ticket status and never notifies anyone.
+ */
+export const autoAcknowledgementBody = (ticketNumber: number, requesterName?: string | null): string => {
+  const firstName = requesterName?.trim().split(/\s+/)[0];
+  return [
+    `Hi${firstName ? ` ${firstName}` : ""}, thanks for contacting DXG support.`,
+    `We've received your request (ticket #${ticketNumber}) and a member of our team will reply here as soon as possible. You'll also get an email when we respond.`,
+    "If you have more details, screenshots or documents that could help, add them to this conversation.",
+  ].join("\n\n");
+};
+
+/**
  * Planner-side helpdesk operations. Every read and write is bounded to the
  * actor's own organization and own tickets; internal agent notes never leave
  * the repository through this path.
@@ -105,18 +120,26 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
         now,
       });
       await bindAttachments(repository, actor, attachments, created.id, message.id);
+      const requester = await requesterSummary(repository, actor);
+      await repository.appendMessage({
+        organizationId: actor.organizationId,
+        ticketId: created.id,
+        authorUserId: null,
+        authorRole: "system",
+        kind: "message",
+        body: autoAcknowledgementBody(created.ticketNumber, requester?.name),
+        attachments: [],
+        // One millisecond after the customer's message so it always sorts below it.
+        now: new Date(now.getTime() + 1),
+      });
       const ticket =
         (await repository.updateTicket(actor.organizationId, created.id, {
-          messageCountDelta: 1,
+          messageCountDelta: 2,
           unreadForAgents: 1,
           lastMessageAt: now.toISOString(),
           lastCustomerMessageAt: now.toISOString(),
         })) ?? created;
-      await notifier.ticketCreated({
-        ticket,
-        requester: await requesterSummary(repository, actor),
-        message,
-      });
+      await notifier.ticketCreated({ ticket, requester, message });
       return { ticket, message };
     },
 
