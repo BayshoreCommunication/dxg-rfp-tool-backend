@@ -178,6 +178,12 @@ export class AppStack extends cdk.Stack {
       CLAMAV_PORT: '3310',
       ...(frontendUrl ? { FRONTEND_URL: frontendUrl } : {}),
       ...(adminUrl ? { ADMIN_URL: adminUrl } : {}),
+      ...(config.supportNotifyEmail
+        ? {
+            SUPPORT_DESK_EMAIL_NOTIFICATIONS: 'true',
+            SUPPORT_DESK_NOTIFY_EMAIL: config.supportNotifyEmail,
+          }
+        : {}),
       ...(apiDomain ? { BACKEND_URL: `https://${apiDomain}` } : {}),
     };
 
