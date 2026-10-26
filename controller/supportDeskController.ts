@@ -5,10 +5,12 @@ import { SupportDeskError, type SupportActor } from "../src/modules/supportDesk/
 import type { AgentSupportDesk } from "../src/modules/supportDesk/application/agentSupportDesk";
 import type { CustomerSupportDesk } from "../src/modules/supportDesk/application/customerSupportDesk";
 import type { SupportAttachments } from "../src/modules/supportDesk/application/supportAttachments";
+import type { SupportPresence } from "../src/modules/supportDesk/application/supportPresence";
 import {
   agentSupportDesk as defaultAgentSupportDesk,
   customerSupportDesk as defaultCustomerSupportDesk,
   supportAttachments as defaultSupportAttachments,
+  supportPresence as defaultSupportPresence,
 } from "../src/modules/supportDesk/composition";
 
 const actorFrom = (req: AuthRequest): SupportActor => {
@@ -65,10 +67,12 @@ export const createSupportDeskController = (dependencies?: {
   customer?: CustomerSupportDesk;
   agent?: AgentSupportDesk;
   attachments?: SupportAttachments;
+  presence?: SupportPresence;
 }) => {
   const customer = dependencies?.customer ?? defaultCustomerSupportDesk;
   const agent = dependencies?.agent ?? defaultAgentSupportDesk;
   const attachments = dependencies?.attachments ?? defaultSupportAttachments;
+  const presence = dependencies?.presence ?? defaultSupportPresence;
 
   const intake = async (
     req: AuthRequest,
@@ -155,6 +159,21 @@ export const createSupportDeskController = (dependencies?: {
     },
 
     // Agent side
+    async presence(req: AuthRequest, res: Response) {
+      try {
+        ok(res, await presence.heartbeat(actorFrom(req), req.params.ticketId, body(req)));
+      } catch (error) {
+        fail(res, error);
+      }
+    },
+    async leavePresence(req: AuthRequest, res: Response) {
+      try {
+        await presence.leave(actorFrom(req), req.params.ticketId);
+        ok(res, { left: true });
+      } catch (error) {
+        fail(res, error);
+      }
+    },
     async listInbox(req: AuthRequest, res: Response) {
       try {
         ok(res, await agent.listInbox(actorFrom(req), query(req)));

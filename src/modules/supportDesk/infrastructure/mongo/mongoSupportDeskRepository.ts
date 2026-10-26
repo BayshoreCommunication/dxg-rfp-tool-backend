@@ -16,6 +16,7 @@ import type {
   SupportTicketRecord,
   SupportUserSummary,
 } from "../../domain";
+import { RESPONSE_TARGET_MS } from "../../serviceLevels";
 
 const oid = (value: string) => new mongoose.Types.ObjectId(value);
 const iso = (value: unknown): string | null =>
@@ -42,6 +43,10 @@ const ticketRecord = (doc: Record<string, unknown>): SupportTicketRecord => ({
   firstAgentResponseAt: iso(doc.firstAgentResponseAt),
   resolvedAt: iso(doc.resolvedAt),
   closedAt: iso(doc.closedAt),
+  responseDueAt: iso(doc.responseDueAt),
+  escalatedAt: iso(doc.escalatedAt),
+  waitingSince: iso(doc.waitingSince),
+  autoCloseReminderSentAt: iso(doc.autoCloseReminderSentAt),
   createdAt: iso(doc.createdAt) ?? new Date(0).toISOString(),
   updatedAt: iso(doc.updatedAt) ?? new Date(0).toISOString(),
 });
@@ -140,12 +145,20 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
           : []),
       ];
     }
+    const skip = (filters.page - 1) * filters.perPage;
     const [docs, total] = await Promise.all([
-      SupportTicket.find(query)
-        .sort({ lastMessageAt: -1, _id: -1 })
-        .skip((filters.page - 1) * filters.perPage)
-        .limit(filters.perPage)
-        .lean(),
+      filters.sort === "recent"
+        ? SupportTicket.find(query).sort({ lastMessageAt: -1, _id: -1 }).skip(skip).limit(filters.perPage).lean()
+        : // Tickets owed an answer first, soonest due (so most overdue) first;
+          // everything else after, newest activity first.
+          SupportTicket.aggregate([
+            { $match: query },
+            { $addFields: { _owed: { $cond: [{ $ifNull: ["$responseDueAt", false] }, 0, 1] } } },
+            { $sort: { _owed: 1, responseDueAt: 1, lastMessageAt: -1, _id: -1 } },
+            { $skip: skip },
+            { $limit: filters.perPage },
+            { $project: { _owed: 0 } },
+          ]),
       SupportTicket.countDocuments(query),
     ]);
     return { tickets: docs.map((doc) => ticketRecord(doc as Record<string, unknown>)), total };
@@ -162,7 +175,11 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
         key === "lastAgentMessageAt" ||
         key === "firstAgentResponseAt" ||
         key === "resolvedAt" ||
-        key === "closedAt"
+        key === "closedAt" ||
+        key === "responseDueAt" ||
+        key === "escalatedAt" ||
+        key === "waitingSince" ||
+        key === "autoCloseReminderSentAt"
       ) {
         set[key] = toDate(value as string | null);
       } else if (key === "assigneeUserId") {
@@ -216,9 +233,9 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
     return docs.map((doc) => messageRecord(doc as Record<string, unknown>));
   },
 
-  async metrics(organizationId) {
+  async metrics(organizationId, now) {
     const organization = oid(organizationId);
-    const [statusRows, unassigned, unreadRow, firstResponse, resolution, perAgentRows] = await Promise.all([
+    const [statusRows, unassigned, unreadRow, firstResponse, resolution, perAgentRows, overdue] = await Promise.all([
       SupportTicket.aggregate<{ _id: string; count: number }>([
         { $match: { organizationId: organization } },
         { $group: { _id: "$status", count: { $sum: 1 } } },
@@ -263,6 +280,11 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
         },
         { $group: { _id: "$assigneeUserId", count: { $sum: 1 } } },
       ]),
+      SupportTicket.countDocuments({
+        organizationId: organization,
+        status: "open",
+        responseDueAt: { $ne: null, $lte: now },
+      }),
     ]);
     const byStatus = new Map(statusRows.map((row) => [row._id, row.count]));
     const metrics: SupportDeskMetrics = {
@@ -272,6 +294,7 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
       closed: byStatus.get("closed") ?? 0,
       unassigned,
       unreadForAgents: unreadRow[0]?.total ?? 0,
+      overdue,
       averageFirstResponseMs: Number.isFinite(firstResponse[0]?.average)
         ? Math.round(firstResponse[0].average)
         : null,
@@ -291,6 +314,93 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
       .sort({ name: 1 })
       .lean();
     return docs.map((doc) => userSummary(doc as Record<string, unknown>));
+  },
+
+  async agentLoads(organizationId) {
+    const rows = await SupportTicket.aggregate<{ _id: unknown; count: number }>([
+      {
+        $match: {
+          organizationId: oid(organizationId),
+          assigneeUserId: { $ne: null },
+          status: { $in: ["open", "waiting_on_customer"] },
+        },
+      },
+      { $group: { _id: "$assigneeUserId", count: { $sum: 1 } } },
+    ]);
+    return new Map(rows.map((row) => [String(row._id), row.count]));
+  },
+
+  async listUnansweredSince(answeredBefore, limit) {
+    const docs = await SupportTicket.find({
+      status: "open",
+      responseDueAt: { $ne: null },
+      escalatedAt: null,
+      lastCustomerMessageAt: { $lte: answeredBefore },
+    })
+      .sort({ responseDueAt: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map((doc) => ticketRecord(doc as Record<string, unknown>));
+  },
+
+  async listNeedingCloseReminder(waitingBefore, limit) {
+    const docs = await SupportTicket.find({
+      status: "waiting_on_customer",
+      waitingSince: { $ne: null, $lte: waitingBefore },
+      autoCloseReminderSentAt: null,
+    })
+      .sort({ waitingSince: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map((doc) => ticketRecord(doc as Record<string, unknown>));
+  },
+
+  async listDueToAutoClose(waitingBefore, remindedBefore, limit) {
+    const docs = await SupportTicket.find({
+      status: "waiting_on_customer",
+      waitingSince: { $ne: null, $lte: waitingBefore },
+      autoCloseReminderSentAt: { $ne: null, $lte: remindedBefore },
+    })
+      .sort({ waitingSince: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map((doc) => ticketRecord(doc as Record<string, unknown>));
+  },
+
+  async backfillServiceLevels(now) {
+    // Waiting tickets from before the auto-close clock existed start it now,
+    // so nothing old closes without its reminder first.
+    const waiting = await SupportTicket.updateMany(
+      { status: "waiting_on_customer", waitingSince: { $exists: false } },
+      { $set: { waitingSince: now, autoCloseReminderSentAt: null } },
+    );
+    // Open tickets whose latest message is the customer's are owed an answer,
+    // timed from that message by priority. They are marked already escalated
+    // so the first sweep does not page every agent about old tickets.
+    let owed = 0;
+    for (const [priority, ms] of Object.entries(RESPONSE_TARGET_MS)) {
+      const result = await SupportTicket.updateMany(
+        {
+          status: "open",
+          priority,
+          responseDueAt: { $exists: false },
+          lastCustomerMessageAt: { $ne: null },
+          $expr: { $gt: ["$lastCustomerMessageAt", { $ifNull: ["$lastAgentMessageAt", new Date(0)] }] },
+        },
+        [{ $set: { responseDueAt: { $add: ["$lastCustomerMessageAt", ms] }, escalatedAt: now } }],
+      );
+      owed += result.modifiedCount;
+    }
+    // Everything else gets explicit nulls so this never matches it again.
+    const rest = await SupportTicket.updateMany(
+      { responseDueAt: { $exists: false } },
+      { $set: { responseDueAt: null, escalatedAt: null } },
+    );
+    const restWaiting = await SupportTicket.updateMany(
+      { waitingSince: { $exists: false } },
+      { $set: { waitingSince: null, autoCloseReminderSentAt: null } },
+    );
+    return waiting.modifiedCount + owed + rest.modifiedCount + restWaiting.modifiedCount;
   },
 
   async findUserSummaries(organizationId, userIds) {

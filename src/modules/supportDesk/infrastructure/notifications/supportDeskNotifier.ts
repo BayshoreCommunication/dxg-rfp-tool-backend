@@ -84,6 +84,35 @@ const notifyAgents = async (
   );
 };
 
+/**
+ * Alerts for a ticket go to its owner when it has one, so agents are not all
+ * paged for every ticket; unowned tickets still reach every agent.
+ */
+const notifyOwnerOrAgents = async (
+  ticket: SupportTicketRecord,
+  title: string,
+  message: string,
+  dedupeSuffix: string,
+): Promise<void> => {
+  if (!ticket.assigneeUserId) {
+    await notifyAgents(ticket, title, message, dedupeSuffix);
+    return;
+  }
+  const assigneeUserId = ticket.assigneeUserId;
+  await bestEffort(
+    () =>
+      createNotification({
+        userId: assigneeUserId,
+        type: "support_ticket",
+        title,
+        message,
+        metadata: { ticketId: ticket.id, ticketNumber: ticket.ticketNumber, audience: "agent" },
+        dedupeKey: `support:${ticket.id}:${dedupeSuffix}:${assigneeUserId}`,
+      }),
+    "owner notification",
+  );
+};
+
 const emailDxg = async (subject: string, lines: string[], link: string): Promise<void> => {
   const to = dxgInboxAddress();
   if (!to || !emailEnabled()) return;
@@ -125,7 +154,7 @@ const emailRequester = async (
 export const supportDeskNotifier: SupportDeskNotifier = {
   async ticketCreated({ ticket, requester, message }) {
     const who = requester?.name ?? "A customer";
-    await notifyAgents(
+    await notifyOwnerOrAgents(
       ticket,
       `New support ticket ${label(ticket)}`,
       `${who}: ${excerpt(message.body)}`,
@@ -140,7 +169,7 @@ export const supportDeskNotifier: SupportDeskNotifier = {
 
   async customerReplied({ ticket, requester, message }) {
     const who = requester?.name ?? "The customer";
-    await notifyAgents(
+    await notifyOwnerOrAgents(
       ticket,
       `Reply on ${label(ticket)}`,
       `${who}: ${excerpt(message.body)}`,
@@ -201,6 +230,75 @@ export const supportDeskNotifier: SupportDeskNotifier = {
       requester?.email,
       `Your support ticket ${label(ticket)} is now ${STATUS_LABEL[status]}`,
       [`DXG support changed the status of your ticket to ${STATUS_LABEL[status]}.`],
+      customerLink(ticket),
+    );
+  },
+
+  async ticketAssigned({ ticket, assigneeUserId, assignedBy }) {
+    await bestEffort(
+      () =>
+        createNotification({
+          userId: assigneeUserId,
+          type: "support_ticket",
+          title: `Assigned to you: ${label(ticket)}`,
+          message: assignedBy ? `${assignedBy} assigned this ticket to you.` : "This new ticket was assigned to you automatically.",
+          metadata: { ticketId: ticket.id, ticketNumber: ticket.ticketNumber, audience: "agent" },
+          dedupeKey: `support:${ticket.id}:assigned:${assigneeUserId}:${ticket.updatedAt}`,
+        }),
+      "assignment notification",
+    );
+  },
+
+  async ticketEscalated({ ticket, assignee, waitingMinutes }) {
+    await notifyAgents(
+      ticket,
+      `Still waiting: ${label(ticket)}`,
+      `No reply for ${waitingMinutes} minutes${assignee ? ` (assigned to ${assignee.name})` : ""}. Can someone pick it up?`,
+      `escalated:${ticket.lastCustomerMessageAt ?? ticket.updatedAt}`,
+    );
+  },
+
+  async autoCloseReminder({ ticket, requester, message }) {
+    await bestEffort(
+      () =>
+        createNotification({
+          userId: ticket.requesterUserId,
+          type: "support_ticket",
+          title: `Still need help with ${label(ticket)}?`,
+          message: excerpt(message.body),
+          metadata: { ticketId: ticket.id, ticketNumber: ticket.ticketNumber, audience: "requester" },
+          dedupeKey: `support:${ticket.id}:close-reminder:${message.id}`,
+        }),
+      "close reminder notification",
+    );
+    await emailRequester(
+      requester?.email,
+      `Still need help with ${label(ticket)}?`,
+      message.body.split(/\n\n+/),
+      customerLink(ticket),
+    );
+  },
+
+  async autoClosed({ ticket, requester }) {
+    await bestEffort(
+      () =>
+        createNotification({
+          userId: ticket.requesterUserId,
+          type: "support_ticket",
+          title: `${label(ticket)} is now closed`,
+          message: "We closed this request after a week without a reply. Reply to it anytime to reopen it.",
+          metadata: { ticketId: ticket.id, ticketNumber: ticket.ticketNumber, audience: "requester" },
+          dedupeKey: `support:${ticket.id}:auto-closed:${ticket.updatedAt}`,
+        }),
+      "auto-close notification",
+    );
+    await emailRequester(
+      requester?.email,
+      `Your support request ${label(ticket)} is now closed`,
+      [
+        "We closed this request after a week without a reply.",
+        "If you still need help, reply to it anytime and it will reopen.",
+      ],
       customerLink(ticket),
     );
   },

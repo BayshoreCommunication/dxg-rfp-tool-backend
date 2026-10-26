@@ -72,6 +72,10 @@ export type SupportTicketRecord = {
   firstAgentResponseAt: string | null;
   resolvedAt: string | null;
   closedAt: string | null;
+  responseDueAt: string | null;
+  escalatedAt: string | null;
+  waitingSince: string | null;
+  autoCloseReminderSentAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -110,6 +114,10 @@ export type SupportTicketPatch = Partial<
     | "firstAgentResponseAt"
     | "resolvedAt"
     | "closedAt"
+    | "responseDueAt"
+    | "escalatedAt"
+    | "waitingSince"
+    | "autoCloseReminderSentAt"
   >
 > & { messageCountDelta?: number };
 
@@ -119,6 +127,8 @@ export type SupportInboxFilters = {
   priority?: SupportTicketPriority;
   category?: SupportTicketCategory;
   search?: string;
+  /** "urgency": tickets owed an answer first, soonest due first. "recent": newest activity first. */
+  sort?: "urgency" | "recent";
   page: number;
   perPage: number;
 };
@@ -130,6 +140,8 @@ export type SupportDeskMetrics = {
   closed: number;
   unassigned: number;
   unreadForAgents: number;
+  /** Open tickets whose response target has passed. */
+  overdue: number;
   averageFirstResponseMs: number | null;
   averageResolutionMs: number | null;
   perAgent: Array<{ agentUserId: string; openTickets: number }>;

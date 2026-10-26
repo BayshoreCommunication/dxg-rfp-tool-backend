@@ -47,8 +47,18 @@ export interface SupportDeskRepository {
     ticketId: string,
     options: { includeInternal: boolean },
   ): Promise<SupportMessageRecord[]>;
-  metrics(organizationId: string): Promise<SupportDeskMetrics>;
+  metrics(organizationId: string, now: Date): Promise<SupportDeskMetrics>;
   listAgents(organizationId: string): Promise<SupportUserSummary[]>;
+  /** Active (open or waiting) tickets per assignee, for automatic assignment. */
+  agentLoads(organizationId: string): Promise<Map<string, number>>;
+  /** Open tickets, across organizations, still unanswered at `answeredBefore`. */
+  listUnansweredSince(answeredBefore: Date, limit: number): Promise<SupportTicketRecord[]>;
+  /** Waiting tickets, across organizations, idle since `waitingBefore` with no reminder yet. */
+  listNeedingCloseReminder(waitingBefore: Date, limit: number): Promise<SupportTicketRecord[]>;
+  /** Reminded tickets, across organizations, idle since `waitingBefore` and reminded before `remindedBefore`. */
+  listDueToAutoClose(waitingBefore: Date, remindedBefore: Date, limit: number): Promise<SupportTicketRecord[]>;
+  /** One-time fill of the service-level fields on tickets created before they existed. */
+  backfillServiceLevels(now: Date): Promise<number>;
   findUserSummaries(
     organizationId: string,
     userIds: readonly string[],
@@ -137,6 +147,37 @@ export interface SupportDeskNotifier {
     status: SupportTicketStatus;
     byAgent: boolean;
   }): Promise<void>;
+  /** A ticket was given to an agent by someone else or automatically. */
+  ticketAssigned(input: {
+    ticket: SupportTicketRecord;
+    assigneeUserId: string;
+    assignedBy: string | null;
+  }): Promise<void>;
+  /** The owner has not answered in time: every agent is alerted. */
+  ticketEscalated(input: {
+    ticket: SupportTicketRecord;
+    assignee: SupportUserSummary | null;
+    waitingMinutes: number;
+  }): Promise<void>;
+  autoCloseReminder(input: {
+    ticket: SupportTicketRecord;
+    requester: SupportUserSummary | null;
+    message: SupportMessageRecord;
+  }): Promise<void>;
+  autoClosed(input: {
+    ticket: SupportTicketRecord;
+    requester: SupportUserSummary | null;
+  }): Promise<void>;
 }
 
 export type SupportDeskClock = () => Date;
+
+export type SupportPresenceState = "viewing" | "replying";
+export type SupportPresenceEntry = { userId: string; state: SupportPresenceState; at: string };
+
+/** Short-lived "who has this ticket open" entries; anything not refreshed fades out. */
+export interface SupportPresenceStore {
+  touch(organizationId: string, ticketId: string, entry: SupportPresenceEntry): Promise<void>;
+  list(organizationId: string, ticketId: string): Promise<SupportPresenceEntry[]>;
+  remove(organizationId: string, ticketId: string, userId: string): Promise<void>;
+}

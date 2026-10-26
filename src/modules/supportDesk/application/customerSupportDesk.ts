@@ -20,11 +20,16 @@ import type {
   SupportDeskRepository,
 } from "../domain/ports/supportDeskPorts";
 import { claimAttachmentsForMessage } from "./supportAttachments";
+import { pickAssignee, serviceLevelPatch } from "../serviceLevels";
 
 export type CustomerSupportDeskDependencies = {
   repository: SupportDeskRepository;
   notifier: SupportDeskNotifier;
   clock?: SupportDeskClock;
+  /** Give new tickets to the least-loaded agent (default on). */
+  autoAssign?: boolean;
+  /** Tie-breaker for automatic assignment; injectable for tests. */
+  random?: () => number;
 };
 
 const requireOwnTicket = async (
@@ -132,13 +137,37 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
         // One millisecond after the customer's message so it always sorts below it.
         now: new Date(now.getTime() + 1),
       });
+      // Give the ticket to the agent with the fewest active tickets, so new
+      // work spreads evenly and its alerts reach one owner, not everyone.
+      const assignee =
+        dependencies.autoAssign === false
+          ? null
+          : pickAssignee(
+              await repository.listAgents(actor.organizationId),
+              await repository.agentLoads(actor.organizationId),
+              dependencies.random,
+            );
       const ticket =
         (await repository.updateTicket(actor.organizationId, created.id, {
           messageCountDelta: 2,
           unreadForAgents: 1,
           lastMessageAt: now.toISOString(),
           lastCustomerMessageAt: now.toISOString(),
+          ...(assignee ? { assigneeUserId: assignee.id } : {}),
+          ...serviceLevelPatch({ before: null, status: "open", priority: created.priority, event: "customer_message", now }),
         })) ?? created;
+      if (assignee) {
+        await repository.appendMessage({
+          organizationId: actor.organizationId,
+          ticketId: created.id,
+          authorUserId: null,
+          authorRole: "system",
+          kind: "internal_note",
+          body: `Assigned automatically to ${assignee.name} (fewest open tickets).`,
+          attachments: [],
+          now: new Date(now.getTime() + 2),
+        });
+      }
       await notifier.ticketCreated({ ticket, requester, message });
       return { ticket, message };
     },
@@ -221,6 +250,7 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
           lastMessageAt: now.toISOString(),
           lastCustomerMessageAt: now.toISOString(),
           ...(reopened ? { status: "open", resolvedAt: null, closedAt: null } : {}),
+          ...serviceLevelPatch({ before: ticket, status: "open", priority: ticket.priority, event: "customer_message", now }),
         })) ?? ticket;
       if (ticketIsTerminal(ticket.status)) {
         await repository.appendMessage({
@@ -251,6 +281,7 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
           status: "resolved",
           resolvedAt: now.toISOString(),
           lastMessageAt: now.toISOString(),
+          ...serviceLevelPatch({ before: ticket, status: "resolved", priority: ticket.priority, event: "change", now }),
         })) ?? ticket;
       await repository.appendMessage({
         organizationId: actor.organizationId,

@@ -164,6 +164,15 @@ const fakeRepository = () => {
     async listAgents() {
       return [users.get(AGENT), users.get(AGENT_TWO)];
     },
+    async agentLoads(organizationId) {
+      const loads = new Map();
+      for (const t of tickets.values()) {
+        if (t.organizationId !== organizationId || !t.assigneeUserId) continue;
+        if (t.status !== "open" && t.status !== "waiting_on_customer") continue;
+        loads.set(t.assigneeUserId, (loads.get(t.assigneeUserId) ?? 0) + 1);
+      }
+      return loads;
+    },
     async findUserSummaries(organizationId, userIds) {
       return new Map(userIds.filter((id) => users.has(id)).map((id) => [id, users.get(id)]));
     },
@@ -196,19 +205,24 @@ const fakeNotifier = () => {
     async customerReplied(input) { events.push(["customerReplied", input]); },
     async agentReplied(input) { events.push(["agentReplied", input]); },
     async statusChanged(input) { events.push(["statusChanged", input]); },
+    async ticketAssigned(input) { events.push(["ticketAssigned", input]); },
+    async ticketEscalated(input) { events.push(["ticketEscalated", input]); },
+    async autoCloseReminder(input) { events.push(["autoCloseReminder", input]); },
+    async autoClosed(input) { events.push(["autoClosed", input]); },
   };
 };
 
 let tick = 0;
 const clock = () => new Date(Date.UTC(2026, 9, 18, 12, 0, tick++));
 
-const build = () => {
+// Most tests exercise manual triage, so automatic assignment is off unless asked for.
+const build = ({ autoAssign = false, random } = {}) => {
   const repository = fakeRepository();
   const notifier = fakeNotifier();
   return {
     repository,
     notifier,
-    customer: createCustomerSupportDesk({ repository, notifier, clock }),
+    customer: createCustomerSupportDesk({ repository, notifier, clock, autoAssign, random }),
     agent: createAgentSupportDesk({ repository, notifier, clock }),
   };
 };
@@ -531,4 +545,50 @@ test("the acknowledgement falls back to a plain greeting without a name", () => 
   assert.match(autoAcknowledgementBody(7, null), /^Hi, thanks for contacting DXG support\./);
   assert.match(autoAcknowledgementBody(7, "  "), /^Hi, thanks/);
   assert.match(autoAcknowledgementBody(7, "Ana Maria Lopez"), /^Hi Ana, /);
+});
+
+test("new tickets go to the least-loaded agent, start the response clock, and only the owner is alerted", async () => {
+  const { customer, repository, notifier } = build({ autoAssign: true, random: () => 0 });
+  const first = await customer.createTicket(planner, { subject: "One", body: "Help" });
+  assert.equal(first.ticket.assigneeUserId, AGENT);
+  assert.equal(first.ticket.responseDueAt, new Date(Date.parse(first.ticket.lastCustomerMessageAt) + 4 * 3_600_000).toISOString());
+  const second = await customer.createTicket(otherPlanner, { subject: "Two", body: "Help" });
+  assert.equal(second.ticket.assigneeUserId, AGENT_TWO, "the agent with fewer open tickets gets the next one");
+  const note = repository.messages.find((m) => m.ticketId === first.ticket.id && m.kind === "internal_note");
+  assert.equal(note.body, "Assigned automatically to Dana DXG (fewest open tickets).");
+  const detail = await customer.getOwnTicket(planner, first.ticket.id);
+  assert.ok(!detail.messages.some((m) => /Assigned automatically/.test(m.body)), "planners never see the assignment note");
+  assert.deepEqual(notifier.events.map((e) => e[0]), ["ticketCreated", "ticketCreated"]);
+});
+
+test("an agent reply stops the response clock and a customer reply restarts it", async () => {
+  const { customer, agent: desk } = build({ autoAssign: true, random: () => 0 });
+  const { ticket } = await customer.createTicket(planner, { subject: "Clock", body: "Help" });
+  const replied = await desk.reply(agent, ticket.id, { body: "On it." });
+  assert.equal(replied.ticket.responseDueAt, null);
+  assert.ok(replied.ticket.waitingSince, "waiting on the customer starts the auto-close clock");
+  const back = await customer.replyToOwnTicket(planner, ticket.id, { body: "Thanks, one more thing." });
+  assert.equal(back.ticket.status, "open");
+  assert.ok(back.ticket.responseDueAt);
+  assert.equal(back.ticket.waitingSince, null);
+  assert.equal(back.ticket.autoCloseReminderSentAt, null);
+});
+
+test("reassigning a ticket alerts the new owner, but not when agents take it themselves", async () => {
+  const { customer, agent: desk, notifier } = build();
+  const { ticket } = await customer.createTicket(planner, { subject: "Hand-off", body: "Help" });
+  await desk.updateTicket(agent, ticket.id, { assigneeUserId: AGENT_TWO });
+  const assigned = notifier.events.filter((e) => e[0] === "ticketAssigned");
+  assert.equal(assigned.length, 1);
+  assert.equal(assigned[0][1].assigneeUserId, AGENT_TWO);
+  assert.equal(assigned[0][1].assignedBy, "Dana DXG");
+  await desk.updateTicket(agent, ticket.id, { assigneeUserId: AGENT });
+  assert.equal(notifier.events.filter((e) => e[0] === "ticketAssigned").length, 1);
+});
+
+test("raising priority on an unanswered ticket pulls its due time in", async () => {
+  const { customer, agent: desk } = build();
+  const { ticket } = await customer.createTicket(planner, { subject: "Urgent now", body: "Help" });
+  const updated = await desk.updateTicket(agent, ticket.id, { priority: "urgent" });
+  assert.equal(updated.responseDueAt, new Date(Date.parse(ticket.lastCustomerMessageAt) + 3_600_000).toISOString());
 });
