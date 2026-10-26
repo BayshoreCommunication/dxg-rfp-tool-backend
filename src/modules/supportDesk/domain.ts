@@ -303,5 +303,17 @@ export const canBeReadByRequester = (
   return !LEGACY_INTERNAL_AUDIT_MARKERS.some((marker) => message.body?.includes(marker));
 };
 
+/**
+ * How a requester-visible message reads to the planner. Planners hear from
+ * one "DXG support", never an individual agent, so public status events
+ * written as "<agent> changed the status to …" are shown with the team name.
+ * Applied on read so older tickets are covered too; agents still see who.
+ */
+export const presentToRequester = <T extends Pick<SupportMessageRecord, "kind" | "body">>(message: T): T => {
+  if (message.kind !== "system") return message;
+  const statusChange = /^.+? changed the status to (.+)$/.exec(message.body);
+  return statusChange ? { ...message, body: `DXG support changed the status to ${statusChange[1]}` } : message;
+};
+
 export const ticketIsTerminal = (status: SupportTicketStatus): boolean =>
   status === "resolved" || status === "closed";

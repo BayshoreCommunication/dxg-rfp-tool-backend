@@ -1,6 +1,7 @@
 import {
   SupportDeskError,
   canBeReadByRequester,
+  presentToRequester,
   parseAttachmentIds,
   parseBody,
   parseCategory,
@@ -201,7 +202,7 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
       const ticket = await requireOwnTicket(repository, actor, ticketId);
       const messages = (
         await repository.listMessages(actor.organizationId, ticket.id, { includeInternal: false })
-      ).filter(canBeReadByRequester);
+      ).filter(canBeReadByRequester).map(presentToRequester);
       const current =
         ticket.unreadForRequester > 0
           ? (await repository.updateTicket(actor.organizationId, ticket.id, { unreadForRequester: 0 })) ?? ticket
@@ -214,7 +215,8 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
       return {
         ticket: current,
         messages,
-        assignee: assignee ? { id: assignee.id, name: assignee.name } : null,
+        // Planners only need to know someone is on it, not who.
+        assignee: assignee ? { id: assignee.id, name: "DXG support" } : null,
       };
     },
 
@@ -224,6 +226,16 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
       input: { body?: unknown; attachments?: unknown },
     ): Promise<{ ticket: SupportTicketRecord; message: SupportMessageRecord }> {
       const ticket = await requireOwnTicket(repository, actor, ticketId);
+      // Resolved is a grace period: a reply reopens it. Closed (3 days after
+      // resolving, or by an agent) is final. DXG agents can still reopen any
+      // ticket from the admin.
+      if (ticket.status === "closed") {
+        throw new SupportDeskError(
+          "SUPPORT_TICKET_CLOSED",
+          "This request is closed and can no longer be replied to.",
+          409,
+        );
+      }
       const body = parseBody(input.body);
       const attachments = await claimAttachmentsForMessage(
         repository,
@@ -242,17 +254,17 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
         now,
       });
       await bindAttachments(repository, actor, attachments, ticket.id, message.id);
-      const reopened = ticketIsTerminal(ticket.status) || ticket.status === "waiting_on_customer";
+      const reopened = ticket.status === "waiting_on_customer" || ticket.status === "resolved";
       const updated =
         (await repository.updateTicket(actor.organizationId, ticket.id, {
           messageCountDelta: 1,
           unreadForAgents: ticket.unreadForAgents + 1,
           lastMessageAt: now.toISOString(),
           lastCustomerMessageAt: now.toISOString(),
-          ...(reopened ? { status: "open", resolvedAt: null, closedAt: null } : {}),
+          ...(reopened ? { status: "open", resolvedAt: null } : {}),
           ...serviceLevelPatch({ before: ticket, status: "open", priority: ticket.priority, event: "customer_message", now }),
         })) ?? ticket;
-      if (ticketIsTerminal(ticket.status)) {
+      if (ticket.status === "resolved") {
         await repository.appendMessage({
           organizationId: actor.organizationId,
           ticketId: ticket.id,
@@ -261,8 +273,9 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
           kind: "system",
           body: "Ticket reopened by the customer.",
           attachments: [],
-          now,
+          now: new Date(now.getTime() + 1),
         });
+        await repository.updateTicket(actor.organizationId, ticket.id, { messageCountDelta: 1 });
       }
       await notifier.customerReplied({
         ticket: updated,

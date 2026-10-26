@@ -20,12 +20,18 @@ export const RESPONSE_TARGET_MS: Record<SupportTicketPriority, number> = {
 
 /** Unanswered this long, a ticket's alerts go to every agent, not just its owner. */
 export const ESCALATE_AFTER_MS = 30 * MINUTE;
-/** Waiting on the customer this long, they get a "we'll close this soon" reminder. */
-export const AUTO_CLOSE_REMINDER_AFTER_MS = 5 * DAY;
-/** Waiting on the customer this long, the ticket closes itself. */
-export const AUTO_CLOSE_AFTER_MS = 7 * DAY;
-/** A reminder always goes out at least this long before an automatic close. */
-export const AUTO_CLOSE_MIN_NOTICE_MS = 1 * DAY;
+/** Waiting on the customer this long, they get a "we'll resolve this soon" reminder. */
+export const AUTO_RESOLVE_REMINDER_AFTER_MS = 5 * DAY;
+/** Waiting on the customer this long, the ticket resolves itself. */
+export const AUTO_RESOLVE_AFTER_MS = 7 * DAY;
+/** A reminder always goes out at least this long before an automatic resolve. */
+export const AUTO_RESOLVE_MIN_NOTICE_MS = 1 * DAY;
+/**
+ * Resolved is a grace period: the customer can reply to reopen it. After this
+ * long it closes for good, like Zendesk's Solved → Closed or Jira's
+ * Resolved → Closed automation.
+ */
+export const CLOSE_AFTER_RESOLVED_MS = 3 * DAY;
 
 export const responseDueAt = (fromIso: string, priority: SupportTicketPriority): string =>
   new Date(Date.parse(fromIso) + RESPONSE_TARGET_MS[priority]).toISOString();
@@ -112,8 +118,9 @@ export const autoCloseReminderBody = (requesterName?: string | null): string => 
   const firstName = requesterName?.trim().split(/\s+/)[0];
   return [
     `Hi${firstName ? ` ${firstName}` : ""}, just checking in on this request.`,
-    "We haven't heard back from you, so we'll close it in 2 days. If you still need help, reply here and it stays open.",
+    "We haven't heard back from you, so we'll mark it as resolved in 2 days. If you still need help, reply here and it stays open.",
   ].join("\n\n");
 };
 
-export const AUTO_CLOSE_NOTE = "Closed automatically after 7 days without a reply from the customer.";
+export const AUTO_RESOLVE_NOTE = "Resolved automatically after 7 days without a reply from the customer.";
+export const AUTO_CLOSE_NOTE = "Closed automatically 3 days after it was resolved.";

@@ -5,10 +5,12 @@ import type {
   SupportDeskRepository,
 } from "../domain/ports/supportDeskPorts";
 import {
-  AUTO_CLOSE_AFTER_MS,
-  AUTO_CLOSE_MIN_NOTICE_MS,
   AUTO_CLOSE_NOTE,
-  AUTO_CLOSE_REMINDER_AFTER_MS,
+  AUTO_RESOLVE_AFTER_MS,
+  AUTO_RESOLVE_MIN_NOTICE_MS,
+  AUTO_RESOLVE_NOTE,
+  AUTO_RESOLVE_REMINDER_AFTER_MS,
+  CLOSE_AFTER_RESOLVED_MS,
   ESCALATE_AFTER_MS,
   autoCloseReminderBody,
   serviceLevelPatch,
@@ -18,6 +20,7 @@ export type SupportDeskSweepResult = {
   backfilled: number;
   escalated: number;
   reminded: number;
+  resolved: number;
   closed: number;
   failed: number;
 };
@@ -29,8 +32,10 @@ export type SupportDeskSweepResult = {
  *    agent, not just the ticket's owner (once per customer message).
  * 2. Remind: a ticket waiting on the customer for 5 days gets a friendly
  *    message in the thread plus a bell and email to the planner.
- * 3. Close: waiting 7 days, and reminded at least a day earlier, it closes
- *    itself. A customer reply at any point restarts everything.
+ * 3. Resolve: waiting 7 days, and reminded at least a day earlier, it is
+ *    resolved for them. A customer reply at any point restarts everything.
+ * 4. Close: any ticket resolved for 3 days (by an agent, the planner or
+ *    step 3) closes for good. Until then a planner reply reopens it.
  *
  * Each ticket is handled on its own so one failure never blocks the rest.
  */
@@ -85,7 +90,7 @@ export const createSupportDeskSweeper = (dependencies: {
       );
 
       const reminders = await each(
-        await repository.listNeedingCloseReminder(new Date(now.getTime() - AUTO_CLOSE_REMINDER_AFTER_MS), batchSize),
+        await repository.listNeedingCloseReminder(new Date(now.getTime() - AUTO_RESOLVE_REMINDER_AFTER_MS), batchSize),
         async (ticket) => {
           const requester = await person(ticket, ticket.requesterUserId);
           // Customer-visible and signed as DXG support, like the first
@@ -111,12 +116,39 @@ export const createSupportDeskSweeper = (dependencies: {
         },
       );
 
-      const closures = await each(
-        await repository.listDueToAutoClose(
-          new Date(now.getTime() - AUTO_CLOSE_AFTER_MS),
-          new Date(now.getTime() - AUTO_CLOSE_MIN_NOTICE_MS),
+      const resolutions = await each(
+        await repository.listDueToAutoResolve(
+          new Date(now.getTime() - AUTO_RESOLVE_AFTER_MS),
+          new Date(now.getTime() - AUTO_RESOLVE_MIN_NOTICE_MS),
           batchSize,
         ),
+        async (ticket) => {
+          await repository.appendMessage({
+            organizationId: ticket.organizationId,
+            ticketId: ticket.id,
+            authorUserId: null,
+            authorRole: "system",
+            kind: "system",
+            body: AUTO_RESOLVE_NOTE,
+            attachments: [],
+            now,
+          });
+          const updated =
+            (await repository.updateTicket(ticket.organizationId, ticket.id, {
+              status: "resolved",
+              resolvedAt: nowIso,
+              lastMessageAt: nowIso,
+              messageCountDelta: 1,
+              ...serviceLevelPatch({ before: ticket, status: "resolved", priority: ticket.priority, event: "change", now }),
+            })) ?? ticket;
+          await notifier.autoResolved({ ticket: updated, requester: await person(ticket, ticket.requesterUserId) });
+        },
+      );
+
+      // Closing after the grace period is quiet: the planner was already told
+      // when it was resolved.
+      const closures = await each(
+        await repository.listResolvedBefore(new Date(now.getTime() - CLOSE_AFTER_RESOLVED_MS), batchSize),
         async (ticket) => {
           await repository.appendMessage({
             organizationId: ticket.organizationId,
@@ -128,15 +160,13 @@ export const createSupportDeskSweeper = (dependencies: {
             attachments: [],
             now,
           });
-          const updated =
-            (await repository.updateTicket(ticket.organizationId, ticket.id, {
-              status: "closed",
-              closedAt: nowIso,
-              lastMessageAt: nowIso,
-              messageCountDelta: 1,
-              ...serviceLevelPatch({ before: ticket, status: "closed", priority: ticket.priority, event: "change", now }),
-            })) ?? ticket;
-          await notifier.autoClosed({ ticket: updated, requester: await person(ticket, ticket.requesterUserId) });
+          await repository.updateTicket(ticket.organizationId, ticket.id, {
+            status: "closed",
+            closedAt: nowIso,
+            lastMessageAt: nowIso,
+            messageCountDelta: 1,
+            ...serviceLevelPatch({ before: ticket, status: "closed", priority: ticket.priority, event: "change", now }),
+          });
         },
       );
 
@@ -144,8 +174,9 @@ export const createSupportDeskSweeper = (dependencies: {
         backfilled,
         escalated: escalation.done,
         reminded: reminders.done,
+        resolved: resolutions.done,
         closed: closures.done,
-        failed: escalation.failed + reminders.failed + closures.failed,
+        failed: escalation.failed + reminders.failed + resolutions.failed + closures.failed,
       };
     },
   };

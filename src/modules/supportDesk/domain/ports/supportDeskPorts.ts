@@ -56,7 +56,9 @@ export interface SupportDeskRepository {
   /** Waiting tickets, across organizations, idle since `waitingBefore` with no reminder yet. */
   listNeedingCloseReminder(waitingBefore: Date, limit: number): Promise<SupportTicketRecord[]>;
   /** Reminded tickets, across organizations, idle since `waitingBefore` and reminded before `remindedBefore`. */
-  listDueToAutoClose(waitingBefore: Date, remindedBefore: Date, limit: number): Promise<SupportTicketRecord[]>;
+  listDueToAutoResolve(waitingBefore: Date, remindedBefore: Date, limit: number): Promise<SupportTicketRecord[]>;
+  /** Resolved tickets, across organizations, resolved at or before `resolvedBefore`. */
+  listResolvedBefore(resolvedBefore: Date, limit: number): Promise<SupportTicketRecord[]>;
   /** One-time fill of the service-level fields on tickets created before they existed. */
   backfillServiceLevels(now: Date): Promise<number>;
   findUserSummaries(
@@ -164,7 +166,8 @@ export interface SupportDeskNotifier {
     requester: SupportUserSummary | null;
     message: SupportMessageRecord;
   }): Promise<void>;
-  autoClosed(input: {
+  /** The customer went quiet, so the ticket was resolved for them. */
+  autoResolved(input: {
     ticket: SupportTicketRecord;
     requester: SupportUserSummary | null;
   }): Promise<void>;

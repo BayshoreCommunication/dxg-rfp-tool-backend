@@ -355,7 +355,18 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
     return docs.map((doc) => ticketRecord(doc as Record<string, unknown>));
   },
 
-  async listDueToAutoClose(waitingBefore, remindedBefore, limit) {
+  async listResolvedBefore(resolvedBefore, limit) {
+    const docs = await SupportTicket.find({
+      status: "resolved",
+      resolvedAt: { $ne: null, $lte: resolvedBefore },
+    })
+      .sort({ resolvedAt: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map((doc) => ticketRecord(doc as Record<string, unknown>));
+  },
+
+  async listDueToAutoResolve(waitingBefore, remindedBefore, limit) {
     const docs = await SupportTicket.find({
       status: "waiting_on_customer",
       waitingSince: { $ne: null, $lte: waitingBefore },

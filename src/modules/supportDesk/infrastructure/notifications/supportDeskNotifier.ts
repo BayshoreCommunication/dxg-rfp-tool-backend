@@ -182,8 +182,9 @@ export const supportDeskNotifier: SupportDeskNotifier = {
     );
   },
 
-  async agentReplied({ ticket, requester, agent, message }) {
-    const who = agent?.name ?? "DXG support";
+  async agentReplied({ ticket, requester, message }) {
+    // Planners hear from one "DXG support", never an individual agent.
+    const who = "DXG support";
     await bestEffort(
       () =>
         createNotification({
@@ -279,25 +280,25 @@ export const supportDeskNotifier: SupportDeskNotifier = {
     );
   },
 
-  async autoClosed({ ticket, requester }) {
+  async autoResolved({ ticket, requester }) {
     await bestEffort(
       () =>
         createNotification({
           userId: ticket.requesterUserId,
           type: "support_ticket",
-          title: `${label(ticket)} is now closed`,
-          message: "We closed this request after a week without a reply. Reply to it anytime to reopen it.",
+          title: `${label(ticket)} is now resolved`,
+          message: "We marked this request as resolved after a week without a reply. Reply within 3 days if you still need help.",
           metadata: { ticketId: ticket.id, ticketNumber: ticket.ticketNumber, audience: "requester" },
-          dedupeKey: `support:${ticket.id}:auto-closed:${ticket.updatedAt}`,
+          dedupeKey: `support:${ticket.id}:auto-resolved:${ticket.updatedAt}`,
         }),
-      "auto-close notification",
+      "auto-resolve notification",
     );
     await emailRequester(
       requester?.email,
-      `Your support request ${label(ticket)} is now closed`,
+      `Your support request ${label(ticket)} is now resolved`,
       [
-        "We closed this request after a week without a reply.",
-        "If you still need help, reply to it anytime and it will reopen.",
+        "We marked this request as resolved after a week without a reply.",
+        "If you still need help, reply to it within 3 days and it will reopen.",
       ],
       customerLink(ticket),
     );

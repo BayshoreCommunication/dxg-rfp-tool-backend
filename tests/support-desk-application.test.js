@@ -8,7 +8,7 @@ const {
 const {
   createAgentSupportDesk,
 } = require("../src/modules/supportDesk/application/agentSupportDesk");
-const { SupportDeskError, canBeReadByRequester } = require("../src/modules/supportDesk/domain");
+const { SupportDeskError, canBeReadByRequester, presentToRequester } = require("../src/modules/supportDesk/domain");
 
 const ORG = "aaaaaaaaaaaaaaaaaaaaaaaa";
 const PLANNER = "bbbbbbbbbbbbbbbbbbbbbbbb";
@@ -373,7 +373,8 @@ test("agent replies set waiting-on-customer, auto-assign, record first response,
   // The customer reading the thread clears their unread marker and sees the assignee.
   const detail = await customer.getOwnTicket(planner, ticket.id);
   assert.equal(detail.ticket.unreadForRequester, 0);
-  assert.deepEqual(detail.assignee, { id: AGENT, name: "Dana DXG" });
+  // Planners learn someone is on it, never which agent.
+  assert.deepEqual(detail.assignee, { id: AGENT, name: "DXG support" });
   assert.equal(await customer.ownUnreadCount(planner), 0);
 
   // Replying with a terminal status also notifies the status change.
@@ -384,23 +385,37 @@ test("agent replies set waiting-on-customer, auto-assign, record first response,
   assert.equal(notifier.events.at(-1)[1].byAgent, true);
 });
 
-test("a customer reply reopens a resolved ticket and marks it unread for agents", async () => {
+test("a planner reply reopens a waiting or resolved ticket, but a closed one is final", async () => {
   const { customer, agent: desk, repository, notifier } = build();
   const { ticket } = await customer.createTicket(planner, { subject: "Login", body: "Cannot sign in." });
-  await desk.reply(agent, ticket.id, { body: "Reset your password.", status: "resolved" });
-  const reply = await customer.replyToOwnTicket(planner, ticket.id, { body: "Still broken." });
-  assert.equal(reply.ticket.status, "open");
-  assert.equal(reply.ticket.resolvedAt, null);
-  assert.equal(reply.ticket.unreadForAgents, 1);
-  assert.equal(repository.messages.at(-1).kind, "system");
-  assert.match(repository.messages.at(-1).body, /reopened/);
+  await desk.reply(agent, ticket.id, { body: "Try resetting your password." });
+  const back = await customer.replyToOwnTicket(planner, ticket.id, { body: "Still broken." });
+  assert.equal(back.ticket.status, "open");
+  assert.equal(back.ticket.unreadForAgents, 1);
   assert.equal(notifier.events.at(-1)[0], "customerReplied");
 
-  const own = await customer.resolveOwnTicket(planner, ticket.id);
+  await desk.reply(agent, ticket.id, { body: "Fixed on our side.", status: "resolved" });
+  const reopened = await customer.replyToOwnTicket(planner, ticket.id, { body: "It broke again." });
+  assert.equal(reopened.ticket.status, "open");
+  assert.equal(reopened.ticket.resolvedAt, null);
+  assert.ok(reopened.ticket.responseDueAt, "a reopened ticket is owed an answer again");
+  assert.match(repository.messages.at(-1).body, /reopened by the customer/);
+
+  await desk.updateTicket(agent, ticket.id, { status: "closed" });
+  const before = repository.messages.length;
+  await rejects(
+    () => customer.replyToOwnTicket(planner, ticket.id, { body: "One more thing." }),
+    "SUPPORT_TICKET_CLOSED",
+    409,
+  );
+  assert.equal(repository.messages.length, before, "nothing is written to a closed ticket");
+
+  const { ticket: second } = await customer.createTicket(planner, { subject: "Other", body: "Hi" });
+  const own = await customer.resolveOwnTicket(planner, second.id);
   assert.equal(own.status, "resolved");
   assert.equal(notifier.events.at(-1)[0], "statusChanged");
   assert.equal(notifier.events.at(-1)[1].byAgent, false);
-  assert.equal((await customer.resolveOwnTicket(planner, ticket.id)).status, "resolved");
+  assert.equal((await customer.resolveOwnTicket(planner, second.id)).status, "resolved");
 });
 
 test("only administrative roles reach the agent desk", async () => {
@@ -485,7 +500,7 @@ test("agents can assign, prioritise, recategorise, and change status with an aud
   assert.deepEqual(customerDetail.messages.map((message) => message.body), [
     "Takes minutes.",
     autoAcknowledgementBody(ticket.ticketNumber, "Pat Planner"),
-    "Dana DXG changed the status to Waiting on customer.",
+    "DXG support changed the status to Waiting on customer.",
   ]);
   assert.equal(customerDetail.ticket.messageCount, 3);
 
@@ -591,4 +606,15 @@ test("raising priority on an unanswered ticket pulls its due time in", async () 
   const { ticket } = await customer.createTicket(planner, { subject: "Urgent now", body: "Help" });
   const updated = await desk.updateTicket(agent, ticket.id, { priority: "urgent" });
   assert.equal(updated.responseDueAt, new Date(Date.parse(ticket.lastCustomerMessageAt) + 3_600_000).toISOString());
+});
+
+test("planners see public status events from DXG support, including on older tickets", () => {
+  assert.equal(
+    presentToRequester({ kind: "system", body: "Dana DXG changed the status to Resolved." }).body,
+    "DXG support changed the status to Resolved.",
+  );
+  const untouched = { kind: "system", body: "Ticket reopened by the customer." };
+  assert.equal(presentToRequester(untouched), untouched);
+  const reply = { kind: "message", body: "Dana here, changed the status to done." };
+  assert.equal(presentToRequester(reply), reply, "only status events are rewritten");
 });

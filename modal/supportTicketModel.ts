@@ -82,6 +82,7 @@ supportTicketSchema.index({ organizationId: 1, assigneeUserId: 1, status: 1 });
 // The sweeper's escalation and auto-close scans.
 supportTicketSchema.index({ status: 1, responseDueAt: 1 });
 supportTicketSchema.index({ status: 1, waitingSince: 1 });
+supportTicketSchema.index({ status: 1, resolvedAt: 1 });
 
 const SupportTicket = mongoose.model<ISupportTicket>("SupportTicket", supportTicketSchema);
 

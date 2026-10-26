@@ -31,7 +31,7 @@ const people = new Map([
   [AGENT_TWO, { id: AGENT_TWO, name: "Eli DXG", email: "eli@example.com", company: null, role: "admin" }],
 ]);
 
-const sweepFixture = ({ unanswered = [], remind = [], close = [], failOn } = {}) => {
+const sweepFixture = ({ unanswered = [], remind = [], resolve = [], close = [], failOn } = {}) => {
   const updates = [];
   const messages = [];
   const events = [];
@@ -40,11 +40,12 @@ const sweepFixture = ({ unanswered = [], remind = [], close = [], failOn } = {})
     async backfillServiceLevels() { return 0; },
     async listUnansweredSince(before) { calls.unansweredBefore = before; return unanswered; },
     async listNeedingCloseReminder(before) { calls.remindBefore = before; return remind; },
-    async listDueToAutoClose(waitingBefore, remindedBefore) { calls.close = [waitingBefore, remindedBefore]; return close; },
+    async listDueToAutoResolve(waitingBefore, remindedBefore) { calls.resolve = [waitingBefore, remindedBefore]; return resolve; },
+    async listResolvedBefore(resolvedBefore) { calls.close = resolvedBefore; return close; },
     async updateTicket(organizationId, id, patch) {
       if (failOn === id) throw new Error("database hiccup");
       updates.push([id, patch]);
-      return { ...[...unanswered, ...remind, ...close].find((t) => t.id === id), ...patch };
+      return { ...[...unanswered, ...remind, ...resolve, ...close].find((t) => t.id === id), ...patch };
     },
     async appendMessage(input) { messages.push(input); return { id: `m${messages.length}`, ...input, createdAt: input.now.toISOString() }; },
     async findUserSummaries(organizationId, ids) { return new Map(ids.filter((id) => people.has(id)).map((id) => [id, people.get(id)])); },
@@ -52,7 +53,7 @@ const sweepFixture = ({ unanswered = [], remind = [], close = [], failOn } = {})
   const notifier = {
     async ticketEscalated(input) { events.push(["escalated", input]); },
     async autoCloseReminder(input) { events.push(["reminder", input]); },
-    async autoClosed(input) { events.push(["closed", input]); },
+    async autoResolved(input) { events.push(["resolved", input]); },
   };
   const sweeper = createSupportDeskSweeper({ repository, notifier, clock: () => NOW });
   return { sweeper, updates, messages, events, calls };
@@ -78,27 +79,39 @@ test("five days waiting posts a friendly check-in in the thread and emails the p
   assert.equal(messages[0].authorRole, "system");
   assert.equal(messages[0].kind, "message", "customer-visible, signed as DXG support");
   assert.match(messages[0].body, /^Hi Pat, just checking in/);
+  assert.match(messages[0].body, /mark it as resolved in 2 days/);
   assert.equal(updates[0][1].autoCloseReminderSentAt, NOW.toISOString());
   assert.equal(updates[0][1].unreadForRequester, 1);
   assert.equal(events[0][0], "reminder");
   assert.equal(result.reminded, 1);
 });
 
-test("seven days waiting, reminded at least a day earlier, closes the ticket and tells the planner", async () => {
+test("seven days waiting, reminded at least a day earlier, resolves the ticket and tells the planner", async () => {
   const stale = ticket({
     id: "stale", status: "waiting_on_customer", waitingSince: ago(7 * DAY + MIN), autoCloseReminderSentAt: ago(2 * DAY),
   });
-  const { sweeper, updates, messages, events, calls } = sweepFixture({ close: [stale] });
+  const { sweeper, updates, messages, events, calls } = sweepFixture({ resolve: [stale] });
   const result = await sweeper.run();
-  assert.deepEqual(calls.close.map((d) => d.toISOString()), [ago(7 * DAY), ago(DAY)]);
-  assert.equal(messages[0].kind, "system");
-  assert.match(messages[0].body, /Closed automatically after 7 days/);
+  assert.deepEqual(calls.resolve.map((d) => d.toISOString()), [ago(7 * DAY), ago(DAY)]);
+  assert.match(messages[0].body, /Resolved automatically after 7 days/);
   const patch = updates[0][1];
-  assert.equal(patch.status, "closed");
-  assert.equal(patch.closedAt, NOW.toISOString());
+  assert.equal(patch.status, "resolved");
+  assert.equal(patch.resolvedAt, NOW.toISOString());
   assert.equal(patch.waitingSince, null);
-  assert.equal(patch.autoCloseReminderSentAt, null);
-  assert.equal(events[0][0], "closed");
+  assert.equal(events[0][0], "resolved");
+  assert.equal(result.resolved, 1);
+});
+
+test("three days after resolving, a ticket closes quietly", async () => {
+  const done = ticket({ id: "done", status: "resolved", resolvedAt: ago(3 * DAY + MIN) });
+  const { sweeper, updates, messages, events, calls } = sweepFixture({ close: [done] });
+  const result = await sweeper.run();
+  assert.equal(calls.close.toISOString(), ago(3 * DAY));
+  assert.equal(messages[0].kind, "system");
+  assert.match(messages[0].body, /Closed automatically 3 days after it was resolved/);
+  assert.equal(updates[0][1].status, "closed");
+  assert.equal(updates[0][1].closedAt, NOW.toISOString());
+  assert.deepEqual(events, [], "the planner was already told when it was resolved");
   assert.equal(result.closed, 1);
 });
 

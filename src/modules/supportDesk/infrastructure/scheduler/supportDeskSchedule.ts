@@ -30,7 +30,7 @@ export const startSupportDeskSweeper = (sweeper: { run(): Promise<SupportDeskSwe
         if (acquired !== "OK") return;
       }
       const result = await sweeper.run();
-      if (result.escalated || result.reminded || result.closed || result.failed || result.backfilled) {
+      if (result.escalated || result.reminded || result.resolved || result.closed || result.failed || result.backfilled) {
         console.log("Support desk sweep:", JSON.stringify(result));
       }
     } catch (error) {
