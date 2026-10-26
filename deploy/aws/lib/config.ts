@@ -53,6 +53,10 @@ export interface EnvironmentConfig {
   readonly albIdleTimeoutSeconds: number;
   /** MongoDB database name inside the env's Atlas cluster (MONGODB_DB_NAME). */
   readonly mongoDbName: string;
+  /** Inbox that receives support-desk alerts (new tickets, customer replies).
+   *  Setting it also turns on support email for customers (agent replies,
+   *  status changes). Omit to keep support email off. */
+  readonly supportNotifyEmail?: string;
   /** Public base URL for app assets (ASSET_STORAGE_PUBLIC_URL_BASE) — the
    *  CloudFront domain in front of the assets bucket. Without it the app
    *  builds direct S3 URLs, which Block Public Access rejects. */
@@ -182,6 +186,7 @@ export const ENVIRONMENTS: Record<string, EnvironmentConfig> = {
     containerInsights: false,
     albIdleTimeoutSeconds: 180,
     mongoDbName: "dxg_rfp_tool_prod",
+    supportNotifyEmail: "dxgrfptool@gmail.com",
     assetPublicUrlBase: "https://d1hn23mh1h53mx.cloudfront.net",
     browserUploadOrigins: [
       "https://av-rfpilot.com",

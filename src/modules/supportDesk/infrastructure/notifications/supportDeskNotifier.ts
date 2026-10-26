@@ -28,7 +28,10 @@ const dxgInboxAddress = (): string | null => {
 
 const frontendUrl = (): string =>
   (process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || "").replace(/\/+$/, "");
-const adminUrl = (): string => (process.env.ADMIN_FRONTEND_URL || "").replace(/\/+$/, "");
+// Production sets ADMIN_URL (deploy/aws/lib/app-stack.ts); ADMIN_FRONTEND_URL
+// is the older name. Without either, agent links collapse to a bare path.
+const adminUrl = (): string =>
+  (process.env.ADMIN_FRONTEND_URL || process.env.ADMIN_URL || "").replace(/\/+$/, "");
 
 const customerLink = (ticket: SupportTicketRecord): string => `${frontendUrl()}/support/${ticket.id}`;
 const agentLink = (ticket: SupportTicketRecord): string => `${adminUrl()}/support/${ticket.id}`;
