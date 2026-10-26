@@ -1,5 +1,8 @@
+export type AccountType = "planner" | "admin";
+
 export type SessionAccount = {
   userId: string;
+  accountType: AccountType;
   email: string;
   organizationId: string;
   role: string;

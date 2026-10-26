@@ -9,6 +9,7 @@ import { createAuthenticateGoogleIdentity } from "./application/googleAuthentica
 import { legacyOtpDelivery } from "./infrastructure/delivery/legacyOtpDelivery";
 import { mongoAuthUserLookup } from "./infrastructure/mongo/mongoAuthUserLookup";
 import { mongoAuthAccountRepository } from "./infrastructure/mongo/mongoAuthAccountRepository";
+import { mongoAdminAuthAccountRepository } from "./infrastructure/mongo/mongoAdminAuthAccountRepository";
 import { mongoOtpRepository } from "./infrastructure/mongo/mongoOtpRepository";
 import { mongoGoogleAccountRepository } from "./infrastructure/mongo/mongoGoogleAccountRepository";
 import { cryptoOtpGenerator } from "./infrastructure/security/cryptoOtpGenerator";
@@ -61,14 +62,41 @@ export const authenticateWithCredentials = createAuthenticateCredentials({
   tokens: jwtAccessTokenIssuer,
 });
 
+/* Administrators sign in, sign up and reset passwords against the `admins`
+   collection only; planner accounts in `users` are never consulted. */
+export const authenticateAdminCredentials = createAuthenticateCredentials({
+  accounts: mongoAdminAuthAccountRepository,
+  passwords: bcryptPasswordVerifier,
+  tokens: jwtAccessTokenIssuer,
+});
+
 export const registerAdminAccount = createRegisterAdmin({
-  accounts: mongoAuthAccountRepository,
+  accounts: mongoAdminAuthAccountRepository,
   passwords: bcryptPasswordHasher,
   tokens: jwtAccessTokenIssuer,
 });
 
+export const requestAdminPasswordResetOtp = createRequestOtp({
+  users: mongoAdminAuthAccountRepository,
+  otps: mongoOtpRepository,
+  delivery: legacyOtpDelivery,
+  generator: cryptoOtpGenerator,
+  hasher: hmacOtpCodeHasher,
+});
+
+export const resetAdminPassword = createResetPassword({
+  accounts: mongoAdminAuthAccountRepository,
+  otps: mongoOtpRepository,
+  passwordHasher: bcryptPasswordHasher,
+  purpose: "admin-forgot-password",
+});
+
 export const getAuthenticatedUserAccount = createGetAuthenticatedUser(
   mongoAuthAccountRepository,
+);
+
+export const getAuthenticatedAdminAccount = createGetAuthenticatedUser(
+  mongoAdminAuthAccountRepository,
 );
 
 export const authenticateGoogleIdentity = createAuthenticateGoogleIdentity({

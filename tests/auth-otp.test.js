@@ -120,3 +120,15 @@ test("invalid OTP attempts are recorded without marking verification", async () 
   assert.equal(attempts, 1);
   assert.equal(verified, false);
 });
+
+test("admin password-reset OTP also conceals a missing admin account", async () => {
+  let sideEffects = 0;
+  const request = createRequestOtp({
+    users: { async emailExists() { return false; } },
+    otps: { async replace() { sideEffects += 1; } },
+    delivery: { async send() { sideEffects += 1; } },
+    generator: { generate() { sideEffects += 1; return "123456"; } },
+  });
+  assert.deepEqual(await request("nobody@example.com", "admin-forgot-password"), { kind: "concealed_missing" });
+  assert.equal(sideEffects, 0);
+});

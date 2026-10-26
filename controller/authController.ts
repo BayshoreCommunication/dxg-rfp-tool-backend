@@ -4,15 +4,20 @@ import { AuthRequest } from "../middleware/auth";
 import {
   authenticateGoogleIdentity,
   authenticateWithCredentials,
+  authenticateAdminCredentials,
   getAuthenticatedUserAccount,
+  getAuthenticatedAdminAccount,
   registerCustomerAccount,
   registerAdminAccount,
   requestAuthenticationOtp,
   resetCustomerPassword,
+  requestAdminPasswordResetOtp,
+  resetAdminPassword,
   verifyAuthenticationOtp,
   beginAuthenticatedSession,
   authenticationSessions,
 } from "../src/modules/auth/composition";
+import type { OtpPurpose } from "../src/modules/auth/domain/ports/otpPorts";
 
 const applicationUserResponse = (user: {
   id: string;
@@ -450,7 +455,7 @@ export const signUpAdmin = async (req: Request, res: Response): Promise<void> =>
 export const signInAdmin = async (req: Request, res: Response): Promise<void> => {
   try {
     if (rejectInvalidBffCredential(req, res)) return;
-    const result = await authenticateWithCredentials(req.body ?? {}, "admin");
+    const result = await authenticateAdminCredentials(req.body ?? {}, "admin");
     if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Email and password are required" });
       return;
@@ -519,9 +524,10 @@ export const signInAdmin = async (req: Request, res: Response): Promise<void> =>
 ───────────────────────────────────────── */
 export const getCurrentUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const user = req.user?.userId
-      ? await getAuthenticatedUserAccount(req.user.userId)
-      : null;
+    const lookup = req.user?.accountType === "admin"
+      ? getAuthenticatedAdminAccount
+      : getAuthenticatedUserAccount;
+    const user = req.user?.userId ? await lookup(req.user.userId) : null;
     if (!user) {
       res.status(404).json({ success: false, message: "User not found" });
       return;
@@ -694,7 +700,10 @@ export const revokeSession = async (req: AuthRequest, res: Response): Promise<vo
    POST /api/auth/forgot-password/send-otp
    Request password reset OTP
 ───────────────────────────────────────── */
-export const sendForgotPasswordOtp = async (req: Request, res: Response): Promise<void> => {
+const createSendForgotPasswordOtp = (
+  requestOtp: (email: string, purpose: OtpPurpose) => Promise<unknown>,
+  purpose: OtpPurpose,
+) => async (req: Request, res: Response): Promise<void> => {
   try {
     const { email } = req.body;
     if (!email) {
@@ -704,7 +713,7 @@ export const sendForgotPasswordOtp = async (req: Request, res: Response): Promis
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    await requestAuthenticationOtp(normalizedEmail, "forgot-password");
+    await requestOtp(normalizedEmail, purpose);
 
     res.status(200).json({
       success: true,
@@ -725,7 +734,8 @@ export const sendForgotPasswordOtp = async (req: Request, res: Response): Promis
    POST /api/auth/forgot-password/verify-otp
    Verify the forgot-password OTP
 ───────────────────────────────────────── */
-export const verifyForgotPasswordOtp = async (req: Request, res: Response): Promise<void> => {
+const createVerifyForgotPasswordOtp = (purpose: OtpPurpose) =>
+  async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, otp } = req.body;
     if (!email || !otp) {
@@ -736,7 +746,7 @@ export const verifyForgotPasswordOtp = async (req: Request, res: Response): Prom
     const result = await verifyAuthenticationOtp(
       email.toLowerCase().trim(),
       otp.trim(),
-      "forgot-password",
+      purpose,
     );
     if (result.kind === "not_found") {
       res.status(400).json({ success: false, message: "OTP not found or already used. Please request a new one." });
@@ -768,9 +778,10 @@ export const verifyForgotPasswordOtp = async (req: Request, res: Response): Prom
    POST /api/auth/forgot-password/reset
    Reset password (only if OTP was verified)
 ───────────────────────────────────────── */
-export const resetPassword = async (req: Request, res: Response): Promise<void> => {
+const createResetPassword = (reset: typeof resetCustomerPassword) =>
+  async (req: Request, res: Response): Promise<void> => {
   try {
-    const result = await resetCustomerPassword(req.body ?? {});
+    const result = await reset(req.body ?? {});
     if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Email and new password are required" });
       return;
@@ -812,3 +823,13 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
     });
   }
 };
+
+export const sendForgotPasswordOtp = createSendForgotPasswordOtp(requestAuthenticationOtp, "forgot-password");
+export const verifyForgotPasswordOtp = createVerifyForgotPasswordOtp("forgot-password");
+export const resetPassword = createResetPassword(resetCustomerPassword);
+
+/* Admin password reset: same three steps, but the code is issued, verified
+   and consumed under its own purpose and only an `admins` account is reset. */
+export const sendAdminForgotPasswordOtp = createSendForgotPasswordOtp(requestAdminPasswordResetOtp, "admin-forgot-password");
+export const verifyAdminForgotPasswordOtp = createVerifyForgotPasswordOtp("admin-forgot-password");
+export const resetAdminForgotPassword = createResetPassword(resetAdminPassword);
