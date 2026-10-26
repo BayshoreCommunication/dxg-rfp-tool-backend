@@ -267,7 +267,15 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
         },
       ]),
       SupportTicket.aggregate<{ average: number }>([
-        { $match: { organizationId: organization, resolvedAt: { $ne: null } } },
+        {
+          $match: {
+            organizationId: organization,
+            resolvedAt: { $ne: null },
+            // A resolve time before creation is bad data (an edited or
+            // imported record) and would drag the average below zero.
+            $expr: { $gte: ["$resolvedAt", "$createdAt"] },
+          },
+        },
         { $group: { _id: null, average: { $avg: { $subtract: ["$resolvedAt", "$createdAt"] } } } },
       ]),
       SupportTicket.aggregate<{ _id: unknown; count: number }>([
