@@ -1,4 +1,5 @@
 import { createGetAdminOverview } from "./application/getAdminOverview";
+import { createGetAdminProposal, createListAdminProposals } from "./application/listAdminProposals";
 import {
   createDeleteAdminClient,
   createListAdminClients,
@@ -15,6 +16,7 @@ import {
   createUpdateAdminSelfProfile,
 } from "./application/manageAdminSelfProfile";
 import { mongoAdminClientRepository } from "./infrastructure/mongo/mongoAdminClientRepository";
+import { mongoAdminProposalRepository } from "./infrastructure/mongo/mongoAdminProposalRepository";
 import { mongoAdminUserRepository } from "./infrastructure/mongo/mongoAdminUserRepository";
 import { mongoAdminSelfProfileRepository } from "./infrastructure/mongo/mongoAdminSelfProfileRepository";
 import { spacesAdminAvatarStorage } from "./infrastructure/storage/spacesAdminAvatarStorage";
@@ -29,6 +31,8 @@ export const getAdminOverviewReport = createGetAdminOverview(
 export const listAdminClients = createListAdminClients(mongoAdminClientRepository);
 export const setAdminClientBlocked = createSetClientBlocked(mongoAdminClientRepository);
 export const deleteAdminClient = createDeleteAdminClient(mongoAdminClientRepository);
+export const listAdminProposals = createListAdminProposals(mongoAdminProposalRepository);
+export const getAdminProposal = createGetAdminProposal(mongoAdminProposalRepository);
 export const listAdministrativeUsers = createListAdminUsers(mongoAdminUserRepository);
 export const createAdministrativeUser = createCreateAdminUser(mongoAdminUserRepository);
 export const updateAdministrativeUser = createUpdateAdminUser(
