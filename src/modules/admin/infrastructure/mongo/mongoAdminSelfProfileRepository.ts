@@ -1,4 +1,4 @@
-import User from "../../../../../modal/userModel";
+import Admin from "../../../../../modal/adminModel";
 import type { AdminSelfProfileRepository } from "../../domain/ports/adminSelfProfilePorts";
 import { tenantFilter } from "../../../shared/tenancy/tenantContext";
 
@@ -7,12 +7,12 @@ const safeData = (value: unknown): Record<string, unknown> =>
 
 export const mongoAdminSelfProfileRepository: AdminSelfProfileRepository = {
   async findSafe(userId) {
-    const user = await User.findOne({ _id: userId, ...tenantFilter() }).select("-password").lean();
-    return user ? safeData(user) : null;
+    const admin = await Admin.findOne({ _id: userId, ...tenantFilter() }).select("-password").lean();
+    return admin ? safeData(admin) : null;
   },
   async findCredentials(userId) {
-    const user = await User.findOne({ _id: userId, ...tenantFilter() }).select("+password").lean();
-    return user?.password ? { passwordHash: user.password } : null;
+    const admin = await Admin.findOne({ _id: userId, ...tenantFilter() }).select("+password").lean();
+    return admin?.password ? { passwordHash: admin.password } : null;
   },
   async update(userId, patch) {
     const update: Record<string, unknown> = { ...patch };
@@ -20,12 +20,12 @@ export const mongoAdminSelfProfileRepository: AdminSelfProfileRepository = {
       update.password = patch.passwordHash;
       delete update.passwordHash;
     }
-    const user = await User.findOneAndUpdate(
+    const admin = await Admin.findOneAndUpdate(
       { _id: userId, ...tenantFilter() },
       { $set: update },
       { new: true, runValidators: true },
     ).select("-password").lean();
-    if (!user) throw new Error("Admin profile disappeared during update");
-    return safeData(user);
+    if (!admin) throw new Error("Admin profile disappeared during update");
+    return safeData(admin);
   },
 };

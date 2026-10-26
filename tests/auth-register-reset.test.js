@@ -140,3 +140,35 @@ test("short registration and reset passwords fail before authorization checks", 
   }), { kind: "invalid_password" });
   assert.equal(reads, 0);
 });
+
+test("admin password reset checks and consumes only the admin reset purpose", async () => {
+  const purposes = [];
+  const reset = createResetPassword({
+    purpose: "admin-forgot-password",
+    otps: {
+      async hasVerified(email, purpose) { purposes.push(["check", purpose]); return true; },
+      async consumeVerified(email, purpose) { purposes.push(["consume", purpose]); },
+    },
+    accounts: {
+      async findCredentials() { return { user: { id: "a1", organizationId: "o1" }, passwordHash: "old", isBlocked: false }; },
+      async replacePassword() { return true; },
+    },
+    passwordHasher: { async hash() { return "new-hash"; } },
+  });
+  assert.deepEqual(await reset({ email: "admin@example.com", newPassword: "secret-01" }), {
+    kind: "reset", userId: "a1", organizationId: "o1",
+  });
+  assert.deepEqual(purposes, [["check", "admin-forgot-password"], ["consume", "admin-forgot-password"]]);
+});
+
+test("a code verified for a planner reset does not authorize an admin reset", async () => {
+  let hashes = 0;
+  const reset = createResetPassword({
+    purpose: "admin-forgot-password",
+    otps: { async hasVerified(email, purpose) { return purpose === "forgot-password"; } },
+    accounts: { async findCredentials() { throw new Error("must not read accounts"); } },
+    passwordHasher: { async hash() { hashes += 1; return "hash"; } },
+  });
+  assert.deepEqual(await reset({ email: "same@example.com", newPassword: "secret-01" }), { kind: "unauthorized" });
+  assert.equal(hashes, 0);
+});

@@ -22,7 +22,7 @@ export const createRequestOtp = (dependencies: {
 }) => async (email: string, purpose: OtpPurpose): Promise<RequestOtpResult> => {
   const exists = await dependencies.users.emailExists(email);
   if (purpose === "signup" && exists) return { kind: "account_exists" };
-  if (purpose === "forgot-password" && !exists) return { kind: "concealed_missing" };
+  if (purpose !== "signup" && !exists) return { kind: "concealed_missing" };
 
   const code = dependencies.generator.generate();
   await dependencies.otps.replace(

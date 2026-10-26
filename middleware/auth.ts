@@ -1,10 +1,10 @@
 import { NextFunction, Request, Response } from "express";
 import { TokenPayload, verifyAccessToken } from "../config/jwt";
 import Organization from "../modal/organizationModel";
-import User from "../modal/userModel";
 import OrganizationMembership from "../modal/organizationMembershipModel";
 import RefreshSession from "../modal/refreshSessionModel";
 import { runWithTenant } from "../src/modules/shared/tenancy/tenantContext";
+import { findSessionPrincipal } from "../src/modules/auth/infrastructure/mongo/mongoSessionAccountLoader";
 import { hasOrganizationAction, legacyAuthorizationRoles, OrganizationAction } from "../src/modules/identity/domain/authorizationPolicy";
 
 // Extend Express Request to include user
@@ -37,10 +37,8 @@ export const createAuthenticate = (verifyToken: (token: string) => TokenPayload)
         return;
       }
       const now = new Date();
-      const [user, organization, membership, activeSession] = await Promise.all([
-        User.findOne({ _id: decoded.userId, organizationId: decoded.organizationId })
-          .select("organizationId isBlocked")
-          .lean(),
+      const [principal, organization, membership, activeSession] = await Promise.all([
+        findSessionPrincipal(decoded.userId, decoded.organizationId),
         Organization.findOne({ _id: decoded.organizationId, status: "active" }).select("_id").lean(),
         OrganizationMembership.findOne({
           organizationId: decoded.organizationId,
@@ -56,7 +54,7 @@ export const createAuthenticate = (verifyToken: (token: string) => TokenPayload)
           idleExpiresAt: { $gt: now },
         }),
       ]);
-      if (!user || user.isBlocked || !user.organizationId || !membership || !activeSession) {
+      if (!principal || !membership || !activeSession) {
         res.status(403).json({ success: false, message: "Active organization membership required" });
         return;
       }
@@ -68,13 +66,18 @@ export const createAuthenticate = (verifyToken: (token: string) => TokenPayload)
         res.status(401).json({ success: false, message: "Session authorization is stale" });
         return;
       }
+      // The account role comes from the stored account, never the token, so a
+      // token minted before an account moved collections or changed role
+      // cannot carry stale privileges.
       req.user = {
         ...decoded,
-        organizationId: String(user.organizationId),
+        role: principal.role,
+        accountType: principal.accountType,
+        organizationId: decoded.organizationId,
         roles: membership.roles,
         rolesVersion: membership.version,
       };
-      runWithTenant({ organizationId: String(user.organizationId), userId: decoded.userId }, next);
+      runWithTenant({ organizationId: decoded.organizationId, userId: decoded.userId }, next);
     } catch (error) {
       res.status(401).json({
         success: false,

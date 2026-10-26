@@ -4,6 +4,7 @@ import SupportMessage from "../../../../../modal/supportMessageModel";
 import SupportCannedReply from "../../../../../modal/supportCannedReplyModel";
 import SupportAttachment from "../../../../../modal/supportAttachmentModel";
 import User from "../../../../../modal/userModel";
+import Admin from "../../../../../modal/adminModel";
 import type {
   SupportCannedReplyRecord,
   SupportDeskRepository,
@@ -281,7 +282,7 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
   },
 
   async listAgents(organizationId) {
-    const docs = await User.find({
+    const docs = await Admin.find({
       organizationId: oid(organizationId),
       role: { $in: ADMIN_ROLES },
       isBlocked: { $ne: true },
@@ -294,13 +295,16 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
 
   async findUserSummaries(organizationId, userIds) {
     if (!userIds.length) return new Map();
-    const docs = await User.find({
-      organizationId: oid(organizationId),
-      _id: { $in: userIds.map(oid) },
-    })
-      .select("name email company role")
-      .lean();
-    return new Map(docs.map((doc) => [String(doc._id), userSummary(doc as Record<string, unknown>)]));
+    // Requesters are planners (`users`); agents and authors of agent replies
+    // are administrators (`admins`). Ids are unique across both collections.
+    const filter = { organizationId: oid(organizationId), _id: { $in: userIds.map(oid) } };
+    const [planners, admins] = await Promise.all([
+      User.find(filter).select("name email company role").lean(),
+      Admin.find(filter).select("name email role").lean(),
+    ]);
+    return new Map(
+      [...planners, ...admins].map((doc) => [String(doc._id), userSummary(doc as Record<string, unknown>)]),
+    );
   },
 
   async listCannedReplies(organizationId) {
