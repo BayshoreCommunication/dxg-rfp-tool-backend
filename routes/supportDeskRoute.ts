@@ -61,6 +61,8 @@ router.get("/admin/support/tickets/:ticketId", ...agentGuard, controller.getTick
 router.post("/admin/support/tickets/:ticketId/messages", ...agentGuard, controller.reply);
 router.post("/admin/support/tickets/:ticketId/notes", ...agentGuard, controller.addInternalNote);
 router.patch("/admin/support/tickets/:ticketId", ...agentGuard, controller.updateTicket);
+router.post("/admin/support/tickets/:ticketId/presence", ...agentGuard, controller.presence);
+router.delete("/admin/support/tickets/:ticketId/presence", ...agentGuard, controller.leavePresence);
 router.post("/admin/support/attachments", ...agentGuard, receiveSupportAttachments, controller.uploadAgentAttachments);
 router.get("/admin/support/tickets/:ticketId/attachments/:attachmentId", ...agentGuard, controller.agentAttachmentUrl);
 

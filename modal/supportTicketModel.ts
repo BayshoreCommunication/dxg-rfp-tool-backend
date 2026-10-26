@@ -37,6 +37,13 @@ export interface ISupportTicket extends Document {
   firstAgentResponseAt: Date | null;
   resolvedAt: Date | null;
   closedAt: Date | null;
+  /** When the latest customer message needs an agent answer by (null when nothing is owed). */
+  responseDueAt: Date | null;
+  /** When every agent was alerted because the owner had not answered in time. */
+  escalatedAt: Date | null;
+  /** When the ticket started waiting on the customer (drives auto-close). */
+  waitingSince: Date | null;
+  autoCloseReminderSentAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -60,6 +67,10 @@ const supportTicketSchema = new Schema<ISupportTicket>(
     firstAgentResponseAt: { type: Date, default: null },
     resolvedAt: { type: Date, default: null },
     closedAt: { type: Date, default: null },
+    responseDueAt: { type: Date, default: null },
+    escalatedAt: { type: Date, default: null },
+    waitingSince: { type: Date, default: null },
+    autoCloseReminderSentAt: { type: Date, default: null },
   },
   { timestamps: true },
 );
@@ -68,6 +79,10 @@ supportTicketSchema.index({ organizationId: 1, ticketNumber: 1 }, { unique: true
 supportTicketSchema.index({ organizationId: 1, status: 1, lastMessageAt: -1 });
 supportTicketSchema.index({ organizationId: 1, requesterUserId: 1, lastMessageAt: -1 });
 supportTicketSchema.index({ organizationId: 1, assigneeUserId: 1, status: 1 });
+// The sweeper's escalation and auto-close scans.
+supportTicketSchema.index({ status: 1, responseDueAt: 1 });
+supportTicketSchema.index({ status: 1, waitingSince: 1 });
+supportTicketSchema.index({ status: 1, resolvedAt: 1 });
 
 const SupportTicket = mongoose.model<ISupportTicket>("SupportTicket", supportTicketSchema);
 

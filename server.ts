@@ -47,6 +47,8 @@ import supportDeskRoutes from "./routes/supportDeskRoute";
 import historicalInsightsRoutes from "./routes/historicalInsightsRoute";
 import governedAssetRoutes from "./routes/governedAssetRoute";
 import { startCronJobs } from "./utils/cronJobs";
+import { supportDeskSweeper } from "./src/modules/supportDesk/composition";
+import { startSupportDeskSweeper } from "./src/modules/supportDesk/infrastructure/scheduler/supportDeskSchedule";
 import { initializeNotificationWebSocketServer } from "./utils/notificationService";
 import { getUploadsDir } from "./utils/paths";
 import { checkQueue } from "./src/modules/durableJobs/queue";
@@ -265,6 +267,9 @@ if (require.main === module) {
       } else {
         console.log("⏭  Cron jobs disabled on this instance (CRON_ENABLED=false)");
       }
+      // Escalations, auto-close reminders and auto-close. Lock-guarded, so it
+      // runs on every instance regardless of CRON_ENABLED.
+      startSupportDeskSweeper(supportDeskSweeper);
 
       const server = http.createServer(app);
       initializeNotificationWebSocketServer(server);

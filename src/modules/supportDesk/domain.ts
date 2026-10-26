@@ -72,6 +72,10 @@ export type SupportTicketRecord = {
   firstAgentResponseAt: string | null;
   resolvedAt: string | null;
   closedAt: string | null;
+  responseDueAt: string | null;
+  escalatedAt: string | null;
+  waitingSince: string | null;
+  autoCloseReminderSentAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -110,6 +114,10 @@ export type SupportTicketPatch = Partial<
     | "firstAgentResponseAt"
     | "resolvedAt"
     | "closedAt"
+    | "responseDueAt"
+    | "escalatedAt"
+    | "waitingSince"
+    | "autoCloseReminderSentAt"
   >
 > & { messageCountDelta?: number };
 
@@ -119,6 +127,8 @@ export type SupportInboxFilters = {
   priority?: SupportTicketPriority;
   category?: SupportTicketCategory;
   search?: string;
+  /** "urgency": tickets owed an answer first, soonest due first. "recent": newest activity first. */
+  sort?: "urgency" | "recent";
   page: number;
   perPage: number;
 };
@@ -130,6 +140,8 @@ export type SupportDeskMetrics = {
   closed: number;
   unassigned: number;
   unreadForAgents: number;
+  /** Open tickets whose response target has passed. */
+  overdue: number;
   averageFirstResponseMs: number | null;
   averageResolutionMs: number | null;
   perAgent: Array<{ agentUserId: string; openTickets: number }>;
@@ -289,6 +301,18 @@ export const canBeReadByRequester = (
   if (message.kind === "internal_note") return false;
   if (message.kind !== "system" || !message.body) return true;
   return !LEGACY_INTERNAL_AUDIT_MARKERS.some((marker) => message.body?.includes(marker));
+};
+
+/**
+ * How a requester-visible message reads to the planner. Planners hear from
+ * one "DXG support", never an individual agent, so public status events
+ * written as "<agent> changed the status to …" are shown with the team name.
+ * Applied on read so older tickets are covered too; agents still see who.
+ */
+export const presentToRequester = <T extends Pick<SupportMessageRecord, "kind" | "body">>(message: T): T => {
+  if (message.kind !== "system") return message;
+  const statusChange = /^.+? changed the status to (.+)$/.exec(message.body);
+  return statusChange ? { ...message, body: `DXG support changed the status to ${statusChange[1]}` } : message;
 };
 
 export const ticketIsTerminal = (status: SupportTicketStatus): boolean =>
