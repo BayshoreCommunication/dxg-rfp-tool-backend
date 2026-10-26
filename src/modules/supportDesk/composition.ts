@@ -5,6 +5,9 @@ import { supportDeskNotifier } from "./infrastructure/notifications/supportDeskN
 import { createSupportAttachments } from "./application/supportAttachments";
 import { s3SupportAttachmentStorage } from "./infrastructure/storage/supportAttachmentStorage";
 import { clamAvSupportUploadScanner } from "./infrastructure/security/supportUploadScanner";
+import { createSupportPresence } from "./application/supportPresence";
+import { createSupportDeskSweeper } from "./application/supportDeskSweeper";
+import { supportPresenceStore } from "./infrastructure/presence/supportPresenceStore";
 
 export const customerSupportDesk = createCustomerSupportDesk({
   repository: mongoSupportDeskRepository,
@@ -20,4 +23,14 @@ export const supportAttachments = createSupportAttachments({
   repository: mongoSupportDeskRepository,
   storage: s3SupportAttachmentStorage,
   scanner: clamAvSupportUploadScanner,
+});
+
+export const supportPresence = createSupportPresence({
+  store: supportPresenceStore,
+  repository: mongoSupportDeskRepository,
+});
+
+export const supportDeskSweeper = createSupportDeskSweeper({
+  repository: mongoSupportDeskRepository,
+  notifier: supportDeskNotifier,
 });

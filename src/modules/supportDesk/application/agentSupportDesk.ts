@@ -25,6 +25,7 @@ import type {
   SupportDeskRepository,
 } from "../domain/ports/supportDeskPorts";
 import { claimAttachmentsForMessage } from "./supportAttachments";
+import { serviceLevelPatch } from "../serviceLevels";
 
 export type AgentSupportDeskDependencies = {
   repository: SupportDeskRepository;
@@ -107,6 +108,7 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
         priority?: unknown;
         category?: unknown;
         search?: unknown;
+        sort?: unknown;
         page?: unknown;
         perPage?: unknown;
       },
@@ -137,6 +139,7 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
         priority: query.priority ? parsePriority(query.priority) : undefined,
         category: query.category ? parseCategory(query.category) : undefined,
         search: parseSearch(query.search),
+        sort: query.sort === "recent" ? "recent" : "urgency",
         page,
         perPage,
       });
@@ -230,6 +233,7 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
           status: nextStatus,
           ...(ticket.assigneeUserId ? {} : { assigneeUserId: actor.userId }),
           ...timestampsForStatus(nextStatus, now),
+          ...serviceLevelPatch({ before: ticket, status: nextStatus, priority: ticket.priority, event: "agent_message", now }),
         })) ?? ticket;
       const people = await summaries(repository, actor.organizationId, [
         ticket.requesterUserId,
@@ -349,6 +353,18 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
       }
       if (events.length === 0) return ticket;
       if (statusChanged) patch.lastMessageAt = now.toISOString();
+      if (patch.status !== undefined || patch.priority !== undefined) {
+        Object.assign(
+          patch,
+          serviceLevelPatch({
+            before: ticket,
+            status: patch.status ?? ticket.status,
+            priority: patch.priority ?? ticket.priority,
+            event: "change",
+            now,
+          }),
+        );
+      }
       const updated = (await repository.updateTicket(actor.organizationId, ticket.id, patch)) ?? ticket;
       for (const event of events) {
         await auditMessage(actor, ticket.id, event.body, now, event.customerVisible);
@@ -356,6 +372,9 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
       const publicEventCount = events.filter((event) => event.customerVisible).length;
       if (publicEventCount > 0) {
         await repository.updateTicket(actor.organizationId, ticket.id, { messageCountDelta: publicEventCount });
+      }
+      if (patch.assigneeUserId && patch.assigneeUserId !== actor.userId) {
+        await notifier.ticketAssigned({ ticket: updated, assigneeUserId: patch.assigneeUserId, assignedBy: agentName });
       }
       if (statusChanged) {
         const requester = (await summaries(repository, actor.organizationId, [ticket.requesterUserId])).get(
@@ -368,7 +387,7 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
 
     async metrics(actor: SupportActor) {
       assertAgent(actor);
-      const metrics = await repository.metrics(actor.organizationId);
+      const metrics = await repository.metrics(actor.organizationId, clock());
       const people = await summaries(
         repository,
         actor.organizationId,

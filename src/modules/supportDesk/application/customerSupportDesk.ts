@@ -1,6 +1,7 @@
 import {
   SupportDeskError,
   canBeReadByRequester,
+  presentToRequester,
   parseAttachmentIds,
   parseBody,
   parseCategory,
@@ -20,11 +21,16 @@ import type {
   SupportDeskRepository,
 } from "../domain/ports/supportDeskPorts";
 import { claimAttachmentsForMessage } from "./supportAttachments";
+import { pickAssignee, serviceLevelPatch } from "../serviceLevels";
 
 export type CustomerSupportDeskDependencies = {
   repository: SupportDeskRepository;
   notifier: SupportDeskNotifier;
   clock?: SupportDeskClock;
+  /** Give new tickets to the least-loaded agent (default on). */
+  autoAssign?: boolean;
+  /** Tie-breaker for automatic assignment; injectable for tests. */
+  random?: () => number;
 };
 
 const requireOwnTicket = async (
@@ -132,13 +138,37 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
         // One millisecond after the customer's message so it always sorts below it.
         now: new Date(now.getTime() + 1),
       });
+      // Give the ticket to the agent with the fewest active tickets, so new
+      // work spreads evenly and its alerts reach one owner, not everyone.
+      const assignee =
+        dependencies.autoAssign === false
+          ? null
+          : pickAssignee(
+              await repository.listAgents(actor.organizationId),
+              await repository.agentLoads(actor.organizationId),
+              dependencies.random,
+            );
       const ticket =
         (await repository.updateTicket(actor.organizationId, created.id, {
           messageCountDelta: 2,
           unreadForAgents: 1,
           lastMessageAt: now.toISOString(),
           lastCustomerMessageAt: now.toISOString(),
+          ...(assignee ? { assigneeUserId: assignee.id } : {}),
+          ...serviceLevelPatch({ before: null, status: "open", priority: created.priority, event: "customer_message", now }),
         })) ?? created;
+      if (assignee) {
+        await repository.appendMessage({
+          organizationId: actor.organizationId,
+          ticketId: created.id,
+          authorUserId: null,
+          authorRole: "system",
+          kind: "internal_note",
+          body: `Assigned automatically to ${assignee.name} (fewest open tickets).`,
+          attachments: [],
+          now: new Date(now.getTime() + 2),
+        });
+      }
       await notifier.ticketCreated({ ticket, requester, message });
       return { ticket, message };
     },
@@ -172,7 +202,7 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
       const ticket = await requireOwnTicket(repository, actor, ticketId);
       const messages = (
         await repository.listMessages(actor.organizationId, ticket.id, { includeInternal: false })
-      ).filter(canBeReadByRequester);
+      ).filter(canBeReadByRequester).map(presentToRequester);
       const current =
         ticket.unreadForRequester > 0
           ? (await repository.updateTicket(actor.organizationId, ticket.id, { unreadForRequester: 0 })) ?? ticket
@@ -185,7 +215,8 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
       return {
         ticket: current,
         messages,
-        assignee: assignee ? { id: assignee.id, name: assignee.name } : null,
+        // Planners only need to know someone is on it, not who.
+        assignee: assignee ? { id: assignee.id, name: "DXG support" } : null,
       };
     },
 
@@ -195,6 +226,16 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
       input: { body?: unknown; attachments?: unknown },
     ): Promise<{ ticket: SupportTicketRecord; message: SupportMessageRecord }> {
       const ticket = await requireOwnTicket(repository, actor, ticketId);
+      // Resolved is a grace period: a reply reopens it. Closed (3 days after
+      // resolving, or by an agent) is final. DXG agents can still reopen any
+      // ticket from the admin.
+      if (ticket.status === "closed") {
+        throw new SupportDeskError(
+          "SUPPORT_TICKET_CLOSED",
+          "This request is closed and can no longer be replied to.",
+          409,
+        );
+      }
       const body = parseBody(input.body);
       const attachments = await claimAttachmentsForMessage(
         repository,
@@ -213,16 +254,17 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
         now,
       });
       await bindAttachments(repository, actor, attachments, ticket.id, message.id);
-      const reopened = ticketIsTerminal(ticket.status) || ticket.status === "waiting_on_customer";
+      const reopened = ticket.status === "waiting_on_customer" || ticket.status === "resolved";
       const updated =
         (await repository.updateTicket(actor.organizationId, ticket.id, {
           messageCountDelta: 1,
           unreadForAgents: ticket.unreadForAgents + 1,
           lastMessageAt: now.toISOString(),
           lastCustomerMessageAt: now.toISOString(),
-          ...(reopened ? { status: "open", resolvedAt: null, closedAt: null } : {}),
+          ...(reopened ? { status: "open", resolvedAt: null } : {}),
+          ...serviceLevelPatch({ before: ticket, status: "open", priority: ticket.priority, event: "customer_message", now }),
         })) ?? ticket;
-      if (ticketIsTerminal(ticket.status)) {
+      if (ticket.status === "resolved") {
         await repository.appendMessage({
           organizationId: actor.organizationId,
           ticketId: ticket.id,
@@ -231,8 +273,9 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
           kind: "system",
           body: "Ticket reopened by the customer.",
           attachments: [],
-          now,
+          now: new Date(now.getTime() + 1),
         });
+        await repository.updateTicket(actor.organizationId, ticket.id, { messageCountDelta: 1 });
       }
       await notifier.customerReplied({
         ticket: updated,
@@ -251,6 +294,7 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
           status: "resolved",
           resolvedAt: now.toISOString(),
           lastMessageAt: now.toISOString(),
+          ...serviceLevelPatch({ before: ticket, status: "resolved", priority: ticket.priority, event: "change", now }),
         })) ?? ticket;
       await repository.appendMessage({
         organizationId: actor.organizationId,
