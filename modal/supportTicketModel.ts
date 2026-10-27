@@ -11,6 +11,7 @@ export const SUPPORT_TICKET_CATEGORIES = [
   "how_to",
   "bug",
   "billing",
+  "feature_request",
   "vendor_email",
   "other",
 ] as const;

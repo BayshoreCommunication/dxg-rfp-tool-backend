@@ -154,7 +154,7 @@ export const isAdministrativeRole = (role?: string): boolean => {
 
 export const assertAgent = (actor: SupportActor): void => {
   if (!isAdministrativeRole(actor.role)) {
-    throw new SupportDeskError("SUPPORT_FORBIDDEN", "Only DXG support agents can do that.", 403);
+    throw new SupportDeskError("SUPPORT_FORBIDDEN", "Only RFPilot support agents can do that.", 403);
   }
 };
 
@@ -305,14 +305,14 @@ export const canBeReadByRequester = (
 
 /**
  * How a requester-visible message reads to the planner. Planners hear from
- * one "DXG support", never an individual agent, so public status events
+ * one "RFPilot support", never an individual agent, so public status events
  * written as "<agent> changed the status to …" are shown with the team name.
  * Applied on read so older tickets are covered too; agents still see who.
  */
 export const presentToRequester = <T extends Pick<SupportMessageRecord, "kind" | "body">>(message: T): T => {
   if (message.kind !== "system") return message;
   const statusChange = /^.+? changed the status to (.+)$/.exec(message.body);
-  return statusChange ? { ...message, body: `DXG support changed the status to ${statusChange[1]}` } : message;
+  return statusChange ? { ...message, body: `RFPilot support changed the status to ${statusChange[1]}` } : message;
 };
 
 export const ticketIsTerminal = (status: SupportTicketStatus): boolean =>

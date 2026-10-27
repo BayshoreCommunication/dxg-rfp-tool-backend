@@ -93,7 +93,7 @@ export const createSupportDeskSweeper = (dependencies: {
         await repository.listNeedingCloseReminder(new Date(now.getTime() - AUTO_RESOLVE_REMINDER_AFTER_MS), batchSize),
         async (ticket) => {
           const requester = await person(ticket, ticket.requesterUserId);
-          // Customer-visible and signed as DXG support, like the first
+          // Customer-visible and signed as RFPilot support, like the first
           // acknowledgement, so it reads as a person checking in.
           const message = await repository.appendMessage({
             organizationId: ticket.organizationId,

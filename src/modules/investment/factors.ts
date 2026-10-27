@@ -1,4 +1,4 @@
-// Multiplier stack for the DXG AV pricing engine. Every number comes from the
+// Multiplier stack for the RFPilot AV pricing engine. Every number comes from the
 // approved pricing_regional_factors / pricing_modifiers / pricing_confidence_rules
 // rows; only the *selection* logic (which market, which union tier, what a
 // factor is allowed to touch) lives in code.

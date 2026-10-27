@@ -81,7 +81,7 @@ const buildProposalEmailHtml = (params: {
   vendorResponseTrackingClickUrl: string;
 }): string => `
   <div style="font-family:Inter,Arial,sans-serif;max-width:620px;margin:0 auto;padding:24px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
-    <p style="margin:0 0 8px;color:#0f172a;font-size:14px;">You have received a proposal from DXG.</p>
+    <p style="margin:0 0 8px;color:#0f172a;font-size:14px;">You have received a proposal from RFPilot.</p>
     <h2 style="margin:0 0 8px;color:#0f172a;font-size:22px;">${escapeHtml(params.title)}</h2>
     <p style="margin:0 0 14px;color:#64748b;font-size:12px;">Reference: ${escapeHtml(params.proposalReference)}</p>
     <div style="margin:0 0 20px;color:#334155;font-size:14px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(params.message)}</div>

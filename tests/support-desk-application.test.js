@@ -8,7 +8,7 @@ const {
 const {
   createAgentSupportDesk,
 } = require("../src/modules/supportDesk/application/agentSupportDesk");
-const { SupportDeskError, canBeReadByRequester, presentToRequester } = require("../src/modules/supportDesk/domain");
+const { SupportDeskError, canBeReadByRequester, parseCategory, presentToRequester } = require("../src/modules/supportDesk/domain");
 
 const ORG = "aaaaaaaaaaaaaaaaaaaaaaaa";
 const PLANNER = "bbbbbbbbbbbbbbbbbbbbbbbb";
@@ -36,8 +36,8 @@ const fakeRepository = () => {
   const users = new Map([
     [PLANNER, { id: PLANNER, name: "Pat Planner", email: "pat@example.com", company: "Acme", role: "customer" }],
     [OTHER_PLANNER, { id: OTHER_PLANNER, name: "Other", email: "other@example.com", company: null, role: "customer" }],
-    [AGENT, { id: AGENT, name: "Dana DXG", email: "dana@example.com", company: null, role: "admin" }],
-    [AGENT_TWO, { id: AGENT_TWO, name: "Eli DXG", email: "eli@example.com", company: null, role: "admin" }],
+    [AGENT, { id: AGENT, name: "Dana RFPilot", email: "dana@example.com", company: null, role: "admin" }],
+    [AGENT_TWO, { id: AGENT_TWO, name: "Eli RFPilot", email: "eli@example.com", company: null, role: "admin" }],
   ]);
   const uploads = new Map();
   return {
@@ -238,15 +238,15 @@ const rejects = async (work, code, status) => {
 
 test("requester visibility hides legacy triage audit messages but keeps public status activity", () => {
   assert.equal(
-    canBeReadByRequester({ kind: "system", body: "Dana DXG assigned this ticket to Eli DXG." }),
+    canBeReadByRequester({ kind: "system", body: "Dana RFPilot assigned this ticket to Eli RFPilot." }),
     false,
   );
   assert.equal(
-    canBeReadByRequester({ kind: "system", body: "Dana DXG set priority to urgent." }),
+    canBeReadByRequester({ kind: "system", body: "Dana RFPilot set priority to urgent." }),
     false,
   );
   assert.equal(
-    canBeReadByRequester({ kind: "system", body: "Dana DXG changed the status to Resolved." }),
+    canBeReadByRequester({ kind: "system", body: "Dana RFPilot changed the status to Resolved." }),
     true,
   );
   assert.equal(canBeReadByRequester({ kind: "internal_note", body: "Private hand-off" }), false);
@@ -368,13 +368,13 @@ test("agent replies set waiting-on-customer, auto-assign, record first response,
   assert.equal(reply.message.authorRole, "agent");
   const kinds = notifier.events.map((e) => e[0]);
   assert.deepEqual(kinds, ["ticketCreated", "agentReplied"]);
-  assert.equal(notifier.events[1][1].agent.name, "Dana DXG");
+  assert.equal(notifier.events[1][1].agent.name, "Dana RFPilot");
 
   // The customer reading the thread clears their unread marker and sees the assignee.
   const detail = await customer.getOwnTicket(planner, ticket.id);
   assert.equal(detail.ticket.unreadForRequester, 0);
   // Planners learn someone is on it, never which agent.
-  assert.deepEqual(detail.assignee, { id: AGENT, name: "DXG support" });
+  assert.deepEqual(detail.assignee, { id: AGENT, name: "RFPilot support" });
   assert.equal(await customer.ownUnreadCount(planner), 0);
 
   // Replying with a terminal status also notifies the status change.
@@ -450,7 +450,7 @@ test("the inbox resolves filters, defaults to active tickets, and attaches peopl
 
   const all = await desk.listInbox(agent, { status: "all" });
   assert.equal(all.tickets.length, 2);
-  assert.equal(all.tickets.find((t) => t.id === b.ticket.id).assignee.name, "Dana DXG");
+  assert.equal(all.tickets.find((t) => t.id === b.ticket.id).assignee.name, "Dana RFPilot");
 
   assert.equal((await desk.listInbox(agent, { status: "closed" })).tickets.length, 1);
   assert.equal((await desk.listInbox(agent, { status: "all", assignee: "me" })).tickets.length, 1);
@@ -489,10 +489,10 @@ test("agents can assign, prioritise, recategorise, and change status with an aud
   assert.equal(updated.messageCount, 3);
   const trail = repository.messages.filter((m) => m.kind !== "message").map((m) => m.body);
   assert.deepEqual(trail, [
-    "Dana DXG assigned this ticket to Eli DXG.",
-    "Dana DXG set priority to urgent.",
-    "Dana DXG changed the category to bug.",
-    "Dana DXG changed the status to Waiting on customer.",
+    "Dana RFPilot assigned this ticket to Eli RFPilot.",
+    "Dana RFPilot set priority to urgent.",
+    "Dana RFPilot changed the category to bug.",
+    "Dana RFPilot changed the status to Waiting on customer.",
   ]);
   assert.equal(notifier.events.at(-1)[0], "statusChanged");
 
@@ -500,7 +500,7 @@ test("agents can assign, prioritise, recategorise, and change status with an aud
   assert.deepEqual(customerDetail.messages.map((message) => message.body), [
     "Takes minutes.",
     autoAcknowledgementBody(ticket.ticketNumber, "Pat Planner"),
-    "DXG support changed the status to Waiting on customer.",
+    "RFPilot support changed the status to Waiting on customer.",
   ]);
   assert.equal(customerDetail.ticket.messageCount, 3);
 
@@ -524,8 +524,8 @@ test("internal notes stay private and metrics attach agent summaries", async () 
   assert.equal(note.kind, "internal_note");
   assert.deepEqual(notifier.events.map((e) => e[0]), ["ticketCreated"]);
   const metrics = await desk.metrics(agent);
-  assert.equal(metrics.perAgent[0].agent.name, "Dana DXG");
-  assert.deepEqual((await desk.listAgents(agent)).map((a) => a.name), ["Dana DXG", "Eli DXG"]);
+  assert.equal(metrics.perAgent[0].agent.name, "Dana RFPilot");
+  assert.deepEqual((await desk.listAgents(agent)).map((a) => a.name), ["Dana RFPilot", "Eli RFPilot"]);
 });
 
 test("canned replies are organization-owned and validated", async () => {
@@ -552,12 +552,12 @@ test("every new ticket gets an automatic acknowledgement that greets the planner
   assert.equal(ack.kind, "message");
   assert.equal(ack.authorUserId, null);
   assert.ok(new Date(ack.createdAt) > new Date(first.createdAt), "acknowledgement sorts after the request");
-  assert.match(ack.body, /^Hi Pat, thanks for contacting DXG support\./);
+  assert.match(ack.body, /^Hi Pat, thanks for contacting RFPilot support\./);
   assert.match(ack.body, new RegExp(`ticket #${ticket.ticketNumber}\\)`));
 });
 
 test("the acknowledgement falls back to a plain greeting without a name", () => {
-  assert.match(autoAcknowledgementBody(7, null), /^Hi, thanks for contacting DXG support\./);
+  assert.match(autoAcknowledgementBody(7, null), /^Hi, thanks for contacting RFPilot support\./);
   assert.match(autoAcknowledgementBody(7, "  "), /^Hi, thanks/);
   assert.match(autoAcknowledgementBody(7, "Ana Maria Lopez"), /^Hi Ana, /);
 });
@@ -570,7 +570,7 @@ test("new tickets go to the least-loaded agent, start the response clock, and on
   const second = await customer.createTicket(otherPlanner, { subject: "Two", body: "Help" });
   assert.equal(second.ticket.assigneeUserId, AGENT_TWO, "the agent with fewer open tickets gets the next one");
   const note = repository.messages.find((m) => m.ticketId === first.ticket.id && m.kind === "internal_note");
-  assert.equal(note.body, "Assigned automatically to Dana DXG (fewest open tickets).");
+  assert.equal(note.body, "Assigned automatically to Dana RFPilot (fewest open tickets).");
   const detail = await customer.getOwnTicket(planner, first.ticket.id);
   assert.ok(!detail.messages.some((m) => /Assigned automatically/.test(m.body)), "planners never see the assignment note");
   assert.deepEqual(notifier.events.map((e) => e[0]), ["ticketCreated", "ticketCreated"]);
@@ -596,7 +596,7 @@ test("reassigning a ticket alerts the new owner, but not when agents take it the
   const assigned = notifier.events.filter((e) => e[0] === "ticketAssigned");
   assert.equal(assigned.length, 1);
   assert.equal(assigned[0][1].assigneeUserId, AGENT_TWO);
-  assert.equal(assigned[0][1].assignedBy, "Dana DXG");
+  assert.equal(assigned[0][1].assignedBy, "Dana RFPilot");
   await desk.updateTicket(agent, ticket.id, { assigneeUserId: AGENT });
   assert.equal(notifier.events.filter((e) => e[0] === "ticketAssigned").length, 1);
 });
@@ -608,13 +608,18 @@ test("raising priority on an unanswered ticket pulls its due time in", async () 
   assert.equal(updated.responseDueAt, new Date(Date.parse(ticket.lastCustomerMessageAt) + 3_600_000).toISOString());
 });
 
-test("planners see public status events from DXG support, including on older tickets", () => {
+test("planners see public status events from RFPilot support, including on older tickets", () => {
   assert.equal(
-    presentToRequester({ kind: "system", body: "Dana DXG changed the status to Resolved." }).body,
-    "DXG support changed the status to Resolved.",
+    presentToRequester({ kind: "system", body: "Dana RFPilot changed the status to Resolved." }).body,
+    "RFPilot support changed the status to Resolved.",
   );
   const untouched = { kind: "system", body: "Ticket reopened by the customer." };
   assert.equal(presentToRequester(untouched), untouched);
   const reply = { kind: "message", body: "Dana here, changed the status to done." };
   assert.equal(presentToRequester(reply), reply, "only status events are rewritten");
+});
+
+test("feature requests are a support category of their own", () => {
+  assert.equal(parseCategory("feature_request"), "feature_request");
+  assert.throws(() => parseCategory("feature"), (error) => error instanceof SupportDeskError && error.code === "SUPPORT_INVALID_CATEGORY");
 });
