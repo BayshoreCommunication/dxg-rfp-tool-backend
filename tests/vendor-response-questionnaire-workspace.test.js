@@ -538,3 +538,36 @@ test("a publish survives a failure in the supersede bookkeeping", async () => {
   assert.equal(result.questionnaire.questionnaireVersion, 1);
   assert.equal(result.questionnaire.references.minimumCount, 3);
 });
+
+test("vendors can staff every standard operator role plus the roles the planner asked for", () => {
+  const { OPERATOR_ROLES } = require("../src/modules/vendorResponses/domain/operatorRoles");
+  const project = (legacy) =>
+    projectProposalToVendorResponseQuestionnaire(
+      require("../contracts/proposal/v1/legacyAdapter").mapLegacyProposalToV1(
+        legacy,
+        { organizationId, ownerUserId, now: fixedNow.toISOString() },
+      ).proposal,
+    );
+  const questionnaire = project(legacyProposal());
+  const labels = questionnaire.crew.roles.map((role) => role.label);
+  const ids = questionnaire.crew.roles.map((role) => role.id);
+
+  assert.equal(OPERATOR_ROLES.length, 47);
+  for (const role of OPERATOR_ROLES) assert.ok(labels.includes(role), `${role} is offered`);
+  assert.ok(labels.includes("Audio Engineer"), "the planner's own role is kept");
+  assert.equal(new Set(ids).size, ids.length, "no duplicate role ids");
+  // Ids that drafts may already reference keep working.
+  assert.ok(ids.includes("role-technical-director"));
+  assert.ok(ids.includes("role-av-technician"));
+  assert.deepEqual(questionnaire.crew.requiredRoleIds, ["role-technical-director"]);
+  assert.equal(labels.filter((label) => /^technical director$/i.test(label)).length, 1);
+  assert.equal(validateVendorResponseQuestionnaireV1(publishQuestionnaireProjection(questionnaire, 1, fixedNow.toISOString())), true);
+
+  // The contract allows 100 roles: requested roles always fit.
+  const many = Array.from({ length: 80 }, (_, index) => `Specialist ${index + 1}`);
+  const crowded = project(legacyProposal({
+    roomByRoom: [{ _id: "room-a", roomFunction: "Main", showCrewNeeded: many }],
+  }));
+  assert.equal(crowded.crew.roles.length, 100);
+  for (const role of many) assert.ok(crowded.crew.roles.some((entry) => entry.label === role));
+});

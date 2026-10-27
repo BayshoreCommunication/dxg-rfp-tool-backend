@@ -4,9 +4,10 @@ import type {
   Section,
   VendorResponseQuestionnaireV1,
 } from "../../../../contracts/generated/vendor-response-questionnaire-v1";
+import { LEGACY_ROLE_IDS, OPERATOR_ROLES } from "./operatorRoles";
 
 export const VENDOR_RESPONSE_QUESTIONNAIRE_PROJECTION_VERSION =
-  "vendor-response-questionnaire-projection.v2";
+  "vendor-response-questionnaire-projection.v3";
 
 export type VendorResponseQuestionnaireProjection = Omit<
   VendorResponseQuestionnaireV1,
@@ -127,21 +128,35 @@ const sections = (): Section[] => [
   section("review", "Review and submit", 11, true),
 ];
 
+const MAX_CREW_ROLES = 100;
+
+const roleId = (label: string) => LEGACY_ROLE_IDS[label] ?? `role-${identifierPart(label).slice(0, 100)}`;
+
+/**
+ * Every standard operator role plus whatever the planner asked for. A planner
+ * role that matches a standard one (any casing) takes the standard label.
+ * The contract allows 100 roles: requested roles always fit, standard ones
+ * the planner did not ask for give way first.
+ */
 const crewRoles = (proposal: ProposalV1) => {
-  const labels = new Set<string>(["Technical director", "AV technician"]);
+  const standard = new Map(OPERATOR_ROLES.map((label) => [roleId(label), label]));
+  const requested = new Map<string, string>();
   for (const room of proposal.content.rooms) {
     for (const role of room.production?.crewRoles ?? []) {
-      if (role.trim()) labels.add(bounded(role.trim(), 120));
+      const label = bounded(role.trim(), 120);
+      if (label && !requested.has(roleId(label))) requested.set(roleId(label), label);
     }
   }
-  return [...new Map(
-    [...labels]
-      .sort((left, right) => left.localeCompare(right))
-      .map((label) => [
-        `role-${identifierPart(label).slice(0, 100)}`,
-        { id: `role-${identifierPart(label).slice(0, 100)}`, label },
-      ]),
-  ).values()];
+  const roles = new Map<string, string>();
+  for (const [id, label] of requested) roles.set(id, standard.get(id) ?? label);
+  for (const [id, label] of standard) {
+    if (roles.size >= MAX_CREW_ROLES) break;
+    if (!roles.has(id)) roles.set(id, label);
+  }
+  return [...roles]
+    .slice(0, MAX_CREW_ROLES)
+    .map(([id, label]) => ({ id, label }))
+    .sort((left, right) => left.label.localeCompare(right.label));
 };
 
 export const projectProposalToVendorResponseQuestionnaire = (
