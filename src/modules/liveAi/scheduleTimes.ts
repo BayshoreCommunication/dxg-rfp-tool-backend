@@ -25,6 +25,14 @@ const ABBREVIATION_BY_LABEL: Record<string, string> = {
   "Hawaii Time (HT)": "HT",
 };
 
+/** "CT" for the legacy labels, otherwise the zone's short name at that instant (e.g. "EDT"). */
+export const eventZoneAbbreviation = (timeZoneLabel: unknown, zone: string, instant: Date): string =>
+  ABBREVIATION_BY_LABEL[String(timeZoneLabel ?? "").trim()] ??
+  new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "short" })
+    .formatToParts(instant)
+    .find((part) => part.type === "timeZoneName")?.value ??
+  "";
+
 export const ianaZoneForLabel = (label: unknown): string | null => {
   if (typeof label !== "string" || !label.trim()) return null;
   const trimmed = label.trim();
@@ -60,12 +68,7 @@ export const formatInstantInEventZone = (value: unknown, timeZoneLabel: unknown)
     minute: "2-digit",
   }).formatToParts(instant);
   const at = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
-  const abbreviation =
-    ABBREVIATION_BY_LABEL[String(timeZoneLabel).trim()] ??
-    new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "short" })
-      .formatToParts(instant)
-      .find((part) => part.type === "timeZoneName")?.value ??
-    "";
+  const abbreviation = eventZoneAbbreviation(timeZoneLabel, zone, instant);
   return `${at("year")}-${at("month")}-${at("day")} ${at("hour")}:${at("minute")} ${at("dayPeriod")} ${abbreviation}`.trim();
 };
 

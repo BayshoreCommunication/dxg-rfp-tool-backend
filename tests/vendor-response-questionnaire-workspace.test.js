@@ -538,3 +538,58 @@ test("a publish survives a failure in the supersede bookkeeping", async () => {
   assert.equal(result.questionnaire.questionnaireVersion, 1);
   assert.equal(result.questionnaire.references.minimumCount, 3);
 });
+
+test("vendors can staff every standard operator role plus the roles the planner asked for", () => {
+  const { OPERATOR_ROLES } = require("../src/modules/vendorResponses/domain/operatorRoles");
+  const project = (legacy) =>
+    projectProposalToVendorResponseQuestionnaire(
+      require("../contracts/proposal/v1/legacyAdapter").mapLegacyProposalToV1(
+        legacy,
+        { organizationId, ownerUserId, now: fixedNow.toISOString() },
+      ).proposal,
+    );
+  const questionnaire = project(legacyProposal());
+  const labels = questionnaire.crew.roles.map((role) => role.label);
+  const ids = questionnaire.crew.roles.map((role) => role.id);
+
+  assert.equal(OPERATOR_ROLES.length, 47);
+  for (const role of OPERATOR_ROLES) assert.ok(labels.includes(role), `${role} is offered`);
+  assert.ok(labels.includes("Audio Engineer"), "the planner's own role is kept");
+  assert.equal(new Set(ids).size, ids.length, "no duplicate role ids");
+  // Ids that drafts may already reference keep working.
+  assert.ok(ids.includes("role-technical-director"));
+  assert.ok(ids.includes("role-av-technician"));
+  assert.deepEqual(questionnaire.crew.requiredRoleIds, ["role-technical-director"]);
+  assert.equal(labels.filter((label) => /^technical director$/i.test(label)).length, 1);
+  assert.equal(validateVendorResponseQuestionnaireV1(publishQuestionnaireProjection(questionnaire, 1, fixedNow.toISOString())), true);
+
+  // The contract allows 100 roles: requested roles always fit.
+  const many = Array.from({ length: 80 }, (_, index) => `Specialist ${index + 1}`);
+  const crowded = project(legacyProposal({
+    roomByRoom: [{ _id: "room-a", roomFunction: "Main", showCrewNeeded: many }],
+  }));
+  assert.equal(crowded.crew.roles.length, 100);
+  for (const role of many) assert.ok(crowded.crew.roles.some((entry) => entry.label === role));
+});
+
+test("room schedules read in the venue's time zone, not as raw UTC instants", () => {
+  const { roomScheduleSummary } = require("../src/modules/vendorResponses/domain/questionnaire");
+  const keynote = {
+    scheduleDate: "2027-09-16",
+    showStartAt: "2027-09-16T19:15:00.000Z",
+    showEndAt: "2027-09-16T20:15:00.000Z",
+  };
+  assert.equal(roomScheduleSummary(keynote, "Eastern Time (ET)"), "Thu, Sep 16, 2027 · 3:15 PM – 4:15 PM ET");
+  assert.equal(roomScheduleSummary(keynote, "America/Chicago"), "Thu, Sep 16, 2027 · 2:15 PM – 3:15 PM CDT");
+  assert.equal(roomScheduleSummary(keynote, undefined), "Thu, Sep 16, 2027 · 7:15 PM – 8:15 PM UTC");
+  assert.equal(
+    roomScheduleSummary({ showStartAt: "2027-09-17T02:00:00.000Z", showEndAt: "2027-09-17T05:30:00.000Z" }, "Pacific Time (PT)"),
+    "Thu, Sep 16, 2027 · 7:00 PM – 10:30 PM PT",
+  );
+  assert.equal(
+    roomScheduleSummary({ showStartAt: "2027-09-17T04:00:00.000Z", showEndAt: "2027-09-17T08:00:00.000Z" }, "Pacific Time (PT)"),
+    "Thu, Sep 16, 2027 · 9:00 PM – Fri, Sep 17, 2027, 1:00 AM PT",
+  );
+  assert.equal(roomScheduleSummary({ scheduleDate: "2027-09-16" }, "Eastern Time (ET)"), "Thu, Sep 16, 2027");
+  assert.doesNotMatch(roomScheduleSummary(keynote, "Eastern Time (ET)"), /T\d{2}:\d{2}|Z\b/);
+});
