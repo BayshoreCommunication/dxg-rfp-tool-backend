@@ -76,7 +76,7 @@ const requesterSummary = async (
 export const autoAcknowledgementBody = (ticketNumber: number, requesterName?: string | null): string => {
   const firstName = requesterName?.trim().split(/\s+/)[0];
   return [
-    `Hi${firstName ? ` ${firstName}` : ""}, thanks for contacting DXG support.`,
+    `Hi${firstName ? ` ${firstName}` : ""}, thanks for contacting RFPilot support.`,
     `We've received your request (ticket #${ticketNumber}) and a member of our team will reply here as soon as possible. You'll also get an email when we respond.`,
     "If you have more details, screenshots or documents that could help, add them to this conversation.",
   ].join("\n\n");
@@ -216,7 +216,7 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
         ticket: current,
         messages,
         // Planners only need to know someone is on it, not who.
-        assignee: assignee ? { id: assignee.id, name: "DXG support" } : null,
+        assignee: assignee ? { id: assignee.id, name: "RFPilot support" } : null,
       };
     },
 
@@ -227,7 +227,7 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
     ): Promise<{ ticket: SupportTicketRecord; message: SupportMessageRecord }> {
       const ticket = await requireOwnTicket(repository, actor, ticketId);
       // Resolved is a grace period: a reply reopens it. Closed (3 days after
-      // resolving, or by an agent) is final. DXG agents can still reopen any
+      // resolving, or by an agent) is final. RFPilot agents can still reopen any
       // ticket from the admin.
       if (ticket.status === "closed") {
         throw new SupportDeskError(

@@ -301,7 +301,7 @@ const quantityFor = (unit: string, facts: ProposalFacts): { quantity: number; dr
   return null; // per_person / per_hour need data the ancillary view cannot support
 };
 
-// Deterministic range engine (SOW WS3 / DXG AV Pricing Engine): every number
+// Deterministic range engine (SOW WS3 / RFPilot AV Pricing Engine): every number
 // traces to approved pricing records, regional factors and modifiers; anything
 // the corpus cannot support is refused explicitly rather than estimated.
 // No model calls.
@@ -439,7 +439,7 @@ export const computeInvestmentGuidance = (
     assumptions.push({
       key: "baseline_calibration_only",
       label: "Baseline national figures",
-      note: "Every contributing rate is a baseline national figure, not a calibrated DXG actual. Treat the range as a market reference until the corpus is calibrated.",
+      note: "Every contributing rate is a baseline national figure, not a calibrated RFPilot actual. Treat the range as a market reference until the corpus is calibrated.",
     });
 
   const lineCategories = new Set(lineItems.map((line) => line.category));

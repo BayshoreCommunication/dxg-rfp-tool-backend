@@ -49,7 +49,7 @@ const emailHtml = (input: {
   vendorUrl: string;
 }) => `
   <div style="font-family:Inter,Arial,sans-serif;max-width:620px;margin:0 auto;padding:24px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
-    <p style="margin:0 0 8px;color:#0f172a;font-size:14px;">You have received a proposal from DXG.</p>
+    <p style="margin:0 0 8px;color:#0f172a;font-size:14px;">You have received a proposal from RFPilot.</p>
     <h2 style="margin:0 0 8px;color:#0f172a;font-size:22px;">${escapeHtml(input.title)}</h2>
     <p style="margin:0 0 14px;color:#64748b;font-size:12px;">Reference: ${escapeHtml(input.reference)}</p>
     <div style="margin:0 0 20px;color:#334155;font-size:14px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(input.message)}</div>
@@ -117,8 +117,8 @@ export const createSendOwnedEmailCampaign = (dependencies: {
     input.subject?.trim() ||
     (isQuestion
       ? `A question about your response to ${proposal.proposalTitle}`
-      : `Proposal for ${proposal.proposalTitle} - DXG RFP Tool`);
-  const defaultMessage = `Hi,\n\nPlease review the proposal and let us know your feedback.\n\nBest regards,\nDXG Team`;
+      : `Proposal for ${proposal.proposalTitle} - RFPilot`);
+  const defaultMessage = `Hi,\n\nPlease review the proposal and let us know your feedback.\n\nBest regards,\nRFPilot Team`;
   const message = cleanMessage(input.message?.trim() || defaultMessage);
   const reference = `#${proposal.proposalId.slice(-8).toUpperCase()}`;
   const recipients: CampaignRecipient[] = emails.map((email) => ({

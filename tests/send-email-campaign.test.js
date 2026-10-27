@@ -180,6 +180,6 @@ test("a vendor question with no subject gets a question subject, not an invitati
   await send({ ownerUserId: "user-001", proposalId: "proposal-001", recipientEmails: ["vendor@example.com"], message: "Hi", kind: "question" });
   assert.equal(capture.deliveries[0].subject, "A question about your response to DXG Summit");
   await send({ ownerUserId: "user-001", proposalId: "proposal-001", recipientEmails: ["vendor@example.com"], message: "Hi" });
-  assert.equal(capture.deliveries[1].subject, "Proposal for DXG Summit - DXG RFP Tool");
+  assert.equal(capture.deliveries[1].subject, "Proposal for DXG Summit - RFPilot");
   assert.match(capture.deliveries[1].html, /Submit Your Proposal/);
 });

@@ -56,7 +56,7 @@ const buildHtml = (input: {
       You can update your response at any time by revisiting the original link.
     </p>
     <p style="color:#94a3b8;font-size:11px;margin:20px 0 0;padding-top:16px;border-top:1px solid #e2e8f0;">
-      This is an automated confirmation from DXG RFP Tool. Please do not reply to this email.
+      This is an automated confirmation from RFPilot. Please do not reply to this email.
     </p>
   </div>
 `;
@@ -70,7 +70,7 @@ export const vendorConfirmationEmailAdapter: VendorConfirmationSender = {
         to: input.email,
         subject: `Your response has been ${action} — ${input.proposalTitle}`,
         html: buildHtml(input),
-        text: `Hi ${input.vendorName},\n\nYour proposal response for "${input.proposalTitle}" has been ${action} successfully.\n\nSubmitted by: ${input.submittedBy}\nSubmission version: ${input.versionNumber}\n${input.questionnaireVersion === null ? "" : `Questionnaire version: ${input.questionnaireVersion}\n`}Received: ${input.receivedAt}\n${input.grandTotalMinor === null || !input.currency ? "" : `Calculated total: ${new Intl.NumberFormat("en-US", { style: "currency", currency: input.currency }).format(input.grandTotalMinor / (10 ** input.currencyDecimalPrecision))}\n`}Files received: ${input.fileCount}\nManifest checksum: ${input.manifestChecksum}\n\nThe event planner will review your response and reach out if they are interested.\n\nDXG RFP Tool`,
+        text: `Hi ${input.vendorName},\n\nYour proposal response for "${input.proposalTitle}" has been ${action} successfully.\n\nSubmitted by: ${input.submittedBy}\nSubmission version: ${input.versionNumber}\n${input.questionnaireVersion === null ? "" : `Questionnaire version: ${input.questionnaireVersion}\n`}Received: ${input.receivedAt}\n${input.grandTotalMinor === null || !input.currency ? "" : `Calculated total: ${new Intl.NumberFormat("en-US", { style: "currency", currency: input.currency }).format(input.grandTotalMinor / (10 ** input.currencyDecimalPrecision))}\n`}Files received: ${input.fileCount}\nManifest checksum: ${input.manifestChecksum}\n\nThe event planner will review your response and reach out if they are interested.\n\nRFPilot RFP Tool`,
       });
     } catch (error) {
       console.error(

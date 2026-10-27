@@ -122,7 +122,7 @@ const emailDxg = async (subject: string, lines: string[], link: string): Promise
         to,
         subject,
         text: [...lines, link].join("\n"),
-        html: `<p>${lines.map(escapeHtml).join("</p><p>")}</p><p><a href="${escapeHtml(link)}">Open in the DXG admin</a></p>`,
+        html: `<p>${lines.map(escapeHtml).join("</p><p>")}</p><p><a href="${escapeHtml(link)}">Open in the RFPilot admin</a></p>`,
       }),
     "dxg email",
   );
@@ -183,14 +183,14 @@ export const supportDeskNotifier: SupportDeskNotifier = {
   },
 
   async agentReplied({ ticket, requester, message }) {
-    // Planners hear from one "DXG support", never an individual agent.
-    const who = "DXG support";
+    // Planners hear from one "RFPilot support", never an individual agent.
+    const who = "RFPilot support";
     await bestEffort(
       () =>
         createNotification({
           userId: ticket.requesterUserId,
           type: "support_ticket",
-          title: `DXG support replied on ${label(ticket)}`,
+          title: `RFPilot support replied on ${label(ticket)}`,
           message: `${who}: ${excerpt(message.body)}`,
           metadata: { ticketId: ticket.id, ticketNumber: ticket.ticketNumber, audience: "requester" },
           dedupeKey: `support:${ticket.id}:agent:${message.id}`,
@@ -199,7 +199,7 @@ export const supportDeskNotifier: SupportDeskNotifier = {
     );
     await emailRequester(
       requester?.email,
-      `DXG support replied on ${label(ticket)}`,
+      `RFPilot support replied on ${label(ticket)}`,
       [`${who} replied to your support ticket.`, excerpt(message.body)],
       customerLink(ticket),
     );
@@ -221,7 +221,7 @@ export const supportDeskNotifier: SupportDeskNotifier = {
           userId: ticket.requesterUserId,
           type: "support_ticket",
           title: `${label(ticket)} is now ${STATUS_LABEL[status]}`,
-          message: `DXG support changed the status of your ticket to ${STATUS_LABEL[status]}.`,
+          message: `RFPilot support changed the status of your ticket to ${STATUS_LABEL[status]}.`,
           metadata: { ticketId: ticket.id, ticketNumber: ticket.ticketNumber, audience: "requester" },
           dedupeKey: `support:${ticket.id}:status:${status}:${ticket.updatedAt}`,
         }),
@@ -230,7 +230,7 @@ export const supportDeskNotifier: SupportDeskNotifier = {
     await emailRequester(
       requester?.email,
       `Your support ticket ${label(ticket)} is now ${STATUS_LABEL[status]}`,
-      [`DXG support changed the status of your ticket to ${STATUS_LABEL[status]}.`],
+      [`RFPilot support changed the status of your ticket to ${STATUS_LABEL[status]}.`],
       customerLink(ticket),
     );
   },

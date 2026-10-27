@@ -101,7 +101,7 @@ const getFromAddress = (): string => {
   const mail = resend
     ? (normalizeEnv(process.env.RESEND_FROM) || "noreply@dxg-agency.com")
     : (normalizeEnv(process.env.SMTP_MAIL) || "noreply@dxg-agency.com");
-  return `"DXG RFP Tool" <${mail}>`;
+  return `"RFPilot" <${mail}>`;
 };
 
 /**
@@ -148,7 +148,7 @@ const sendEmail = async (params: {
   // -------------------------------------------------------------------------
   // SMTP — fallback when Resend is absent or returned an error
   // -------------------------------------------------------------------------
-  const smtpFrom = `"DXG RFP Tool" <${normalizeEnv(process.env.SMTP_MAIL) || "noreply@dxg-agency.com"}>`;
+  const smtpFrom = `"RFPilot" <${normalizeEnv(process.env.SMTP_MAIL) || "noreply@dxg-agency.com"}>`;
   const activeTransporter = await ensureTransporter();
   const info = await activeTransporter.sendMail({
     from: smtpFrom,
@@ -178,7 +178,7 @@ export async function sendSignupOtpEmail(
   console.log(`Sending OTP ${otp} to ${email}`);
   await sendEmail({
     to: email,
-    subject: "Verify your email - DXG RFP Tool",
+    subject: "Verify your email - RFPilot",
     html: `
       <div style="font-family:Inter,sans-serif;max-width:480px;margin:auto;padding:32px;background:#f9f9f9;border-radius:12px;">
         <h2 style="color:#0f1b57;margin-bottom:8px;">Email Verification</h2>
@@ -198,7 +198,7 @@ export async function sendForgotPasswordOtpEmail(
 ): Promise<void> {
   await sendEmail({
     to: email,
-    subject: "Reset your password - DXG RFP Tool",
+    subject: "Reset your password - RFPilot",
     html: `
       <div style="font-family:Inter,sans-serif;max-width:480px;margin:auto;padding:32px;background:#f9f9f9;border-radius:12px;">
         <h2 style="color:#0f1b57;margin-bottom:8px;">Password Reset</h2>
