@@ -27,8 +27,8 @@ const ticket = (overrides) => ({
 
 const people = new Map([
   [PLANNER, { id: PLANNER, name: "Pat Planner", email: "pat@example.com", company: null, role: "customer" }],
-  [AGENT, { id: AGENT, name: "Dana DXG", email: "dana@example.com", company: null, role: "admin" }],
-  [AGENT_TWO, { id: AGENT_TWO, name: "Eli DXG", email: "eli@example.com", company: null, role: "admin" }],
+  [AGENT, { id: AGENT, name: "Dana RFPilot", email: "dana@example.com", company: null, role: "admin" }],
+  [AGENT_TWO, { id: AGENT_TWO, name: "Eli RFPilot", email: "eli@example.com", company: null, role: "admin" }],
 ]);
 
 const sweepFixture = ({ unanswered = [], remind = [], resolve = [], close = [], failOn } = {}) => {
@@ -66,7 +66,7 @@ test("an answer owed for 30 minutes alerts every agent once and names the owner"
   assert.equal(calls.unansweredBefore.toISOString(), ago(30 * MIN));
   assert.deepEqual(updates, [["late", { escalatedAt: NOW.toISOString() }]]);
   assert.equal(events[0][0], "escalated");
-  assert.equal(events[0][1].assignee.name, "Dana DXG");
+  assert.equal(events[0][1].assignee.name, "Dana RFPilot");
   assert.equal(events[0][1].waitingMinutes, 45);
   assert.equal(result.escalated, 1);
 });
@@ -77,7 +77,7 @@ test("five days waiting posts a friendly check-in in the thread and emails the p
   const result = await sweeper.run();
   assert.equal(calls.remindBefore.toISOString(), ago(5 * DAY));
   assert.equal(messages[0].authorRole, "system");
-  assert.equal(messages[0].kind, "message", "customer-visible, signed as DXG support");
+  assert.equal(messages[0].kind, "message", "customer-visible, signed as RFPilot support");
   assert.match(messages[0].body, /^Hi Pat, just checking in/);
   assert.match(messages[0].body, /mark it as resolved in 2 days/);
   assert.equal(updates[0][1].autoCloseReminderSentAt, NOW.toISOString());
@@ -155,9 +155,9 @@ test("agents see who else has the ticket open, replying first, never themselves"
   const { presence } = presenceFixture();
   assert.deepEqual(await presence.heartbeat(actor(AGENT), TICKET, { state: "viewing" }), { others: [] });
   const seen = await presence.heartbeat(actor(AGENT_TWO), TICKET, { state: "replying" });
-  assert.deepEqual(seen.others, [{ userId: AGENT, name: "Dana DXG", state: "viewing" }]);
+  assert.deepEqual(seen.others, [{ userId: AGENT, name: "Dana RFPilot", state: "viewing" }]);
   const back = await presence.heartbeat(actor(AGENT), TICKET, {});
-  assert.deepEqual(back.others, [{ userId: AGENT_TWO, name: "Eli DXG", state: "replying" }]);
+  assert.deepEqual(back.others, [{ userId: AGENT_TWO, name: "Eli RFPilot", state: "replying" }]);
 });
 
 test("presence fades out without a heartbeat and clears on leave", async () => {

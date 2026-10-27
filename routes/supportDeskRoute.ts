@@ -49,7 +49,7 @@ router.post("/support/tickets/:ticketId/resolve", authenticate, customerWriteLim
 router.post("/support/attachments", authenticate, customerWriteLimit, receiveSupportAttachments, controller.uploadOwnAttachments);
 router.get("/support/tickets/:ticketId/attachments/:attachmentId", authenticate, controller.ownAttachmentUrl);
 
-// DXG agent side — administrative roles only.
+// RFPilot agent side — administrative roles only.
 router.get("/admin/support/tickets", ...agentGuard, controller.listInbox);
 router.get("/admin/support/metrics", ...agentGuard, controller.metrics);
 router.get("/admin/support/agents", ...agentGuard, controller.listAgents);

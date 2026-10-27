@@ -132,7 +132,7 @@ try {
 app.get("/", (_req: Request, res: Response) => {
   res.json({
     success: true,
-    message: "DXG RFP Tool - API is running!",
+    message: "RFPilot - API is running!",
     version: "1.0.0",
     timestamp: new Date().toISOString(),
   });

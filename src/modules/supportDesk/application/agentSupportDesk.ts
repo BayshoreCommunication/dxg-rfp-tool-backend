@@ -73,7 +73,7 @@ const timestampsForStatus = (
 };
 
 /**
- * DXG-side helpdesk operations. Agents are organization members with an
+ * RFPilot-side helpdesk operations. Agents are organization members with an
  * administrative role; every operation is still bounded to the agent's own
  * organization so a tenant can never see another tenant's inbox.
  */
