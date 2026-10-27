@@ -4,9 +4,11 @@ import type {
   Section,
   VendorResponseQuestionnaireV1,
 } from "../../../../contracts/generated/vendor-response-questionnaire-v1";
+import { eventZoneAbbreviation, ianaZoneForLabel } from "../../liveAi/scheduleTimes";
+import { LEGACY_ROLE_IDS, OPERATOR_ROLES } from "./operatorRoles";
 
 export const VENDOR_RESPONSE_QUESTIONNAIRE_PROJECTION_VERSION =
-  "vendor-response-questionnaire-projection.v2";
+  "vendor-response-questionnaire-projection.v3";
 
 export type VendorResponseQuestionnaireProjection = Omit<
   VendorResponseQuestionnaireV1,
@@ -127,21 +129,75 @@ const sections = (): Section[] => [
   section("review", "Review and submit", 11, true),
 ];
 
+/**
+ * A room's schedule as the venue reads it: "Thu, Sep 16, 2027 · 3:15 PM –
+ * 4:15 PM ET". Show times are stored as UTC instants; vendors quote against
+ * the venue clock, so they are shown in the event's time zone (UTC when the
+ * proposal names none).
+ */
+export const roomScheduleSummary = (
+  room: { scheduleDate?: string; showStartAt?: string; showEndAt?: string },
+  timeZoneLabel: unknown,
+): string => {
+  const zone = ianaZoneForLabel(timeZoneLabel) ?? "UTC";
+  const instant = (value?: string) => {
+    const parsed = value ? new Date(value) : null;
+    return parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
+  };
+  const start = instant(room.showStartAt);
+  const end = instant(room.showEndAt);
+  const dayOf = (value: Date) =>
+    new Intl.DateTimeFormat("en-US", { timeZone: zone, weekday: "short", month: "short", day: "numeric", year: "numeric" }).format(value);
+  const timeOf = (value: Date) =>
+    new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(value);
+  const scheduled = /^\d{4}-\d{2}-\d{2}$/.test(room.scheduleDate ?? "")
+    ? new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric", year: "numeric" })
+      .format(new Date(`${room.scheduleDate}T12:00:00Z`))
+    : room.scheduleDate?.trim() || null;
+  const day = scheduled ?? (start ? dayOf(start) : end ? dayOf(end) : null);
+  const zoneName = (start ?? end) ? eventZoneAbbreviation(timeZoneLabel, zone, (start ?? end) as Date) : "";
+  let times = "";
+  if (start && end) {
+    times = dayOf(start) === dayOf(end)
+      ? `${timeOf(start)} – ${timeOf(end)}`
+      : `${timeOf(start)} – ${dayOf(end)}, ${timeOf(end)}`;
+  } else if (start) {
+    times = `from ${timeOf(start)}`;
+  } else if (end) {
+    times = `until ${timeOf(end)}`;
+  }
+  return [day, times && `${times} ${zoneName}`.trim()].filter(Boolean).join(" · ");
+};
+
+const MAX_CREW_ROLES = 100;
+
+const roleId = (label: string) => LEGACY_ROLE_IDS[label] ?? `role-${identifierPart(label).slice(0, 100)}`;
+
+/**
+ * Every standard operator role plus whatever the planner asked for. A planner
+ * role that matches a standard one (any casing) takes the standard label.
+ * The contract allows 100 roles: requested roles always fit, standard ones
+ * the planner did not ask for give way first.
+ */
 const crewRoles = (proposal: ProposalV1) => {
-  const labels = new Set<string>(["Technical director", "AV technician"]);
+  const standard = new Map(OPERATOR_ROLES.map((label) => [roleId(label), label]));
+  const requested = new Map<string, string>();
   for (const room of proposal.content.rooms) {
     for (const role of room.production?.crewRoles ?? []) {
-      if (role.trim()) labels.add(bounded(role.trim(), 120));
+      const label = bounded(role.trim(), 120);
+      if (label && !requested.has(roleId(label))) requested.set(roleId(label), label);
     }
   }
-  return [...new Map(
-    [...labels]
-      .sort((left, right) => left.localeCompare(right))
-      .map((label) => [
-        `role-${identifierPart(label).slice(0, 100)}`,
-        { id: `role-${identifierPart(label).slice(0, 100)}`, label },
-      ]),
-  ).values()];
+  const roles = new Map<string, string>();
+  for (const [id, label] of requested) roles.set(id, standard.get(id) ?? label);
+  for (const [id, label] of standard) {
+    if (roles.size >= MAX_CREW_ROLES) break;
+    if (!roles.has(id)) roles.set(id, label);
+  }
+  return [...roles]
+    .slice(0, MAX_CREW_ROLES)
+    .map(([id, label]) => ({ id, label }))
+    .sort((left, right) => left.label.localeCompare(right.label));
 };
 
 export const projectProposalToVendorResponseQuestionnaire = (
@@ -236,9 +292,7 @@ export const projectProposalToVendorResponseQuestionnaire = (
       ...(room.setup ? { setup: room.setup } : {}),
       ...([room.scheduleDate, room.showStartAt, room.showEndAt].some(Boolean)
         ? {
-            scheduleSummary: [room.scheduleDate, room.showStartAt, room.showEndAt]
-              .filter(Boolean)
-              .join(" | "),
+            scheduleSummary: roomScheduleSummary(room, proposal.content.venueSchedule.timeZone),
           }
         : {}),
       ...(room.estimatedAttendees !== undefined
