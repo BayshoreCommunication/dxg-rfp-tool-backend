@@ -571,3 +571,25 @@ test("vendors can staff every standard operator role plus the roles the planner 
   assert.equal(crowded.crew.roles.length, 100);
   for (const role of many) assert.ok(crowded.crew.roles.some((entry) => entry.label === role));
 });
+
+test("room schedules read in the venue's time zone, not as raw UTC instants", () => {
+  const { roomScheduleSummary } = require("../src/modules/vendorResponses/domain/questionnaire");
+  const keynote = {
+    scheduleDate: "2027-09-16",
+    showStartAt: "2027-09-16T19:15:00.000Z",
+    showEndAt: "2027-09-16T20:15:00.000Z",
+  };
+  assert.equal(roomScheduleSummary(keynote, "Eastern Time (ET)"), "Thu, Sep 16, 2027 · 3:15 PM – 4:15 PM ET");
+  assert.equal(roomScheduleSummary(keynote, "America/Chicago"), "Thu, Sep 16, 2027 · 2:15 PM – 3:15 PM CDT");
+  assert.equal(roomScheduleSummary(keynote, undefined), "Thu, Sep 16, 2027 · 7:15 PM – 8:15 PM UTC");
+  assert.equal(
+    roomScheduleSummary({ showStartAt: "2027-09-17T02:00:00.000Z", showEndAt: "2027-09-17T05:30:00.000Z" }, "Pacific Time (PT)"),
+    "Thu, Sep 16, 2027 · 7:00 PM – 10:30 PM PT",
+  );
+  assert.equal(
+    roomScheduleSummary({ showStartAt: "2027-09-17T04:00:00.000Z", showEndAt: "2027-09-17T08:00:00.000Z" }, "Pacific Time (PT)"),
+    "Thu, Sep 16, 2027 · 9:00 PM – Fri, Sep 17, 2027, 1:00 AM PT",
+  );
+  assert.equal(roomScheduleSummary({ scheduleDate: "2027-09-16" }, "Eastern Time (ET)"), "Thu, Sep 16, 2027");
+  assert.doesNotMatch(roomScheduleSummary(keynote, "Eastern Time (ET)"), /T\d{2}:\d{2}|Z\b/);
+});
