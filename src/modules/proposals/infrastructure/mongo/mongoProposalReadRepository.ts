@@ -1,11 +1,16 @@
 import Proposal from "../../../../../modal/proposalsModel";
-import mongoose, { type PipelineStage } from "mongoose";
+import type { PipelineStage } from "mongoose";
 import type {
   ListOwnedProposalRepositoryInput,
   ProposalListCounts,
   ProposalReadRepository,
 } from "../../domain/ports/proposalReadRepository";
-import { tenantFilter, tenantObjectId } from "../../../shared/tenancy/tenantContext";
+import { rfpListScope } from "../../../identity/domain/rfpAccessPolicy";
+import {
+  assertProposalMissIsNotFound,
+  requestActorFor,
+  scopeProposalFilter,
+} from "../../../identity/application/proposalAccess";
 
 const DETAIL_PROPOSAL_SELECT = "-__v";
 const LIST_PROPOSAL_SELECT = [
@@ -31,8 +36,6 @@ const searchConditions = (search: string) => {
 
 const buildListFilter = (input: ListOwnedProposalRepositoryInput) => {
   const filter: Record<string, unknown> = {
-    userId: input.ownerUserId,
-    ...tenantFilter(),
     isArchived: input.archived ? true : { $ne: true },
   };
   if (input.status) filter.status = input.status;
@@ -58,7 +61,8 @@ const buildListFilter = (input: ListOwnedProposalRepositoryInput) => {
       delete filter.$or;
     } else filter.$or = conditions;
   }
-  return filter;
+  // Lists show exactly the proposals the detail route would allow (ORG-102).
+  return scopeProposalFilter(requestActorFor(input.ownerUserId), "view", filter);
 };
 
 const buildCountsAggregation = (
@@ -67,11 +71,12 @@ const buildCountsAggregation = (
   const expiredThreshold = input.expiryDays
     ? new Date(Date.now() - input.expiryDays * 24 * 60 * 60 * 1000)
     : null;
-  const baseFilter: Record<string, unknown> = {
-    userId: new mongoose.Types.ObjectId(input.ownerUserId),
-    organizationId: tenantObjectId(),
-  };
-  if (input.search) baseFilter.$or = searchConditions(input.search);
+  // Same scope as the list so the counts always match it. $match doesn't cast, and the
+  // scope is built from ObjectIds for that reason.
+  const scope = rfpListScope(requestActorFor(input.ownerUserId), "view");
+  const baseFilter: Record<string, unknown> = input.search
+    ? { $and: [scope, { $or: searchConditions(input.search) }] }
+    : scope;
   const notArchived = { $ne: ["$isArchived", true] };
   const notCopy = { $ne: ["$isCopy", true] };
   return [
@@ -93,9 +98,12 @@ const buildCountsAggregation = (
 
 export const mongoProposalReadRepository: ProposalReadRepository = {
   async findOwnedById({ proposalId, ownerUserId }) {
-    return Proposal.findOne({ _id: proposalId, userId: ownerUserId, ...tenantFilter() })
+    const actor = requestActorFor(ownerUserId);
+    const proposal = await Proposal.findOne(scopeProposalFilter(actor, "view", { _id: proposalId }))
       .select(DETAIL_PROPOSAL_SELECT)
       .lean();
+    if (!proposal) await assertProposalMissIsNotFound(actor, proposalId, "view");
+    return proposal;
   },
 
   async listOwned(input) {

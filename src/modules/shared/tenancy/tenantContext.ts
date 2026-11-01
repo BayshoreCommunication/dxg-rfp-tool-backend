@@ -1,7 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import mongoose from "mongoose";
+import type { RfpActor } from "../../identity/domain/rfpAccessPolicy";
 
-export type TenantContext = { organizationId: string; userId: string };
+// rfpActor is set by the authenticate middleware for planner requests (ORG-103) and is what
+// proposal repositories scope by. Other tenant scopes (workers, admin) leave it unset.
+export type TenantContext = { organizationId: string; userId: string; rfpActor?: RfpActor };
 const storage = new AsyncLocalStorage<TenantContext>();
 
 export const runWithTenant = <T>(context: TenantContext, callback: () => T): T =>
@@ -19,3 +22,9 @@ export const tenantFilter = (): { organizationId: string } => ({
 
 export const tenantObjectId = (): mongoose.Types.ObjectId =>
   new mongoose.Types.ObjectId(currentTenant().organizationId);
+
+export const currentRfpActor = (): RfpActor => {
+  const actor = currentTenant().rfpActor;
+  if (!actor) throw new Error("Proposal access actor is unavailable outside an authenticated request");
+  return actor;
+};

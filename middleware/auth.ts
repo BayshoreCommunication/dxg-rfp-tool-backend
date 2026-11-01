@@ -115,7 +115,7 @@ export const createAuthenticate = (
         { organizationId: decoded.organizationId, userId: decoded.userId, roles: membership.roles, status: membership.status },
         dependencies.actorLookups,
       );
-      runWithTenant({ organizationId: decoded.organizationId, userId: decoded.userId }, next);
+      runWithTenant({ organizationId: decoded.organizationId, userId: decoded.userId, rfpActor: req.rfpActor }, next);
     } catch (error) {
       res.status(401).json({
         success: false,
