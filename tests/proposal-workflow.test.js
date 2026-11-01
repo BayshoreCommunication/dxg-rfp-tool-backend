@@ -130,7 +130,8 @@ test("the Mongo publish read does not delay the Postgres work",()=>{
  // that mirror is best-effort and behind PROPOSAL_REFERENCE_DUAL_WRITE_ENABLED,
  // so serving it from there would report every proposal unpublished whenever
  // the dual write is off.
- assert.match(source,/Proposal\.findOne\(\{_id:proposalMongoId,userId:actorUserMongoId\}\)\.select\("status"\)/);
+ // ORG-104: the read is also scoped to the organization.
+ assert.match(source,/Proposal\.findOne\(\{_id:proposalMongoId,userId:actorUserMongoId,organizationId:organizationMongoId\}\)\.select\("status"\)/);
 });
 
 test("workflow facts ignore retired-section aggregates while preserving current workflow data",()=>{

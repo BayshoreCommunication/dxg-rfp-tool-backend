@@ -51,7 +51,7 @@ const validateLoadInOrdering = async (
   const date = answers.find((item) => item.path === "/content/venueSchedule/loadInDate")?.answer;
   const time = answers.find((item) => item.path === "/content/venueSchedule/loadInTime")?.answer;
   if (!date || !time) return true;
-  const proposal = await Proposal.findOne(ownedDraftFilter(input))
+  const proposal = await Proposal.findOne(ownedDraftFilter(input)) // tenant-scoped: ownedDraftFilter carries organizationId
     .select("event.startDate venueSchedule.showStartDate venueSchedule.showStartTime")
     .lean<{ event?: Record<string, unknown>; venueSchedule?: Record<string, unknown> }>();
   if (!proposal) return false;
@@ -189,6 +189,7 @@ export const applyAnswersToProposalFields = async (input: {
         ]
       : []),
   ];
+  // tenant-scoped: ownedDraftFilter carries organizationId
   const row = await Proposal.findOneAndUpdate(
     ownedDraftFilter(input),
     [{

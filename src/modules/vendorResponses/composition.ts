@@ -1,3 +1,4 @@
+import { checkRequestProposalAccess, isProposalAccessDenied } from "../identity/application/proposalAccess";
 import {
   createGetOwnedVendorSubmissionDetail,
   createGetOwnedVendorResponse,
@@ -188,6 +189,14 @@ const submitVendorResponseVersion = createSubmitVendorResponse({
   sourceRegistry: postgresVendorSubmissionSourceRegistry,
   folderName: process.env.DO_FOLDER_NAME || "rfp-tool",
   malwareScan: vendorUploadMalwareScan,
+  plannerAccess: async ({ proposalId, userId }) => {
+    try {
+      return await checkRequestProposalAccess(userId, proposalId, "edit");
+    } catch (error) {
+      if (isProposalAccessDenied(error)) return "forbidden";
+      throw error;
+    }
+  },
 });
 
 const finalizeVendorResponseDraft = createFinalizeVendorSubmissionDraft({

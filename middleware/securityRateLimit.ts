@@ -24,6 +24,13 @@ const redisClient = (): Redis | null => {
   return redis;
 };
 
+// For shutdown and tests: the shared counter connection otherwise keeps the process alive.
+export const closeSecurityRateLimitRedis = async (): Promise<void> => {
+  const client = redis;
+  redis = undefined;
+  if (client) await client.quit().catch(() => client.disconnect());
+};
+
 const memoryHit = (key: string, windowMs: number, now: number): Bucket => {
   if (buckets.size > 10_000) {
     for (const [existingKey, value] of buckets) if (value.resetAt <= now) buckets.delete(existingKey);

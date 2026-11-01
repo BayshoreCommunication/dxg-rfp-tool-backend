@@ -53,7 +53,8 @@ export const guidanceRepository = {
   // Guidance is a cheap deterministic computation over the owner's proposal,
   // persisted for auditability and workflow readiness. No model calls.
   async generate(ctx: Ctx & { proposalMongoId: string }) {
-    const proposal = await Proposal.findOne({ _id: ctx.proposalMongoId, userId: ctx.actorUserMongoId })
+    // AI features stay owner-only until Postgres proposal references stop keying on the owner.
+    const proposal = await Proposal.findOne({ _id: ctx.proposalMongoId, userId: ctx.actorUserMongoId, organizationId: ctx.organizationMongoId })
       .lean<any>();
     if (!proposal) throw new GuidanceError("PROPOSAL_NOT_FOUND", "Proposal was not found.", 404);
     const proposalVersion = Number(proposal.version || 1);
@@ -84,6 +85,7 @@ export const guidanceRepository = {
     const proposal = await Proposal.findOne({
       _id: ctx.proposalMongoId,
       userId: ctx.actorUserMongoId,
+      organizationId: ctx.organizationMongoId,
     })
       .select("version")
       .lean<{ version?: number }>();

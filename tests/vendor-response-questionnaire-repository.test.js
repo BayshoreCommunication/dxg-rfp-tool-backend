@@ -15,6 +15,19 @@ const organizationId = "507f1f77bcf86cd799439012";
 const proposalId = "507f1f77bcf86cd799439011";
 const ownerUserId = "507f1f77bcf86cd799439013";
 
+const { Types } = require("mongoose");
+const { runWithTenant } = require("../src/modules/shared/tenancy/tenantContext");
+
+// Planner calls run inside an authenticated request, which carries the access-policy actor.
+const plannerActor = { organizationId, userId: ownerUserId, roles: ["planner"], membershipStatus: "active", managedTeamIds: [], shares: new Map() };
+const asPlanner = (work) => runWithTenant({ organizationId, userId: ownerUserId, rfpActor: plannerActor }, work);
+const plannerEditScope = {
+  $and: [
+    { _id: proposalId },
+    { organizationId: new Types.ObjectId(organizationId), $or: [{ userId: new Types.ObjectId(ownerUserId) }] },
+  ],
+};
+
 const projectionFixture = () => {
   const questionnaire = buildVendorResponseQuestionnaire();
   questionnaire.proposalId = proposalId;
@@ -28,7 +41,7 @@ const projectionFixture = () => {
   return projection;
 };
 
-test("proposal loading scopes Mongo reads by tenant, proposal, and optional owner", async () => {
+test("proposal loading scopes planner reads by the access policy and vendor reads by the grant's organization", async () => {
   const original = Proposal.findOne;
   let capturedFilter;
   Proposal.findOne = (filter) => {
@@ -51,22 +64,21 @@ test("proposal loading scopes Mongo reads by tenant, proposal, and optional owne
   };
 
   try {
-    const result = await repository.loadProposal({ organizationId, proposalId, ownerUserId });
-    assert.deepEqual(capturedFilter, {
-      _id: proposalId,
-      organizationId,
-      userId: ownerUserId,
-    });
+    const result = await asPlanner(() => repository.loadProposal({ organizationId, proposalId, ownerUserId }));
+    assert.deepEqual(capturedFilter, plannerEditScope);
     assert.equal(result.organizationId, organizationId);
     assert.equal(result.ownerUserId, ownerUserId);
     assert.equal(result.responseFormat, "structured_v1");
     assert.equal(result.legacyProposal._id, proposalId);
+
+    await repository.loadProposal({ organizationId, proposalId });
+    assert.deepEqual(capturedFilter, { _id: proposalId, organizationId });
   } finally {
     Proposal.findOne = original;
   }
 });
 
-test("proposal rollout marker updates are tenant and owner scoped", async () => {
+test("proposal rollout marker updates are scoped by the access policy", async () => {
   const original = Proposal.updateOne;
   let capturedFilter;
   let capturedUpdate;
@@ -76,18 +88,14 @@ test("proposal rollout marker updates are tenant and owner scoped", async () => 
     return { matchedCount: 1 };
   };
   try {
-    const updated = await repository.setResponseFormat({
+    const updated = await asPlanner(() => repository.setResponseFormat({
       organizationId,
       proposalId,
       ownerUserId,
       responseFormat: "legacy_unstructured",
-    });
+    }));
     assert.equal(updated, true);
-    assert.deepEqual(capturedFilter, {
-      _id: proposalId,
-      organizationId,
-      userId: ownerUserId,
-    });
+    assert.deepEqual(capturedFilter, plannerEditScope);
     assert.equal(
       capturedUpdate.$set["proposalSettings.vendorResponseFormat"],
       "legacy_unstructured",
