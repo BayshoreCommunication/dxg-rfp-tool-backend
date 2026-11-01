@@ -1,3 +1,4 @@
+import Organization from "../../../modal/organizationModel";
 import { createRequestOtp, createVerifyOtp } from "./application/manageOtp";
 import { createRegisterCustomer, createResetPassword } from "./application/registerAndReset";
 import {
@@ -134,8 +135,12 @@ const provisionIdentityProjection = async (input: {
   organizationId: string;
   correlationId: string;
 }) => {
+  // The name lets the projection create a new customer organization's row on first sign-in;
+  // without it every organization made at signup would report AI as unavailable.
+  const organization = await Organization.findById(input.organizationId).select("name").lean<{ name?: string } | null>();
   const outcome = await ensureIdentityProjection({
     organizationMongoId: input.organizationId,
+    organizationName: organization?.name,
     userMongoId: input.userId,
     correlationId: input.correlationId,
   });

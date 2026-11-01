@@ -1,9 +1,7 @@
-import mongoose from "mongoose";
 import User from "../../../../../modal/userModel";
 import type { SafeAuthUser } from "../../domain/ports/authAccountPorts";
 import type { GoogleAccountRepository } from "../../domain/ports/googleIdentityPorts";
-import { requireDefaultOrganizationId } from "./defaultOrganization";
-import OrganizationMembership from "../../../../../modal/organizationMembershipModel";
+import { createCustomerWithOrganization } from "./customerOrganization";
 
 const toSafeUser = (user: {
   _id: unknown;
@@ -42,32 +40,16 @@ export const mongoGoogleAccountRepository: GoogleAccountRepository = {
     }
     return null;
   },
+  // A new Google customer becomes the Owner of a new organization of their own (ORG-106).
   async createGoogleAccount({ identity, fallbackPasswordHash }) {
-    const organizationId = await requireDefaultOrganizationId();
     const fallbackName = identity.email.split("@")[0] || "Google User";
-    const now = new Date();
-    const user = await User.findOneAndUpdate(
-      { _id: new mongoose.Types.ObjectId() },
-      {
-        $setOnInsert: {
-          name: identity.name || fallbackName,
-          organizationId,
-          email: identity.email,
-          avatar: identity.avatar,
-          password: fallbackPasswordHash,
-          googleId: identity.subject,
-          role: "customer",
-          isBlocked: false,
-        },
-      },
-      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true },
-    ).select("-password").lean();
-    if (!user) throw new Error("Google account was not created");
-    await OrganizationMembership.updateOne(
-      { organizationId, userId: user._id },
-      { $setOnInsert: { roles: ["planner"], status: "active", version: 1, activatedAt: now } },
-      { upsert: true },
-    );
+    const user = await createCustomerWithOrganization({
+      name: identity.name || fallbackName,
+      email: identity.email,
+      avatar: identity.avatar,
+      password: fallbackPasswordHash,
+      googleId: identity.subject,
+    });
     return toSafeUser(user);
   },
 };
