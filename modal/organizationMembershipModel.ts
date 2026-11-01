@@ -1,15 +1,24 @@
 import mongoose, { Document, Schema } from "mongoose";
 
-export const ORGANIZATION_ROLES = [
-  "planner",
+export const CUSTOMER_ORGANIZATION_ROLES = [
+  "owner",
   "organization_admin",
-  "dxg_producer",
+  "team_manager",
+  "planner",
+  "viewer",
+] as const;
+// DXG staff live in the admins collection. These values stay readable on existing
+// memberships so the tenancy migration can strip them; new writes refuse them.
+export const LEGACY_DXG_ROLES = ["dxg_producer", "dxg_admin", "super_admin"] as const;
+export const ORGANIZATION_ROLES = [
+  ...CUSTOMER_ORGANIZATION_ROLES,
   "knowledge_editor",
   "knowledge_approver",
-  "dxg_admin",
-  "super_admin",
+  ...LEGACY_DXG_ROLES,
 ] as const;
 export type OrganizationRole = (typeof ORGANIZATION_ROLES)[number];
+
+export const isLegacyDxgRole = (role: string): boolean => (LEGACY_DXG_ROLES as readonly string[]).includes(role);
 
 export interface IOrganizationMembership extends Document {
   organizationId: mongoose.Types.ObjectId;
@@ -51,8 +60,23 @@ organizationMembershipSchema.path("roles").validate(
   (roles: OrganizationRole[]) => roles.length > 0 && new Set(roles).size === roles.length,
   "At least one unique organization role is required",
 );
+// Runs for documents and for updates with runValidators. The remaining query upserts
+// that grant DXG roles skip validators; they go with the default-organization paths (ORG-106).
+organizationMembershipSchema.path("roles").validate({
+  validator(this: unknown, roles: OrganizationRole[]) {
+    const isUnchangedDocument =
+      this instanceof mongoose.Document && !this.isNew && !this.isModified("roles");
+    return isUnchangedDocument || !roles.some(isLegacyDxgRole);
+  },
+  message: (props: { value: OrganizationRole[] }) =>
+    `Legacy DXG roles cannot be granted: ${props.value.filter(isLegacyDxgRole).join(", ")}`,
+});
 organizationMembershipSchema.index({ organizationId: 1, userId: 1 }, { unique: true });
 organizationMembershipSchema.index({ organizationId: 1, status: 1, roles: 1 });
+organizationMembershipSchema.index(
+  { organizationId: 1 },
+  { unique: true, name: "one_active_owner_per_organization", partialFilterExpression: { status: "active", roles: "owner" } },
+);
 
 const OrganizationMembership = mongoose.model<IOrganizationMembership>(
   "OrganizationMembership",
