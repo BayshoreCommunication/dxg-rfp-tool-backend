@@ -138,6 +138,22 @@ export const runVendorDraftCleanup = async () => {
   }
 };
 
+// ORG-109: proposals whose owner is no longer an active member of the proposal's organization.
+// The PRD tracks "orphaned RFPs = 0"; a non-zero count needs a reassignment. Counts only, no ids.
+export const runOrphanedProposalCheck = async () => {
+  try {
+    const { findOrphanedProposals } = await import("../src/modules/tenancy/migrationVerification");
+    const result = await findOrphanedProposals({ sampleSize: 0 });
+    if (result.total > 0) {
+      console.warn(`[Cron] Orphaned proposals: ${result.total} across ${result.byOrganization.length} organization(s)`);
+    } else {
+      console.log("[Cron] Orphaned proposals: 0");
+    }
+  } catch {
+    console.error("[Cron] Orphaned proposal check failed");
+  }
+};
+
 export const startCronJobs = () => {
   // Run once immediately on startup
   runExpirationCheck();
@@ -165,5 +181,11 @@ export const startCronJobs = () => {
   // deletion workflow and should execute on the predictable daily schedule.
   setInterval(() => {
     void runVendorDraftCleanup();
+  }, 24 * 60 * 60 * 1000);
+
+  // Read-only, so it also runs on startup and gives a deploy an immediate reading.
+  void runOrphanedProposalCheck();
+  setInterval(() => {
+    void runOrphanedProposalCheck();
   }, 24 * 60 * 60 * 1000);
 };
