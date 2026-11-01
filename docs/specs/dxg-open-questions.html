@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DXG decisions: Organization Accounts</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      .deep { background: linear-gradient(135deg, #0f172a, #1e293b); color: #e2e8f0; }
+      .label { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+      a.issue { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      @page { margin: 14mm 12mm; }
+      @media print {
+        html { font-size: 12px; }
+        body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: #fff !important; }
+        main { max-width: none !important; padding-left: 0 !important; padding-right: 0 !important; }
+        main > * + *, #decisions > * + * { margin-top: 1.75rem !important; }
+        article, section > .grid > div, table { break-inside: avoid; }
+        h2 { break-after: avoid; }
+        main { padding-top: 0 !important; padding-bottom: 0 !important; }
+      }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans">
+    <main class="max-w-6xl mx-auto px-6 py-12 space-y-12">
+      <header class="space-y-4">
+        <p class="label text-slate-500">Decisions · 1 Nov 2026 · DXG (Ace Johnson) → Bayshore · answers to the 29 Oct open questions</p>
+        <h1 class="font-serif text-4xl">RFPilot Organization Accounts</h1>
+        <p class="text-slate-600 text-sm max-w-3xl">
+          DXG has answered all seven blocking questions. This page records each decision and what we'll build because of it.
+          Two answers add work: free-plan limits (Q2), and templates and vendor lists shared across the organization (Q4).
+          Q1 also changes how existing users are handled. The launch scope grows from 38 to 46 tickets, and the estimate from about 26 to about 32 engineer-weeks.
+          A few smaller follow-ups are listed at the end, each with the assumption we'll build to unless DXG says otherwise.
+        </p>
+      </header>
+
+      <!-- At a glance -------------------------------------------------- -->
+      <section class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+        <h2 class="font-serif text-2xl">At a glance</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="text-left text-slate-500">
+              <tr class="border-b border-slate-200"><th class="py-2 pr-4">#</th><th class="py-2 pr-4">Question</th><th class="py-2 pr-4">DXG's decision</th><th class="py-2">Status</th></tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr><td class="py-2 pr-4">Q1</td><td class="pr-4"><a href="#q1" class="underline">Existing users at migration</a></td><td class="pr-4">Keep them as they are. A DXG admin adds them to organizations later</td><td><span class="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">Decided · adds scope</span></td></tr>
+              <tr><td class="py-2 pr-4">Q2</td><td class="pr-4"><a href="#q2" class="underline">Pricing</a></td><td class="pr-4">Priced by number of proposals created. Free trial: 2 proposals, with vendor responses and proposal intelligence locked</td><td><span class="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">Decided · adds scope</span></td></tr>
+              <tr><td class="py-2 pr-4">Q3</td><td class="pr-4"><a href="#q3" class="underline">Viewer commenting</a></td><td class="pr-4">Not needed. Viewers are read-only</td><td><span class="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">Decided</span></td></tr>
+              <tr><td class="py-2 pr-4">Q4</td><td class="pr-4"><a href="#q4" class="underline">Templates and vendor lists</a></td><td class="pr-4">Shared across the organization, at launch</td><td><span class="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">Decided · adds scope</span></td></tr>
+              <tr><td class="py-2 pr-4">Q5</td><td class="pr-4"><a href="#q5" class="underline">Sign-in</a></td><td class="pr-4">Our recommendation: keep current sign-in, add Microsoft and two-factor</td><td><span class="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">Decided</span></td></tr>
+              <tr><td class="py-2 pr-4">Q6</td><td class="pr-4"><a href="#q6" class="underline">Admins and planners' drafts</a></td><td class="pr-4">Yes, Admins see drafts</td><td><span class="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">Decided</span></td></tr>
+              <tr><td class="py-2 pr-4">Q7</td><td class="pr-4"><a href="#q7" class="underline">Viewers and outside clients</a></td><td class="pr-4">Our recommendation: members only at launch, guest review links soon after</td><td><span class="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">Decided</span></td></tr>
+              <tr><td class="py-2 pr-4">F1–F6</td><td class="pr-4"><a href="#followups" class="underline">Follow-ups from these answers</a></td><td class="pr-4">Each has an assumption we'll build to</td><td><span class="rounded-full bg-sky-100 text-sky-800 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">Please confirm</span></td></tr>
+              <tr><td class="py-2 pr-4">I1–I2</td><td class="pr-4"><a href="#inputs" class="underline">Microsoft registration, test domain with DNS</a></td><td class="pr-4">Still needed</td><td><span class="rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">Input needed</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Decisions ---------------------------------------------------- -->
+      <section id="decisions" class="space-y-10">
+        <h2 class="font-serif text-3xl">Decisions</h2>
+
+        <article id="q1" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+          <div class="flex flex-wrap items-center gap-3">
+            <h3 class="font-serif text-2xl">Q1 · What happens to existing users?</h3>
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-0.5 text-xs font-semibold">Decided · adds scope</span>
+          </div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-4 space-y-2">
+              <p class="label text-slate-500">DXG's decision</p>
+              <p class="text-sm">Keep existing users as they are, so a DXG admin can add them to an organization later. This is a new option. We don't create an organization for each user, and we don't group users by email domain.</p>
+            </div>
+            <div class="deep rounded-lg p-4 space-y-2">
+              <p class="label text-slate-400">What we'll build</p>
+              <p class="text-sm">At launch, existing users keep signing in and keep seeing only their own proposals, exactly as today. Behind the scenes each one gets a private holding space, so their data stays separate from every other customer. They aren't an Owner and don't get organization settings yet.</p>
+              <p class="text-sm">A new tool in the admin app lets DXG staff place an existing user in an organization: either a new one where they become Owner, or an existing one with a role and team. Their proposals, vendor responses and assistant history move with them, and the move is recorded in the audit log.</p>
+            </div>
+          </div>
+        </article>
+
+        <article id="q2" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+          <div class="flex flex-wrap items-center gap-3">
+            <h3 class="font-serif text-2xl">Q2 · How does pricing work?</h3>
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-0.5 text-xs font-semibold">Decided · adds scope</span>
+          </div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-4 space-y-2">
+              <p class="label text-slate-500">DXG's decision</p>
+              <p class="text-sm">Pricing is based on the number of proposals created, not on seats. For now there is a free trial that allows up to 2 proposals. Vendor responses and proposal intelligence are locked for free users.</p>
+            </div>
+            <div class="deep rounded-lg p-4 space-y-2">
+              <p class="label text-slate-400">What we'll build</p>
+              <p class="text-sm">There are no seat limits, so invitations are never refused for being over a limit, and the question of whether Viewers count as seats goes away. Every new organization starts on the free trial. The server enforces the 2-proposal limit and the two locked features, so the rules can't be bypassed by going around the screens.</p>
+              <p class="text-sm">Locked features stay visible with an upgrade prompt. The signup plan step shows the free trial. DXG staff can change an organization's plan from the admin app until paid plans and checkout are defined.</p>
+            </div>
+          </div>
+        </article>
+
+        <article id="q3" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+          <div class="flex flex-wrap items-center gap-3">
+            <h3 class="font-serif text-2xl">Q3 · Do Viewers need commenting?</h3>
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-0.5 text-xs font-semibold">Decided</span>
+          </div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-4 space-y-2">
+              <p class="label text-slate-500">DXG's decision</p>
+              <p class="text-sm">Commenting isn't needed.</p>
+            </div>
+            <div class="deep rounded-lg p-4 space-y-2">
+              <p class="label text-slate-400">What we'll build</p>
+              <p class="text-sm">Viewers are read-only. Commenting is dropped from the plan entirely, not deferred, and the spec's "with the ability to comment" wording is removed.</p>
+            </div>
+          </div>
+        </article>
+
+        <article id="q4" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+          <div class="flex flex-wrap items-center gap-3">
+            <h3 class="font-serif text-2xl">Q4 · Are templates and vendor lists shared across the organization?</h3>
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-0.5 text-xs font-semibold">Decided · adds scope</span>
+          </div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-4 space-y-2">
+              <p class="label text-slate-500">DXG's decision</p>
+              <p class="text-sm">Yes, shared across the organization, included at launch.</p>
+            </div>
+            <div class="deep rounded-lg p-4 space-y-2">
+              <p class="label text-slate-400">What we'll build</p>
+              <p class="text-sm">Today RFPilot has only two fixed presentation layouts and no saved vendor lists, so both are new features.</p>
+              <p class="text-sm"><b>Organization templates:</b> save a proposal as a reusable starting point and start new proposals from it. Owners and Admins publish templates to the whole organization. Planners can keep personal templates.</p>
+              <p class="text-sm"><b>Organization vendor list:</b> one shared list of vendor companies and contacts that anyone creating a proposal can pick from when sending it out. Owners, Admins and Team Managers edit the list.</p>
+            </div>
+          </div>
+        </article>
+
+        <article id="q5" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+          <div class="flex flex-wrap items-center gap-3">
+            <h3 class="font-serif text-2xl">Q5 · Authentication</h3>
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-0.5 text-xs font-semibold">Decided</span>
+          </div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-4 space-y-2">
+              <p class="label text-slate-500">DXG's decision</p>
+              <p class="text-sm">Go with our recommendation.</p>
+            </div>
+            <div class="deep rounded-lg p-4 space-y-2">
+              <p class="label text-slate-400">What we'll build</p>
+              <p class="text-sm">Keep RFPilot's current sign-in (password, Google, email codes). Add Microsoft sign-in and authenticator-app two-factor. Organizations and roles live in RFPilot. We'll revisit a hosted provider when enterprise SAML single sign-on is scheduled.</p>
+            </div>
+          </div>
+        </article>
+
+        <article id="q6" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+          <div class="flex flex-wrap items-center gap-3">
+            <h3 class="font-serif text-2xl">Q6 · Can Admins see planners' draft RFPs?</h3>
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-0.5 text-xs font-semibold">Decided</span>
+          </div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-4 space-y-2">
+              <p class="label text-slate-500">DXG's decision</p>
+              <p class="text-sm">Yes. Admins can see planners' proposals, drafts included.</p>
+            </div>
+            <div class="deep rounded-lg p-4 space-y-2">
+              <p class="label text-slate-400">What we'll build</p>
+              <p class="text-sm">Owners and Admins see every proposal in the organization, drafts included, as the permissions matrix says. A short note in the product tells planners that their organization's Admins can see their drafts, so nobody is surprised.</p>
+            </div>
+          </div>
+        </article>
+
+        <article id="q7" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+          <div class="flex flex-wrap items-center gap-3">
+            <h3 class="font-serif text-2xl">Q7 · Are Viewers inside the organization, or also outside clients?</h3>
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-0.5 text-xs font-semibold">Decided</span>
+          </div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-4 space-y-2">
+              <p class="label text-slate-500">DXG's decision</p>
+              <p class="text-sm">Go with our recommendation.</p>
+            </div>
+            <div class="deep rounded-lg p-4 space-y-2">
+              <p class="label text-slate-400">What we'll build</p>
+              <p class="text-sm">At launch, Viewers are organization members with their own login. Outside clients are invited as Viewers. Because pricing isn't per seat (Q2), this costs the customer nothing extra. Guest review links (a secure, expiring, read-only link to one proposal, with no account) come as a fast follow.</p>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- Follow-ups --------------------------------------------------- -->
+      <section id="followups" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+        <div class="flex flex-wrap items-center gap-3">
+          <h2 class="font-serif text-2xl">Follow-ups from these answers</h2>
+          <span class="rounded-full bg-sky-100 text-sky-800 px-3 py-0.5 text-xs font-semibold">Please confirm</span>
+        </div>
+        <p class="text-sm text-slate-600">None of these stops work. Each shows the assumption we'll build to. Any of them can be changed later through configuration.</p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="text-left text-slate-500">
+              <tr class="border-b border-slate-200"><th class="py-2 pr-4">#</th><th class="py-2 pr-4">Question</th><th class="py-2">Our assumption</th></tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 align-top">
+              <tr><td class="py-2 pr-4">F1</td><td class="py-2 pr-4">Is the 2-proposal free limit per organization or per user?</td><td class="py-2">Per organization, since the organization owns the plan.</td></tr>
+              <tr><td class="py-2 pr-4">F2</td><td class="py-2 pr-4">Does deleting a proposal free up a slot?</td><td class="py-2">No. The limit counts proposals created, which matches pricing by proposals created.</td></tr>
+              <tr><td class="py-2 pr-4">F3</td><td class="py-2 pr-4">With vendor responses locked, can free users still send proposals to vendors?</td><td class="py-2">Yes. Vendors can respond, and responses are kept but can't be opened until the organization upgrades.</td></tr>
+              <tr><td class="py-2 pr-4">F4</td><td class="py-2 pr-4">Do the free-plan limits apply to existing users?</td><td class="py-2">Not while they're unassigned. They keep today's access. Once a DXG admin places them in an organization, that organization's plan applies, and DXG sets the plan at that point.</td></tr>
+              <tr><td class="py-2 pr-4">F5</td><td class="py-2 pr-4">What are the paid plans, and how does a customer upgrade?</td><td class="py-2">Until DXG defines them, the upgrade prompt says "Contact us", and DXG staff change the plan in the admin app. Online checkout is out of scope for launch.</td></tr>
+              <tr><td class="py-2 pr-4">F6</td><td class="py-2 pr-4">Who manages shared templates and the vendor list?</td><td class="py-2">Owners and Admins publish organization templates. Owners, Admins and Team Managers edit the vendor list. Everyone who can create proposals can use both.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Inputs ------------------------------------------------------- -->
+      <section id="inputs" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+        <div class="flex flex-wrap items-center gap-3">
+          <h2 class="font-serif text-2xl">Inputs only DXG can provide</h2>
+          <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-0.5 text-xs font-semibold">Input needed</span>
+        </div>
+        <div class="grid md:grid-cols-2 gap-4">
+          <div class="rounded-lg border border-slate-200 p-4 space-y-1">
+            <p class="label text-slate-500">I1 · Microsoft app registration</p>
+            <p class="text-sm">A multi-tenant app registration in DXG's Microsoft Entra account (or permission for us to create one), plus a test tenant.</p>
+          </div>
+          <div class="rounded-lg border border-slate-200 p-4 space-y-1">
+            <p class="label text-slate-500">I2 · A test domain with DNS access</p>
+            <p class="text-sm">A domain where we can add TXT records, so we can test "verify our domain" and access requests end to end.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
