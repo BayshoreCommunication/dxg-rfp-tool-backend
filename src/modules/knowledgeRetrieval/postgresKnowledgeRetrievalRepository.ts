@@ -280,7 +280,8 @@ export const knowledgeRetrievalRepository = {
  JOIN rfpilot.knowledge_import_documents doc ON doc.id=f.document_id
  LEFT JOIN rfpilot.knowledge_fragment_embeddings e ON e.release_id=r.id AND e.fragment_id=f.id AND e.embedding_model_release_id=$3
  CROSS JOIN search_query
- WHERE r.organization_id=$11
+ -- The customer's own knowledge plus DXG's shared platform knowledge (migration 064).
+ WHERE r.organization_id IN ($11, rfpilot.platform_organization_id())
    AND r.state='active'
    AND r.effective_at<=now()
    AND (r.expires_at IS NULL OR r.expires_at>now())
@@ -396,7 +397,7 @@ const loadResults = async (
      JOIN rfpilot.knowledge_import_batches b ON b.id=rel.batch_id
      WHERE rr.query_id=$1
        AND rr.organization_id=$2
-       AND rel.organization_id=$2
+       AND rel.organization_id IN ($2, rfpilot.platform_organization_id())
        AND rel.state='active'
        AND rel.effective_at<=now()
        AND (rel.expires_at IS NULL OR rel.expires_at>now())

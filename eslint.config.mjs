@@ -34,6 +34,7 @@ export default tseslint.config(
       "scripts/migrateOrganizationMemberships.ts",
       "scripts/migrateAdminAccounts.ts",
       "scripts/migratePostgres.ts",
+      "scripts/markPlatformOrganization.ts",
       "scripts/backfillPostgresProposalReferences.ts",
       "scripts/backfillIdentityProjections.ts",
       "scripts/backfillVendorSubmissionVersions.ts",

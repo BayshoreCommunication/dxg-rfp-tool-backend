@@ -46,6 +46,19 @@ sit in `scan_failed` if ClamAV is down.
 5. Smoke: `GET /api/v1/ai/pilot/status` (security admin) — verify environment,
    model, kill-switch state; upload → scan → extract on a synthetic fixture.
 
+### Shared platform corpus (once per environment, after migration 064)
+
+DXG's pricing corpus, expert rules and knowledge base live in DXG's organization and every
+customer organization reads them. Nothing is shared until that organization is marked:
+
+1. `npm run platform:mark-organization -- --slug=dxg` (dry run: shows the organization and its
+   corpus counts).
+2. `npm run platform:mark-organization -- --apply --slug=dxg`.
+
+Mark it before any customer leaves DXG's organization (new signups from ORG-106, the ORG-107
+migration); otherwise their investment guidance and knowledge grounding find no corpus. Only one
+organization can be the platform, and the script refuses to move the mark.
+
 ## Cost & usage
 
 `GET /api/v1/ai/usage-report?days=30` (`organization:manage`) — daily attempt
