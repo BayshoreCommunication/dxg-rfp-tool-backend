@@ -59,6 +59,25 @@ Mark it before any customer leaves DXG's organization (new signups from ORG-106,
 migration); otherwise their investment guidance and knowledge grounding find no corpus. Only one
 organization can be the platform, and the script refuses to move the mark.
 
+### Moving existing customers into their own organizations (ORG-107, once)
+
+Each existing customer moves out of the shared organization into a legacy holding tenant of their
+own, with their MongoDB documents and Postgres rows. DXG staff, DXG's corpus and the audit history
+stay put. Run in a maintenance window:
+
+1. Mark the platform organization (above).
+2. Pause the worker and dispatcher and let the outbox drain.
+3. `npm run migrate:customer-organizations -- --run-id=<id>` (dry run). Postgres moves run in a
+   transaction that is rolled back, so the per-customer counts are exact and a missing privilege
+   fails here. It needs `POSTGRES_MIGRATION_URL` (the role that owns the tables; no superuser).
+4. `npm run migrate:customer-organizations -- --apply --run-id=<id>`. A failed customer is reported
+   and the rest continue; re-running the same run id skips customers already moved.
+5. Check `remainingInSharedOrganization` is all zero, then resume the worker and dispatcher.
+
+Rollback: `npm run migrate:customer-organizations -- --rollback-run=<id>` (dry run), then with
+`--apply`. Everything in each holding tenant, including anything created since, moves back and
+the holding tenants are deleted. Customers sign in again either way.
+
 ## Cost & usage
 
 `GET /api/v1/ai/usage-report?days=30` (`organization:manage`) — daily attempt

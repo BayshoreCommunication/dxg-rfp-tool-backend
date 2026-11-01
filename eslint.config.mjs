@@ -32,6 +32,7 @@ export default tseslint.config(
       "scripts/migrateProposalV1.ts",
       "scripts/migrateDxgOrganization.ts",
       "scripts/migrateOrganizationMemberships.ts",
+      "scripts/migrateCustomerOrganizations.ts",
       "scripts/migrateAdminAccounts.ts",
       "scripts/migratePostgres.ts",
       "scripts/markPlatformOrganization.ts",
