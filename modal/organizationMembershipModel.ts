@@ -60,8 +60,9 @@ organizationMembershipSchema.path("roles").validate(
   (roles: OrganizationRole[]) => roles.length > 0 && new Set(roles).size === roles.length,
   "At least one unique organization role is required",
 );
-// Runs for documents and for updates with runValidators. The remaining query upserts
-// that grant DXG roles skip validators; they go with the default-organization paths (ORG-106).
+// Runs for documents and for updates with runValidators. DXG staff sign-in still upserts
+// dxg_admin/super_admin memberships in DXG's own organization (never a customer one) without
+// validators; that ends when the admin app stops authenticating through memberships.
 organizationMembershipSchema.path("roles").validate({
   validator(this: unknown, roles: OrganizationRole[]) {
     const isUnchangedDocument =

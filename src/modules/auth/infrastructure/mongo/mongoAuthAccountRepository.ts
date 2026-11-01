@@ -5,6 +5,7 @@ import type {
   SafeAuthUser,
 } from "../../domain/ports/authAccountPorts";
 import { requireDefaultOrganizationId } from "./defaultOrganization";
+import { createCustomerWithOrganization } from "./customerOrganization";
 import OrganizationMembership from "../../../../../modal/organizationMembershipModel";
 import { legacyRoleToMembershipRoles } from "../../../identity/application/membershipMigration";
 
@@ -34,32 +35,15 @@ export const mongoAuthAccountRepository: AuthAccountRepository = {
   async emailExists(email) {
     return Boolean(await User.exists({ email }));
   },
+  // A new customer becomes the Owner of a new organization of their own (ORG-106).
   async createCustomer(input) {
-    const organizationId = await requireDefaultOrganizationId();
-    const now = new Date();
-    const id = new mongoose.Types.ObjectId();
-    const user = await User.findOneAndUpdate(
-      { _id: id },
-      {
-        $setOnInsert: {
-          name: input.name,
-          organizationId,
-          email: input.email,
-          phone: input.phone,
-          company: input.company,
-          password: input.passwordHash,
-          role: "customer",
-          isBlocked: false,
-        },
-      },
-      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true },
-    ).select("-password").lean();
-    if (!user) throw new Error("Customer account was not created");
-    await OrganizationMembership.updateOne(
-      { organizationId, userId: user._id },
-      { $setOnInsert: { roles: ["planner"], status: "active", version: 1, activatedAt: now } },
-      { upsert: true },
-    );
+    const user = await createCustomerWithOrganization({
+      name: input.name,
+      email: input.email,
+      phone: input.phone,
+      company: input.company,
+      password: input.passwordHash,
+    });
     return toSafeUser(user);
   },
   async replacePassword(email, passwordHash) {

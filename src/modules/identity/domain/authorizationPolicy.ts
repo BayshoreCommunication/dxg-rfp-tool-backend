@@ -28,6 +28,8 @@ export const legacyAuthorizationRoles = (role: string): string[] => {
   const normalized = role.toLowerCase().trim().replace(/[\s-]/g, "_");
   if (normalized === "superadmin" || normalized === "super_admin") return ["super_admin"];
   if (normalized === "admin") return ["dxg_admin", "super_admin"];
-  if (normalized === "customer") return ["planner", "organization_admin", "dxg_producer"];
+  // A "customer" guard means any customer role. It used to expand to planner, organization_admin
+  // and dxg_producer, which granted every customer administrator and producer rights (ORG-106).
+  if (normalized === "customer") return ["owner", "organization_admin", "team_manager", "planner", "viewer"];
   return [normalized];
 };
