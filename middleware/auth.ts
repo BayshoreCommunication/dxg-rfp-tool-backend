@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextFunction, Request, Response } from "express";
 import { TokenPayload, verifyAccessToken } from "../config/jwt";
 import Organization from "../modal/organizationModel";
@@ -6,13 +7,31 @@ import RefreshSession from "../modal/refreshSessionModel";
 import { runWithTenant } from "../src/modules/shared/tenancy/tenantContext";
 import { findSessionPrincipal } from "../src/modules/auth/infrastructure/mongo/mongoSessionAccountLoader";
 import { hasOrganizationAction, legacyAuthorizationRoles, OrganizationAction } from "../src/modules/identity/domain/authorizationPolicy";
+import type { RfpActor } from "../src/modules/identity/domain/rfpAccessPolicy";
+import { ActorLookups, noTeamsOrSharesYet, resolveRfpActor } from "../src/modules/identity/application/resolveRfpActor";
+import { authenticationSessions } from "../src/modules/auth/composition";
 
 // Extend Express Request to include user
 export interface AuthRequest extends Request {
   user?: TokenPayload;
+  // Resolved once per request for rfpAccessPolicy: organization, roles, managed teams, shares.
+  rfpActor?: RfpActor;
 }
 
-export const createAuthenticate = (verifyToken: (token: string) => TokenPayload) => async (
+type AuthenticateDependencies = {
+  revokeInactiveMembership(input: { userId: string; organizationId: string; correlationId: string }): Promise<number>;
+  actorLookups: ActorLookups;
+};
+
+const defaultDependencies: AuthenticateDependencies = {
+  revokeInactiveMembership: (input) => authenticationSessions.revokeInactiveMembership(input),
+  actorLookups: noTeamsOrSharesYet,
+};
+
+export const createAuthenticate = (
+  verifyToken: (token: string) => TokenPayload,
+  dependencies: AuthenticateDependencies = defaultDependencies,
+) => async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
@@ -40,11 +59,11 @@ export const createAuthenticate = (verifyToken: (token: string) => TokenPayload)
       const [principal, organization, membership, activeSession] = await Promise.all([
         findSessionPrincipal(decoded.userId, decoded.organizationId),
         Organization.findOne({ _id: decoded.organizationId, status: "active" }).select("_id").lean(),
+        // Any status: a deactivated or removed member is told so and signed out below.
         OrganizationMembership.findOne({
           organizationId: decoded.organizationId,
           userId: decoded.userId,
-          status: "active",
-        }).select("roles version").lean(),
+        }).select("roles version status").lean(),
         RefreshSession.exists({
           sessionId: decoded.sessionId,
           userId: decoded.userId,
@@ -54,7 +73,22 @@ export const createAuthenticate = (verifyToken: (token: string) => TokenPayload)
           idleExpiresAt: { $gt: now },
         }),
       ]);
-      if (!principal || !membership || !activeSession) {
+      // Deactivation takes effect on the next request, not at token expiry: refuse with 401 and
+      // revoke the member's refresh sessions so the client can't mint a new access token.
+      if (!membership || membership.status !== "active") {
+        await dependencies.revokeInactiveMembership({
+          userId: decoded.userId,
+          organizationId: decoded.organizationId,
+          correlationId: (req as AuthRequest & { correlationId?: string }).correlationId ?? randomUUID(),
+        });
+        res.status(401).json({
+          success: false,
+          code: "MEMBERSHIP_INACTIVE",
+          message: "Your organization membership is no longer active. Please contact your organization's admin.",
+        });
+        return;
+      }
+      if (!principal || !activeSession) {
         res.status(403).json({ success: false, message: "Active organization membership required" });
         return;
       }
@@ -77,6 +111,10 @@ export const createAuthenticate = (verifyToken: (token: string) => TokenPayload)
         roles: membership.roles,
         rolesVersion: membership.version,
       };
+      req.rfpActor = await resolveRfpActor(
+        { organizationId: decoded.organizationId, userId: decoded.userId, roles: membership.roles, status: membership.status },
+        dependencies.actorLookups,
+      );
       runWithTenant({ organizationId: decoded.organizationId, userId: decoded.userId }, next);
     } catch (error) {
       res.status(401).json({

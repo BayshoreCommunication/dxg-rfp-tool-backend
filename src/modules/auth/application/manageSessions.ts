@@ -264,6 +264,31 @@ export const createSessionManager = (dependencies: Dependencies) => {
     return revoked;
   };
 
+  // The access path calls this on every request from a member who is no longer active, so it
+  // stays idempotent: only the request that actually revokes sessions writes the audit event.
+  const revokeInactiveMembership = async (input: { userId: string; organizationId: string; correlationId: string }) => {
+    const revoked = await dependencies.sessions.revokeAll({
+      userId: input.userId,
+      organizationId: input.organizationId,
+      reason: "membership_inactive",
+      now: now(),
+    });
+    if (revoked > 0) {
+      await dependencies.audit.append({
+        organizationId: input.organizationId,
+        actorUserId: input.userId,
+        action: "auth.sessions.revoked_all",
+        targetType: "user",
+        targetId: input.userId,
+        decision: "revoked",
+        reason: "membership_inactive",
+        correlationId: input.correlationId,
+        metadata: { revokedCount: revoked },
+      });
+    }
+    return revoked;
+  };
+
   const listActive = (input: { userId: string; organizationId: string }) =>
     dependencies.sessions.listActive({ ...input, now: now() });
 
@@ -273,6 +298,7 @@ export const createSessionManager = (dependencies: Dependencies) => {
     revokeSession,
     revokePresented,
     revokeAll,
+    revokeInactiveMembership,
     listActive,
   };
 };
