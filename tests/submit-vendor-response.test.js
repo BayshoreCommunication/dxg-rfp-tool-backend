@@ -471,3 +471,35 @@ test("planner channel without a recorded user is refused", async () => {
   assert.deepEqual(result, { kind: "forbidden" });
   assert.equal(capture.save, undefined);
 });
+
+test("with the access policy wired, a planner who may edit someone else's proposal can record a response", async () => {
+  const capture = {};
+  const seen = [];
+  const deps = dependencies(capture);
+  deps.plannerAccess = async (input) => { seen.push(input); return "allowed"; };
+  const submit = createSubmitVendorResponse(deps);
+  const result = await submit({
+    proposalId: "proposal-001", vendorName: "AV Partners", submittedBy: "Avery", email: "vendor@example.com",
+    channel: "planner_upload", recordedByUserId: "admin-777", files: [],
+  });
+  assert.equal(result.kind, "created");
+  assert.deepEqual(seen, [{ proposalId: "proposal-001", userId: "admin-777" }]);
+});
+
+test("with the access policy wired, its refusal and miss decide the outcome and uploads are cleaned up", async () => {
+  for (const [access, kind] of [["forbidden", "forbidden"], ["not_found", "proposal_not_found"]]) {
+    const capture = {};
+    const deps = dependencies(capture);
+    const cleaned = [];
+    deps.storage.cleanup = async (path) => { cleaned.push(path); };
+    deps.plannerAccess = async () => access;
+    const submit = createSubmitVendorResponse(deps);
+    const result = await submit({
+      proposalId: "proposal-001", vendorName: "AV Partners", submittedBy: "Avery", email: "vendor@example.com",
+      channel: "planner_upload", recordedByUserId: "planner-001", files: [{ originalname: "quote.pdf", path: "/tmp/quote" }],
+    });
+    assert.equal(result.kind, kind, access);
+    assert.deepEqual(cleaned, ["/tmp/quote"], access);
+    assert.equal(capture.save, undefined, access);
+  }
+});

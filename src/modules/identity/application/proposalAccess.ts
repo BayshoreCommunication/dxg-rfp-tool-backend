@@ -1,7 +1,9 @@
 import mongoose from "mongoose";
 import Proposal from "../../../../modal/proposalsModel";
 import { canAccessRfp, rfpListScope, type RfpAction, type RfpActor } from "../domain/rfpAccessPolicy";
-import { currentRfpActor } from "../../shared/tenancy/tenantContext";
+import { currentRfpActor, currentTenantOrNull } from "../../shared/tenancy/tenantContext";
+import OrganizationMembership from "../../../../modal/organizationMembershipModel";
+import { resolveRfpActor } from "./resolveRfpActor";
 
 // Thrown when a proposal exists in the actor's organization but the access policy refuses the
 // action. Controllers map it to 403; a proposal outside the organization stays a plain miss (404).
@@ -72,4 +74,49 @@ export const checkRequestProposalAccess = async (
   if (await Proposal.exists(scopeProposalFilter(actor, action, { _id: proposalId }))) return "allowed";
   await assertProposalMissIsNotFound(actor, proposalId, action);
   return "not_found";
+};
+
+export type ActingUser = { organizationId: string; userId: string };
+
+// The policy actor for a user acting in an organization. Inside an authenticated request it is the
+// one the middleware resolved; elsewhere (durable jobs carry the organization and user that queued
+// them) it is rebuilt from the membership, so a job can't outlive the access that started it.
+export const actorFor = async ({ organizationId, userId }: ActingUser): Promise<RfpActor> => {
+  const requestActor = currentTenantOrNull()?.rfpActor;
+  if (requestActor && String(requestActor.userId) === String(userId) && String(requestActor.organizationId) === String(organizationId)) {
+    return requestActor;
+  }
+  const membership = await OrganizationMembership.findOne({ organizationId, userId }).select("roles status").lean();
+  return resolveRfpActor({ organizationId: String(organizationId), userId: String(userId), roles: membership?.roles ?? [], status: membership?.status ?? "removed" });
+};
+
+// Single-proposal filter for an acting user. Use with explainProposalMiss after a miss.
+export const proposalFilterFor = async (who: ActingUser, action: RfpAction, filter: Record<string, unknown>) =>
+  scopeProposalFilter(await actorFor(who), action, filter);
+
+export const explainProposalMiss = async (who: ActingUser, proposalId: unknown, action: RfpAction) =>
+  assertProposalMissIsNotFound(await actorFor(who), proposalId, action);
+
+// Vendor responses and submissions inherit their proposal's decision. Organization-wide actors
+// need only the organization; everyone else is narrowed to the proposals the policy lets them reach.
+export const vendorRecordScope = async (who: ActingUser, action: RfpAction): Promise<Record<string, unknown>> => {
+  const actor = await actorFor(who);
+  const organizationId = new mongoose.Types.ObjectId(String(actor.organizationId));
+  // An organization-wide scope is the organization filter alone.
+  if (Object.keys(rfpListScope(actor, action)).length === 1) return { organizationId };
+  const proposalIds = await Proposal.distinct("_id", scopeProposalFilter(actor, action));
+  return { organizationId, proposalId: { $in: proposalIds } };
+};
+
+// After a scoped lookup of one vendor record missed: a record in the actor's organization whose
+// proposal the policy refuses is a 403; anything else stays a miss.
+export const explainVendorRecordMiss = async (
+  who: ActingUser,
+  model: { findOne(filter: Record<string, unknown>): { select(fields: string): { lean<T>(): Promise<T> } } },
+  recordId: unknown,
+  action: RfpAction,
+): Promise<void> => {
+  if (!mongoose.isValidObjectId(recordId)) return;
+  const record = await model.findOne({ _id: recordId, organizationId: who.organizationId }).select("proposalId").lean<{ proposalId?: unknown } | null>();
+  if (record?.proposalId) await explainProposalMiss(who, record.proposalId, action);
 };

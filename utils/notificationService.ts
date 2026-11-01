@@ -240,6 +240,7 @@ export const initializeNotificationWebSocketServer = (server: http.Server) => {
 };
 
 export const emitUnreadNotificationCount = async (userId: string) => {
+  // scope-exempt: the recipient's own unread badge (one active membership per user at launch)
   const count = await Notification.countDocuments({ userId, isRead: false });
   const clients = clientsByUserId.get(userId);
 
@@ -296,7 +297,8 @@ export const createNotification = async ({
     return notification;
   } catch (error: any) {
     if (error?.code === 11000 && dedupeKey) {
-      return Notification.findOne({ dedupeKey });
+      // scope-exempt: duplicate-key fallback for the notification this call just tried to insert
+      return Notification.findOne({ dedupeKey, userId });
     }
     throw error;
   }

@@ -1,4 +1,3 @@
-import mongoose from "mongoose";
 import VendorResponse from "../../../../../modal/vendorResponseModel";
 import VendorSubmission from "../../../../../modal/vendorSubmissionModel";
 import VendorSubmissionVersion from "../../../../../modal/vendorSubmissionVersionModel";
@@ -8,7 +7,8 @@ import type {
   VendorResponseDeletionTarget,
 } from "../../domain/ports/vendorResponseDeleteRepository";
 import { governedVendorObjectKey } from "../storage/spacesVendorDocumentStorage";
-import { tenantFilter } from "../../../shared/tenancy/tenantContext";
+import { currentTenant } from "../../../shared/tenancy/tenantContext";
+import { explainVendorRecordMiss, vendorRecordScope } from "../../../identity/application/proposalAccess";
 
 type StoredDocument = {
   objectKey?: unknown;
@@ -89,28 +89,25 @@ const deletionTargets = async (responses: StoredResponse[]) => {
   });
 };
 
-const ownedFilter = (ownerUserId: string) => ({
-  proposalOwnerId: new mongoose.Types.ObjectId(ownerUserId),
-  ...tenantFilter(),
-});
+// Deleting vendor data needs the proposal's delete permission (ORG-102); the scope covers
+// responses and submissions alike through their proposalId.
+const actingUser = (ownerUserId: string) => ({ organizationId: currentTenant().organizationId, userId: ownerUserId });
+const deleteScope = (ownerUserId: string) => vendorRecordScope(actingUser(ownerUserId), "delete");
 
 export const mongoVendorResponseDeleteRepository: VendorResponseDeleteRepository = {
   async findOwnedDeletionTarget({ responseId, ownerUserId }) {
-    const response = await VendorResponse.findOne({
-      _id: responseId,
-      ...ownedFilter(ownerUserId),
-    })
+    const response = await VendorResponse.findOne({ $and: [{ _id: responseId }, await deleteScope(ownerUserId)] }) // tenant-scoped: deleteScope
       .select("_id proposalId organizationId proposalOwnerId submissionId documents")
       .lean<StoredResponse>();
-    if (!response) return null;
+    if (!response) {
+      await explainVendorRecordMiss(actingUser(ownerUserId), VendorResponse, responseId, "delete");
+      return null;
+    }
     return (await deletionTargets([response]))[0] ?? null;
   },
 
   async listOwnedDeletionTargets({ ownerUserId, responseIds }) {
-    const responses = await VendorResponse.find({
-      ...ownedFilter(ownerUserId),
-      _id: { $in: responseIds },
-    })
+    const responses = await VendorResponse.find({ $and: [{ _id: { $in: responseIds } }, await deleteScope(ownerUserId)] }) // tenant-scoped: deleteScope
       .select("_id proposalId organizationId proposalOwnerId submissionId documents")
       .lean<StoredResponse[]>();
     return deletionTargets(responses);
@@ -132,16 +129,9 @@ export const mongoVendorResponseDeleteRepository: VendorResponseDeleteRepository
       });
     }
     if (submissionIds.length > 0) {
-      await VendorSubmission.deleteMany({
-        _id: { $in: submissionIds },
-        proposalOwnerId: new mongoose.Types.ObjectId(ownerUserId),
-        ...tenantFilter(),
-      });
+      await VendorSubmission.deleteMany({ $and: [{ _id: { $in: submissionIds } }, await deleteScope(ownerUserId)] }); // tenant-scoped: deleteScope
     }
-    const result = await VendorResponse.deleteMany({
-      _id: { $in: responseIds },
-      ...ownedFilter(ownerUserId),
-    });
+    const result = await VendorResponse.deleteMany({ $and: [{ _id: { $in: responseIds } }, await deleteScope(ownerUserId)] }); // tenant-scoped: deleteScope
     return result.deletedCount;
   },
 };

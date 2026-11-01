@@ -18,7 +18,7 @@ export const mongoDashboardReadRepository: DashboardReadRepository = {
     });
     const [totalProposals, emailRows, proposalViewRows, latestDocuments] =
       await Promise.all([
-        Proposal.countDocuments(ownedProposals),
+        Proposal.countDocuments(ownedProposals), // tenant-scoped: ownedProposals applies the access policy
         EmailCampaign.aggregate<{
           totalEmailSent: number;
           totalEmailClicked: number;
@@ -41,7 +41,7 @@ export const mongoDashboardReadRepository: DashboardReadRepository = {
             },
           },
         ]),
-        Proposal.find(ownedProposals)
+        Proposal.find(ownedProposals) // tenant-scoped: ownedProposals applies the access policy
           .sort({ createdAt: -1 })
           .limit(5)
           .select(

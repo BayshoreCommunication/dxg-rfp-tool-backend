@@ -82,11 +82,9 @@ export const buildChatReply = async (
         _id: proposalMongoId,
         userId: ctx.actorUserMongoId,
         isArchived: { $ne: true },
-        $or: [
-          { organizationId: ctx.organizationMongoId },
-          { organizationId: { $exists: false } },
-          { organizationId: null },
-        ],
+        // Proposals without an organization were backfilled by migrate:dxg-organization;
+        // the proposals list already requires one, so the assistant does too.
+        organizationId: ctx.organizationMongoId,
       })
         .select(
           "status isDraft version event venueSchedule roomByRoom production hybridVirtual contentCreative venue budget",

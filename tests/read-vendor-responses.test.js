@@ -17,8 +17,23 @@ test("proposal summary aggregation uses object identifiers for tenant matching",
     ),
     "utf8",
   );
-  assert.match(source, /organizationId:\s*tenantObjectId\(\)/);
+  // ORG-104: the match is the proposal-access scope, which builds ObjectIds (aggregations aren't cast).
+  assert.match(source, /const baseFilter: Record<string, unknown> = await responseScope\(ownerUserId\)/);
   assert.match(source, /responseIds:\s*\{\s*\$push:\s*"\$_id"\s*\}/);
+});
+
+test("the vendor record scope matches the organization by object identifier", async () => {
+  require("ts-node/register/transpile-only");
+  const { Types } = require("mongoose");
+  const { runWithTenant } = require("../src/modules/shared/tenancy/tenantContext");
+  const { vendorRecordScope } = require("../src/modules/identity/application/proposalAccess");
+  const organizationId = new Types.ObjectId().toHexString();
+  const userId = new Types.ObjectId().toHexString();
+  const rfpActor = { organizationId, userId, roles: ["organization_admin"], membershipStatus: "active", managedTeamIds: [], shares: new Map() };
+  const scope = await runWithTenant({ organizationId, userId, rfpActor }, () => vendorRecordScope({ organizationId, userId }, "viewResponses"));
+  assert.ok(scope.organizationId instanceof Types.ObjectId);
+  assert.equal(String(scope.organizationId), organizationId);
+  assert.deepEqual(Object.keys(scope), ["organizationId"]);
 });
 
 test("vendor-response proposal summaries normalize paging and preserve complete counts", async () => {

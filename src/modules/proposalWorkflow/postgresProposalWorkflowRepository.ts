@@ -6,8 +6,8 @@ import{CANONICAL_STANDALONE_VIDEO_RECORDING_ROOT,LEGACY_STANDALONE_VIDEO_RECORDI
 // Whether the RFP has gone out lives in Mongo with the rest of the proposal,
 // not in the AI domain, so the Publish step could never read as done from
 // Postgres alone. Read here rather than in the SQL facts for that reason.
-const publishStatus=async(proposalMongoId:string,actorUserMongoId:string):Promise<string|null>=>{
- const p=await Proposal.findOne({_id:proposalMongoId,userId:actorUserMongoId}).select("status").lean<{status?:string}>();
+const publishStatus=async(proposalMongoId:string,actorUserMongoId:string,organizationMongoId:string):Promise<string|null>=>{
+ const p=await Proposal.findOne({_id:proposalMongoId,userId:actorUserMongoId,organizationId:organizationMongoId}).select("status").lean<{status?:string}>();
  return p?.status??null;
 };
 type WorkflowRow={id:string;status:string;current_step:WorkflowStep;updated_at:Date};type FactsRow={source_count:number;ready_source_count:number;context_status:string|null;reviewed_count:number;applied_count:number;draft_status:string|null;gap_count:number|null;guidance_count:number|null;guidance_blocking_count:number|null;open_question_count:number;answered_question_count:number;accepted_section_count:number;rejected_section_count:number};
@@ -127,7 +127,7 @@ const present=(row:WorkflowRow,postgresFacts:Omit<WorkflowFacts,"publishStatus">
 // paid its full latency on top of the transaction for no reason.
 const readParts=<T>(input:{organizationMongoId:string;actorUserMongoId:string;proposalMongoId:string},work:(c:PoolClient,org:string,pid:string)=>Promise<T>)=>
  Promise.all([
-  publishStatus(input.proposalMongoId,input.actorUserMongoId),
+  publishStatus(input.proposalMongoId,input.actorUserMongoId,input.organizationMongoId),
   withPostgresTransaction(async c=>{
    const org=await tenant(c,input.organizationMongoId),pid=await proposal(c,org,input.proposalMongoId,input.actorUserMongoId);
    const row=await work(c,org,pid);

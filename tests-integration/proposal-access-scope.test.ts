@@ -12,15 +12,20 @@ import Organization from '../modal/organizationModel';
 import OrganizationMembership from '../modal/organizationMembershipModel';
 import Proposal from '../modal/proposalsModel';
 import RefreshSession from '../modal/refreshSessionModel';
+import VendorResponse from '../modal/vendorResponseModel';
+import PublicAccessGrant from '../modal/publicAccessGrantModel';
 import User from '../modal/userModel';
 import { authenticationSessions } from '../src/modules/auth/composition';
 import { closePostgres } from '../config/postgres';
+import { closeSecurityRateLimitRedis } from '../middleware/securityRateLimit';
 
 let server: http.Server;
 let baseUrl: string;
 const orgIds: mongoose.Types.ObjectId[] = [];
 const tokens: Record<string, string> = {};
 const proposals: Record<string, string> = {};
+const responses: Record<string, string> = {};
+const owners: Record<string, unknown> = {};
 
 const member = async (organizationId: mongoose.Types.ObjectId, key: string, roles: string[]) => {
   const user = await User.create({ name: key, email: `${key}-${randomMongoId().slice(0, 10)}@example.test`, password: 'not-a-real-hash', role: 'customer', organizationId });
@@ -35,6 +40,12 @@ const member = async (organizationId: mongoose.Types.ObjectId, key: string, role
 const proposal = async (key: string, organizationId: mongoose.Types.ObjectId, userId: unknown) => {
   const created = await Proposal.create({ organizationId, userId, event: { eventName: `Scope ${key}` } });
   proposals[key] = String(created._id);
+  owners[key] = userId;
+  const response = await VendorResponse.create({
+    organizationId, proposalId: created._id, proposalOwnerId: userId, proposalTitle: `Scope ${key}`,
+    vendorName: `Vendor ${key}`, submittedBy: 'Avery', email: `vendor-${key}@example.test`, message: 'Quote', emailTrackingId: `scope-${key}-${randomMongoId()}`,
+  });
+  responses[key] = String(response._id);
 };
 const call = async (who: string, method: string, path: string, body?: unknown) => {
   const res = await fetch(`${baseUrl}${path}`, {
@@ -70,6 +81,8 @@ after(async () => {
   if (mongoose.connection.readyState === 1) {
     await Promise.all([
       Proposal.deleteMany({ organizationId: { $in: orgIds } }),
+      VendorResponse.deleteMany({ organizationId: { $in: orgIds } }),
+      PublicAccessGrant.deleteMany({ organizationId: { $in: orgIds } }),
       OrganizationMembership.deleteMany({ organizationId: { $in: orgIds } }),
       RefreshSession.deleteMany({ organizationId: { $in: orgIds } }),
       User.deleteMany({ organizationId: { $in: orgIds } }),
@@ -78,6 +91,7 @@ after(async () => {
   }
   await disconnectMongo();
   await closePostgres();
+  await closeSecurityRateLimitRedis();
 });
 
 test('a planner lists and opens only their own proposals', async () => {
@@ -125,6 +139,31 @@ test('list counts match the scoped list', async () => {
     assert.equal(res.body.counts?.all, expected, who);
     assert.equal(res.body.counts?.all, res.body.data.length, who);
   }
+});
+
+test('vendor responses inherit the proposal decision', async () => {
+  const listed = async (who: string) => ((await call(who, 'GET', '/api/vendor-responses?limit=50')).body.data as Array<{ _id: string }>).map((r) => String(r._id)).sort();
+  assert.deepEqual(await listed('plannerOne'), [responses.one]);
+  assert.deepEqual(await listed('admin'), [responses.one, responses.two].sort());
+  assert.deepEqual(await listed('viewer'), []);
+
+  assert.equal((await call('plannerOne', 'GET', `/api/vendor-responses/${responses.one}`)).status, 200);
+  const refused = await call('plannerOne', 'GET', `/api/vendor-responses/${responses.two}`);
+  assert.equal(refused.status, 403);
+  assert.equal(refused.body.code, 'PROPOSAL_ACCESS_DENIED');
+  assert.equal((await call('plannerOne', 'GET', `/api/vendor-responses/${responses.foreign}`)).status, 404);
+  assert.equal((await call('admin', 'GET', `/api/vendor-responses/${responses.two}`)).status, 200);
+  assert.equal((await call('admin', 'GET', `/api/vendor-responses/${responses.foreign}`)).status, 404);
+  assert.equal((await call('plannerOne', 'DELETE', `/api/vendor-responses/${responses.two}`)).status, 403);
+  assert.equal(await VendorResponse.countDocuments({ _id: responses.two }), 1, 'a refused delete removes nothing');
+});
+
+test('issuing a public link follows the policy and always answers', async () => {
+  const issue = (who: string, key: string) => call(who, 'POST', '/api/public-access', { resourceId: proposals[key], purpose: 'proposal:view' });
+  assert.equal((await issue('plannerOne', 'two')).status, 403);
+  assert.equal((await issue('plannerOne', 'foreign')).status, 404);
+  assert.equal((await issue('admin', 'two')).status, 201);
+  assert.equal((await issue('plannerOne', 'one')).status, 201);
 });
 
 test('the owner can archive their own proposal', async () => {

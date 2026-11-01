@@ -113,13 +113,13 @@ export const mongoProposalReadRepository: ProposalReadRepository = {
       _id: input.sortOrder === "asc" ? (1 as const) : (-1 as const),
     };
     const [proposals, total, countsRows] = await Promise.all([
-      Proposal.find(filter)
+      Proposal.find(filter) // tenant-scoped: buildListFilter applies the access policy
         .select(LIST_PROPOSAL_SELECT)
         .sort(sort)
         .skip((input.page - 1) * input.limit)
         .limit(input.limit)
         .lean(),
-      Proposal.countDocuments(filter),
+      Proposal.countDocuments(filter), // tenant-scoped: buildListFilter applies the access policy
       input.includeCounts
         ? Proposal.aggregate<ProposalListCounts>(buildCountsAggregation(input))
         : Promise.resolve([]),

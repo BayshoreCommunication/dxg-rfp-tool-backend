@@ -130,6 +130,9 @@ export const createSubmitVendorResponse = (dependencies: {
   folderName: string;
   now?: () => number;
   malwareScan?: VendorUploadMalwareScan;
+  // Whether the recording planner may edit the proposal (rfpAccessPolicy). Without it only the
+  // proposal owner may record a response.
+  plannerAccess?: (input: { proposalId: string; userId: string }) => Promise<"allowed" | "not_found" | "forbidden">;
 }) => async (input: {
   proposalId: string;
   vendorName: unknown;
@@ -182,17 +185,19 @@ export const createSubmitVendorResponse = (dependencies: {
   }
 
   // The public portal is gated by a per-proposal access grant. A planner-entered
-  // response carries no such grant, so ownership is checked here against the same
-  // owner the dashboard reads are scoped to — a planner can only record responses
-  // for their own proposals.
-  if (
-    channel === "planner_upload" &&
-    (typeof input.recordedByUserId !== "string" ||
-      !input.recordedByUserId.trim() ||
-      input.recordedByUserId.trim() !== proposal.ownerUserId)
-  ) {
-    await Promise.all(input.files.map((file) => dependencies.storage.cleanup(file.path)));
-    return { kind: "forbidden" as const };
+  // response carries no such grant, so the planner must be allowed to edit the
+  // proposal — the same decision the proposal itself is guarded by.
+  if (channel === "planner_upload") {
+    const recordedBy = typeof input.recordedByUserId === "string" ? input.recordedByUserId.trim() : "";
+    const access = !recordedBy
+      ? "forbidden"
+      : dependencies.plannerAccess
+        ? await dependencies.plannerAccess({ proposalId: input.proposalId, userId: recordedBy })
+        : recordedBy === proposal.ownerUserId ? "allowed" : "forbidden";
+    if (access !== "allowed") {
+      await Promise.all(input.files.map((file) => dependencies.storage.cleanup(file.path)));
+      return access === "not_found" ? { kind: "proposal_not_found" as const } : { kind: "forbidden" as const };
+    }
   }
 
   const replay = await dependencies.repository.findVersionByIdempotencyKey({

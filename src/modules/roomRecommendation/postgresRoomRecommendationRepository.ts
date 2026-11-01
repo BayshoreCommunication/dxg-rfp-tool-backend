@@ -80,7 +80,8 @@ export const roomRecommendationRepository = {
   // proposal write. Idempotent on the input fingerprint: regenerating an
   // unchanged proposal returns the stored run.
   async generate(ctx: Ctx & { proposalMongoId: string }) {
-    const proposal = await Proposal.findOne({ _id: ctx.proposalMongoId, userId: ctx.actorUserMongoId })
+    // AI features stay owner-only until Postgres proposal references stop keying on the owner.
+    const proposal = await Proposal.findOne({ _id: ctx.proposalMongoId, userId: ctx.actorUserMongoId, organizationId: ctx.organizationMongoId })
       .select("version status isDraft isArchived event venueSchedule hybridVirtual roomByRoom")
       .lean<any>();
     if (!proposal) throw new RoomRecommendationError("PROPOSAL_NOT_FOUND", "Proposal was not found.", 404);

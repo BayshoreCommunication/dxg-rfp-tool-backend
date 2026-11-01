@@ -16,6 +16,8 @@ export const currentTenant = (): TenantContext => {
   return context;
 };
 
+export const currentTenantOrNull = (): TenantContext | null => storage.getStore() ?? null;
+
 export const tenantFilter = (): { organizationId: string } => ({
   organizationId: currentTenant().organizationId,
 });

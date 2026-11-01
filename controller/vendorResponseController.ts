@@ -1,3 +1,4 @@
+import { respondIfProposalAccessDenied } from "../src/modules/identity/application/proposalAccess";
 import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import type { AuthRequest } from "../middleware/auth";
@@ -185,6 +186,7 @@ export const getVendorResponseWorkspace = async (
     });
     res.status(200).json({ success: true, data: workspace });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     sendWorkspaceError(res, error, "Vendor workspace is temporarily unavailable.");
   }
 };
@@ -206,6 +208,7 @@ export const createVendorResponseDraft = async (
       data: result.draft,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     sendDraftError(res, error, "Vendor response draft could not be created.");
   }
 };
@@ -232,6 +235,7 @@ export const createVendorResponseRevisionDraft = async (
       data: result.draft,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     sendDraftError(res, error, "Vendor response revision draft could not be created.");
   }
 };
@@ -250,6 +254,7 @@ export const getVendorResponseDraft = async (
     const draft = await getPublicVendorResponseDraft(scope, req.params.draftId);
     res.status(200).json({ success: true, data: draft });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     sendDraftError(res, error, "Vendor response draft could not be loaded.");
   }
 };
@@ -277,6 +282,7 @@ export const saveVendorResponseDraft = async (
     });
     res.status(200).json({ success: true, data: draft });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     sendDraftError(res, error, "Vendor response draft could not be saved.");
   }
 };
@@ -326,6 +332,7 @@ export const uploadVendorResponseDraftDocuments = async (
     });
     res.status(201).json({ success: true, data: result });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     sendDraftError(res, error, "Vendor response documents could not be uploaded.");
   }
 };
@@ -353,6 +360,7 @@ export const retireVendorResponseDraftDocument = async (
     });
     res.status(200).json({ success: true, data: draft });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     sendDraftError(res, error, "Vendor response document could not be retired.");
   }
 };
@@ -379,6 +387,7 @@ export const abandonVendorResponseDraft = async (
     });
     res.status(200).json({ success: true, data: draft });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     sendDraftError(res, error, "Vendor response draft could not be abandoned.");
   }
 };
@@ -444,6 +453,7 @@ export const finalizeVendorResponseDraft = async (
       },
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     sendDraftError(res, error, "Vendor response draft could not be finalized.");
   }
 };
@@ -481,6 +491,7 @@ export const publishVendorQuestionnaire = async (
       data: publication.questionnaire,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     sendWorkspaceError(res, error, "Vendor questionnaire could not be published.");
   }
 };
@@ -527,6 +538,7 @@ export const configureVendorResponseRollout = async (
       },
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     sendWorkspaceError(res, error, "Vendor response rollout could not be configured.");
   }
 };
@@ -755,6 +767,7 @@ export const submitVendorResponse = async (
     });
     sendSubmissionOutcome(res, result, vendorSubmissionCopy);
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Submit vendor response error:", error);
     res.status(500).json({
       success: false,
@@ -826,6 +839,7 @@ export const recordVendorResponseOnBehalf = async (
     });
     sendSubmissionOutcome(res, result, plannerSubmissionCopy);
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Record vendor response error:", error);
     res.status(500).json({
       success: false,
@@ -962,6 +976,7 @@ export const getVendorResponses = async (
       filteredUnreadCount: result.filteredUnreadCount,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Get vendor responses error:", error);
     res.status(500).json({
       success: false,
@@ -1001,6 +1016,7 @@ export const getVendorResponseProposals = async (
       unreadCount: result.unreadCount,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Get vendor response proposals error:", error);
     res.status(500).json({
       success: false,
@@ -1043,6 +1059,7 @@ export const getVendorResponseById = async (
 
     res.status(200).json({ success: true, data: result.response });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Get vendor response by id error:", error);
     res.status(500).json({
       success: false,
@@ -1076,6 +1093,7 @@ export const getVendorSubmissionDetail = async (
     }
     res.status(200).json({ success: true, data: result.detail });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Get vendor submission detail error:", error);
     res.status(500).json({
       success: false,
@@ -1143,6 +1161,7 @@ export const exportVendorSubmissionVersion = async (
         version,
       }));
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Export vendor submission version error:", error);
     res.status(500).json({
       success: false,
@@ -1188,6 +1207,7 @@ export const markVendorResponseRead = async (
       data: result.response,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Mark vendor response read error:", error);
     res.status(500).json({
       success: false,
@@ -1225,6 +1245,7 @@ export const deleteVendorResponse = async (
       deletedCount: result.deletedCount,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Delete vendor response error:", error);
     res.status(500).json({
       success: false,
@@ -1283,6 +1304,7 @@ export const deleteSelectedVendorResponses = async (
       deletedCount: result.deletedCount,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Delete selected vendor responses error:", error);
     res.status(500).json({
       success: false,

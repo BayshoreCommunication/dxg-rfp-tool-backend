@@ -486,6 +486,7 @@ export const mongoVendorSubmissionRepository: VendorSubmissionRepository & {
   },
 
   async findProposal(proposalId) {
+    // scope-exempt: vendor finalize compares organizationId with the grant; manual entry checks the access policy first
     const proposal = await Proposal.findById(proposalId)
       .select("_id organizationId userId event.eventName")
       .lean<any>();

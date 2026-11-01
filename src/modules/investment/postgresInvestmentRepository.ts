@@ -84,7 +84,8 @@ const present = (row: any) => {
 
 export const investmentRepository = {
   async generate(ctx: Ctx & { proposalMongoId: string }) {
-    const proposal = await Proposal.findOne({ _id: ctx.proposalMongoId, userId: ctx.actorUserMongoId }).lean<any>();
+    // AI features stay owner-only until Postgres proposal references stop keying on the owner.
+    const proposal = await Proposal.findOne({ _id: ctx.proposalMongoId, userId: ctx.actorUserMongoId, organizationId: ctx.organizationMongoId }).lean<any>();
     if (!proposal) throw new InvestmentError("PROPOSAL_NOT_FOUND", "Proposal was not found.", 404);
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, ctx.organizationMongoId);

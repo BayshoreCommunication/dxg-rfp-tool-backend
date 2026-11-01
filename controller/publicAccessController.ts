@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth";
 import { PUBLIC_GRANT_PURPOSES, type PublicGrantPurpose } from "../src/modules/publicAccess/domain/publicGrant";
 import { publicAccess } from "../src/modules/publicAccess/composition";
+import { respondIfProposalAccessDenied } from "../src/modules/identity/application/proposalAccess";
 
 export const issuePublicAccess = async (req: AuthRequest, res: Response): Promise<void> => {
   const { resourceId, purpose, expiresInHours, maxUses, recipient } = req.body ?? {};
@@ -13,8 +14,19 @@ export const issuePublicAccess = async (req: AuthRequest, res: Response): Promis
   if (purpose === "vendor:submit" && (typeof recipient !== "string" || !recipient.trim())) {
     res.status(400).json({ success: false, message: "Recipient is required for vendor submission grants" }); return;
   }
-  const grant = await publicAccess.issue({ organizationId: req.user.organizationId, createdByUserId: req.user.userId, resourceId, purpose, expiresInHours, maxUses, recipient });
-  res.status(201).json({ success: true, grant });
+  // Express 4 doesn't forward async rejections, so every outcome is answered here.
+  try {
+    const grant = await publicAccess.issue({ organizationId: req.user.organizationId, createdByUserId: req.user.userId, resourceId, purpose, expiresInHours, maxUses, recipient });
+    res.status(201).json({ success: true, grant });
+  } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
+    if (error instanceof Error && error.message === "Proposal not found for this organization") {
+      res.status(404).json({ success: false, message: "Proposal not found" });
+      return;
+    }
+    console.error("Issue public access error:", error);
+    res.status(500).json({ success: false, message: "Could not create the access link" });
+  }
 };
 
 export const revokePublicAccess = async (req: AuthRequest, res: Response): Promise<void> => {

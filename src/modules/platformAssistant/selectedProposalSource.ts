@@ -349,11 +349,9 @@ export const mongoAssistantProposalContextSource =
         userId: context.actorUserMongoId,
         isArchived: { $ne: true },
         isCopy: { $ne: true },
-        $or: [
-          { organizationId: context.organizationMongoId },
-          { organizationId: { $exists: false } },
-          { organizationId: null },
-        ],
+        // Proposals without an organization were backfilled by migrate:dxg-organization;
+        // the proposals list already requires one, so the assistant does too.
+        organizationId: context.organizationMongoId,
       })
         .select(SAFE_PROPOSAL_FIELDS)
         .sort({ updatedAt: -1 })
