@@ -25,6 +25,7 @@ import { mongoProposalReadRepository } from "./infrastructure/mongo/mongoProposa
 import { mongoProposalSettingsRepository } from "./infrastructure/mongo/mongoProposalSettingsRepository";
 import { mongoProposalWriteRepository } from "./infrastructure/mongo/mongoProposalWriteRepository";
 import { mongoPublicProposalAccessRepository } from "./infrastructure/mongo/mongoPublicProposalAccessRepository";
+import { mongoProposalTeamAssignment } from "./infrastructure/mongo/mongoProposalTeamAssignment";
 import { proposalNotificationAdapter } from "./infrastructure/notifications/proposalNotificationAdapter";
 import { spacesProposalFileStorage } from "./infrastructure/storage/spacesProposalFileStorage";
 import { postgresProposalReferenceSynchronizer } from "./infrastructure/references/postgresProposalReferenceSynchronizer";
@@ -43,6 +44,7 @@ const mutationDependencies = {
   proposals: mongoProposalWriteRepository,
   settings: mongoProposalSettingsRepository,
   references: postgresProposalReferenceSynchronizer,
+  teams: mongoProposalTeamAssignment,
 };
 
 export const updateOwnedProposalStatus =

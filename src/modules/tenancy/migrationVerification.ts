@@ -6,6 +6,7 @@ import User from "../../../modal/userModel";
 import VendorResponse from "../../../modal/vendorResponseModel";
 import { rfpListScope } from "../identity/domain/rfpAccessPolicy";
 import { resolveRfpActor } from "../identity/application/resolveRfpActor";
+import { mongoActorLookups } from "../identity/application/mongoActorLookups";
 import { STAFF_ROLES } from "./customerOrganizationMigration";
 import { STAY_TABLES } from "./postgresTenantMove";
 
@@ -30,7 +31,7 @@ export const snapshotVisibility = async (): Promise<VisibilitySnapshot> => {
       userId: String(membership.userId),
       roles: (membership.roles as string[]) ?? [],
       status: String(membership.status),
-    });
+    }, mongoActorLookups);
     const proposalIds = (await Proposal.collection.find(rfpListScope(actor, "view"), { projection: { _id: 1 } }).toArray()).map((p) => p._id);
     const responses = await VendorResponse.collection
       .find({ organizationId: membership.organizationId, proposalId: { $in: proposalIds } }, { projection: { _id: 1 } })

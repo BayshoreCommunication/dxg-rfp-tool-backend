@@ -46,6 +46,8 @@ import platformAssistantRoutes from "./routes/platformAssistantRoute";
 import supportDeskRoutes from "./routes/supportDeskRoute";
 import historicalInsightsRoutes from "./routes/historicalInsightsRoute";
 import governedAssetRoutes from "./routes/governedAssetRoute";
+import teamsRoutes from "./routes/teamsRoute";
+import rfpSharesRoutes from "./routes/rfpSharesRoute";
 import { startCronJobs } from "./utils/cronJobs";
 import { supportDeskSweeper } from "./src/modules/supportDesk/composition";
 import { startSupportDeskSweeper } from "./src/modules/supportDesk/infrastructure/scheduler/supportDeskSchedule";
@@ -213,6 +215,8 @@ app.use("/api/v1", platformAssistantRoutes);
 app.use("/api/v1", supportDeskRoutes);
 app.use("/api/v1", historicalInsightsRoutes);
 app.use("/api/v1", governedAssetRoutes);
+app.use("/api/v1", teamsRoutes);
+app.use("/api/v1", rfpSharesRoutes);
 
 // Email campaign routes
 app.use("/api/emails", emailRoutes);

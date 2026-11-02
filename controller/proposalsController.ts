@@ -20,6 +20,7 @@ import {
 } from "../src/modules/proposals/composition";
 import { ProposalFileAccessError } from "../src/modules/proposals/application/proposalFileAccess";
 import { PROPOSAL_STATUSES } from "../src/modules/proposals/application/mutateOwnedProposal";
+import { ProposalTeamNotAssignableError } from "../src/modules/proposals/application/authorOwnedProposal";
 import { respondIfProposalAccessDenied } from "../src/modules/identity/application/proposalAccess";
 
 const isValidProposalId = (id?: string) =>
@@ -271,6 +272,10 @@ export const updateProposal = async (
     });
   } catch (error: any) {
     if (respondIfProposalAccessDenied(res, error)) return;
+    if (error instanceof ProposalTeamNotAssignableError) {
+      res.status(error.status).json({ success: false, code: error.code, message: error.message });
+      return;
+    }
     console.error("Update proposal error:", error);
 
     if (error.name === "ValidationError") {

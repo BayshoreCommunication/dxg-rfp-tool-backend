@@ -2,7 +2,7 @@ require("ts-node/register/transpile-only");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createSessionManager } = require("../src/modules/auth/application/manageSessions");
-const { resolveRfpActor } = require("../src/modules/identity/application/resolveRfpActor");
+const { resolveRfpActor, noTeamsOrShares } = require("../src/modules/identity/application/resolveRfpActor");
 
 const fakeManager = (revokedCounts) => {
   const calls = { revokeAll: [], audit: [] };
@@ -56,8 +56,8 @@ test("an inactive membership skips the lookups and carries nothing", async () =>
   assert.equal(actor.membershipStatus, "suspended");
 });
 
-test("until teams and sharing exist the default lookups return nothing", async () => {
-  const actor = await resolveRfpActor({ organizationId: "o1", userId: "u1", roles: ["planner"], status: "active" });
+test("the no-teams lookups give an actor only role and ownership reach", async () => {
+  const actor = await resolveRfpActor({ organizationId: "o1", userId: "u1", roles: ["planner"], status: "active" }, noTeamsOrShares);
   assert.deepEqual(actor.managedTeamIds, []);
   assert.equal(actor.shares.size, 0);
 });
