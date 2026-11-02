@@ -1,6 +1,7 @@
 import type { ProposalSettingsRepository } from "../domain/ports/proposalSettingsRepository";
 import type { ProposalWriteRepository } from "../domain/ports/proposalWriteRepository";
 import type { ProposalReferenceSynchronizer } from "../domain/ports/proposalReferenceSynchronizer";
+import type { ProposalTeamAssignment } from "../domain/ports/proposalTeamAssignment";
 import { withLiveSettings } from "./proposalPresentation";
 import { activeProposalWorkflowContent } from "../domain/workflowSections";
 
@@ -8,6 +9,34 @@ type AuthorDependencies = {
   proposals: ProposalWriteRepository;
   settings: ProposalSettingsRepository;
   references?: ProposalReferenceSynchronizer;
+  teams?: ProposalTeamAssignment;
+};
+
+export class ProposalTeamNotAssignableError extends Error {
+  readonly status = 422;
+  readonly code = "TEAM_NOT_ASSIGNABLE";
+  constructor() {
+    super("The team doesn't exist in this organization or is archived");
+    this.name = "ProposalTeamNotAssignableError";
+  }
+}
+
+// A new proposal (created or copied) lands on its creator's team when they're on exactly one;
+// a client can't pick the team at creation.
+const defaultTeamId = async (dependencies: AuthorDependencies, ownerUserId: string) =>
+  (await dependencies.teams?.defaultTeamFor(ownerUserId)) ?? null;
+
+// Anyone allowed to edit the proposal may move it to another active team, or clear it with null.
+const resolveTeamChange = async (dependencies: AuthorDependencies, proposalId: string, updates: Record<string, unknown>) => {
+  if (!("teamId" in updates)) return;
+  const teamId = updates.teamId;
+  if (teamId === null || teamId === "") {
+    updates.teamId = null;
+    return;
+  }
+  if (typeof teamId !== "string" || !dependencies.teams || !(await dependencies.teams.isAssignable({ teamId, proposalId }))) {
+    throw new ProposalTeamNotAssignableError();
+  }
 };
 
 const removeSystemFields = (input: Record<string, unknown>) => {
@@ -43,6 +72,7 @@ export const createCreateOwnedProposal = (dependencies: AuthorDependencies) =>
     if (proposalData.status === "draft" || !proposalData.status) {
       proposalData.status = "unsubmitted";
     }
+    proposalData.teamId = await defaultTeamId(dependencies, input.ownerUserId);
     const proposal = await dependencies.proposals.createOwned({
       ownerUserId: input.ownerUserId,
       proposal: proposalData,
@@ -65,6 +95,7 @@ export const createUpdateOwnedProposal = (dependencies: AuthorDependencies) =>
       removeSystemFields(input.updates),
     );
     delete updates.isCopy;
+    await resolveTeamChange(dependencies, input.proposalId, updates);
     if (updates.status === "unsubmitted") {
       updates.isDraft = true;
       updates.isActive = false;
@@ -126,6 +157,7 @@ export const createCopyOwnedProposal = (dependencies: AuthorDependencies) =>
       archivedAt: null,
       isCopy: true,
       viewsCount: 0,
+      teamId: await defaultTeamId(dependencies, input.ownerUserId),
     };
     if (
       input.overrides.templateId === "template-one" ||

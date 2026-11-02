@@ -4,6 +4,7 @@ import { canAccessRfp, rfpListScope, type RfpAction, type RfpActor } from "../do
 import { currentRfpActor, currentTenantOrNull } from "../../shared/tenancy/tenantContext";
 import OrganizationMembership from "../../../../modal/organizationMembershipModel";
 import { resolveRfpActor } from "./resolveRfpActor";
+import { mongoActorLookups } from "./mongoActorLookups";
 
 // Thrown when a proposal exists in the actor's organization but the access policy refuses the
 // action. Controllers map it to 403; a proposal outside the organization stays a plain miss (404).
@@ -87,7 +88,7 @@ export const actorFor = async ({ organizationId, userId }: ActingUser): Promise<
     return requestActor;
   }
   const membership = await OrganizationMembership.findOne({ organizationId, userId }).select("roles status").lean();
-  return resolveRfpActor({ organizationId: String(organizationId), userId: String(userId), roles: membership?.roles ?? [], status: membership?.status ?? "removed" });
+  return resolveRfpActor({ organizationId: String(organizationId), userId: String(userId), roles: membership?.roles ?? [], status: membership?.status ?? "removed" }, mongoActorLookups);
 };
 
 // Single-proposal filter for an acting user. Use with explainProposalMiss after a miss.
