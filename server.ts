@@ -9,6 +9,7 @@ import morgan from "morgan";
 import connectDB from "./config/db";
 import { checkPostgres, checkRowLevelSecurity, closePostgres, postgresEnabled } from "./config/postgres";
 import authRoutes from "./routes/authRoute";
+import twoFactorRoutes from "./routes/twoFactorRoute";
 import adminRoutes from "./routes/adminRoute";
 import adminUserRoutes from "./routes/adminUserRoute";
 import allClientsRoutes from "./routes/allClientsRoute";
@@ -173,6 +174,7 @@ app.get("/api", (_req: Request, res: Response) => {
 });
 
 // Auth routes
+app.use("/api/auth/2fa", twoFactorRoutes);
 app.use("/api/auth", authRoutes);
 
 // Admin routes

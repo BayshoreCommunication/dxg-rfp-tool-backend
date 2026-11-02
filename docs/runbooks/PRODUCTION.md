@@ -34,6 +34,11 @@ sit in `scan_failed` if ClamAV is down.
 - Secrets (worker env only where possible): `OPENAI_API_KEY`, `JWT_SECRET`,
   `OTP_PEPPER`, `TELEMETRY_PSEUDONYM_KEY` (required when observability is on),
   `DOCUMENT_STORAGE_*`, `POSTGRES_URL`, `MONGODB_URL`, `REDIS_URL`.
+- Two-factor: `TWO_FACTOR_ENCRYPTION_KEY` (32 bytes, `openssl rand -hex 32`) is required in
+  production; without it enrolment and sign-in challenges answer 503 `TWO_FACTOR_NOT_CONFIGURED`.
+  Never change it in place: put the old key in `TWO_FACTOR_ENCRYPTION_PREVIOUS_KEYS` first, or every
+  enrolled member is locked out until an Admin resets their 2FA. `TWO_FACTOR_SSO_POLICY` stays
+  `challenge` until DXG answers Q8.
 - Model pin: `LIVE_AI_MODEL=gpt-5.4-mini-2026-03-17`. Changing it is a release:
   run the gold evaluation (`docs/testing/GOLD_EVALUATION.md`) and record the run.
 
