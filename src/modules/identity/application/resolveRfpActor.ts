@@ -7,9 +7,8 @@ export type ActorLookups = {
   shares(input: { organizationId: string; userId: string }): Promise<Map<string, SharePermission>>;
 };
 
-// Team, TeamMembership and ProposalShare arrive in M2 (ORG-2xx). Until then nobody manages a
-// team and nothing is shared, so the actor reaches only what the role and ownership allow.
-export const noTeamsOrSharesYet: ActorLookups = {
+// For callers and tests that need an actor reaching only what the role and ownership allow.
+export const noTeamsOrShares: ActorLookups = {
   managedTeamIds: async () => [],
   shares: async () => new Map(),
 };
@@ -17,7 +16,7 @@ export const noTeamsOrSharesYet: ActorLookups = {
 // Built once per authenticated request from the membership the auth middleware already loaded.
 export const resolveRfpActor = async (
   membership: { organizationId: string; userId: string; roles: readonly string[]; status: string },
-  lookups: ActorLookups = noTeamsOrSharesYet,
+  lookups: ActorLookups,
 ): Promise<RfpActor> => {
   const scope = { organizationId: membership.organizationId, userId: membership.userId };
   const active = membership.status === "active";
