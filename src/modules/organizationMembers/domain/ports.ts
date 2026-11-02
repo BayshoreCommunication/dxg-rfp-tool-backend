@@ -23,6 +23,11 @@ export interface MembershipStore {
   // Refuses with owns_rfps when the member owns an RFP when the change commits.
   deactivate(input: { organizationId: string; userId: string; expectedVersion: number; now: Date }): Promise<MemberRecord | "stale" | { ownedRfpCount: number }>;
   reactivate(input: { organizationId: string; userId: string; expectedVersion: number }): Promise<MemberRecord | "stale">;
+  // One transaction: the current Owner becomes organization_admin and the target becomes Owner.
+  // not_owner when the actor is no longer the active Owner when it commits.
+  transferOwnership(input: {
+    organizationId: string; fromUserId: string; toUserId: string; expectedTargetVersion: number;
+  }): Promise<{ from: MemberRecord; to: MemberRecord } | "stale" | "not_owner">;
 }
 
 // Teams arrive with ORG-201. Until then nobody is on a team.

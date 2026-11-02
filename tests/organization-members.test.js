@@ -163,3 +163,36 @@ test("deactivation and reactivation round-trip with version checks", async () =>
   const ownerSelf = await members.deactivate(actor("owner"), { userId: ids.owner, version: 1 });
   assert.equal(ownerSelf.code, "LAST_OWNER");
 });
+
+test("only the Owner transfers ownership, to another active member", () => {
+  const owner = { userId: ids.owner, roles: ["owner"] };
+  const admin = { userId: ids.admin, roles: ["organization_admin"] };
+  const active = { userId: ids.planner, roles: ["planner"], status: "active" };
+  const code = (d) => (d.ok ? "ok" : d.code);
+  assert.equal(code(policy.decideOwnershipTransfer({ actor: owner, target: active })), "ok");
+  assert.equal(code(policy.decideOwnershipTransfer({ actor: admin, target: active })), "OWNER_ONLY");
+  assert.equal(code(policy.decideOwnershipTransfer({ actor: owner, target: null })), "MEMBER_NOT_FOUND");
+  assert.equal(code(policy.decideOwnershipTransfer({ actor: owner, target: { ...owner, status: "active" } })), "ALREADY_OWNER");
+  assert.equal(code(policy.decideOwnershipTransfer({ actor: owner, target: { ...active, status: "suspended" } })), "MEMBER_INACTIVE");
+});
+
+test("a transfer is audited and refusals are audited as denied", async () => {
+  const { members, actor, events, store } = setup();
+  store.transferOwnership = async ({ fromUserId, toUserId }) => {
+    store.rows.get(fromUserId).roles = ["organization_admin"];
+    store.rows.get(toUserId).roles = ["owner"];
+    return { from: { ...store.rows.get(fromUserId) }, to: { ...store.rows.get(toUserId) } };
+  };
+  const refused = await members.transferOwnership(actor("admin"), { toUserId: ids.planner, version: 1 });
+  assert.equal(refused.code, "OWNER_ONLY");
+  assert.equal(events.at(-1).decision, "denied");
+  assert.equal((await members.transferOwnership(actor("owner"), { toUserId: ids.planner, version: 9 })).code, "STALE_VERSION");
+
+  const done = await members.transferOwnership(actor("owner"), { toUserId: ids.planner, version: 1 });
+  assert.equal(done.ok, true);
+  assert.equal(done.owner.role, "owner");
+  assert.equal(done.previousOwner.role, "organization_admin");
+  assert.equal(events.at(-1).action, "organization.ownership.transferred");
+  assert.equal(events.at(-1).decision, "allowed");
+  assert.equal(events.at(-1).metadata.previousOwnerUserId, ids.owner);
+});

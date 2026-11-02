@@ -7,6 +7,7 @@ import { after, before, beforeEach, test } from "node:test";
 import type http from "node:http";
 import mongoose from "mongoose";
 import { closePostgres } from "../config/postgres";
+import OrganizationMembership from "../modal/organizationMembershipModel";
 import { auditEvents, cleanupOrganizations, createProposals, membershipOf, seedOrganization, startApp, stopApp, type Fixture } from "./memberFixtures";
 
 let server: http.Server;
@@ -132,4 +133,45 @@ test("another organization's member is not found", async () => {
   const res = await call(org.members.owner.accessToken, "PATCH", `/api/organization/members/${other.members.planner.userId}/role`, { role: "viewer", version: 1 });
   assert.equal(res.status, 404);
   assert.equal((await membershipOf(other.organizationId, other.members.planner.userId))!.roles[0], "planner");
+});
+
+const activeOwners = async (organizationId: string) =>
+  (await OrganizationMembership.find({ organizationId, status: "active", roles: "owner" }).lean()).map((m) => String(m.userId));
+
+test("ownership transfer is atomic: exactly one active Owner before and after", async () => {
+  assert.deepEqual(await activeOwners(org.organizationId), [org.members.owner.userId]);
+  const res = await call(org.members.owner.accessToken, "POST", "/api/organization/ownership/transfer", { toUserId: org.members.planner.userId, version: 1 });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.owner.role, "owner");
+  assert.equal(res.body.data.previousOwner.role, "organization_admin");
+  assert.deepEqual(await activeOwners(org.organizationId), [org.members.planner.userId]);
+  const [event] = await auditEvents(org.organizationId, "organization.ownership.transferred");
+  assert.equal(event.decision, "allowed");
+  assert.equal(event.targetId, org.members.planner.userId);
+  assert.equal(String(event.actorUserId), org.members.owner.userId);
+});
+
+test("only the Owner can transfer, and only to an active member at the version they saw", async () => {
+  const path = "/api/organization/ownership/transfer";
+  const byAdmin = await call(org.members.organization_admin.accessToken, "POST", path, { toUserId: org.members.planner.userId, version: 1 });
+  assert.equal(byAdmin.status, 403);
+  const stale = await call(org.members.owner.accessToken, "POST", path, { toUserId: org.members.planner.userId, version: 7 });
+  assert.equal(stale.body.code, "STALE_VERSION");
+  await OrganizationMembership.updateOne({ organizationId: org.organizationId, userId: org.members.viewer.userId }, { $set: { status: "suspended" } });
+  const inactive = await call(org.members.owner.accessToken, "POST", path, { toUserId: org.members.viewer.userId, version: 1 });
+  assert.equal(inactive.body.code, "MEMBER_INACTIVE");
+  assert.deepEqual(await activeOwners(org.organizationId), [org.members.owner.userId]);
+  assert.equal((await auditEvents(org.organizationId, "organization.ownership.transferred")).every((e) => e.decision === "denied"), true);
+});
+
+test("concurrent transfers to two members leave exactly one Owner", async () => {
+  const path = "/api/organization/ownership/transfer";
+  const results = await Promise.all([
+    call(org.members.owner.accessToken, "POST", path, { toUserId: org.members.planner.userId, version: 1 }),
+    call(org.members.owner.accessToken, "POST", path, { toUserId: org.members.team_manager.userId, version: 1 }),
+  ]);
+  assert.equal(results.filter((r) => r.status === 200).length, 1, JSON.stringify(results.map((r) => r.body.code)));
+  const owners = await activeOwners(org.organizationId);
+  assert.equal(owners.length, 1);
+  assert.notEqual(owners[0], org.members.owner.userId);
 });

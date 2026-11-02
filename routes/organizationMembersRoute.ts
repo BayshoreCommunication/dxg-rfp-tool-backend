@@ -11,5 +11,7 @@ router.get("/members", controller.list);
 router.patch("/members/:userId/role", controller.changeRole);
 router.post("/members/:userId/deactivate", controller.deactivate);
 router.post("/members/:userId/reactivate", controller.reactivate);
+// Body: { toUserId, version } where version is the new Owner's current membership version.
+router.post("/ownership/transfer", controller.transferOwnership);
 
 export default router;

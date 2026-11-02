@@ -2,6 +2,7 @@ import {
   customerRole,
   decideDeactivation,
   decideManage,
+  decideOwnershipTransfer,
   decideReactivation,
   decideRoleChange,
   isAssignableRole,
@@ -13,7 +14,8 @@ import {
 } from "../domain/memberPolicy";
 import type { MemberAuditWriter, MemberRecord, MembershipStore, TeamDirectory, TeamRef } from "../domain/ports";
 
-// ORG-206 membership management: list, change role, deactivate and reactivate. Every change is optimistic on the membership version and audited, refusals included.
+// ORG-206 membership management: list, change role, deactivate, reactivate, and the ownership
+// transfer. Every change is optimistic on the membership version and audited, refusals included.
 
 export type MemberActor = {
   organizationId: string;
@@ -183,7 +185,32 @@ export const createMemberManagement = (dependencies: Dependencies) => {
     return { ok: true, member: await viewWithTeams(actor, updated) };
   };
 
-  return { list, changeRole, deactivate, reactivate };
+  // The Owner hands the role to another active member and becomes an Admin, atomically, so the
+  // organization has exactly one active Owner before and after.
+  const transferOwnership = async (actor: MemberActor, input: { toUserId: unknown; version: unknown }): Promise<MemberResult<{ previousOwner: MemberView; owner: MemberView }>> => {
+    const action = "organization.ownership.transferred";
+    const toUserId = typeof input.toUserId === "string" ? input.toUserId : "";
+    if (!/^[a-f0-9]{24}$/i.test(toUserId)) return refusal(400, "MEMBER_REQUIRED", "Choose the member who becomes the Owner.");
+    const version = parseVersion(input.version);
+    if (version === null) return versionRequired();
+    const target = await dependencies.store.find(actor.organizationId, toUserId);
+    const decision = decideOwnershipTransfer({ actor, target });
+    if (!decision.ok) return refuse(actor, action, toUserId, decision);
+    if (target!.version !== version) return refuse(actor, action, toUserId, stale(target));
+
+    const result = await dependencies.store.transferOwnership({
+      organizationId: actor.organizationId, fromUserId: actor.userId, toUserId, expectedTargetVersion: version,
+    });
+    if (result === "not_owner") return refuse(actor, action, toUserId, refusal(403, "OWNER_ONLY", "Only the Owner can transfer ownership."));
+    if (result === "stale") return refuse(actor, action, toUserId, stale(await dependencies.store.find(actor.organizationId, toUserId)));
+    await audit(actor, {
+      action, targetUserId: toUserId, decision: "allowed", reason: "ownership_transferred",
+      metadata: { previousOwnerUserId: actor.userId, newOwnerPreviousRole: customerRole(target!.roles), previousOwnerNewRole: "organization_admin" },
+    });
+    return { ok: true, previousOwner: await viewWithTeams(actor, result.from), owner: await viewWithTeams(actor, result.to) };
+  };
+
+  return { list, changeRole, deactivate, reactivate, transferOwnership };
 };
 
 export type MemberManagement = ReturnType<typeof createMemberManagement>;

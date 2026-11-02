@@ -2,7 +2,7 @@ import mongoose, { type ClientSession } from "mongoose";
 import OrganizationMembership from "../../../../modal/organizationMembershipModel";
 import Proposal from "../../../../modal/proposalsModel";
 import User from "../../../../modal/userModel";
-import type { MemberStatus } from "../domain/memberPolicy";
+import { withCustomerRole, type MemberStatus } from "../domain/memberPolicy";
 import type { MemberRecord, MembershipStore } from "../domain/ports";
 
 type MembershipRow = {
@@ -36,6 +36,9 @@ const withUser = async (row: MembershipRow | null): Promise<MemberRecord | null>
 
 class OwnedRfps extends Error {
   constructor(readonly count: number) { super("member owns RFPs"); }
+}
+class Abort extends Error {
+  constructor(readonly outcome: "stale" | "not_owner") { super(outcome); }
 }
 
 // Proposal.userId is the owner (modal/proposalsModel.ts).
@@ -112,5 +115,41 @@ export const mongoMembershipStore: MembershipStore = {
   async reactivate(input) {
     const row = await updateVersioned(input, { status: "suspended" }, { $set: { status: "active", suspendedAt: null, activatedAt: new Date() } });
     return row ? ((await withUser(row)) as MemberRecord) : "stale";
+  },
+
+  // Demote first, then promote, in one transaction: the one-active-owner unique index holds at
+  // every step, and a concurrent transfer or role change conflicts and retries or aborts.
+  async transferOwnership(input) {
+    const organizationId = objectId(input.organizationId);
+    const session = await mongoose.startSession();
+    let rows = null as { from: MembershipRow; to: MembershipRow } | null;
+    try {
+      await session.withTransaction(async () => {
+        const owner = await OrganizationMembership.findOne({ organizationId, userId: objectId(input.fromUserId), status: "active", roles: "owner" })
+          .session(session).select(MEMBER_FIELDS).lean<MembershipRow | null>();
+        if (!owner) throw new Abort("not_owner");
+        const target = await OrganizationMembership.findOne({ organizationId, userId: objectId(input.toUserId), status: "active", version: input.expectedTargetVersion })
+          .session(session).select(MEMBER_FIELDS).lean<MembershipRow | null>();
+        if (!target) throw new Abort("stale");
+        const from = await updateVersioned(
+          { organizationId: input.organizationId, userId: input.fromUserId, expectedVersion: Number(owner.version ?? 1) },
+          { status: "active", roles: "owner" }, { $set: { roles: withCustomerRole(owner.roles ?? [], "organization_admin") } }, session,
+        );
+        if (!from) throw new Abort("not_owner");
+        const to = await updateVersioned(
+          { organizationId: input.organizationId, userId: input.toUserId, expectedVersion: input.expectedTargetVersion },
+          { status: "active" }, { $set: { roles: withCustomerRole(target.roles ?? [], "owner") } }, session,
+        );
+        if (!to) throw new Abort("stale");
+        rows = { from, to };
+      });
+    } catch (error) {
+      if (error instanceof Abort) return error.outcome;
+      throw error;
+    } finally {
+      await session.endSession();
+    }
+    const { from, to } = rows!;
+    return { from: (await withUser(from))!, to: (await withUser(to))! };
   },
 };

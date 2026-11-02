@@ -81,5 +81,13 @@ export const decideReactivation = (input: { target: MemberFacts }): Decision =>
     ? allow
     : refuse(409, "MEMBER_NOT_DEACTIVATED", "Only a deactivated member can be reactivated.");
 
+export const decideOwnershipTransfer = (input: { actor: ManagerFacts; target: MemberFacts | null }): Decision => {
+  if (!isOwner(input.actor.roles)) return refuse(403, "OWNER_ONLY", "Only the Owner can transfer ownership.");
+  if (!input.target) return refuse(404, "MEMBER_NOT_FOUND", "Member not found.");
+  if (input.target.userId === input.actor.userId) return refuse(400, "ALREADY_OWNER", "You are already the Owner.");
+  if (input.target.status !== "active") return refuse(409, "MEMBER_INACTIVE", "Ownership can only go to an active member.");
+  return allow;
+};
+
 // API status names: a suspended membership is shown as deactivated.
 export const publicStatus = (status: MemberStatus) => (status === "suspended" ? "deactivated" : status);

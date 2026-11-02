@@ -54,6 +54,7 @@ export const createOrganizationMembersController = (members: MemberManagement = 
     changeRole: handle((actor, req) => members.changeRole(actor, { userId: param(req, "userId"), role: body(req).role, version: body(req).version })),
     deactivate: handle((actor, req) => members.deactivate(actor, { userId: param(req, "userId"), version: body(req).version })),
     reactivate: handle((actor, req) => members.reactivate(actor, { userId: param(req, "userId"), version: body(req).version })),
+    transferOwnership: handle((actor, req) => members.transferOwnership(actor, { toUserId: body(req).toUserId, version: body(req).version })),
   };
 };
 
