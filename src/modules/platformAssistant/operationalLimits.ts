@@ -14,6 +14,8 @@ type RedisEvalClient = {
     keyCount: number,
     ...arguments_: Array<string | number>
   ): Promise<unknown>;
+  quit?: () => Promise<unknown>;
+  disconnect?: () => void;
 };
 
 type RateBucket = { count: number; resetAt: number };
@@ -24,6 +26,8 @@ export type AssistantLimitLease = {
 
 export interface AssistantOperationalLimiter {
   acquire(context: PlatformAssistantContext): Promise<AssistantLimitLease>;
+  // For shutdown and tests: the shared Redis connection otherwise keeps the process alive.
+  close?(): Promise<void>;
 }
 
 const digest = (value: string): string =>
@@ -244,6 +248,12 @@ export const createAssistantOperationalLimiter = (options?: {
   };
 
   return {
+    async close() {
+      const client = redis;
+      redis = undefined;
+      resolvedRedis = false;
+      if (client) await client.quit?.().catch(() => client.disconnect?.());
+    },
     async acquire(context) {
       const config = configured();
       const keys = assistantLimitKeys(context);

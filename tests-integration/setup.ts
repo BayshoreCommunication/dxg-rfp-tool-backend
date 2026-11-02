@@ -6,7 +6,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import mongoose from "mongoose";
-import type { PoolClient } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { closePostgres, postgresPool } from "../config/postgres";
 import Proposal from "../modal/proposalsModel";
 
@@ -128,13 +128,14 @@ export const setTenantGuc = async (
 
 // The default Docker superuser bypasses RLS entirely (superusers ignore even
 // FORCE ROW LEVEL SECURITY), so RLS assertions need a plain login role.
-export const ensureAppRole = async (): Promise<void> => {
-  const pool = postgresPool();
+export const ensureAppRole = async (pool: Pool = postgresPool()): Promise<void> => {
   await pool.query(
     "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname='rfpilot_app') THEN CREATE ROLE rfpilot_app LOGIN PASSWORD 'rfpilot_test'; END IF; END $$;",
   );
   await pool.query("GRANT USAGE ON SCHEMA rfpilot TO rfpilot_app");
   await pool.query("GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA rfpilot TO rfpilot_app");
+  // /health reads the migration version; without this the API reports itself unhealthy.
+  await pool.query("GRANT SELECT ON public.rfpilot_schema_migrations TO rfpilot_app");
 };
 
 let mongoConnected = false;
