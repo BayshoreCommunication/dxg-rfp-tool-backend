@@ -36,14 +36,19 @@ const setup = (owned = {}) => {
   ], owned);
   const events = [];
   const sessionCalls = [];
+  const reassignCalls = [];
+  const mirrorCalls = [];
+  let reassignResult = { rfpIds: ["b".repeat(24), "c".repeat(24)] };
   const members = createMemberManagement({
     store,
     teams: { teamsFor: async () => new Map([[ids.planner, [{ id: "t1", name: "East" }]]]) },
     audit: { append: async (event) => { events.push(event); } },
+    reassignments: { reassign: async (input) => { reassignCalls.push(input); return reassignResult; } },
+    ownershipMirror: { afterReassign: async (input) => { mirrorCalls.push(input); } },
     sessions: { afterRoleChange: async (c) => { sessionCalls.push(["role", c.userId, c.actorSessionId]); }, afterDeactivation: async (c) => { sessionCalls.push(["deactivated", c.userId]); } },
   });
   const actor = (role) => ({ organizationId: ORG, userId: ids[role], roles: [role === "admin" ? "organization_admin" : role === "manager" ? "team_manager" : role], correlationId: "c" });
-  return { store, events, members, actor, sessionCalls };
+  return { store, events, members, actor, sessionCalls, reassignCalls, mirrorCalls, setReassignResult: (r) => { reassignResult = r; } };
 };
 
 test("role changes follow the Owner and RFP-ownership rules for every actor", () => {
@@ -211,4 +216,39 @@ test("role changes, deactivations and transfers call the session hooks", async (
     ["role", ids.owner, "owner-session"],
     ["role", ids.admin, "owner-session"],
   ]);
+});
+
+test("reassignment goes only to an active member who can own RFPs", () => {
+  const code = (d) => (d.ok ? "ok" : d.code);
+  const m = (userId, role, status = "active") => ({ userId, roles: [role], status });
+  assert.equal(code(policy.decideReassignment({ from: m(ids.planner, "planner", "suspended"), to: m(ids.manager, "team_manager") })), "ok");
+  assert.equal(code(policy.decideReassignment({ from: m(ids.planner, "planner"), to: m(ids.viewer, "viewer") })), "REASSIGN_TARGET_INELIGIBLE");
+  assert.equal(code(policy.decideReassignment({ from: m(ids.planner, "planner"), to: m(ids.admin, "organization_admin", "suspended") })), "REASSIGN_TARGET_INELIGIBLE");
+  assert.equal(code(policy.decideReassignment({ from: m(ids.planner, "planner"), to: m(ids.planner, "planner") })), "REASSIGN_TO_SELF");
+  assert.equal(code(policy.decideReassignment({ from: null, to: m(ids.admin, "organization_admin") })), "MEMBER_NOT_FOUND");
+});
+
+test("reassignment writes one audit event per RFP and mirrors the new owner", async () => {
+  const { members, actor, events, reassignCalls, mirrorCalls, setReassignResult } = setup();
+  const done = await members.reassignRfps(actor("admin"), { fromUserId: ids.planner, toUserId: ids.manager });
+  assert.equal(done.reassignedCount, 2);
+  assert.equal(reassignCalls[0].rfpIds, null);
+  const audits = events.filter((e) => e.action === "proposal.owner.reassigned");
+  assert.deepEqual(audits.map((e) => [e.targetType, e.targetId, e.decision]), [["proposal", "b".repeat(24), "allowed"], ["proposal", "c".repeat(24), "allowed"]]);
+  assert.deepEqual(audits[0].metadata, { fromUserId: ids.planner, toUserId: ids.manager });
+  assert.deepEqual(mirrorCalls[0].rfpIds, ["b".repeat(24), "c".repeat(24)]);
+
+  const selected = await members.reassignRfps(actor("admin"), { fromUserId: ids.planner, toUserId: ids.manager, rfpIds: ["b".repeat(24), "b".repeat(24)] });
+  assert.equal(selected.ok, true);
+  assert.deepEqual(reassignCalls[1].rfpIds, ["b".repeat(24)]);
+
+  assert.equal((await members.reassignRfps(actor("admin"), { fromUserId: ids.planner, toUserId: ids.manager, rfpIds: ["bad"] })).code, "INVALID_RFP_SELECTION");
+  assert.equal((await members.reassignRfps(actor("planner"), { fromUserId: ids.planner, toUserId: ids.manager })).status, 403);
+  assert.equal((await members.reassignRfps(actor("admin"), { fromUserId: ids.planner, toUserId: ids.viewer })).code, "REASSIGN_TARGET_INELIGIBLE");
+
+  setReassignResult({ notOwnedCount: 1 });
+  const notOwned = await members.reassignRfps(actor("admin"), { fromUserId: ids.planner, toUserId: ids.manager, rfpIds: ["b".repeat(24)] });
+  assert.equal(notOwned.code, "RFPS_NOT_OWNED_BY_MEMBER");
+  setReassignResult("target_ineligible");
+  assert.equal((await members.reassignRfps(actor("admin"), { fromUserId: ids.planner, toUserId: ids.manager })).code, "REASSIGN_TARGET_INELIGIBLE");
 });

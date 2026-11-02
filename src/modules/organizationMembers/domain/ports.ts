@@ -30,6 +30,18 @@ export interface MembershipStore {
   }): Promise<{ from: MemberRecord; to: MemberRecord } | "stale" | "not_owner">;
 }
 
+// ORG-207: moves RFPs owned by one member to another in one transaction. rfpIds null = all.
+export interface RfpReassignmentStore {
+  reassign(input: {
+    organizationId: string; fromUserId: string; toUserId: string; rfpIds: string[] | null;
+  }): Promise<{ rfpIds: string[] } | "target_ineligible" | { notOwnedCount: number }>;
+}
+// Mirrors the new owner into secondary stores (the Postgres proposal reference). Best effort:
+// MongoDB is authoritative and reconciliation repairs a failed write.
+export interface RfpOwnershipMirror {
+  afterReassign(input: { organizationId: string; rfpIds: string[]; toUserId: string }): Promise<void>;
+}
+
 // ORG-307: what a membership change does to the member's sessions.
 export type SessionChange = { organizationId: string; userId: string; actorUserId: string; actorSessionId?: string; correlationId: string };
 export interface MemberSessionHooks {

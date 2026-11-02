@@ -3,6 +3,8 @@ import {
   decideDeactivation,
   decideManage,
   decideOwnershipTransfer,
+  decideReassignment,
+  MAX_SELECTED_RFPS,
   decideReactivation,
   decideRoleChange,
   isAssignableRole,
@@ -12,7 +14,7 @@ import {
   type CustomerRole,
   type Refusal,
 } from "../domain/memberPolicy";
-import type { MemberAuditWriter, MemberRecord, MembershipStore, MemberSessionHooks, TeamDirectory, TeamRef } from "../domain/ports";
+import type { MemberAuditWriter, MemberRecord, MembershipStore, MemberSessionHooks, RfpOwnershipMirror, RfpReassignmentStore, TeamDirectory, TeamRef } from "../domain/ports";
 
 // ORG-206 membership management: list, change role, deactivate, reactivate, and the ownership
 // transfer. Every change is optimistic on the membership version and audited, refusals included.
@@ -46,6 +48,8 @@ type Dependencies = {
   teams: TeamDirectory;
   audit: MemberAuditWriter;
   sessions: MemberSessionHooks;
+  reassignments: RfpReassignmentStore;
+  ownershipMirror: RfpOwnershipMirror;
   now?: () => Date;
 };
 
@@ -218,7 +222,48 @@ export const createMemberManagement = (dependencies: Dependencies) => {
     return { ok: true, previousOwner: await viewWithTeams(actor, result.from), owner: await viewWithTeams(actor, result.to) };
   };
 
-  return { list, changeRole, deactivate, reactivate, transferOwnership };
+  // ORG-207 offboarding: move all, or the selected, RFPs owned by one member to another active
+  // non-Viewer member, with one audit event per RFP. Deactivation is then allowed.
+  const reassignRfps = async (actor: MemberActor, input: { fromUserId: string; toUserId: unknown; rfpIds?: unknown }): Promise<MemberResult<{ reassignedCount: number; rfpIds: string[] }>> => {
+    const action = "proposal.owner.reassigned";
+    const manage = decideManage(actor);
+    if (!manage.ok) return refuse(actor, action, input.fromUserId, manage);
+    const toUserId = typeof input.toUserId === "string" ? input.toUserId : "";
+    if (!/^[a-f0-9]{24}$/i.test(toUserId)) return refusal(400, "REASSIGN_TARGET_REQUIRED", "Choose the member who receives the RFPs.");
+    let rfpIds: string[] | null = null;
+    if (input.rfpIds !== undefined && input.rfpIds !== "all") {
+      if (!Array.isArray(input.rfpIds) || input.rfpIds.length === 0 || input.rfpIds.length > MAX_SELECTED_RFPS ||
+        !input.rfpIds.every((id) => typeof id === "string" && /^[a-f0-9]{24}$/i.test(id))) {
+        return refusal(400, "INVALID_RFP_SELECTION", `Select between 1 and ${MAX_SELECTED_RFPS} RFPs, or omit rfpIds to reassign all.`);
+      }
+      rfpIds = [...new Set(input.rfpIds as string[])];
+    }
+    const [from, to] = await Promise.all([
+      dependencies.store.find(actor.organizationId, input.fromUserId),
+      dependencies.store.find(actor.organizationId, toUserId),
+    ]);
+    const decision = decideReassignment({ from, to });
+    if (!decision.ok) return refuse(actor, action, input.fromUserId, decision);
+
+    const result = await dependencies.reassignments.reassign({ organizationId: actor.organizationId, fromUserId: input.fromUserId, toUserId, rfpIds });
+    if (result === "target_ineligible") {
+      return refuse(actor, action, input.fromUserId, refusal(409, "REASSIGN_TARGET_INELIGIBLE", "RFPs can only go to an active member who isn't a Viewer."));
+    }
+    if ("notOwnedCount" in result) {
+      return refusal(409, "RFPS_NOT_OWNED_BY_MEMBER", "Some selected RFPs aren't owned by this member. Nothing was reassigned.", { notOwnedCount: result.notOwnedCount });
+    }
+    for (const rfpId of result.rfpIds) {
+      await dependencies.audit.append({
+        organizationId: actor.organizationId, actorUserId: actor.userId, action, targetType: "proposal", targetId: rfpId,
+        decision: "allowed", reason: "offboarding_reassignment", correlationId: actor.correlationId,
+        metadata: { fromUserId: input.fromUserId, toUserId },
+      });
+    }
+    if (result.rfpIds.length > 0) await dependencies.ownershipMirror.afterReassign({ organizationId: actor.organizationId, rfpIds: result.rfpIds, toUserId });
+    return { ok: true, reassignedCount: result.rfpIds.length, rfpIds: result.rfpIds };
+  };
+
+  return { list, changeRole, deactivate, reactivate, transferOwnership, reassignRfps };
 };
 
 export type MemberManagement = ReturnType<typeof createMemberManagement>;

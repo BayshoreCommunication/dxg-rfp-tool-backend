@@ -89,5 +89,20 @@ export const decideOwnershipTransfer = (input: { actor: ManagerFacts; target: Me
   return allow;
 };
 
+// ORG-207: RFPs can move to an active member who is allowed to own RFPs (not a Viewer).
+const RFP_OWNER_ROLES: readonly CustomerRole[] = ["owner", "organization_admin", "team_manager", "planner"];
+export const canOwnRfps = (roles: readonly string[]) => roles.some((role) => (RFP_OWNER_ROLES as readonly string[]).includes(role));
+export const MAX_SELECTED_RFPS = 1000;
+
+export const decideReassignment = (input: { from: MemberFacts | null; to: MemberFacts | null }): Decision => {
+  if (!input.from) return refuse(404, "MEMBER_NOT_FOUND", "Member not found.");
+  if (!input.to) return refuse(404, "REASSIGN_TARGET_NOT_FOUND", "The member receiving the RFPs was not found.");
+  if (input.from.userId === input.to.userId) return refuse(400, "REASSIGN_TO_SELF", "Choose a different member to receive the RFPs.");
+  if (input.to.status !== "active" || !canOwnRfps(input.to.roles)) {
+    return refuse(409, "REASSIGN_TARGET_INELIGIBLE", "RFPs can only go to an active member who isn't a Viewer.");
+  }
+  return allow;
+};
+
 // API status names: a suspended membership is shown as deactivated.
 export const publicStatus = (status: MemberStatus) => (status === "suspended" ? "deactivated" : status);

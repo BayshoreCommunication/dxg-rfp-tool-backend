@@ -3,7 +3,9 @@ import OrganizationMembership from "../../../../modal/organizationMembershipMode
 import Proposal from "../../../../modal/proposalsModel";
 import User from "../../../../modal/userModel";
 import { withCustomerRole, type MemberStatus } from "../domain/memberPolicy";
-import type { MemberRecord, MembershipStore } from "../domain/ports";
+
+const RFP_OWNER_ROLES = ["owner", "organization_admin", "team_manager", "planner"];
+import type { MemberRecord, MembershipStore, RfpReassignmentStore } from "../domain/ports";
 
 type MembershipRow = {
   _id: unknown; userId: unknown; roles?: string[]; status: MemberStatus; version?: number;
@@ -151,5 +153,48 @@ export const mongoMembershipStore: MembershipStore = {
     }
     const { from, to } = rows!;
     return { from: (await withUser(from))!, to: (await withUser(to))! };
+  },
+};
+
+class NotOwned extends Error {
+  constructor(readonly count: number) { super("selected RFPs not owned"); }
+}
+
+// The receiving member's membership is written inside the transaction, so a concurrent
+// deactivation of that member (which writes the same document) serializes with this move:
+// either this sees an inactive member and refuses, or the deactivation counts these RFPs.
+export const mongoRfpReassignmentStore: RfpReassignmentStore = {
+  async reassign(input) {
+    const organizationId = objectId(input.organizationId);
+    const session = await mongoose.startSession();
+    let moved = null as string[] | null;
+    try {
+      await session.withTransaction(async () => {
+        moved = null;
+        const claimed = await OrganizationMembership.collection.updateOne(
+          { organizationId, userId: objectId(input.toUserId), status: "active", roles: { $in: RFP_OWNER_ROLES } },
+          { $set: { updatedAt: new Date() } },
+          { session },
+        );
+        if (claimed.matchedCount === 0) return;
+        const filter = {
+          organizationId, userId: objectId(input.fromUserId),
+          ...(input.rfpIds ? { _id: { $in: input.rfpIds.map(objectId) } } : {}),
+        };
+        // tenant-scoped: filter carries organizationId (built above)
+        const owned = await Proposal.find(filter).select("_id").session(session).lean<{ _id: unknown }[]>();
+        if (input.rfpIds && owned.length !== input.rfpIds.length) throw new NotOwned(input.rfpIds.length - owned.length);
+        const ids = owned.map((p) => p._id);
+        // tenant-scoped: filter is built from organizationId above
+        if (ids.length) await Proposal.updateMany({ organizationId, _id: { $in: ids }, userId: objectId(input.fromUserId) }, { $set: { userId: objectId(input.toUserId) } }, { session });
+        moved = ids.map(String);
+      });
+    } catch (error) {
+      if (error instanceof NotOwned) return { notOwnedCount: error.count };
+      throw error;
+    } finally {
+      await session.endSession();
+    }
+    return moved ? { rfpIds: moved } : "target_ineligible";
   },
 };
