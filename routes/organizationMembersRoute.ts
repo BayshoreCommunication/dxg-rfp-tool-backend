@@ -9,6 +9,8 @@ router.use(authenticate, authorizeAction("organization:manage"));
 
 router.get("/members", controller.list);
 router.patch("/members/:userId/role", controller.changeRole);
+// Body: { teamIds, version }. 503 TEAMS_UNAVAILABLE until ORG-201 lands.
+router.put("/members/:userId/teams", controller.changeTeams);
 router.post("/members/:userId/deactivate", controller.deactivate);
 router.post("/members/:userId/reactivate", controller.reactivate);
 // ORG-207. Body: { toUserId, rfpIds? } (omit rfpIds, or "all", to move every RFP the member owns).

@@ -23,6 +23,7 @@ const fakeStore = (members, owned = {}) => {
     setRoles: async ({ userId, expectedVersion, roles }) => bump(userId, expectedVersion, { roles }),
     deactivate: async ({ userId, expectedVersion }) => (owned[userId] ? { ownedRfpCount: owned[userId] } : bump(userId, expectedVersion, { status: "suspended" })),
     reactivate: async ({ userId, expectedVersion }) => bump(userId, expectedVersion, { status: "active" }),
+    bumpVersion: async ({ userId, expectedVersion }) => bump(userId, expectedVersion, {}),
   };
 };
 
@@ -35,20 +36,25 @@ const setup = (owned = {}) => {
     { userId: ids.viewer, roles: ["viewer"] },
   ], owned);
   const events = [];
+  let teamResult = () => "unavailable";
   const sessionCalls = [];
   const reassignCalls = [];
   const mirrorCalls = [];
   let reassignResult = { rfpIds: ["b".repeat(24), "c".repeat(24)] };
   const members = createMemberManagement({
     store,
-    teams: { teamsFor: async () => new Map([[ids.planner, [{ id: "t1", name: "East" }]]]) },
+    teams: {
+      teamsFor: async () => new Map([[ids.planner, [{ id: "t1", name: "East" }]]]),
+      activeTeamIds: async (_org, teamIds) => teamResult(teamIds),
+      setMemberTeams: async () => ({ previousTeamIds: [] }),
+    },
     audit: { append: async (event) => { events.push(event); } },
     reassignments: { reassign: async (input) => { reassignCalls.push(input); return reassignResult; } },
     ownershipMirror: { afterReassign: async (input) => { mirrorCalls.push(input); } },
     sessions: { afterRoleChange: async (c) => { sessionCalls.push(["role", c.userId, c.actorSessionId]); }, afterDeactivation: async (c) => { sessionCalls.push(["deactivated", c.userId]); } },
   });
   const actor = (role) => ({ organizationId: ORG, userId: ids[role], roles: [role === "admin" ? "organization_admin" : role === "manager" ? "team_manager" : role], correlationId: "c" });
-  return { store, events, members, actor, sessionCalls, reassignCalls, mirrorCalls, setReassignResult: (r) => { reassignResult = r; } };
+  return { setTeamResult: (fn) => { teamResult = fn; }, store, events, members, actor, sessionCalls, reassignCalls, mirrorCalls, setReassignResult: (r) => { reassignResult = r; } };
 };
 
 test("role changes follow the Owner and RFP-ownership rules for every actor", () => {
@@ -251,4 +257,27 @@ test("reassignment writes one audit event per RFP and mirrors the new owner", as
   assert.equal(notOwned.code, "RFPS_NOT_OWNED_BY_MEMBER");
   setReassignResult("target_ineligible");
   assert.equal((await members.reassignRfps(actor("admin"), { fromUserId: ids.planner, toUserId: ids.manager })).code, "REASSIGN_TARGET_INELIGIBLE");
+});
+
+test("changing teams is optimistic, audited, and unavailable until teams exist", async () => {
+  const { members, actor, events, setTeamResult } = setup();
+  const t = "d".repeat(24);
+  const unavailable = await members.changeTeams(actor("admin"), { userId: ids.planner, teamIds: [t], version: 1 });
+  assert.equal(unavailable.status, 503);
+  assert.equal(unavailable.code, "TEAMS_UNAVAILABLE");
+
+  setTeamResult((teamIds) => teamIds);
+  const changed = await members.changeTeams(actor("admin"), { userId: ids.planner, teamIds: [t, t], version: 1 });
+  assert.equal(changed.ok, true, "a 503 must not have moved the version");
+  assert.equal(changed.member.version, 2);
+  assert.deepEqual(events.at(-1).metadata, { previousTeamIds: [], teamIds: [t], version: 2 });
+  assert.equal(events.at(-1).action, "organization.member.teams_changed");
+
+  assert.equal((await members.changeTeams(actor("admin"), { userId: ids.planner, teamIds: [t], version: 1 })).code, "STALE_VERSION");
+  assert.equal((await members.changeTeams(actor("admin"), { userId: ids.planner, teamIds: ["nope"], version: 2 })).code, "INVALID_TEAMS");
+  assert.equal((await members.changeTeams(actor("planner"), { userId: ids.viewer, teamIds: [], version: 1 })).status, 403);
+  setTeamResult(() => []);
+  const unknown = await members.changeTeams(actor("admin"), { userId: ids.planner, teamIds: [t], version: 2 });
+  assert.equal(unknown.code, "UNKNOWN_TEAMS");
+  assert.deepEqual(unknown.details, { unknownTeamIds: [t] });
 });

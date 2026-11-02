@@ -23,6 +23,8 @@ export interface MembershipStore {
   // Refuses with owns_rfps when the member owns an RFP when the change commits.
   deactivate(input: { organizationId: string; userId: string; expectedVersion: number; now: Date }): Promise<MemberRecord | "stale" | { ownedRfpCount: number }>;
   reactivate(input: { organizationId: string; userId: string; expectedVersion: number }): Promise<MemberRecord | "stale">;
+  // Bumps the version for a change stored elsewhere (team memberships).
+  bumpVersion(input: { organizationId: string; userId: string; expectedVersion: number }): Promise<MemberRecord | "stale">;
   // One transaction: the current Owner becomes organization_admin and the target becomes Owner.
   // not_owner when the actor is no longer the active Owner when it commits.
   transferOwnership(input: {
@@ -49,9 +51,13 @@ export interface MemberSessionHooks {
   afterDeactivation(change: SessionChange): Promise<unknown>;
 }
 
-// Teams arrive with ORG-201. Until then nobody is on a team.
+// Teams arrive with ORG-201. Until then nobody is on a team and team changes are unavailable.
 export interface TeamDirectory {
   teamsFor(organizationId: string, userIds: string[]): Promise<Map<string, TeamRef[]>>;
+  // Which of teamIds are active teams of the organization; "unavailable" before ORG-201.
+  activeTeamIds(organizationId: string, teamIds: string[]): Promise<string[] | "unavailable">;
+  // Makes the member's active teams exactly teamIds, keeping manager flags on teams they stay on.
+  setMemberTeams(input: { organizationId: string; userId: string; teamIds: string[] }): Promise<{ previousTeamIds: string[] }>;
 }
 
 export interface MemberAuditWriter {

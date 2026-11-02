@@ -119,6 +119,11 @@ export const mongoMembershipStore: MembershipStore = {
     return row ? ((await withUser(row)) as MemberRecord) : "stale";
   },
 
+  async bumpVersion(input) {
+    const row = await updateVersioned(input, { status: { $ne: "removed" } }, { $set: { updatedAt: new Date() } });
+    return row ? ((await withUser(row)) as MemberRecord) : "stale";
+  },
+
   // Demote first, then promote, in one transaction: the one-active-owner unique index holds at
   // every step, and a concurrent transfer or role change conflicts and retries or aborts.
   async transferOwnership(input) {

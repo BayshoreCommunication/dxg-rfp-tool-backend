@@ -52,6 +52,7 @@ export const createOrganizationMembersController = (members: MemberManagement = 
       q: queryString(req, "q"), status: queryString(req, "status"), role: queryString(req, "role"),
     })),
     changeRole: handle((actor, req) => members.changeRole(actor, { userId: param(req, "userId"), role: body(req).role, version: body(req).version })),
+    changeTeams: handle((actor, req) => members.changeTeams(actor, { userId: param(req, "userId"), teamIds: body(req).teamIds, version: body(req).version })),
     deactivate: handle((actor, req) => members.deactivate(actor, { userId: param(req, "userId"), version: body(req).version })),
     reactivate: handle((actor, req) => members.reactivate(actor, { userId: param(req, "userId"), version: body(req).version })),
     reassignRfps: handle((actor, req) => members.reassignRfps(actor, { fromUserId: param(req, "userId"), toUserId: body(req).toUserId, rfpIds: body(req).rfpIds })),

@@ -16,7 +16,7 @@ export type ManagerFacts = { userId: string; roles: readonly string[] };
 
 export type Refusal = {
   ok: false;
-  status: 400 | 403 | 404 | 409;
+  status: 400 | 403 | 404 | 409 | 503;
   code: string;
   message: string;
   details?: Record<string, unknown>;

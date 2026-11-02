@@ -154,6 +154,34 @@ export const createMemberManagement = (dependencies: Dependencies) => {
     return { ok: true, member: await viewWithTeams(actor, updated), previousRole };
   };
 
+  const changeTeams = async (actor: MemberActor, input: { userId: string; teamIds: unknown; version: unknown }): Promise<MemberResult<{ member: MemberView }>> => {
+    const action = "organization.member.teams_changed";
+    const manage = decideManage(actor);
+    if (!manage.ok) return refuse(actor, action, input.userId, manage);
+    if (!Array.isArray(input.teamIds) || input.teamIds.length > 100 || !input.teamIds.every((id) => typeof id === "string" && /^[a-f0-9]{24}$/i.test(id))) {
+      return refusal(400, "INVALID_TEAMS", "teamIds must be a list of up to 100 team ids.");
+    }
+    const teamIds = [...new Set(input.teamIds as string[])];
+    const version = parseVersion(input.version);
+    if (version === null) return versionRequired();
+    const target = await dependencies.store.find(actor.organizationId, input.userId);
+    if (!target) return notFound();
+    if (target.version !== version) return refuse(actor, action, input.userId, stale(target));
+    if (target.status === "removed") return refuse(actor, action, input.userId, refusal(409, "MEMBER_REMOVED", "This member has been removed."));
+
+    const known = await dependencies.teams.activeTeamIds(actor.organizationId, teamIds);
+    if (known === "unavailable") return refusal(503, "TEAMS_UNAVAILABLE", "Teams aren't available yet.");
+    const unknownTeamIds = teamIds.filter((id) => !known.includes(id));
+    if (unknownTeamIds.length > 0) return refusal(400, "UNKNOWN_TEAMS", "Some teams don't exist in this organization.", { unknownTeamIds });
+
+    // The version moves before the write so a concurrent change of the same member loses cleanly.
+    const bumped = await dependencies.store.bumpVersion({ organizationId: actor.organizationId, userId: target.userId, expectedVersion: version });
+    if (bumped === "stale") return refuse(actor, action, input.userId, stale(await dependencies.store.find(actor.organizationId, input.userId)));
+    const result = await dependencies.teams.setMemberTeams({ organizationId: actor.organizationId, userId: target.userId, teamIds });
+    await audit(actor, { action, targetUserId: target.userId, decision: "allowed", reason: "teams_changed", metadata: { previousTeamIds: result.previousTeamIds, teamIds, version: bumped.version } });
+    return { ok: true, member: await viewWithTeams(actor, bumped) };
+  };
+
   const deactivate = async (actor: MemberActor, input: { userId: string; version: unknown }): Promise<MemberResult<{ member: MemberView }>> => {
     const action = "organization.member.deactivated";
     const manage = decideManage(actor);
@@ -263,7 +291,7 @@ export const createMemberManagement = (dependencies: Dependencies) => {
     return { ok: true, reassignedCount: result.rfpIds.length, rfpIds: result.rfpIds };
   };
 
-  return { list, changeRole, deactivate, reactivate, transferOwnership, reassignRfps };
+  return { list, changeRole, changeTeams, deactivate, reactivate, transferOwnership, reassignRfps };
 };
 
 export type MemberManagement = ReturnType<typeof createMemberManagement>;
