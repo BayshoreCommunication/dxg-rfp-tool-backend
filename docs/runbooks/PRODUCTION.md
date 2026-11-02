@@ -70,12 +70,20 @@ stay put. Run in a maintenance window:
 
 1. Mark the platform organization (above).
 2. Pause the worker and dispatcher and let the outbox drain.
-3. `npm run migrate:customer-organizations -- --run-id=<id>` (dry run). Postgres moves run in a
+3. `npm run verify:customer-organizations -- --snapshot=<file>`: records, per member, the proposal
+   and vendor-response ids they can see (ids only). Keep the file private and delete it afterwards.
+   A customer who sees other customers' proposals here holds an admin role in the shared
+   organization; resolve that before continuing.
+4. `npm run migrate:customer-organizations -- --run-id=<id>` (dry run). Postgres moves run in a
    transaction that is rolled back, so the per-customer counts are exact and a missing privilege
    fails here. It needs `POSTGRES_MIGRATION_URL` (the role that owns the tables; no superuser).
-4. `npm run migrate:customer-organizations -- --apply --run-id=<id>`. A failed customer is reported
+5. `npm run migrate:customer-organizations -- --apply --run-id=<id>`. A failed customer is reported
    and the rest continue; re-running the same run id skips customers already moved.
-5. Check `remainingInSharedOrganization` is all zero, then resume the worker and dispatcher.
+6. `npm run verify:customer-organizations -- --before=<file>`. It exits 1 unless every member sees
+   exactly the same ids, nothing customer-owned is left in the shared organization, and every
+   proposal's owner is an active member. Roll back if it fails and the cause isn't clear.
+7. Resume the worker and dispatcher. The cron worker re-runs the orphan check every day
+   (`[Cron] Orphaned proposals: N`); anything above 0 needs a reassignment.
 
 Rollback: `npm run migrate:customer-organizations -- --rollback-run=<id>` (dry run), then with
 `--apply`. Everything in each holding tenant, including anything created since, moves back and

@@ -13,7 +13,7 @@ import { loadTenantSchema, moveAllRows, moveCustomerRows, withRowMovesAllowed, t
 // Dry run by default. A run is journaled per customer and rolled back by run id.
 
 const JOURNAL = "customerorganizationmigrations";
-const STAFF_ROLES = new Set(["admin", "super_admin", "superadmin"]);
+export const STAFF_ROLES = new Set(["admin", "super_admin", "superadmin"]);
 
 type JournalEntry = {
   runId: string; userId: string; fromOrganizationId: string; holdingOrganizationId: string;
