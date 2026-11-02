@@ -47,7 +47,10 @@ sit in `scan_failed` if ClamAV is down.
    model, kill-switch state; upload → scan → extract on a synthetic fixture.
 6. Check the API's startup log says `Postgres row-level security enforced for role …`. An error
    `postgres.rls.bypassed` means `POSTGRES_URL` logs in as a superuser or BYPASSRLS role, so the
-   database is not enforcing tenant isolation; point it at the non-owner app role.
+   database is not enforcing tenant isolation; point it at the non-owner app role. That role
+   needs `USAGE` on schema `rfpilot`, `SELECT, INSERT, UPDATE, DELETE` on its tables, and `SELECT`
+   on `public.rfpilot_schema_migrations`; without the last grant `/health` answers 503 and the load
+   balancer drains every task.
 
 ### Shared platform corpus (once per environment, after migration 064)
 

@@ -16,3 +16,10 @@ export const supportRedis = (): Redis | null => {
   });
   return client;
 };
+
+// For shutdown and tests: the shared connection otherwise keeps the process alive.
+export const closeSupportRedis = async (): Promise<void> => {
+  const current = client;
+  client = undefined;
+  if (current) await current.quit().catch(() => current.disconnect());
+};
