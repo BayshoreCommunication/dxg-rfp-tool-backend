@@ -10,7 +10,7 @@ import { hasOrganizationAction, legacyAuthorizationRoles, OrganizationAction } f
 import type { RfpActor } from "../src/modules/identity/domain/rfpAccessPolicy";
 import { ActorLookups, resolveRfpActor } from "../src/modules/identity/application/resolveRfpActor";
 import { mongoActorLookups } from "../src/modules/identity/application/mongoActorLookups";
-import { authenticationSessions } from "../src/modules/auth/composition";
+import { authenticationSessions, membershipSessions } from "../src/modules/auth/composition";
 
 // Extend Express Request to include user
 export interface AuthRequest extends Request {
@@ -21,11 +21,14 @@ export interface AuthRequest extends Request {
 
 type AuthenticateDependencies = {
   revokeInactiveMembership(input: { userId: string; organizationId: string; correlationId: string }): Promise<number>;
+  // ORG-307: the member's role was changed by someone else; keep this session, end the others.
+  revokeOtherSessionsAfterRoleChange(input: { userId: string; organizationId: string; sessionId: string; correlationId: string }): Promise<number>;
   actorLookups: ActorLookups;
 };
 
 const defaultDependencies: AuthenticateDependencies = {
   revokeInactiveMembership: (input) => authenticationSessions.revokeInactiveMembership(input),
+  revokeOtherSessionsAfterRoleChange: (input) => membershipSessions.onRequestWithPendingRevocation(input),
   actorLookups: mongoActorLookups,
 };
 
@@ -64,7 +67,7 @@ export const createAuthenticate = (
         OrganizationMembership.findOne({
           organizationId: decoded.organizationId,
           userId: decoded.userId,
-        }).select("roles version status").lean(),
+        }).select("roles version status sessionRevocationPending").lean(),
         RefreshSession.exists({
           sessionId: decoded.sessionId,
           userId: decoded.userId,
@@ -97,9 +100,13 @@ export const createAuthenticate = (
         res.status(403).json({ success: false, message: "Organization is inactive or unavailable" });
         return;
       }
-      if (decoded.rolesVersion !== membership.version) {
-        res.status(401).json({ success: false, message: "Session authorization is stale" });
-        return;
+      // Roles always come from the membership, never the token, so a role change applies on this
+      // request with no sign-out (ORG-307); the token's rolesVersion is informational only.
+      const correlationId = (req as AuthRequest & { correlationId?: string }).correlationId ?? randomUUID();
+      if (membership.sessionRevocationPending) {
+        await dependencies.revokeOtherSessionsAfterRoleChange({
+          userId: decoded.userId, organizationId: decoded.organizationId, sessionId: decoded.sessionId, correlationId,
+        });
       }
       // The account role comes from the stored account, never the token, so a
       // token minted before an account moved collections or changed role

@@ -47,7 +47,8 @@ export interface RefreshSessionRepository {
   }): Promise<boolean>;
   revokeFamily(input: { familyId: string; reason: string; now: Date }): Promise<number>;
   revokeSession(input: { sessionId: string; userId: string; reason: string; now: Date }): Promise<number>;
-  revokeAll(input: { userId: string; organizationId: string; reason: string; now: Date }): Promise<number>;
+  // exceptSessionId keeps one session (the acting one) alive.
+  revokeAll(input: { userId: string; organizationId: string; reason: string; now: Date; exceptSessionId?: string }): Promise<number>;
   listActive(input: { userId: string; organizationId: string; now: Date }): Promise<Array<{
     sessionId: string;
     createdAt: Date;

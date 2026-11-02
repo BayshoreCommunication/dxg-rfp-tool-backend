@@ -64,9 +64,9 @@ export const mongoRefreshSessionRepository: RefreshSessionRepository = {
     );
     return result.modifiedCount;
   },
-  async revokeAll({ userId, organizationId, reason, now }) {
+  async revokeAll({ userId, organizationId, reason, now, exceptSessionId }) {
     const result = await RefreshSession.updateMany(
-      { userId, organizationId, status: { $ne: "revoked" } },
+      { userId, organizationId, status: { $ne: "revoked" }, ...(exceptSessionId ? { sessionId: { $ne: exceptSessionId } } : {}) },
       { $set: { status: "revoked", revokedAt: now, revokeReason: reason } },
     );
     return result.modifiedCount;
