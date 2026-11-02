@@ -154,6 +154,20 @@ export const runOrphanedProposalCheck = async () => {
   }
 };
 
+// ORG-305: verifies pending domains and re-checks verified ones weekly. Each run takes the
+// domains whose next check is due; removing a TXT record un-verifies on the re-check.
+export const runDomainVerificationSweep = async () => {
+  try {
+    const { domainVerification } = await import("../src/modules/domainVerification/composition");
+    const result = await domainVerification.sweep({ limit: 200 });
+    if (result.checked > 0 || result.failed > 0) {
+      console.log(`[Cron] Domain verification: ${result.checked} checked, ${result.verified} verified, ${result.unverified} unverified, ${result.pending} pending, ${result.failed} failed`);
+    }
+  } catch {
+    console.error("[Cron] Domain verification sweep failed");
+  }
+};
+
 export const startCronJobs = () => {
   // Run once immediately on startup
   runExpirationCheck();
@@ -182,6 +196,11 @@ export const startCronJobs = () => {
   setInterval(() => {
     void runVendorDraftCleanup();
   }, 24 * 60 * 60 * 1000);
+
+  void runDomainVerificationSweep();
+  setInterval(() => {
+    void runDomainVerificationSweep();
+  }, 15 * 60 * 1000);
 
   // Read-only, so it also runs on startup and gives a deploy an immediate reading.
   void runOrphanedProposalCheck();

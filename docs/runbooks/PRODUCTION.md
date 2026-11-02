@@ -39,6 +39,9 @@ sit in `scan_failed` if ClamAV is down.
   Never change it in place: put the old key in `TWO_FACTOR_ENCRYPTION_PREVIOUS_KEYS` first, or every
   enrolled member is locked out until an Admin resets their 2FA. `TWO_FACTOR_SSO_POLICY` stays
   `challenge` until DXG answers Q8.
+- Domain verification: the cron worker verifies domains and re-checks them weekly
+  (`[Cron] Domain verification: ...`), so it needs outbound DNS. `DOMAIN_VERIFICATION_METHODS`
+  stays `dns_txt` until DXG answers Q7.
 - Model pin: `LIVE_AI_MODEL=gpt-5.4-mini-2026-03-17`. Changing it is a release:
   run the gold evaluation (`docs/testing/GOLD_EVALUATION.md`) and record the run.
 
