@@ -49,6 +49,17 @@ export const checkPostgres = async () => {
   return { enabled: true, ready: true, migrationVersion: result.rows[0]?.version ?? null };
 };
 
+// Row-level security is the database-side tenant boundary, but a superuser or BYPASSRLS login
+// skips it entirely; the application's queries are then the only isolation left. With one
+// organization per customer (ORG-106/107) that matters, so the API checks its own login at startup.
+export const checkRowLevelSecurity = async () => {
+  const result = await postgresPool().query<{ role: string; superuser: boolean; bypass_rls: boolean }>(
+    "SELECT current_user AS role, rolsuper AS superuser, rolbypassrls AS bypass_rls FROM pg_roles WHERE rolname = current_user",
+  );
+  const row = result.rows[0];
+  return { role: row?.role ?? null, enforced: Boolean(row) && !row.superuser && !row.bypass_rls };
+};
+
 export const closePostgres = async () => {
   if (pool) await pool.end();
   pool = null;
