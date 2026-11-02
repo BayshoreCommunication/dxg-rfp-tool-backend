@@ -1,4 +1,5 @@
 import Organization from "../../../modal/organizationModel";
+import OrganizationMembership from "../../../modal/organizationMembershipModel";
 import { createRequestOtp, createVerifyOtp } from "./application/manageOtp";
 import { createRegisterCustomer, createResetPassword } from "./application/registerAndReset";
 import {
@@ -178,5 +179,11 @@ export const beginAuthenticatedSession = async (input: {
   const account = await mongoSessionAccountLoader.load(input.userId, input.organizationId);
   if (!account) throw new Error("Active organization membership is required");
   await provisionIdentityProjection(input);
-  return authenticationSessions.begin({ account, ...input });
+  const session = await authenticationSessions.begin({ account, ...input });
+  // For the member list's "last login"; the membership version is untouched.
+  await OrganizationMembership.updateOne(
+    { organizationId: input.organizationId, userId: input.userId },
+    { $set: { lastSignedInAt: new Date() } },
+  ).catch(() => undefined);
+  return session;
 };

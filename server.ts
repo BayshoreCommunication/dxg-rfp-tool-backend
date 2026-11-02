@@ -20,6 +20,7 @@ import proposalRoutes from "./routes/proposalsRoute";
 import publicAccessRoutes from "./routes/publicAccessRoute";
 import settingsRoutes from "./routes/settingsRoute";
 import userRoutes from "./routes/usersRoute";
+import organizationMembersRoutes from "./routes/organizationMembersRoute";
 import vendorResponseRoutes from "./routes/vendorResponseRoute";
 import documentSourcesRoutes from "./routes/documentSourcesRoute";
 import jobsRoutes from "./routes/jobsRoute";
@@ -184,6 +185,9 @@ app.use("/api/all-clients", allClientsRoutes);
 
 // User management routes
 app.use("/api/users", userRoutes);
+
+// Organization member management (ORG-206)
+app.use("/api/organization", organizationMembersRoutes);
 
 // Proposal routes
 app.use("/api/proposals", proposalRoutes);

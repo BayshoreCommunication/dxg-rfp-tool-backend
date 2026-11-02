@@ -30,6 +30,8 @@ export interface IOrganizationMembership extends Document {
   activatedAt?: Date | null;
   suspendedAt?: Date | null;
   removedAt?: Date | null;
+  // Set at each sign-in (ORG-206 member list). Not part of the optimistic version.
+  lastSignedInAt?: Date | null;
   migrationRunId?: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -51,6 +53,7 @@ const organizationMembershipSchema = new Schema<IOrganizationMembership>(
     activatedAt: { type: Date, default: null },
     suspendedAt: { type: Date, default: null },
     removedAt: { type: Date, default: null },
+    lastSignedInAt: { type: Date, default: null },
     migrationRunId: { type: String, trim: true, default: null },
   },
   { timestamps: true },
