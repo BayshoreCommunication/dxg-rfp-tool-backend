@@ -5,6 +5,8 @@ import { hmacOtpCodeHasher } from "../auth/infrastructure/security/hmacOtpCodeHa
 import { mongoSecurityAuditWriter } from "../auth/infrastructure/audit/mongoSecurityAuditWriter";
 import { authenticationSessions } from "../auth/composition";
 import { createTwoFactorService } from "./application/manageTwoFactor";
+import { createOrganizationTwoFactorPolicy } from "./application/organizationTwoFactorPolicy";
+import { mongoOrganizationTwoFactorDirectory } from "./infrastructure/mongo/mongoOrganizationTwoFactorDirectory";
 import { ssoPolicyFromEnv } from "./domain/secondFactorPolicy";
 import { mongoTwoFactorChallengeRepository, mongoTwoFactorRepository } from "./infrastructure/mongo/mongoTwoFactorRepository";
 
@@ -50,4 +52,11 @@ export const twoFactor = createTwoFactorService({
   revokeMemberSessions: (input) => authenticationSessions.revokeAll(input),
   ssoPolicy: () => ssoPolicyFromEnv(),
   issuer: process.env.TWO_FACTOR_ISSUER?.trim() || "RFPilot",
+});
+
+export const organizationTwoFactorPolicy = createOrganizationTwoFactorPolicy({
+  directory: mongoOrganizationTwoFactorDirectory,
+  twoFactor,
+  revokeMemberSessions: (input) => authenticationSessions.revokeAll(input),
+  audit: mongoSecurityAuditWriter,
 });

@@ -54,6 +54,7 @@ const PARAM_SOURCES: Record<string, { pg?: string; mongo?: string; field?: strin
   notifications: { mongo: 'notifications' },
   'public-access': { mongo: 'publicaccessgrants' },
   users: { mongo: 'users' },
+  members: { mongo: 'users' },
   'all-clients': { mongo: 'users' },
   sessions: { mongo: 'refreshsessions' },
   tickets: { mongo: 'supporttickets' },
