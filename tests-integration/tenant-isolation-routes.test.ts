@@ -91,6 +91,7 @@ const PARAM_SOURCES: Record<string, { pg?: string; mongo?: string; field?: strin
   'expert-rules': { pg: 'expert_rules' },
   assets: { pg: 'governed_assets' },
   vendors: { pg: 'comparison_participants' },
+  invitations: { mongo: 'invitations' },
 };
 // Parameters that name a kind rather than a record.
 const LITERAL_PARAMS: Record<string, string> = { sectionKey: 'event_overview', reportType: 'executive' };
@@ -309,6 +310,7 @@ const seedForeignOrganization = async () => {
     ['POST', '/api/v1/knowledge/pricing-records', { category: 'audio', itemLabel: `${MARKER} line array`, unit: 'per_day', amountLowMinor: 1, amountMidMinor: 2, amountHighMinor: 3, currency: 'USD' }],
     ['POST', '/api/v1/knowledge/expert-rules', { title: `${MARKER} rule`, body: `${MARKER} rule`, category: 'audio' }],
     ['PUT', '/api/settings', { companyName: `${MARKER} Events`, emailSignature: MARKER }],
+    ['POST', '/api/v1/organization/invitations', { email: `invitee-${MARKER.toLowerCase()}@example.test`, role: 'planner' }],
   ];
   const skipped: string[] = [];
   for (const [method, path, body] of steps) {

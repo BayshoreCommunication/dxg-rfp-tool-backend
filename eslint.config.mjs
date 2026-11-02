@@ -21,6 +21,8 @@ export default tseslint.config(
       "controller/vendorResponseController.ts",
       "controller/supportDeskController.ts",
       "routes/supportDeskRoute.ts",
+      "controller/invitationController.ts",
+      "routes/invitationRoute.ts",
       "routes/platformAssistantRoute.ts",
       "routes/historicalInsightsRoute.ts",
       "routes/requirementRegistryRoute.ts",

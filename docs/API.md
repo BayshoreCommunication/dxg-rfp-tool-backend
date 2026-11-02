@@ -44,6 +44,16 @@ All routes are available by default without feature-flag environment variables. 
 
 - Existing authenticated list/detail endpoints return current version metadata while retaining their response shape.
 
+## Organization invitations (ORG-203)
+
+Routes in `routes/invitationRoute.ts`, rules in `src/modules/invitations/domain/invitationRules.ts`.
+
+- `GET /api/v1/organization/invitations?status=` lists invitations the caller may manage (Owner/Admin: all; Team Manager: their teams, when `allowManagerInvites` is on).
+- `POST /api/v1/organization/invitations` `{ email, role, teamId? }` invites one person; `POST .../bulk` `{ emails: string | string[], role, teamId? }` takes up to 500 entries and answers with one result per row (`invited`, or `refused` with a code such as `INVALID_EMAIL`, `DUPLICATE_IN_LIST`, `ALREADY_INVITED`, `ALREADY_MEMBER`, `EMAIL_IN_ANOTHER_ORGANIZATION`, `LEGACY_ACCOUNT_PENDING_PLACEMENT`).
+- `POST .../:id/resend` rotates the link (the old one stops working at once) and restarts the 7-day expiry; `POST .../:id/revoke` withdraws it.
+- Public, token in the body: `POST /api/v1/invitations/lookup` `{ token }` returns organization, role, inviter, email and whether an account exists. `POST /api/v1/invitations/accept` `{ token, email, password }` signs an existing account in (the email must equal the invited one); `POST /api/v1/invitations/accept/register` `{ token, name, password }` creates the account in the inviting organization. Both return a session like `/api/auth/login`. Role, team and organization come only from the invitation.
+- Dead links answer `404 INVITATION_INVALID` or `410` with `INVITATION_EXPIRED`, `INVITATION_REVOKED`, `INVITATION_ALREADY_USED` or `INVITATION_SUPERSEDED`; none of them names the organization or email.
+
 ## Where to find endpoints
 
 - Backend route overview and legacy API: `../README.md`.
