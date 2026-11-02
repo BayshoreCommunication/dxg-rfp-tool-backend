@@ -3,6 +3,7 @@ import mongoose, { Document, Schema } from "mongoose";
 export interface IProposal extends Document {
   organizationId?: mongoose.Types.ObjectId;
   userId?: mongoose.Types.ObjectId;
+  teamId?: mongoose.Types.ObjectId | null;
   status: "unsubmitted" | "submitted" | "reviewed" | "approved" | "rejected";
   isDraft: boolean;
   isActive: boolean;
@@ -101,6 +102,9 @@ const proposalSchema = new Schema<IProposal>(
       type: Schema.Types.ObjectId,
       ref: "User",
     },
+    // Defaults to the creator's team when they're on exactly one (ORG-202). Managers of an active
+    // team reach its proposals through rfpAccessPolicy.
+    teamId: { type: Schema.Types.ObjectId, ref: "Team", default: null },
 
     status: {
       type: String,
@@ -198,6 +202,7 @@ const proposalSchema = new Schema<IProposal>(
 
 proposalSchema.index({ userId: 1, createdAt: -1 });
 proposalSchema.index({ organizationId: 1, userId: 1, createdAt: -1 });
+proposalSchema.index({ organizationId: 1, teamId: 1 });
 proposalSchema.index({ status: 1 });
 proposalSchema.index({ "contact.contactEmail": 1 });
 proposalSchema.index({ "event.eventName": 1 });

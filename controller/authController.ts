@@ -19,7 +19,7 @@ import {
 } from "../src/modules/auth/composition";
 import type { OtpPurpose } from "../src/modules/auth/domain/ports/otpPorts";
 
-const applicationUserResponse = (user: {
+export const applicationUserResponse = (user: {
   id: string;
   name: string;
   email: string;
@@ -43,7 +43,7 @@ const applicationUserResponse = (user: {
 const refreshCookieName = () => process.env.NODE_ENV === "production"
   ? "__Host-rfpilot_refresh"
   : "rfpilot_refresh";
-const correlationId = (req: Request) => {
+export const correlationId = (req: Request) => {
   const supplied = req.headers["x-correlation-id"];
   return typeof supplied === "string" && supplied.length <= 128
     ? supplied
@@ -82,7 +82,7 @@ const isAuthorizedBff = (req: Request) => {
   const right = Buffer.from(supplied);
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 };
-const rejectInvalidBffCredential = (req: Request, res: Response) => {
+export const rejectInvalidBffCredential = (req: Request, res: Response) => {
   if (
     req.headers["x-rfpilot-bff-key"] !== undefined &&
     !isAuthorizedBff(req)
@@ -101,7 +101,7 @@ const presentedRefreshToken = (req: Request) =>
   (isAuthorizedBff(req) && typeof req.body?.refreshToken === "string"
     ? req.body.refreshToken
     : "");
-const createSession = async (req: Request, res: Response, user: {
+export const createSession = async (req: Request, res: Response, user: {
   id: string;
   organizationId?: string;
 }) => {
@@ -116,14 +116,14 @@ const createSession = async (req: Request, res: Response, user: {
   setRefreshCookie(res, session.refreshToken, session.refreshExpiresAt);
   return session;
 };
-const bffRefreshResponse = (req: Request, session: {
+export const bffRefreshResponse = (req: Request, session: {
   refreshToken: string;
   refreshExpiresAt: number;
 }) => isAuthorizedBff(req) ? {
   refreshToken: session.refreshToken,
   refreshExpiresAt: session.refreshExpiresAt,
 } : {};
-const bffRequestsAccountOnly = (req: Request) =>
+export const bffRequestsAccountOnly = (req: Request) =>
   isAuthorizedBff(req) && req.body?.createSession === false;
 
 /* ─────────────────────────────────────────

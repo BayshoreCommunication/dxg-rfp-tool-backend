@@ -8,7 +8,8 @@ import { runWithTenant } from "../src/modules/shared/tenancy/tenantContext";
 import { findSessionPrincipal } from "../src/modules/auth/infrastructure/mongo/mongoSessionAccountLoader";
 import { hasOrganizationAction, legacyAuthorizationRoles, OrganizationAction } from "../src/modules/identity/domain/authorizationPolicy";
 import type { RfpActor } from "../src/modules/identity/domain/rfpAccessPolicy";
-import { ActorLookups, noTeamsOrSharesYet, resolveRfpActor } from "../src/modules/identity/application/resolveRfpActor";
+import { ActorLookups, resolveRfpActor } from "../src/modules/identity/application/resolveRfpActor";
+import { mongoActorLookups } from "../src/modules/identity/application/mongoActorLookups";
 import { authenticationSessions, membershipSessions } from "../src/modules/auth/composition";
 
 // Extend Express Request to include user
@@ -28,7 +29,7 @@ type AuthenticateDependencies = {
 const defaultDependencies: AuthenticateDependencies = {
   revokeInactiveMembership: (input) => authenticationSessions.revokeInactiveMembership(input),
   revokeOtherSessionsAfterRoleChange: (input) => membershipSessions.onRequestWithPendingRevocation(input),
-  actorLookups: noTeamsOrSharesYet,
+  actorLookups: mongoActorLookups,
 };
 
 export const createAuthenticate = (

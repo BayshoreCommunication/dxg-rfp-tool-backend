@@ -44,6 +44,33 @@ All routes are available by default without feature-flag environment variables. 
 
 - Existing authenticated list/detail endpoints return current version metadata while retaining their response shape.
 
+## Organization invitations (ORG-203)
+
+Routes in `routes/invitationRoute.ts`, rules in `src/modules/invitations/domain/invitationRules.ts`.
+
+- `GET /api/v1/organization/invitations?status=` lists invitations the caller may manage (Owner/Admin: all; Team Manager: their teams, when `allowManagerInvites` is on).
+- `POST /api/v1/organization/invitations` `{ email, role, teamId? }` invites one person; `POST .../bulk` `{ emails: string | string[], role, teamId? }` takes up to 500 entries and answers with one result per row (`invited`, or `refused` with a code such as `INVALID_EMAIL`, `DUPLICATE_IN_LIST`, `ALREADY_INVITED`, `ALREADY_MEMBER`, `EMAIL_IN_ANOTHER_ORGANIZATION`, `LEGACY_ACCOUNT_PENDING_PLACEMENT`).
+- `POST .../:id/resend` rotates the link (the old one stops working at once) and restarts the 7-day expiry; `POST .../:id/revoke` withdraws it.
+- Public, token in the body: `POST /api/v1/invitations/lookup` `{ token }` returns organization, role, inviter, email and whether an account exists. `POST /api/v1/invitations/accept` `{ token, email, password }` signs an existing account in (the email must equal the invited one); `POST /api/v1/invitations/accept/register` `{ token, name, password }` creates the account in the inviting organization. Both return a session like `/api/auth/login`. Role, team and organization come only from the invitation.
+- Emails (ORG-204) go through `utils/emailService.ts` (`sendTransactionalEmail`, no fixed-recipient copy) and link to `${FRONTEND_URL}/invite/<token>`, so `FRONTEND_URL` must be the dashboard origin. The cron worker's invitation sweep (every 15 minutes) expires invitations, sends the day-six reminder once per link with a fresh link, and retries failed sends up to five attempts. Under `NODE_ENV=test` mail goes to an in-memory recorder.
+- Dead links answer `404 INVITATION_INVALID` or `410` with `INVITATION_EXPIRED`, `INVITATION_REVOKED`, `INVITATION_ALREADY_USED` or `INVITATION_SUPERSEDED`; none of them names the organization or email.
+## Teams
+
+Team administration (ORG-201) lives in `routes/teamsRoute.ts`; rules in `src/modules/teams/application/manageTeams.ts`. Every change writes a `SecurityAuditEvent` (`team.created`, `team.renamed`, `team.archived`, `team.member_added`, `team.member_removed`, `team.manager_changed`).
+
+- `GET /api/v1/teams` — Owners and Admins get every team with its members; other members get `{ id, name }` for active teams.
+- `POST /api/v1/teams` `{ name }`, `GET|PATCH /api/v1/teams/:teamId` `{ name }`, `POST /api/v1/teams/:teamId/archive` — Owner/Admin only. Active names are unique per organization, ignoring case (409 `TEAM_NAME_TAKEN`). Archived teams can't be changed (409 `TEAM_ARCHIVED`).
+- `POST /api/v1/teams/:teamId/members` `{ userId, isManager? }`, `PATCH /api/v1/teams/:teamId/members/:userId` `{ isManager }`, `DELETE /api/v1/teams/:teamId/members/:userId` — Owner/Admin only. Members must be active in the organization; a manager must hold the `team_manager` role (422 `TEAM_MANAGER_ROLE_REQUIRED`).
+- Proposal team (ORG-202): `POST /api/proposals` and copy put a new proposal on its creator's team when they're on exactly one active team (a client-sent `teamId` is ignored). `PUT /api/proposals/:id` with `teamId` (an active team in the organization, or `null`) changes it for anyone allowed to edit; anything else is 422 `TEAM_NOT_ASSIGNABLE`. Resending the current team's id is accepted even after that team is archived.
+
+## Proposal sharing
+
+Sharing (ORG-208) lives in `routes/rfpSharesRoute.ts`; rules in `src/modules/rfpSharing/application/manageRfpShares.ts`. Who may share is the access policy's `share` decision: the proposal's owner, a manager of its (active) team, or an Owner/Admin.
+
+- `GET /api/v1/proposals/:proposalId/shares` lists shares as `{ userId, permission, grantedBy, memberActive, createdAt, updatedAt }`. `memberActive: false` marks a deactivated member's share, which is kept but grants nothing.
+- `PUT /api/v1/proposals/:proposalId/shares/:userId` `{ permission: "view" | "edit" }` grants or changes a share; `DELETE` revokes it. The member must be active in the same organization (404 `MEMBER_NOT_FOUND`, 409 `MEMBER_INACTIVE`); Viewers get view only (422 `VIEWER_VIEW_ONLY`). Grants and revocations write `proposal.share_granted` / `proposal.share_revoked` audit events.
+- A share reaches list, detail and vendor-response reads through `rfpListScope` and `canAccessRfp`; an edit share also allows edits.
+
 ## Where to find endpoints
 
 - Backend route overview and legacy API: `../README.md`.

@@ -20,6 +20,7 @@ import { closePostgres, postgresPool } from "../config/postgres";
 import { closeSecurityRateLimitRedis } from "../middleware/securityRateLimit";
 import { closePlacementPool } from "../controller/adminLegacyCustomersController";
 import { resolveRfpActor } from "../src/modules/identity/application/resolveRfpActor";
+import { mongoActorLookups } from "../src/modules/identity/application/mongoActorLookups";
 import { rfpListScope } from "../src/modules/identity/domain/rfpAccessPolicy";
 import { findCustomerLeftovers, findOrphanedProposals } from "../src/modules/tenancy/migrationVerification";
 import { cleanupOrganizations, seedOrganization, type Fixture } from "./memberFixtures";
@@ -190,7 +191,7 @@ test("placing into an existing organization: the receiving Admin sees the propos
 
   // The receiving Admin sees Ben's proposal through the access policy; a Planner doesn't.
   const visible = async (role: "organization_admin" | "planner") => {
-    const actor = await resolveRfpActor({ organizationId: target, userId: receiving.members[role].userId, roles: [role], status: "active" });
+    const actor = await resolveRfpActor({ organizationId: target, userId: receiving.members[role].userId, roles: [role], status: "active" }, mongoActorLookups);
     return (await Proposal.collection.find(rfpListScope(actor)).toArray()).map((p) => String(p._id));
   };
   assert.ok((await visible("organization_admin")).includes(String(legacy.ben.proposals[0])));

@@ -4,6 +4,7 @@ const {
   createCopyOwnedProposal,
   createCreateOwnedProposal,
   createUpdateOwnedProposal,
+  ProposalTeamNotAssignableError,
 } = require("../src/modules/proposals/application/authorOwnedProposal");
 
 const createDependencies = (capture = {}) => ({
@@ -53,6 +54,7 @@ test("create strips client-controlled system fields and normalizes drafts", asyn
       userId: "other-user",
       createdAt: "yesterday",
       proposalSetting: { injected: true },
+      teamId: "client-picked-team",
       status: "draft",
       event: { eventName: "Summit" },
     },
@@ -64,6 +66,7 @@ test("create strips client-controlled system fields and normalizes drafts", asyn
       status: "unsubmitted",
       event: { eventName: "Summit" },
       isDraft: true,
+      teamId: null,
     },
   });
   assert.equal(result.proposalSetting.branding.brandName, "DXG");
@@ -206,4 +209,53 @@ test("create, update, and copy do not write or propagate the dormant recording r
   });
   assert.equal("videoRecordingStep" in copyCapture.create.proposal, false);
   assert.deepEqual(copyCapture.create.proposal.roomByRoom, [{ videoRecording: "Yes", camerasQty: "2" }]);
+});
+
+// ORG-202: team assignment.
+const withTeams = (capture, { defaultTeam = null, assignable = [] } = {}) => ({
+  ...createDependencies(capture),
+  teams: {
+    defaultTeamFor: async (ownerUserId) => { capture.defaultTeamFor = ownerUserId; return defaultTeam; },
+    isAssignable: async (input) => { capture.isAssignable = input; return assignable.includes(input.teamId); },
+  },
+});
+
+test("a new or copied proposal lands on the creator's single team, never a client-picked one", async () => {
+  const capture = {};
+  await createCreateOwnedProposal(withTeams(capture, { defaultTeam: "team-1" }))({
+    ownerUserId: "user-001",
+    proposal: { teamId: "team-9", event: { eventName: "Summit" } },
+  });
+  assert.equal(capture.defaultTeamFor, "user-001");
+  assert.equal(capture.create.proposal.teamId, "team-1");
+
+  const copied = {};
+  await createCopyOwnedProposal(withTeams(copied, { defaultTeam: null }))({ proposalId: "source-001", ownerUserId: "user-001", overrides: {} });
+  assert.equal(copied.create.proposal.teamId, null);
+});
+
+test("an edit may move the proposal to an assignable team or clear it", async () => {
+  const capture = {};
+  const update = createUpdateOwnedProposal(withTeams(capture, { assignable: ["team-2"] }));
+  await update({ proposalId: "proposal-001", ownerUserId: "user-001", updates: { teamId: "team-2" } });
+  assert.deepEqual(capture.isAssignable, { teamId: "team-2", proposalId: "proposal-001" });
+  assert.equal(capture.update.updates.teamId, "team-2");
+  for (const cleared of [null, ""]) {
+    await update({ proposalId: "proposal-001", ownerUserId: "user-001", updates: { teamId: cleared } });
+    assert.equal(capture.update.updates.teamId, null);
+  }
+  await update({ proposalId: "proposal-001", ownerUserId: "user-001", updates: { event: { eventName: "No team change" } } });
+  assert.equal("teamId" in capture.update.updates, false);
+});
+
+test("an edit to a team that isn't assignable is refused before writing", async () => {
+  const capture = {};
+  const update = createUpdateOwnedProposal(withTeams(capture, { assignable: ["team-2"] }));
+  for (const teamId of ["team-archived", { $ne: null }, 42]) {
+    await assert.rejects(
+      update({ proposalId: "proposal-001", ownerUserId: "user-001", updates: { teamId } }),
+      (error) => error instanceof ProposalTeamNotAssignableError && error.status === 422 && error.code === "TEAM_NOT_ASSIGNABLE",
+    );
+  }
+  assert.equal(capture.update, undefined);
 });
