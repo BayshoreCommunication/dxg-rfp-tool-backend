@@ -16,6 +16,9 @@ import SecurityAuditEvent from '../modal/securityAuditEventModel';
 import Team from '../modal/teamModel';
 import TeamMembership from '../modal/teamMembershipModel';
 import User from '../modal/userModel';
+import RfpShare from '../modal/rfpShareModel';
+import VendorResponse from '../modal/vendorResponseModel';
+import { actorFor } from '../src/modules/identity/application/proposalAccess';
 import { authenticationSessions } from '../src/modules/auth/composition';
 import { closePostgres } from '../config/postgres';
 import { closeSecurityRateLimitRedis } from '../middleware/securityRateLimit';
@@ -56,7 +59,7 @@ let orgB: mongoose.Types.ObjectId;
 before(async () => {
   await connectMongo();
   assert.equal(mongoose.connection.name, TEST_MONGODB_DB_NAME);
-  await Promise.all([Team.init(), TeamMembership.init()]);
+  await Promise.all([Team.init(), TeamMembership.init(), RfpShare.init()]);
   orgA = (await Organization.create({ name: 'Teams A', slug: `intg-teams-${randomMongoId().slice(0, 10)}` }))._id;
   orgB = (await Organization.create({ name: 'Teams B', slug: `intg-teams-${randomMongoId().slice(0, 10)}` }))._id;
   orgIds.push(orgA, orgB);
@@ -66,6 +69,7 @@ before(async () => {
   await member(orgA, 'planner', ['planner']);
   await member(orgA, 'colleague', ['planner']);
   await member(orgA, 'viewer', ['viewer']);
+  await member(orgA, 'leaver', ['planner']);
   await member(orgB, 'foreignAdmin', ['organization_admin']);
   await member(orgB, 'foreigner', ['planner']);
   server = http.createServer(app).listen(0);
@@ -78,6 +82,8 @@ after(async () => {
   if (mongoose.connection.readyState === 1) {
     await Promise.all([
       Proposal.deleteMany({ organizationId: { $in: orgIds } }),
+      RfpShare.deleteMany({ organizationId: { $in: orgIds } }),
+      VendorResponse.deleteMany({ organizationId: { $in: orgIds } }),
       Team.deleteMany({ organizationId: { $in: orgIds } }),
       TeamMembership.deleteMany({ organizationId: { $in: orgIds } }),
       OrganizationMembership.deleteMany({ organizationId: { $in: orgIds } }),
@@ -211,4 +217,95 @@ test('ORG-202: anyone allowed to edit can change the team; only active teams in 
   const cleared = await put('colleague', null);
   assert.equal(cleared.status, 200);
   assert.equal(cleared.body.data.teamId, null);
+});
+
+const share = (who: string, proposalId: string, target: string, permission?: string) =>
+  call(who, 'PUT', `/api/v1/proposals/${proposalId}/shares/${userIds[target]}`, permission ? { permission } : {});
+const unshare = (who: string, proposalId: string, target: string) => call(who, 'DELETE', `/api/v1/proposals/${proposalId}/shares/${userIds[target]}`);
+
+test('ORG-208: owner, team manager or Admin share within the organization; viewers get view only; audited', async () => {
+  const teamId = await createTeam('Sharing team', [['manager', true]]);
+  const proposal = await Proposal.create({ organizationId: orgA, userId: userIds.colleague, teamId, event: { eventName: 'Shared RFP' } });
+  const id = String(proposal._id);
+
+  assert.equal((await share('colleague', id, 'planner', 'view')).status, 200, 'owner');
+  assert.equal((await share('manager', id, 'planner', 'edit')).status, 200, 'team manager');
+  assert.equal((await share('admin', id, 'viewer', 'view')).status, 200, 'admin');
+  assert.equal((await share('planner', id, 'owner', 'view')).status, 403, 'an edit share does not let you share');
+  assert.equal((await share('viewer', id, 'planner', 'view')).status, 403);
+  assert.equal((await share('admin', id, 'viewer', 'edit')).body.code, 'VIEWER_VIEW_ONLY');
+  assert.equal((await share('admin', id, 'foreigner', 'view')).status, 404, 'other organizations are not members');
+  assert.equal((await share('foreignAdmin', id, 'foreigner', 'view')).status, 404, 'another organization cannot see the proposal');
+  assert.equal((await share('admin', id, 'planner', 'owner')).status, 400);
+
+  const listed = await call('colleague', 'GET', `/api/v1/proposals/${id}/shares`);
+  assert.deepEqual(
+    (listed.body.data as Array<{ userId: string; permission: string; memberActive: boolean }>).map((s) => [s.userId, s.permission, s.memberActive]).sort(),
+    [[userIds.planner, 'edit', true], [userIds.viewer, 'view', true]].sort(),
+  );
+  assert.equal((await call('planner', 'GET', `/api/v1/proposals/${id}/shares`)).status, 403);
+
+  // An edit share lets a planner edit; a view share does not.
+  assert.equal((await call('planner', 'PUT', `/api/proposals/${id}`, { event: { eventName: 'Edited through a share' } })).status, 200);
+  assert.equal((await call('viewer', 'GET', `/api/proposals/${id}`)).status, 200);
+  assert.ok((await listedIds('viewer')).includes(id));
+  await share('admin', id, 'planner', 'view');
+  assert.equal((await call('planner', 'PUT', `/api/proposals/${id}`, { event: { eventName: 'Refused' } })).status, 403);
+  assert.equal((await call('planner', 'GET', `/api/proposals/${id}`)).status, 200);
+
+  assert.equal((await unshare('manager', id, 'planner')).status, 200);
+  assert.equal((await unshare('manager', id, 'planner')).status, 404);
+  assert.equal((await call('planner', 'GET', `/api/proposals/${id}`)).status, 403);
+  assert.ok(!(await listedIds('planner')).includes(id));
+
+  const events = await SecurityAuditEvent.find({ organizationId: orgA, targetType: 'proposal', targetId: id }).sort({ createdAt: 1, _id: 1 }).lean();
+  assert.deepEqual(events.map((e) => [e.action, (e.metadata as any).userId, (e.metadata as any).permission]), [
+    ['proposal.share_granted', userIds.planner, 'view'],
+    ['proposal.share_granted', userIds.planner, 'edit'],
+    ['proposal.share_granted', userIds.viewer, 'view'],
+    ['proposal.share_granted', userIds.planner, 'view'],
+    ['proposal.share_revoked', userIds.planner, 'view'],
+  ]);
+});
+
+test('ORG-208: a vendor-response read works through a share, and only through one', async () => {
+  const proposal = await Proposal.create({ organizationId: orgA, userId: userIds.colleague, event: { eventName: 'Vendor RFP' } });
+  const response = await VendorResponse.create({
+    organizationId: orgA, proposalId: proposal._id, proposalOwnerId: userIds.colleague, proposalTitle: 'Vendor RFP',
+    vendorName: 'Vendor', submittedBy: 'Avery', email: 'vendor@example.com', message: 'Quote', emailTrackingId: `share-${randomMongoId()}`,
+  });
+  const read = (who: string) => call(who, 'GET', `/api/vendor-responses/${response._id}`);
+  const listedResponses = async (who: string) => ((await call(who, 'GET', '/api/vendor-responses?limit=100')).body.data as Array<{ _id: string }>).map((r) => String(r._id));
+
+  for (const who of ['planner', 'viewer']) {
+    assert.equal((await read(who)).status, 403, `${who} without a share`);
+    assert.ok(!(await listedResponses(who)).includes(String(response._id)));
+  }
+  await share('colleague', String(proposal._id), 'planner', 'view');
+  await share('colleague', String(proposal._id), 'viewer', 'view');
+  for (const who of ['planner', 'viewer']) {
+    assert.equal((await read(who)).status, 200, `${who} with a share`);
+    assert.ok((await listedResponses(who)).includes(String(response._id)));
+  }
+  assert.equal((await call('viewer', 'DELETE', `/api/vendor-responses/${response._id}`)).status, 403, 'a view share does not allow deleting');
+  await unshare('colleague', String(proposal._id), 'planner');
+  assert.equal((await read('planner')).status, 403, 'revoked');
+  assert.equal((await read('foreigner')).status, 404);
+});
+
+test('ORG-208: a deactivated member\'s share is kept but grants nothing', async () => {
+  const proposal = await Proposal.create({ organizationId: orgA, userId: userIds.colleague, event: { eventName: 'Leaver RFP' } });
+  const id = String(proposal._id);
+  await share('colleague', id, 'leaver', 'edit');
+  assert.equal((await call('leaver', 'GET', `/api/proposals/${id}`)).status, 200);
+
+  await OrganizationMembership.updateOne({ organizationId: orgA, userId: userIds.leaver }, { $set: { status: 'suspended' } });
+  assert.equal((await call('leaver', 'GET', `/api/proposals/${id}`)).status, 401);
+  // Jobs rebuild the actor from the membership: the share is not there either.
+  const jobActor = await actorFor({ organizationId: String(orgA), userId: userIds.leaver });
+  assert.equal(jobActor.shares.size, 0);
+  assert.equal(await RfpShare.countDocuments({ organizationId: orgA, proposalId: proposal._id, userId: userIds.leaver }), 1, 'kept for the record');
+  const listed = (await call('colleague', 'GET', `/api/v1/proposals/${id}/shares`)).body.data as Array<{ userId: string; memberActive: boolean }>;
+  assert.deepEqual(listed.map((s) => [s.userId, s.memberActive]), [[userIds.leaver, false]]);
+  assert.equal((await share('colleague', id, 'leaver', 'view')).body.code, 'MEMBER_INACTIVE');
 });

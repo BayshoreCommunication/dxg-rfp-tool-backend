@@ -35,6 +35,7 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 
 - `Team` (organization, name, archived) and `TeamMembership` (team, user, `isManager`, unique per team and user). Active team names are unique per organization, ignoring case. Archiving keeps memberships; the authenticate middleware reads managed teams from active teams only, so an archived team's managers lose its scope on their next request.
 - `Proposal.teamId` (optional, indexed with `organizationId`) is the team whose managers reach the proposal.
+- `RfpShare` (organization, proposal, user, `permission` view|edit, `grantedBy`; unique per proposal and user). Revoking deletes the row (the audit event keeps the record); a deactivated member's rows are kept and ignored, because actor lookups run for active members only.
 
 ## Pricing data
 

@@ -1,5 +1,7 @@
 import Team from "../../../../modal/teamModel";
 import TeamMembership from "../../../../modal/teamMembershipModel";
+import RfpShare from "../../../../modal/rfpShareModel";
+import type { SharePermission } from "../domain/rfpAccessPolicy";
 import type { ActorLookups } from "./resolveRfpActor";
 
 // Teams and shares behind each request's RfpActor. Only active teams count, so archiving a team
@@ -11,5 +13,8 @@ export const mongoActorLookups: ActorLookups = {
     const active = await Team.find({ _id: { $in: managed.map((m) => m.teamId) }, organizationId, archived: false }).select("_id").lean();
     return active.map((team) => String(team._id));
   },
-  shares: async () => new Map(),
+  async shares({ organizationId, userId }) {
+    const shares = await RfpShare.find({ organizationId, userId }).select("proposalId permission").lean();
+    return new Map(shares.map((share) => [String(share.proposalId), share.permission as SharePermission]));
+  },
 };
