@@ -149,3 +149,66 @@ test('a team manager reaches the team\'s proposals until the team is archived; A
   const actions = await auditActions(orgA, teamId);
   assert.deepEqual(actions, ['team.created', 'team.member_added', 'team.manager_changed', 'team.manager_changed', 'team.archived']);
 });
+
+const createTeam = async (name: string, members: Array<[string, boolean]>) => {
+  const teamId = (await call('admin', 'POST', '/api/v1/teams', { name })).body.data.id as string;
+  for (const [who, isManager] of members) {
+    assert.equal((await call('admin', 'POST', `/api/v1/teams/${teamId}/members`, { userId: userIds[who], isManager })).status, 201);
+  }
+  return teamId;
+};
+const createProposal = async (who: string, body: Record<string, unknown> = {}) => {
+  const res = await call(who, 'POST', '/api/proposals', { event: { eventName: `RFP by ${who}` }, ...body });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  return res.body.data as { _id: string; teamId: string | null };
+};
+
+test('ORG-202: a new proposal lands on the creator\'s only team and its manager sees it without a share', async () => {
+  const teamId = await createTeam('Awards', [['manager', true], ['planner', false]]);
+  const created = await createProposal('planner', { teamId: new mongoose.Types.ObjectId().toHexString() });
+  assert.equal(String(created.teamId), teamId, 'the creator\'s team wins over a client-picked one');
+  assert.ok((await listedIds('manager')).includes(String(created._id)));
+  assert.equal((await call('manager', 'GET', `/api/proposals/${created._id}`)).status, 200);
+
+  // On two teams there is no single default.
+  await createTeam('Summits', [['planner', false]]);
+  const unassigned = await createProposal('planner');
+  assert.equal(unassigned.teamId, null);
+  assert.equal((await call('manager', 'GET', `/api/proposals/${unassigned._id}`)).status, 403);
+
+  // A manager of one team can't see another team's proposals.
+  const otherTeam = await createTeam('Retreats', [['colleague', false]]);
+  const other = await createProposal('colleague');
+  assert.equal(String(other.teamId), otherTeam);
+  assert.ok(!(await listedIds('manager')).includes(String(other._id)));
+  assert.equal((await call('manager', 'GET', `/api/proposals/${other._id}`)).status, 403);
+});
+
+test('ORG-202: anyone allowed to edit can change the team; only active teams in the organization are accepted', async () => {
+  const fromTeam = await createTeam('Launches', [['colleague', false]]);
+  const toTeam = await createTeam('Roadshows', [['manager', true]]);
+  const foreignTeam = (await call('foreignAdmin', 'POST', '/api/v1/teams', { name: 'Foreign team' })).body.data.id as string;
+  const proposal = await createProposal('colleague');
+  const put = (who: string, teamId: unknown) => call(who, 'PUT', `/api/proposals/${proposal._id}`, { teamId });
+  assert.equal(String((await put('colleague', fromTeam)).body.data.teamId), fromTeam);
+
+  assert.equal((await put('colleague', foreignTeam)).status, 422);
+  assert.equal((await put('colleague', 'not-an-id')).status, 422);
+  assert.equal((await put('planner', toTeam)).status, 403, 'not allowed to edit');
+  assert.equal((await put('viewer', toTeam)).status, 403);
+
+  const moved = await put('colleague', toTeam);
+  assert.equal(moved.status, 200);
+  assert.equal(String(moved.body.data.teamId), toTeam);
+  assert.equal((await call('manager', 'GET', `/api/proposals/${proposal._id}`)).status, 200, 'the new team\'s manager now reaches it');
+
+  // Archived: can't move a proposal onto it, but an edit resending the current team still saves.
+  await call('admin', 'POST', `/api/v1/teams/${fromTeam}/archive`);
+  assert.equal((await put('colleague', fromTeam)).status, 422);
+  await call('admin', 'POST', `/api/v1/teams/${toTeam}/archive`);
+  assert.equal((await put('colleague', toTeam)).status, 200);
+
+  const cleared = await put('colleague', null);
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.data.teamId, null);
+});
