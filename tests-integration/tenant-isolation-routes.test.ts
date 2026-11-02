@@ -55,6 +55,8 @@ const PARAM_SOURCES: Record<string, { pg?: string; mongo?: string; field?: strin
   'public-access': { mongo: 'publicaccessgrants' },
   users: { mongo: 'users' },
   'all-clients': { mongo: 'users' },
+  members: { mongo: 'users' },
+  'legacy-customers': { mongo: 'users' },
   sessions: { mongo: 'refreshsessions' },
   tickets: { mongo: 'supporttickets' },
   attachments: { mongo: 'supportattachments', field: 'attachmentId' },
