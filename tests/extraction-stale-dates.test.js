@@ -9,6 +9,10 @@ const {
 const NOW = new Date("2026-09-16T12:00:00Z");
 const iso = (offsetDays) =>
   new Date(NOW.getTime() + offsetDays * 86_400_000).toISOString().slice(0, 10);
+// The pipeline judges staleness against the real clock, so its fixture dates are relative to
+// today; fixed dates expire (the +45-day "future" date went stale on 2026-11-01).
+const isoFromToday = (offsetDays) =>
+  new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
 
 test("a date that has already passed is not a usable answer", () => {
   // The regression: the example brief's "Proposal due August 7" and event
@@ -36,9 +40,9 @@ test("a malformed date is left to the normalizer, not judged as stale", () => {
 test("stale dates become questions while good candidates survive", () => {
   const evidence = [{ id: "ev1", sourceKey: "s1", text: "Proposal due August 7" }];
   const candidates = [
-    { path: "/content/event/startDate", value: iso(-2), confidence: 0.9, citations: ["ev1"] },
-    { path: "/content/budget/proposalSubmissionDueDate", value: iso(-40), confidence: 0.9, citations: ["ev1"] },
-    { path: "/content/event/endDate", value: iso(45), confidence: 0.9, citations: ["ev1"] },
+    { path: "/content/event/startDate", value: isoFromToday(-2), confidence: 0.9, citations: ["ev1"] },
+    { path: "/content/budget/proposalSubmissionDueDate", value: isoFromToday(-40), confidence: 0.9, citations: ["ev1"] },
+    { path: "/content/event/endDate", value: isoFromToday(45), confidence: 0.9, citations: ["ev1"] },
   ];
   const result = normalizeAndDeduplicateExtractionCandidates(candidates, evidence);
 
