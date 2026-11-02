@@ -1,3 +1,4 @@
+import { membershipSessions } from "../auth/composition";
 import { mongoSecurityAuditWriter } from "../auth/infrastructure/audit/mongoSecurityAuditWriter";
 import { createMemberManagement } from "./application/manageMembers";
 import type { TeamDirectory } from "./domain/ports";
@@ -10,4 +11,5 @@ export const memberManagement = createMemberManagement({
   store: mongoMembershipStore,
   teams: noTeamsYet,
   audit: mongoSecurityAuditWriter,
+  sessions: membershipSessions,
 });

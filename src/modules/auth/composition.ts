@@ -19,6 +19,7 @@ import { jwtAccessTokenIssuer } from "./infrastructure/security/jwtAccessTokenIs
 import { cryptoSecretGenerator } from "./infrastructure/security/cryptoSecretGenerator";
 import { googleIdTokenVerifier } from "./infrastructure/identity/googleIdTokenVerifier";
 import { createSessionManager } from "./application/manageSessions";
+import { createMembershipSessionHardening } from "./application/membershipSessionHardening";
 import { mongoRefreshSessionRepository } from "./infrastructure/mongo/mongoRefreshSessionRepository";
 import { mongoSessionAccountLoader } from "./infrastructure/mongo/mongoSessionAccountLoader";
 import { jwtSessionAccessTokenIssuer } from "./infrastructure/security/jwtSessionAccessTokenIssuer";
@@ -187,3 +188,16 @@ export const beginAuthenticatedSession = async (input: {
   ).catch(() => undefined);
   return session;
 };
+
+// ORG-307 hooks for membership changes. ORG-304's 2FA reset calls afterTwoFactorReset.
+export const membershipSessions = createMembershipSessionHardening({
+  revokeOtherSessions: (input) => authenticationSessions.revokeOtherSessions(input),
+  markRevocationPending: async ({ organizationId, userId }) => {
+    await OrganizationMembership.updateOne({ organizationId, userId }, { $set: { sessionRevocationPending: true } });
+  },
+  claimRevocationPending: async ({ organizationId, userId }) =>
+    (await OrganizationMembership.updateOne(
+      { organizationId, userId, sessionRevocationPending: true },
+      { $set: { sessionRevocationPending: false } },
+    )).modifiedCount === 1,
+});

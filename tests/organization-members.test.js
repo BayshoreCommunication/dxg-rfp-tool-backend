@@ -35,13 +35,15 @@ const setup = (owned = {}) => {
     { userId: ids.viewer, roles: ["viewer"] },
   ], owned);
   const events = [];
+  const sessionCalls = [];
   const members = createMemberManagement({
     store,
     teams: { teamsFor: async () => new Map([[ids.planner, [{ id: "t1", name: "East" }]]]) },
     audit: { append: async (event) => { events.push(event); } },
+    sessions: { afterRoleChange: async (c) => { sessionCalls.push(["role", c.userId, c.actorSessionId]); }, afterDeactivation: async (c) => { sessionCalls.push(["deactivated", c.userId]); } },
   });
   const actor = (role) => ({ organizationId: ORG, userId: ids[role], roles: [role === "admin" ? "organization_admin" : role === "manager" ? "team_manager" : role], correlationId: "c" });
-  return { store, events, members, actor };
+  return { store, events, members, actor, sessionCalls };
 };
 
 test("role changes follow the Owner and RFP-ownership rules for every actor", () => {
@@ -195,4 +197,18 @@ test("a transfer is audited and refusals are audited as denied", async () => {
   assert.equal(events.at(-1).action, "organization.ownership.transferred");
   assert.equal(events.at(-1).decision, "allowed");
   assert.equal(events.at(-1).metadata.previousOwnerUserId, ids.owner);
+});
+
+test("role changes, deactivations and transfers call the session hooks", async () => {
+  const { members, actor, sessionCalls, store } = setup();
+  await members.changeRole(actor("admin"), { userId: ids.planner, role: "team_manager", version: 1 });
+  await members.deactivate(actor("admin"), { userId: ids.viewer, version: 1 });
+  store.transferOwnership = async ({ fromUserId, toUserId }) => ({ from: { ...store.rows.get(fromUserId) }, to: { ...store.rows.get(toUserId) } });
+  await members.transferOwnership({ ...actor("owner"), sessionId: "owner-session" }, { toUserId: ids.admin, version: 1 });
+  assert.deepEqual(sessionCalls, [
+    ["role", ids.planner, undefined],
+    ["deactivated", ids.viewer],
+    ["role", ids.owner, "owner-session"],
+    ["role", ids.admin, "owner-session"],
+  ]);
 });

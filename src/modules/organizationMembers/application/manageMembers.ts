@@ -12,7 +12,7 @@ import {
   type CustomerRole,
   type Refusal,
 } from "../domain/memberPolicy";
-import type { MemberAuditWriter, MemberRecord, MembershipStore, TeamDirectory, TeamRef } from "../domain/ports";
+import type { MemberAuditWriter, MemberRecord, MembershipStore, MemberSessionHooks, TeamDirectory, TeamRef } from "../domain/ports";
 
 // ORG-206 membership management: list, change role, deactivate, reactivate, and the ownership
 // transfer. Every change is optimistic on the membership version and audited, refusals included.
@@ -45,6 +45,7 @@ type Dependencies = {
   store: MembershipStore;
   teams: TeamDirectory;
   audit: MemberAuditWriter;
+  sessions: MemberSessionHooks;
   now?: () => Date;
 };
 
@@ -97,6 +98,9 @@ export const createMemberManagement = (dependencies: Dependencies) => {
     return result;
   };
 
+  const sessionChange = (actor: MemberActor, userId: string) =>
+    ({ organizationId: actor.organizationId, userId, actorUserId: actor.userId, actorSessionId: actor.sessionId, correlationId: actor.correlationId });
+
   const viewWithTeams = async (actor: MemberActor, member: MemberRecord) =>
     toView(member, (await dependencies.teams.teamsFor(actor.organizationId, [member.userId])).get(member.userId) ?? []);
 
@@ -142,6 +146,7 @@ export const createMemberManagement = (dependencies: Dependencies) => {
     });
     if (updated === "stale") return refuse(actor, action, input.userId, stale(await dependencies.store.find(actor.organizationId, input.userId)));
     await audit(actor, { action, targetUserId: target.userId, decision: "allowed", reason: "role_changed", metadata: { previousRole, role, version: updated.version } });
+    await dependencies.sessions.afterRoleChange(sessionChange(actor, target.userId));
     return { ok: true, member: await viewWithTeams(actor, updated), previousRole };
   };
 
@@ -163,6 +168,7 @@ export const createMemberManagement = (dependencies: Dependencies) => {
     if (updated === "stale") return refuse(actor, action, input.userId, stale(await dependencies.store.find(actor.organizationId, input.userId)));
     if ("ownedRfpCount" in updated) return refuse(actor, action, input.userId, ownerHasRfps(updated.ownedRfpCount));
     await audit(actor, { action, targetUserId: target.userId, decision: "allowed", reason: "member_deactivated", metadata: { previousStatus: target.status, version: updated.version } });
+    await dependencies.sessions.afterDeactivation(sessionChange(actor, target.userId));
     return { ok: true, member: await viewWithTeams(actor, updated) };
   };
 
@@ -207,6 +213,8 @@ export const createMemberManagement = (dependencies: Dependencies) => {
       action, targetUserId: toUserId, decision: "allowed", reason: "ownership_transferred",
       metadata: { previousOwnerUserId: actor.userId, newOwnerPreviousRole: customerRole(target!.roles), previousOwnerNewRole: "organization_admin" },
     });
+    await dependencies.sessions.afterRoleChange(sessionChange(actor, actor.userId));
+    await dependencies.sessions.afterRoleChange(sessionChange(actor, toUserId));
     return { ok: true, previousOwner: await viewWithTeams(actor, result.from), owner: await viewWithTeams(actor, result.to) };
   };
 

@@ -30,6 +30,13 @@ export interface MembershipStore {
   }): Promise<{ from: MemberRecord; to: MemberRecord } | "stale" | "not_owner">;
 }
 
+// ORG-307: what a membership change does to the member's sessions.
+export type SessionChange = { organizationId: string; userId: string; actorUserId: string; actorSessionId?: string; correlationId: string };
+export interface MemberSessionHooks {
+  afterRoleChange(change: SessionChange): Promise<unknown>;
+  afterDeactivation(change: SessionChange): Promise<unknown>;
+}
+
 // Teams arrive with ORG-201. Until then nobody is on a team.
 export interface TeamDirectory {
   teamsFor(organizationId: string, userIds: string[]): Promise<Map<string, TeamRef[]>>;

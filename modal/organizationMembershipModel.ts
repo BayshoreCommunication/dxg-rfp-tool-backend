@@ -32,6 +32,9 @@ export interface IOrganizationMembership extends Document {
   removedAt?: Date | null;
   // Set at each sign-in (ORG-206 member list). Not part of the optimistic version.
   lastSignedInAt?: Date | null;
+  // ORG-307: set when someone else changed this member's role. The member's next request claims
+  // it, keeps that session and revokes their other sessions.
+  sessionRevocationPending?: boolean;
   migrationRunId?: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -54,6 +57,7 @@ const organizationMembershipSchema = new Schema<IOrganizationMembership>(
     suspendedAt: { type: Date, default: null },
     removedAt: { type: Date, default: null },
     lastSignedInAt: { type: Date, default: null },
+    sessionRevocationPending: { type: Boolean, default: false },
     migrationRunId: { type: String, trim: true, default: null },
   },
   { timestamps: true },
