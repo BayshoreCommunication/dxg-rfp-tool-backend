@@ -7,7 +7,7 @@ import http from "http";
 import mongoose from "mongoose";
 import morgan from "morgan";
 import connectDB from "./config/db";
-import { checkPostgres, closePostgres, postgresEnabled } from "./config/postgres";
+import { checkPostgres, checkRowLevelSecurity, closePostgres, postgresEnabled } from "./config/postgres";
 import authRoutes from "./routes/authRoute";
 import adminRoutes from "./routes/adminRoute";
 import adminUserRoutes from "./routes/adminUserRoute";
@@ -256,6 +256,15 @@ if (require.main === module) {
     try {
       // Connect to database first
       await connectDB();
+
+      // Logged, never served: /health is public. Role name and verdict only.
+      if (postgresEnabled()) {
+        await checkRowLevelSecurity().then((rls) => {
+          if (rls.enforced) console.log(`🔒 Postgres row-level security enforced for role ${rls.role}`);
+          else if (process.env.NODE_ENV === "production") console.error(`postgres.rls.bypassed role=${rls.role}: the API's Postgres login skips row-level security; tenant isolation rests on queries alone`);
+          else console.warn(`⚠️  Postgres role ${rls.role} bypasses row-level security (expected for local development only)`);
+        }).catch(() => console.error("postgres.rls.check_failed"));
+      }
 
       // The cron jobs mutate and purge proposals with no cross-replica
       // locking, and two of them run immediately at startup. When the API
