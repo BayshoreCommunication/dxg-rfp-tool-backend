@@ -21,6 +21,7 @@ import publicAccessRoutes from "./routes/publicAccessRoute";
 import settingsRoutes from "./routes/settingsRoute";
 import userRoutes from "./routes/usersRoute";
 import organizationMembersRoutes from "./routes/organizationMembersRoute";
+import adminLegacyCustomersRoutes from "./routes/adminLegacyCustomersRoute";
 import vendorResponseRoutes from "./routes/vendorResponseRoute";
 import documentSourcesRoutes from "./routes/documentSourcesRoute";
 import jobsRoutes from "./routes/jobsRoute";
@@ -179,6 +180,8 @@ app.use("/api/auth", authRoutes);
 // Admin routes
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin-user", adminUserRoutes);
+// Placing legacy customers into organizations (ORG-110)
+app.use("/api/admin/legacy-customers", adminLegacyCustomersRoutes);
 
 // Admin clients route
 app.use("/api/all-clients", allClientsRoutes);
