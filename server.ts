@@ -22,6 +22,8 @@ import proposalRoutes from "./routes/proposalsRoute";
 import publicAccessRoutes from "./routes/publicAccessRoute";
 import settingsRoutes from "./routes/settingsRoute";
 import userRoutes from "./routes/usersRoute";
+import organizationMembersRoutes from "./routes/organizationMembersRoute";
+import adminLegacyCustomersRoutes from "./routes/adminLegacyCustomersRoute";
 import vendorResponseRoutes from "./routes/vendorResponseRoute";
 import documentSourcesRoutes from "./routes/documentSourcesRoute";
 import jobsRoutes from "./routes/jobsRoute";
@@ -48,6 +50,9 @@ import platformAssistantRoutes from "./routes/platformAssistantRoute";
 import supportDeskRoutes from "./routes/supportDeskRoute";
 import historicalInsightsRoutes from "./routes/historicalInsightsRoute";
 import governedAssetRoutes from "./routes/governedAssetRoute";
+import invitationRoutes from "./routes/invitationRoute";
+import teamsRoutes from "./routes/teamsRoute";
+import rfpSharesRoutes from "./routes/rfpSharesRoute";
 import { startCronJobs } from "./utils/cronJobs";
 import { supportDeskSweeper } from "./src/modules/supportDesk/composition";
 import { startSupportDeskSweeper } from "./src/modules/supportDesk/infrastructure/scheduler/supportDeskSchedule";
@@ -184,12 +189,17 @@ app.use("/api/organization", organizationSecurityRoutes);
 // Admin routes
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin-user", adminUserRoutes);
+// Placing legacy customers into organizations (ORG-110)
+app.use("/api/admin/legacy-customers", adminLegacyCustomersRoutes);
 
 // Admin clients route
 app.use("/api/all-clients", allClientsRoutes);
 
 // User management routes
 app.use("/api/users", userRoutes);
+
+// Organization member management (ORG-206)
+app.use("/api/organization", organizationMembersRoutes);
 
 // Proposal routes
 app.use("/api/proposals", proposalRoutes);
@@ -219,6 +229,9 @@ app.use("/api/v1", platformAssistantRoutes);
 app.use("/api/v1", supportDeskRoutes);
 app.use("/api/v1", historicalInsightsRoutes);
 app.use("/api/v1", governedAssetRoutes);
+app.use("/api/v1", invitationRoutes);
+app.use("/api/v1", teamsRoutes);
+app.use("/api/v1", rfpSharesRoutes);
 
 // Email campaign routes
 app.use("/api/emails", emailRoutes);

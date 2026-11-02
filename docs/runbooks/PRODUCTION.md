@@ -100,6 +100,27 @@ Rollback: `npm run migrate:customer-organizations -- --rollback-run=<id>` (dry r
 `--apply`. Everything in each holding tenant, including anything created since, moves back and
 the holding tenants are deleted. Customers sign in again either way.
 
+### Placing a legacy customer in an organization (ORG-110)
+
+DXG staff place one legacy customer at a time through the admin API (`/api/admin/legacy-customers`,
+DXG admins only): `GET /` lists customers still in a holding tenant with their proposal counts,
+`GET /target-organizations?q=` lists customer organizations, `POST /:userId/placements` places
+(`{ target: "new", organization: { name, ... } }` makes them Owner of a new organization;
+`{ target: "existing", organizationId, role }` adds them as organization_admin, team_manager or
+planner), and `POST /placements/:runId/rollback` undoes one placement.
+
+Each placement is one journaled run (`legacycustomerplacements`): their MongoDB documents and
+Postgres rows move with ORG-107's rewrite, the holding tenant is set inactive, audit events go to
+the target organization and to the admin's own organization, and the response carries ORG-109's
+checks (`verification.passed`). Rollback moves the customer's records back and reactivates the
+holding tenant; a new organization is deleted only if nobody else has joined it.
+
+The Postgres move needs the table-owner role and briefly takes exclusive locks on tenant tables.
+The API therefore places only when it runs with `POSTGRES_MIGRATION_URL`; with the Postgres
+foundation on and no migration role it answers 503 `PLACEMENT_REQUIRES_MIGRATION_ROLE`. Giving the
+API that role is a trust-boundary decision (record it in DECISIONS.md first). Teams aren't
+available yet (ORG-201), so a placement can't name one.
+
 ## Cost & usage
 
 `GET /api/v1/ai/usage-report?days=30` (`organization:manage`) — daily attempt

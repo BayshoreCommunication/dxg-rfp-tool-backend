@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const { Types } = require("mongoose");
 const { RFP_ACTIONS, canAccessRfp, rfpListScope } = require("../src/modules/identity/domain/rfpAccessPolicy");
 const { hasOrganizationAction } = require("../src/modules/identity/domain/authorizationPolicy");
+const { resolveRfpActor } = require("../src/modules/identity/application/resolveRfpActor");
 
 const id = () => new Types.ObjectId().toHexString();
 const ORG = id();
@@ -30,16 +31,19 @@ const relationships = {
   "other-team": { rfp: { ownerUserId: SOMEONE, teamId: OTHER_TEAM } },
   "archived-team": { rfp: { ownerUserId: SOMEONE, teamId: ARCHIVED_TEAM } },
   unrelated: { rfp: { ownerUserId: SOMEONE } },
+  // A share adds to what the team gives, and still counts once the team is archived (ORG-208).
+  "team-shared-view": { rfp: { ownerUserId: SOMEONE, teamId: MY_TEAM }, share: "view" },
+  "archived-team-shared-edit": { rfp: { ownerUserId: SOMEONE, teamId: ARCHIVED_TEAM }, share: "edit" },
   "foreign-org": { rfp: { ownerUserId: ME, organizationId: FOREIGN_ORG, teamId: MY_TEAM }, share: "edit" },
 };
 
 // The source permissions matrix (spec §4 and §7), written out per cell rather than derived.
 const expected = {
-  owner: { own: ALL, "shared-view": ALL, "shared-edit": ALL, team: ALL, "other-team": ALL, "archived-team": ALL, unrelated: ALL },
-  organization_admin: { own: ALL, "shared-view": ALL, "shared-edit": ALL, team: ALL, "other-team": ALL, "archived-team": ALL, unrelated: ALL },
-  team_manager: { own: OWN, "shared-view": VIEW_SHARE, "shared-edit": EDIT_SHARE, team: TEAM, "other-team": NONE, "archived-team": NONE, unrelated: NONE },
-  planner: { own: OWN, "shared-view": VIEW_SHARE, "shared-edit": EDIT_SHARE, team: NONE, "other-team": NONE, "archived-team": NONE, unrelated: NONE },
-  viewer: { own: NONE, "shared-view": VIEW_SHARE, "shared-edit": VIEW_SHARE, team: NONE, "other-team": NONE, "archived-team": NONE, unrelated: NONE },
+  owner: { own: ALL, "shared-view": ALL, "shared-edit": ALL, team: ALL, "other-team": ALL, "archived-team": ALL, unrelated: ALL, "team-shared-view": ALL, "archived-team-shared-edit": ALL },
+  organization_admin: { own: ALL, "shared-view": ALL, "shared-edit": ALL, team: ALL, "other-team": ALL, "archived-team": ALL, unrelated: ALL, "team-shared-view": ALL, "archived-team-shared-edit": ALL },
+  team_manager: { own: OWN, "shared-view": VIEW_SHARE, "shared-edit": EDIT_SHARE, team: TEAM, "other-team": NONE, "archived-team": NONE, unrelated: NONE, "team-shared-view": TEAM, "archived-team-shared-edit": EDIT_SHARE },
+  planner: { own: OWN, "shared-view": VIEW_SHARE, "shared-edit": EDIT_SHARE, team: NONE, "other-team": NONE, "archived-team": NONE, unrelated: NONE, "team-shared-view": VIEW_SHARE, "archived-team-shared-edit": EDIT_SHARE },
+  viewer: { own: NONE, "shared-view": VIEW_SHARE, "shared-edit": VIEW_SHARE, team: NONE, "other-team": NONE, "archived-team": NONE, unrelated: NONE, "team-shared-view": VIEW_SHARE, "archived-team-shared-edit": VIEW_SHARE },
 };
 
 const actorFor = (role, { share, rfpId, status = "active", managedTeamIds = [MY_TEAM] } = {}) => ({
@@ -164,6 +168,58 @@ test("list scope and single-proposal decision agree on randomized fixtures", () 
     }
   }
   assert.equal(checks, 300 * RFP_ACTIONS.length * 12);
+});
+
+// Actors built the way the request path builds them (resolveRfpActor over team, membership and
+// share records), with lookups that follow mongoActorLookups: managed teams are the active teams
+// the member manages in the organization; shares are the member's shares in the organization.
+test("actors resolved from team, membership and share records: list scope and decision agree", async () => {
+  const random = prng(20261102);
+  const pick = (values) => values[Math.floor(random() * values.length)];
+  const roles = ["owner", "organization_admin", "team_manager", "planner", "viewer"];
+  let checks = 0;
+  for (let round = 0; round < 150; round++) {
+    const users = Array.from({ length: 6 }, () => ({ id: id(), roles: [pick(roles)], status: random() < 0.85 ? "active" : pick(["suspended", "removed"]) }));
+    const teams = Array.from({ length: 4 }, () => ({ id: id(), organizationId: random() < 0.9 ? ORG : FOREIGN_ORG, archived: random() < 0.25 }));
+    const teamMemberships = users.flatMap((user) => teams.filter(() => random() < 0.4).map((team) => ({ teamId: team.id, userId: user.id, isManager: random() < 0.5 })));
+    const rfps = Array.from({ length: 12 }, () => ({
+      id: id(),
+      organizationId: random() < 0.85 ? ORG : FOREIGN_ORG,
+      ownerUserId: pick(users).id,
+      teamId: random() < 0.6 ? pick(teams).id : null,
+    }));
+    const shareRows = rfps.flatMap((rfp) => users.filter(() => random() < 0.2).map((user) => ({ organizationId: rfp.organizationId, proposalId: rfp.id, userId: user.id, permission: pick(["view", "edit"]) })));
+    const lookups = {
+      managedTeamIds: async ({ organizationId, userId }) =>
+        teamMemberships
+          .filter((m) => m.userId === userId && m.isManager)
+          .map((m) => teams.find((team) => team.id === m.teamId))
+          .filter((team) => team.organizationId === organizationId && !team.archived)
+          .map((team) => team.id),
+      shares: async ({ organizationId, userId }) =>
+        new Map(shareRows.filter((row) => row.organizationId === organizationId && row.userId === userId).map((row) => [row.proposalId, row.permission])),
+    };
+    for (const user of users) {
+      const actor = await resolveRfpActor({ organizationId: ORG, userId: user.id, roles: user.roles, status: user.status }, lookups);
+      for (const action of RFP_ACTIONS) {
+        const scope = rfpListScope(actor, action);
+        for (const rfp of rfps) {
+          const decision = canAccessRfp(actor, rfp, action);
+          assert.equal(matches(asDoc(rfp), scope), decision.allowed, JSON.stringify({ round, action, rfp, user }));
+          // A deactivated member's shares and teams are inert.
+          if (user.status !== "active") assert.equal(decision.allowed, false);
+          // An archived team, or a team elsewhere, never gives its manager anything by itself.
+          const team = teams.find((t) => t.id === rfp.teamId);
+          const otherwiseRelated = rfp.ownerUserId === user.id || shareRows.some((r) => r.proposalId === rfp.id && r.userId === user.id);
+          if (team && (team.archived || team.organizationId !== ORG) && !otherwiseRelated && user.roles[0] === "team_manager") {
+            assert.equal(decision.allowed, false, "archived team scope");
+          }
+          checks++;
+        }
+      }
+    }
+  }
+  assert.equal(checks, 150 * 6 * RFP_ACTIONS.length * 12);
 });
 
 test("new customer roles carry coarse capabilities; viewers stay read-only", () => {

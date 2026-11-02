@@ -28,7 +28,7 @@ export type CustomerResult = {
 const journal = () => mongoose.connection.collection<JournalEntry>(JOURNAL);
 const safeError = (error: unknown) => (error instanceof Error ? error.message : "Migration step failed").slice(0, 300);
 
-const inPostgres = async <T>(pool: Pool, commit: boolean, work: (client: PoolClient, schema: TenantSchema) => Promise<T>): Promise<T> => {
+export const inPostgres = async <T>(pool: Pool, commit: boolean, work: (client: PoolClient, schema: TenantSchema) => Promise<T>): Promise<T> => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -44,7 +44,7 @@ const inPostgres = async <T>(pool: Pool, commit: boolean, work: (client: PoolCli
   }
 };
 
-const postgresOrganizationId = async (client: PoolClient, mongoId: string): Promise<string | null> =>
+export const postgresOrganizationId = async (client: PoolClient, mongoId: string): Promise<string | null> =>
   (await client.query<{ id: string }>("SELECT id FROM rfpilot.organizations WHERE external_mongo_id = $1", [mongoId])).rows[0]?.id ?? null;
 
 const ensurePostgresOrganization = async (client: PoolClient, mongoId: string, name: string): Promise<string> =>

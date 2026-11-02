@@ -289,6 +289,32 @@ export const createSessionManager = (dependencies: Dependencies) => {
     return revoked;
   };
 
+  // ORG-307: a membership change (role, deactivation, 2FA reset) ends the member's other
+  // sessions. exceptSessionId is the session that keeps working, when there is one.
+  const revokeOtherSessions = async (input: {
+    userId: string; organizationId: string; exceptSessionId?: string; reason: string;
+    actorUserId?: string; correlationId: string;
+  }) => {
+    const revoked = await dependencies.sessions.revokeAll({
+      userId: input.userId, organizationId: input.organizationId, reason: input.reason, now: now(),
+      exceptSessionId: input.exceptSessionId,
+    });
+    if (revoked > 0) {
+      await dependencies.audit.append({
+        organizationId: input.organizationId,
+        actorUserId: input.actorUserId ?? input.userId,
+        action: "auth.sessions.revoked_others",
+        targetType: "user",
+        targetId: input.userId,
+        decision: "revoked",
+        reason: input.reason,
+        correlationId: input.correlationId,
+        metadata: { revokedCount: revoked, keptSession: Boolean(input.exceptSessionId) },
+      });
+    }
+    return revoked;
+  };
+
   const listActive = (input: { userId: string; organizationId: string }) =>
     dependencies.sessions.listActive({ ...input, now: now() });
 
@@ -299,6 +325,7 @@ export const createSessionManager = (dependencies: Dependencies) => {
     revokePresented,
     revokeAll,
     revokeInactiveMembership,
+    revokeOtherSessions,
     listActive,
   };
 };

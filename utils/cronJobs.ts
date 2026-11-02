@@ -154,6 +154,22 @@ export const runOrphanedProposalCheck = async () => {
   }
 };
 
+// ORG-204: expire invitations, queue the day-six reminder, and send or retry invitation email.
+// Counts only: never addresses or links.
+export const runInvitationSweep = async () => {
+  try {
+    const { sweepInvitations } = await import("../src/modules/invitations/composition");
+    const result = await sweepInvitations();
+    if (result.expired || result.remindersQueued || result.sent || result.failed) {
+      console.log(
+        `[Cron] Invitations: ${result.expired} expired, ${result.remindersQueued} reminder(s) queued, ${result.sent} email(s) sent, ${result.failed} failed`,
+      );
+    }
+  } catch {
+    console.error("[Cron] Invitation sweep failed");
+  }
+};
+
 // ORG-305: verifies pending domains and re-checks verified ones weekly. Each run takes the
 // domains whose next check is due; removing a TXT record un-verifies on the re-check.
 export const runDomainVerificationSweep = async () => {
@@ -196,6 +212,13 @@ export const startCronJobs = () => {
   setInterval(() => {
     void runVendorDraftCleanup();
   }, 24 * 60 * 60 * 1000);
+
+  // Every 15 minutes: a failed invitation email is retried within the hour, and the day-six
+  // reminder goes out within 15 minutes of the invitation having a day left.
+  void runInvitationSweep();
+  setInterval(() => {
+    void runInvitationSweep();
+  }, 15 * 60 * 1000);
 
   void runDomainVerificationSweep();
   setInterval(() => {

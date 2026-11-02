@@ -125,7 +125,7 @@ export const bffRefreshResponse = (req: Request, session: {
   refreshToken: session.refreshToken,
   refreshExpiresAt: session.refreshExpiresAt,
 } : {};
-const bffRequestsAccountOnly = (req: Request) =>
+export const bffRequestsAccountOnly = (req: Request) =>
   isAuthorizedBff(req) && req.body?.createSession === false;
 
 /* ORG-303/304: a correct password (or SSO identity) is only the first step when
