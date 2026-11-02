@@ -3,6 +3,8 @@ import { mongoSecurityAuditWriter } from "../auth/infrastructure/audit/mongoSecu
 import { mongoAuthAccountRepository } from "../auth/infrastructure/mongo/mongoAuthAccountRepository";
 import { createInvitationDispatcher } from "./application/dispatchInvitations";
 import { createInvitationService } from "./application/manageInvitations";
+import { createInvitationSweep } from "./application/sweepInvitations";
+import { mongoInvitationSweepRepository } from "./infrastructure/mongoInvitationSweepRepository";
 import type { InvitationMailer, InvitationTeamDirectory } from "./domain/ports";
 import { createMongoInvitationAcceptance } from "./infrastructure/mongoInvitationAcceptance";
 import { mongoInvitationRepository } from "./infrastructure/mongoInvitationRepository";
@@ -50,7 +52,9 @@ export const createInvitationModule = (overrides: {
     audit: mongoSecurityAuditWriter,
     now: overrides.now,
   });
-  return { service, dispatcher };
+  const sweep = createInvitationSweep({ sweeps: mongoInvitationSweepRepository, dispatcher, now: overrides.now });
+  return { service, dispatcher, sweep };
 };
 
 export const invitations = createInvitationModule();
+export const sweepInvitations = () => invitations.sweep();

@@ -212,6 +212,17 @@ export async function sendForgotPasswordOtpEmail(
   });
 }
 
+// Account email that carries a credential (an invitation link): only the named recipient gets it,
+// never the SMTP_FIXED_RECIPIENTS copy that campaign mail adds.
+export async function sendTransactionalEmail(params: {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+}): Promise<void> {
+  await sendEmail(params);
+}
+
 export async function sendCustomEmail(params: {
   to: string;
   subject: string;
