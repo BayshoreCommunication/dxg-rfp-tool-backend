@@ -176,6 +176,10 @@ export const runDomainVerificationSweep = async () => {
   try {
     const { domainVerification } = await import("../src/modules/domainVerification/composition");
     const result = await domainVerification.sweep({ limit: 200 });
+    if (result.skipped) {
+      console.log("[Cron] Domain verification: previous sweep still running, skipped");
+      return;
+    }
     if (result.checked > 0 || result.failed > 0) {
       console.log(`[Cron] Domain verification: ${result.checked} checked, ${result.verified} verified, ${result.unverified} unverified, ${result.pending} pending, ${result.failed} failed`);
     }

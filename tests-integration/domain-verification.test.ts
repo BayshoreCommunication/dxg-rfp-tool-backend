@@ -149,7 +149,7 @@ test('adding returns the TXT record; the job verifies, re-checks weekly, and un-
   assert.ok(await SecurityAuditEvent.exists({ organizationId: orgA, action: 'organization.domain.unverified', targetId: id }));
 });
 
-test('a domain verified by one organization cannot be verified or added by another', async () => {
+test("a domain verified by one organization never verifies for another, which isn't told why", async () => {
   const name = domain('shared');
   const a = await call('POST', '/api/organization/domains', adminA, { domain: name });
   const b = await call('POST', '/api/organization/domains', adminB, { domain: name });
@@ -162,9 +162,13 @@ test('a domain verified by one organization cannot be verified or added by anoth
   const winner = (await OrganizationDomain.findOne({ domain: name, status: 'verified' }).lean())!;
   const loserToken = String(winner.organizationId) === orgA ? adminB : adminA;
   await OrganizationDomain.deleteOne({ domain: name, status: 'pending' });
-  const refused = await call('POST', '/api/organization/domains', loserToken, { domain: name });
-  assert.equal(refused.status, 409);
-  assert.equal(refused.body.code, 'DOMAIN_UNAVAILABLE');
+  const again = await call('POST', '/api/organization/domains', loserToken, { domain: name });
+  assert.equal(again.status, 201, 'added like any other domain: the answer does not reveal it is taken');
+  assert.equal(again.body.domain.status, 'pending');
+  dns.set(name, { kind: 'records', values: [a.body.domain.verification.value, b.body.domain.verification.value, again.body.domain.verification.value] });
+  const checked = await call('POST', `/api/organization/domains/${again.body.domain.id}/check`, loserToken);
+  assert.equal(checked.body.domain.status, 'pending');
+  assert.equal(checked.body.domain.lastCheckOutcome, 'not_verified');
   assert.equal(txtRecordValue('x'), 'rfpilot-domain-verification=x');
 });
 

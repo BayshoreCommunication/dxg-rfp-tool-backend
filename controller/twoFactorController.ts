@@ -8,7 +8,8 @@ import {
   rejectInvalidBffCredential,
 } from "./authController";
 import { authenticateWithCredentials, getAuthenticatedUserAccount } from "../src/modules/auth/composition";
-import { TwoFactorNotConfiguredError, twoFactor } from "../src/modules/twoFactor/composition";
+import { TwoFactorNotConfiguredError, accountIsSsoLinked, twoFactor } from "../src/modules/twoFactor/composition";
+import { reauthenticationForDisable } from "../src/modules/twoFactor/domain/secondFactorPolicy";
 
 /* ORG-303 TOTP two-factor. Pre-session endpoints take the challenge token from
    sign-in; the rest need a normal session. Codes never appear in logs or audit
@@ -212,10 +213,17 @@ const passwordMatches = async (req: AuthRequest) => {
   return result.kind === "authenticated" && result.user.id === req.user!.userId;
 };
 
-/* POST /api/auth/2fa/disable { password, code | recoveryCode } */
+/* POST /api/auth/2fa/disable { password?, code | recoveryCode }
+   password is optional only for an SSO-linked account; the code is always required. */
 export const disableTwoFactor = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    if (!await passwordMatches(req)) {
+    const passwordSupplied = typeof req.body?.password === "string" && req.body.password.length > 0;
+    const reauthentication = reauthenticationForDisable({
+      passwordSupplied,
+      passwordMatches: passwordSupplied && await passwordMatches(req),
+      ssoLinked: !passwordSupplied && await accountIsSsoLinked(req.user!.userId),
+    });
+    if (reauthentication === "refused") {
       fail(res, 401, "REAUTHENTICATION_FAILED", "Password is incorrect");
       return;
     }
@@ -225,6 +233,7 @@ export const disableTwoFactor = async (req: AuthRequest, res: Response): Promise
       code: req.body?.code,
       recoveryCode: req.body?.recoveryCode,
       correlationId: correlationId(req),
+      reauthentication,
     });
     if (result.kind !== "disabled") {
       respondToVerifyFailure(res, result);

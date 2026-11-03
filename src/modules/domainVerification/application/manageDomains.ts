@@ -28,7 +28,6 @@ export interface DomainRepository {
   list(organizationId: string): Promise<DomainRecord[]>;
   findById(organizationId: string, id: string): Promise<DomainRecord | null>;
   countForOrganization(organizationId: string): Promise<number>;
-  isVerifiedElsewhere(domain: string, organizationId: string): Promise<boolean>;
   create(input: { organizationId: string; domain: string; verificationToken: string; addedByUserId: string; nextCheckAt: Date }): Promise<DomainRecord | "duplicate">;
   /** Also adds the domain to the organization's verifiedDomains. "claimed" when another organization holds it verified. */
   markVerified(input: { id: string; method: DomainMethod; verifiedByUserId: string | null; now: Date; nextCheckAt: Date; outcome: string }): Promise<"verified" | "claimed">;
@@ -38,6 +37,12 @@ export interface DomainRepository {
   /** Also removes the domain from the organization's verifiedDomains. */
   remove(organizationId: string, id: string): Promise<DomainRecord | null>;
   due(now: Date, limit: number): Promise<DomainRecord[]>;
+  /**
+   * Atomic: takes a due record for one checker by moving its nextCheckAt to leaseUntil. False
+   * when another task (or an earlier sweep) already took it. A checker that dies mid-check
+   * leaves the record due again once the lease runs out.
+   */
+  claimDue(input: { id: string; now: Date; leaseUntil: Date }): Promise<boolean>;
 }
 
 export type TxtLookup =
@@ -73,6 +78,9 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 export const RECHECK_VERIFIED_MS = 7 * DAY;
 export const RETRY_DNS_ERROR_MS = HOUR;
+// Longer than one check can take (two 5 s DNS tries), short enough to retry soon after a crash.
+export const CHECK_LEASE_MS = 5 * MINUTE;
+export const SWEEP_CONCURRENCY = 5;
 export const MAX_DOMAINS_PER_ORGANIZATION = 20;
 // A new claim is checked every 15 minutes for its first day (DNS propagation), then daily.
 export const pendingRecheckMs = (createdAt: Date, now: Date) =>
@@ -119,7 +127,8 @@ export const createDomainVerification = (dependencies: Dependencies) => {
       id: record.id, method, verifiedByUserId, now: at, nextCheckAt: after(at, RECHECK_VERIFIED_MS), outcome: method === "dns_txt" ? "txt_record_found" : "admin_email_domain",
     });
     if (result === "claimed") {
-      await dependencies.domains.recordCheck({ id: record.id, now: at, nextCheckAt: after(at, pendingRecheckMs(record.createdAt, at)), outcome: "verified_by_another_organization" });
+      // Another organization holds it verified. Say nothing that tells this one so.
+      await dependencies.domains.recordCheck({ id: record.id, now: at, nextCheckAt: after(at, pendingRecheckMs(record.createdAt, at)), outcome: "not_verified" });
       return false;
     }
     await audit(record, "organization.domain.verified", "allowed", method, correlationId, actorUserId);
@@ -162,8 +171,8 @@ export const createDomainVerification = (dependencies: Dependencies) => {
     if (!domain) return { kind: "invalid" as const };
     if (isPublicMailDomain(domain)) return { kind: "not_verifiable" as const };
     if (await dependencies.domains.countForOrganization(input.organizationId) >= MAX_DOMAINS_PER_ORGANIZATION) return { kind: "limit" as const };
-    // Don't hint which organization; just that it isn't available.
-    if (await dependencies.domains.isVerifiedElsewhere(domain, input.organizationId)) return { kind: "unavailable" as const };
+    // A domain another organization holds verified is added like any other, so the answer
+    // doesn't reveal that it's taken; the partial unique index means it never verifies here.
     const at = now();
     const created = await dependencies.domains.create({
       organizationId: input.organizationId,
@@ -198,20 +207,41 @@ export const createDomainVerification = (dependencies: Dependencies) => {
     return { kind: "removed" as const };
   };
 
-  /** The background job: every domain whose next check is due, oldest first. */
+  /**
+   * The background job: every domain whose next check is due, oldest first. Runs in every
+   * task, so each record is leased before it's checked; within a process a second sweep
+   * while one is running is skipped.
+   */
+  let sweeping = false;
   const sweep = async (input: { limit?: number; correlationId?: string } = {}) => {
-    const due = await dependencies.domains.due(now(), input.limit ?? 100);
-    const counts = { checked: 0, verified: 0, unverified: 0, pending: 0, failed: 0 };
-    for (const record of due) {
-      try {
-        const outcome = await check(record, input.correlationId ?? crypto.randomUUID());
-        counts.checked += 1;
-        counts[outcome] += 1;
-      } catch {
-        counts.failed += 1;
-      }
+    const counts = { checked: 0, verified: 0, unverified: 0, pending: 0, failed: 0, skipped: false };
+    if (sweeping) return { ...counts, skipped: true };
+    sweeping = true;
+    try {
+      const queue = await dependencies.domains.due(now(), input.limit ?? 100);
+      const checkOne = async (record: DomainRecord) => {
+        const at = now();
+        if (!await dependencies.domains.claimDue({ id: record.id, now: at, leaseUntil: after(at, CHECK_LEASE_MS) })) return;
+        try {
+          const outcome = await check(record, input.correlationId ?? crypto.randomUUID());
+          counts.checked += 1;
+          counts[outcome] += 1;
+        } catch {
+          counts.failed += 1;
+          // Back off like a DNS error, or this record would head every sweep forever.
+          const failedAt = now();
+          await dependencies.domains.recordCheck({ id: record.id, now: failedAt, nextCheckAt: after(failedAt, RETRY_DNS_ERROR_MS), outcome: "check_failed" })
+            .catch(() => undefined);
+        }
+      };
+      const worker = async () => {
+        for (let record = queue.shift(); record; record = queue.shift()) await checkOne(record);
+      };
+      await Promise.all(Array.from({ length: SWEEP_CONCURRENCY }, worker));
+      return counts;
+    } finally {
+      sweeping = false;
     }
-    return counts;
   };
 
   return { add, list, checkNow, remove, sweep };

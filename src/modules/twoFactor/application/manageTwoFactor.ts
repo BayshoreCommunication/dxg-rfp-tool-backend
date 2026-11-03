@@ -30,7 +30,14 @@ export interface TwoFactorRepository {
   acceptStep(input: { userId: string; step: number }): Promise<boolean>;
   /** Atomic: marks one unused recovery code used. */
   consumeRecoveryCode(input: { userId: string; hash: string; now: Date }): Promise<boolean>;
-  recordFailure(input: { userId: string; now: Date; maxFailures: number; lockMs: number }): Promise<void>;
+  /**
+   * Atomic: counts one attempt, but only while the account is unlocked and under the cap, so
+   * concurrent guesses can't all slip past a lock that hasn't been written yet. A success
+   * (acceptStep, consumeRecoveryCode) clears the count.
+   */
+  claimAttempt(input: { userId: string; now: Date; maxFailures: number }): Promise<boolean>;
+  /** Atomic: once the cap is spent, locks for lockMs × 2^(earlier locks), at most maxLockMs. */
+  lockIfExhausted(input: { userId: string; now: Date; maxFailures: number; lockMs: number; maxLockMs: number }): Promise<void>;
   replaceRecoveryCodes(input: { userId: string; hashes: string[] }): Promise<void>;
   remove(userId: string): Promise<boolean>;
 }
@@ -71,9 +78,11 @@ export interface TwoFactorAudit {
 export const CHALLENGE_TTL_MS = 10 * 60_000;
 export const CHALLENGE_MAX_ATTEMPTS = 5;
 // Per account, across challenges and IPs: a stolen password can't buy unlimited guesses
-// by signing in again. 10 consecutive failures lock the second factor for 15 minutes.
+// by signing in again. 10 consecutive failures lock the second factor for 15 minutes, and
+// each further lock before a success doubles, up to a day: at most ~10 guesses a day.
 export const MAX_CONSECUTIVE_FAILURES = 10;
 export const LOCK_MS = 15 * 60_000;
+export const MAX_LOCK_MS = 24 * 60 * 60_000;
 
 type Dependencies = {
   records: TwoFactorRepository;
@@ -118,11 +127,16 @@ export const createTwoFactorService = (dependencies: Dependencies) => {
     const record = await dependencies.records.find(userId);
     if (!record || record.status !== "enabled") return { kind: "not_enrolled" };
     const at = now();
-    if (record.lockedUntil && record.lockedUntil > at) {
-      return { kind: "locked", retryAfterSeconds: Math.ceil((record.lockedUntil.getTime() - at.getTime()) / 1000) };
+    const lockInput = { userId, now: at, maxFailures: MAX_CONSECUTIVE_FAILURES, lockMs: LOCK_MS, maxLockMs: MAX_LOCK_MS };
+    if (!await dependencies.records.claimAttempt({ userId, now: at, maxFailures: MAX_CONSECUTIVE_FAILURES })) {
+      // Also writes a lock whose last attempt never got to (a crash mid-check).
+      await dependencies.records.lockIfExhausted(lockInput);
+      const lockedUntil = (await dependencies.records.find(userId))?.lockedUntil;
+      const retryMs = lockedUntil && lockedUntil > at ? lockedUntil.getTime() - at.getTime() : LOCK_MS;
+      return { kind: "locked", retryAfterSeconds: Math.ceil(retryMs / 1000) };
     }
     const fail = async (): Promise<VerifyResult> => {
-      await dependencies.records.recordFailure({ userId, now: at, maxFailures: MAX_CONSECUTIVE_FAILURES, lockMs: LOCK_MS });
+      await dependencies.records.lockIfExhausted(lockInput);
       return { kind: "invalid_code" };
     };
     if (typeof input.recoveryCode === "string" && input.recoveryCode.trim()) {
@@ -268,8 +282,8 @@ export const createTwoFactorService = (dependencies: Dependencies) => {
     return { ...result, userId: challenge.userId, organizationId: challenge.organizationId };
   };
 
-  /** The caller has already re-checked the password; this adds a current second factor. */
-  const disable = async (input: CodeInput & { userId: string; organizationId: string; correlationId: string }) => {
+  /** The caller has already re-authenticated (see reauthenticationForDisable); this adds a current second factor. */
+  const disable = async (input: CodeInput & { userId: string; organizationId: string; correlationId: string; reauthentication?: "password" | "second_factor" }) => {
     if (await dependencies.organizationRequiresTwoFactor(input.organizationId)) return { kind: "required_by_organization" as const };
     const result = await verify(input.userId, input);
     if (result.kind !== "verified") return result;
@@ -283,6 +297,7 @@ export const createTwoFactorService = (dependencies: Dependencies) => {
       decision: "revoked",
       reason: "user_disabled_with_reauthentication",
       correlationId: input.correlationId,
+      metadata: { reauthentication: input.reauthentication ?? "password" },
     });
     return { kind: "disabled" as const };
   };

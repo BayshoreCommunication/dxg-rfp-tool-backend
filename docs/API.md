@@ -85,6 +85,21 @@ Sharing (ORG-208) lives in `routes/rfpSharesRoute.ts`; rules in `src/modules/rfp
 - `PUT /api/v1/proposals/:proposalId/shares/:userId` `{ permission: "view" | "edit" }` grants or changes a share; `DELETE` revokes it. The member must be active in the same organization (404 `MEMBER_NOT_FOUND`, 409 `MEMBER_INACTIVE`); Viewers get view only (422 `VIEWER_VIEW_ONLY`). Grants and revocations write `proposal.share_granted` / `proposal.share_revoked` audit events.
 - A share reaches list, detail and vendor-response reads through `rfpListScope` and `canAccessRfp`; an edit share also allows edits.
 
+## Two-factor authentication (ORG-303, ORG-304)
+
+Routes in `routes/twoFactorRoute.ts` (`/api/auth/2fa`) and `routes/organizationSecurityRoute.ts`; rules in `src/modules/twoFactor/`.
+
+- `POST /api/auth/2fa/disable` `{ password?, code | recoveryCode }`: a current TOTP or recovery code is always required. `password` is required too unless the account is linked to Google sign-in, which may have no password its owner knows; a wrong password is never ignored (401 `REAUTHENTICATION_FAILED`).
+- Wrong codes are counted per account across challenges and IPs, and each attempt is counted before the code is checked. Ten failures lock the second factor for 15 minutes (429 `TWO_FACTOR_LOCKED` with `Retry-After`); each further lock before a successful code doubles, up to 24 hours. Signed-in 2FA endpoints are also limited per user, whatever the IP.
+- `POST /api/organization/members/:userId/two-factor/reset` answers 409 `TWO_FACTOR_RESET_SHARED_ACCOUNT` when the member is also active in another organization: the enrolment belongs to the person, so only DXG support resets it.
+
+## Organization domains (ORG-305)
+
+Routes under `/api/organization/domains` (`organization:manage`); rules in `src/modules/domainVerification/`.
+
+- `POST /api/organization/domains` `{ domain }` answers 201 with the TXT record to publish, also for a domain another organization already holds verified: the response never says a domain is taken. Such a domain stays `pending` and its checks report `lastCheckOutcome: "not_verified"`, because only one organization can hold a domain verified. Refusals: 400 `DOMAIN_INVALID`, 422 `DOMAIN_NOT_VERIFIABLE` (public mail providers), 409 `DOMAIN_LIMIT_REACHED`, 409 `DOMAIN_ALREADY_ADDED`.
+- The cron worker checks due domains every 15 minutes, five at a time, leasing each record so concurrent tasks don't check it twice. A check that errors is retried after an hour (`dns_error:<code>` or `check_failed`).
+
 ## Where to find endpoints
 
 - Backend route overview and legacy API: `../README.md`.
