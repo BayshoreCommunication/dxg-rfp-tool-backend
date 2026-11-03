@@ -9,7 +9,8 @@ router.use(authenticate, authorizeAction("organization:manage"));
 
 router.get("/members", controller.list);
 router.patch("/members/:userId/role", controller.changeRole);
-// Body: { teamIds, version }. 503 TEAMS_UNAVAILABLE until ORG-201 lands.
+// Body: { teamIds, version }. Replaces the member's active teams (ORG-201 Teams of this
+// organization only); an archived or foreign team id is 400 UNKNOWN_TEAMS.
 router.put("/members/:userId/teams", controller.changeTeams);
 router.post("/members/:userId/deactivate", controller.deactivate);
 router.post("/members/:userId/reactivate", controller.reactivate);

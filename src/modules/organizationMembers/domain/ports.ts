@@ -19,7 +19,9 @@ export interface MembershipStore {
   list(organizationId: string): Promise<MemberRecord[]>;
   find(organizationId: string, userId: string): Promise<MemberRecord | null>;
   countOwnedRfps(organizationId: string, userId: string): Promise<number>;
-  setRoles(input: { organizationId: string; userId: string; expectedVersion: number; roles: string[] }): Promise<MemberRecord | "stale">;
+  // When the new roles can't own RFPs, refuses with ownedRfpCount if the member owns one when
+  // the change commits.
+  setRoles(input: { organizationId: string; userId: string; expectedVersion: number; roles: string[] }): Promise<MemberRecord | "stale" | { ownedRfpCount: number }>;
   // Refuses with owns_rfps when the member owns an RFP when the change commits.
   deactivate(input: { organizationId: string; userId: string; expectedVersion: number; now: Date }): Promise<MemberRecord | "stale" | { ownedRfpCount: number }>;
   reactivate(input: { organizationId: string; userId: string; expectedVersion: number }): Promise<MemberRecord | "stale">;
@@ -45,19 +47,21 @@ export interface RfpOwnershipMirror {
 }
 
 // ORG-307: what a membership change does to the member's sessions.
-export type SessionChange = { organizationId: string; userId: string; actorUserId: string; actorSessionId?: string; correlationId: string };
+export type SessionChange = { organizationId: string; userId: string; actorUserId: string; actorSessionId?: string; correlationId: string; demoted?: boolean };
 export interface MemberSessionHooks {
   afterRoleChange(change: SessionChange): Promise<unknown>;
   afterDeactivation(change: SessionChange): Promise<unknown>;
 }
 
-// Teams arrive with ORG-201. Until then nobody is on a team and team changes are unavailable.
+// The member's teams (ORG-201). "unavailable" when no team store is configured.
 export interface TeamDirectory {
+  // Active teams only.
   teamsFor(organizationId: string, userIds: string[]): Promise<Map<string, TeamRef[]>>;
-  // Which of teamIds are active teams of the organization; "unavailable" before ORG-201.
+  // Which of teamIds are active teams of the organization.
   activeTeamIds(organizationId: string, teamIds: string[]): Promise<string[] | "unavailable">;
   // Makes the member's active teams exactly teamIds, keeping manager flags on teams they stay on.
-  setMemberTeams(input: { organizationId: string; userId: string; teamIds: string[] }): Promise<{ previousTeamIds: string[] }>;
+  // Returns unknownTeamIds, and changes nothing, when a team stopped being active meanwhile.
+  setMemberTeams(input: { organizationId: string; userId: string; teamIds: string[] }): Promise<{ previousTeamIds: string[] } | { unknownTeamIds: string[] }>;
 }
 
 export interface MemberAuditWriter {

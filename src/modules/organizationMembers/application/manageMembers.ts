@@ -8,6 +8,7 @@ import {
   decideReactivation,
   decideRoleChange,
   isAssignableRole,
+  isDemotion,
   ownerHasRfps,
   publicStatus,
   withCustomerRole,
@@ -145,12 +146,15 @@ export const createMemberManagement = (dependencies: Dependencies) => {
     if (!decision.ok) return refuse(actor, action, input.userId, decision);
     if (previousRole === role) return { ok: true, member: await viewWithTeams(actor, target), previousRole };
 
+    const roles = withCustomerRole(target.roles, role);
     const updated = await dependencies.store.setRoles({
-      organizationId: actor.organizationId, userId: target.userId, expectedVersion: version, roles: withCustomerRole(target.roles, role),
+      organizationId: actor.organizationId, userId: target.userId, expectedVersion: version, roles,
     });
     if (updated === "stale") return refuse(actor, action, input.userId, stale(await dependencies.store.find(actor.organizationId, input.userId)));
+    // An RFP reassigned to the member between the count above and the write.
+    if ("ownedRfpCount" in updated) return refuse(actor, action, input.userId, ownerHasRfps(updated.ownedRfpCount));
     await audit(actor, { action, targetUserId: target.userId, decision: "allowed", reason: "role_changed", metadata: { previousRole, role, version: updated.version } });
-    await dependencies.sessions.afterRoleChange(sessionChange(actor, target.userId));
+    await dependencies.sessions.afterRoleChange({ ...sessionChange(actor, target.userId), demoted: isDemotion(target.roles, roles) });
     return { ok: true, member: await viewWithTeams(actor, updated), previousRole };
   };
 
@@ -171,13 +175,17 @@ export const createMemberManagement = (dependencies: Dependencies) => {
 
     const known = await dependencies.teams.activeTeamIds(actor.organizationId, teamIds);
     if (known === "unavailable") return refusal(503, "TEAMS_UNAVAILABLE", "Teams aren't available yet.");
+    const unknownTeams = (unknownTeamIds: string[]) =>
+      refusal(400, "UNKNOWN_TEAMS", "Some teams aren't active teams of this organization.", { unknownTeamIds });
     const unknownTeamIds = teamIds.filter((id) => !known.includes(id));
-    if (unknownTeamIds.length > 0) return refusal(400, "UNKNOWN_TEAMS", "Some teams don't exist in this organization.", { unknownTeamIds });
+    if (unknownTeamIds.length > 0) return unknownTeams(unknownTeamIds);
 
     // The version moves before the write so a concurrent change of the same member loses cleanly.
     const bumped = await dependencies.store.bumpVersion({ organizationId: actor.organizationId, userId: target.userId, expectedVersion: version });
     if (bumped === "stale") return refuse(actor, action, input.userId, stale(await dependencies.store.find(actor.organizationId, input.userId)));
     const result = await dependencies.teams.setMemberTeams({ organizationId: actor.organizationId, userId: target.userId, teamIds });
+    // A team archived between the check and the write; the bumped version only forces a reload.
+    if ("unknownTeamIds" in result) return unknownTeams(result.unknownTeamIds);
     await audit(actor, { action, targetUserId: target.userId, decision: "allowed", reason: "teams_changed", metadata: { previousTeamIds: result.previousTeamIds, teamIds, version: bumped.version } });
     return { ok: true, member: await viewWithTeams(actor, bumped) };
   };

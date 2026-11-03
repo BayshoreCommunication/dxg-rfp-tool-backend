@@ -10,6 +10,8 @@ import OrganizationMembership from "../modal/organizationMembershipModel";
 import Proposal from "../modal/proposalsModel";
 import RefreshSession from "../modal/refreshSessionModel";
 import SecurityAuditEvent from "../modal/securityAuditEventModel";
+import Team from "../modal/teamModel";
+import TeamMembership from "../modal/teamMembershipModel";
 import User from "../modal/userModel";
 import { authenticate, AuthRequest } from "../middleware/auth";
 import { authenticationSessions } from "../src/modules/auth/composition";
@@ -93,6 +95,8 @@ export const cleanupOrganizations = async () => {
     OrganizationMembership.deleteMany({ organizationId: { $in: ids } }),
     RefreshSession.deleteMany({ organizationId: { $in: ids } }),
     Proposal.collection.deleteMany({ organizationId: { $in: ids } }),
+    Team.collection.deleteMany({ organizationId: { $in: ids } }),
+    TeamMembership.collection.deleteMany({ organizationId: { $in: ids } }),
     User.deleteMany({ organizationId: { $in: ids } }),
     Organization.deleteMany({ _id: { $in: ids } }),
   ]);

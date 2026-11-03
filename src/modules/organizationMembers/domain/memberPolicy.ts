@@ -36,6 +36,17 @@ export const isAssignableRole = (value: unknown): value is AssignableRole =>
 export const customerRole = (roles: readonly string[]): CustomerRole | null =>
   CUSTOMER_ROLES.find((role) => roles.includes(role)) ?? null;
 
+// A role change that leaves the member with less (ORG-307 ends their sessions at once).
+// Roles outside the customer ranking count as lost when they're removed.
+export const isDemotion = (previous: readonly string[], next: readonly string[]) => {
+  const rank = (roles: readonly string[]) => {
+    const role = customerRole(roles);
+    return role ? CUSTOMER_ROLES.indexOf(role) : CUSTOMER_ROLES.length;
+  };
+  if (rank(next) > rank(previous)) return true;
+  return previous.some((role) => !(CUSTOMER_ROLES as readonly string[]).includes(role) && !next.includes(role));
+};
+
 // The roles a membership ends up with when its customer role becomes `role`.
 export const withCustomerRole = (roles: readonly string[], role: CustomerRole): string[] =>
   [role, ...roles.filter((r) => KEPT_ROLES.includes(r))];
