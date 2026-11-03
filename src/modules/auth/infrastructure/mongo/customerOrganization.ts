@@ -39,7 +39,14 @@ export const createCustomerWithOrganization = async (fields: CustomerFields) => 
     await session.withTransaction(async () => {
       const organizationName = organizationNameFor(fields);
       const [organization] = await Organization.create(
-        [{ name: organizationName, slug: organizationSlugFor(organizationName), kind: "customer", status: "active" }],
+        [{
+          name: organizationName,
+          slug: organizationSlugFor(organizationName),
+          kind: "customer",
+          status: "active",
+          // A placeholder name ("Pat's organization"); the dashboard asks the Owner for the company.
+          needsName: !fields.company?.trim(),
+        }],
         { session },
       );
       user = await User.findOneAndUpdate(
