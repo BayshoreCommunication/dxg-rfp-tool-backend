@@ -6,9 +6,13 @@ import crypto from "node:crypto";
    mandatory 2FA?) is open. The spec's default until it is answered: SSO sign-ins
    are still challenged. TWO_FACTOR_SSO_POLICY is the one switch:
      challenge (default)  SSO is treated exactly like a password sign-in
-     trust_sso            SSO sign-ins skip the second factor entirely */
+     trust_sso            SSO sign-ins skip the second factor entirely
 
-export type PrimaryMethod = "password" | "sso";
+   company_sso is a sign-in through the organization's own identity provider. That
+   IdP owns MFA for those, so they never get our prompt (DXG decision 2026-11-03),
+   whatever TWO_FACTOR_SSO_POLICY says. */
+
+export type PrimaryMethod = "password" | "sso" | "company_sso";
 export type SsoPolicy = "challenge" | "trust_sso";
 export type SecondFactorStep = "none" | "challenge" | "enrol";
 
@@ -21,6 +25,7 @@ export const decideSecondFactor = (input: {
   method: PrimaryMethod;
   ssoPolicy: SsoPolicy;
 }): SecondFactorStep => {
+  if (input.method === "company_sso") return "none";
   if (input.method === "sso" && input.ssoPolicy === "trust_sso") return "none";
   if (input.enrolled) return "challenge";
   if (input.organizationRequiresTwoFactor) return "enrol";

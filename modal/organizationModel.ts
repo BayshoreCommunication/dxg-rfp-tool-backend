@@ -41,6 +41,7 @@ export interface IOrganization extends Document {
   verifiedDomains: string[];
   autoApproveDomain: boolean;
   requireTwoFactor: boolean;
+  requireSso: boolean;
   allowManagerInvites: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -84,6 +85,8 @@ const organizationSchema = new Schema<IOrganization>(
     },
     autoApproveDomain: { type: Boolean, default: false },
     requireTwoFactor: { type: Boolean, default: false },
+    // Members whose email is on the SSO connection's domains must use it (the Owner is exempt).
+    requireSso: { type: Boolean, default: false },
     allowManagerInvites: { type: Boolean, default: false },
   },
   { timestamps: true },

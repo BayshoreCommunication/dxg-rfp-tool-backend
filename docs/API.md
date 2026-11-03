@@ -101,6 +101,29 @@ Routes under `/api/organization/domains` (`organization:manage`); rules in `src/
 - `POST /api/organization/domains` `{ domain }` answers 201 with the TXT record to publish, also for a domain another organization already holds verified: the response never says a domain is taken. Such a domain stays `pending` and its checks report `lastCheckOutcome: "not_verified"`, because only one organization can hold a domain verified. Refusals: 400 `DOMAIN_INVALID`, 422 `DOMAIN_NOT_VERIFIABLE` (public mail providers), 409 `DOMAIN_LIMIT_REACHED`, 409 `DOMAIN_ALREADY_ADDED`.
 - The cron worker checks due domains every 15 minutes, five at a time, leasing each record so concurrent tasks don't check it twice. A check that errors is retried after an hour (`dns_error:<code>` or `check_failed`).
 
+## Sign-in: Google, Microsoft and company SSO
+
+Customers sign in with Google, Microsoft or their organization's own OpenID Connect provider; there is no customer email/password. The password, signup-OTP and reset routes (and password invitation accept) answer 410 `PASSWORD_SIGN_IN_DISABLED` unless `PASSWORD_SIGN_IN_ENABLED=true`. Setup for operators and customer IT: [SSO_SETUP.md](SSO_SETUP.md). Rules in `src/modules/sso/`.
+
+- `GET /api/auth/sso/start?kind=microsoft|company&email=&invite=&bind=`: `bind` is the lowercase hex SHA-256 of the dashboard's `rfp_sso_bind` cookie; `email` is required for `company`. Redirects (302) to the IdP, or to `${FRONTEND_URL}/sign-in?error=CODE` (`/invite/<token>?error=CODE` when `invite` was given).
+- `GET /api/auth/sso/callback`: the redirect URI registered with every IdP. Success redirects to `${FRONTEND_URL}/sso/complete?handoff=…` (single use, 60 s).
+- `POST /api/auth/sso/exchange` `{ handoff, bind }` (BFF key required): answers like `POST /api/auth/google`, including the 2FA step. Company SSO never gets our 2FA prompt; Microsoft follows `TWO_FACTOR_SSO_POLICY` like Google.
+- Account rules: a first company sign-in joins the connection's organization as Planner (a pending invitation's role wins when signing in from the invite); a first Microsoft sign-in creates a new organization with the person as Owner. A company IdP may only sign in emails on the connection's domains that its organization still has verified. Microsoft work-tenant emails are trusted only with `xms_edov=true`.
+- Error codes in the redirect: `SSO_INVALID_REQUEST`, `SSO_NOT_CONFIGURED`, `MICROSOFT_NOT_CONFIGURED`, `SSO_PROVIDER_UNAVAILABLE`, `SSO_STATE_INVALID`, `SSO_CANCELLED`, `SSO_IDENTITY_INVALID`, `EMAIL_MISSING`, `MICROSOFT_EMAIL_UNVERIFIED`, `COMPANY_EMAIL_UNVERIFIED`, `SSO_DOMAIN_NOT_ALLOWED`, `SSO_IDENTITY_MISMATCH`, `SSO_REQUIRED`, `EMAIL_IN_ANOTHER_ORGANIZATION`, `MEMBER_DEACTIVATED`, `USER_BLOCKED`, `SSO_INVITE_ORG_MISMATCH`, plus invitation refusal codes. Exchange errors: 401 `SSO_HANDOFF_INVALID`.
+- Require SSO: when an organization requires it, emails on its connection's domains are refused on Google and Microsoft sign-in and invite accept (403 `SSO_REQUIRED`), except the organization's Owner (break-glass) and people whose account belongs to another organization.
+- `POST /api/v1/invitations/lookup` includes `invitation.companySso` (true when the inviting organization has an active connection for the invited email's domain).
+
+## Organization SSO connection
+
+Routes under `/api/organization/sso` (`organization:manage`). One OIDC connection per organization; the client secret is sealed with `SSO_SECRET_KEY` and never returned.
+
+- `GET /api/organization/sso` → `{ connection | null, requireSso, redirectUri, verifiedDomains }`; `connection` is `{ issuer, clientId, hasClientSecret, domains, status: "draft"|"active", lastTestedAt, lastTestOutcome, version, updatedAt }`.
+- `PUT /api/organization/sso` `{ issuer, clientId, clientSecret?, domains, version? }` (secret required on create; `version` for updates) → `{ connection }`. Refusals: 400 `VALIDATION_ERROR`, 422 `SSO_DOMAIN_NOT_VERIFIED` with `domains` (unverified, or used by another organization's connection), 422 `SSO_ISSUER_UNREACHABLE`, 409 `VERSION_CONFLICT`.
+- `POST /api/organization/sso/test` → `{ ok, issuer, authorizationEndpoint, problems[] }` (discovery and signing keys; no sign-in).
+- `PUT /api/organization/sso/status` `{ status }` → `{ connection }`. Turning it off (draft) also turns Require SSO off.
+- `PUT /api/organization/sso/require` `{ requireSso }` → `{ requireSso, signedOutMembers }`; 409 `SSO_CONNECTION_NOT_ACTIVE`. Turning it on signs out the non-Owner members on the connection's domains (not the person making the change).
+- `DELETE /api/organization/sso` → `{ success }`; also turns Require SSO off. 404 `SSO_CONNECTION_NOT_FOUND` where there is none.
+
 ## Where to find endpoints
 
 - Backend route overview and legacy API: `../README.md`.

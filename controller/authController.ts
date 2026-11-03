@@ -76,7 +76,7 @@ const cookieValue = (req: Request, name: string) => {
   }
   return "";
 };
-const isAuthorizedBff = (req: Request) => {
+export const isAuthorizedBff = (req: Request) => {
   const expected = process.env.BFF_SHARED_SECRET;
   const supplied = req.headers["x-rfpilot-bff-key"];
   if (!expected || typeof supplied !== "string") return false;
@@ -391,6 +391,14 @@ export const signInWithGoogle = async (req: Request, res: Response): Promise<voi
       res.status(403).json({
         success: false,
         message: "Your account has been suspended. Please contact support.",
+      });
+      return;
+    }
+    if (result.kind === "sso_required") {
+      res.status(403).json({
+        success: false,
+        code: "SSO_REQUIRED",
+        message: "Your company requires you to sign in with its own sign-in. Use \"Sign in with your company\".",
       });
       return;
     }

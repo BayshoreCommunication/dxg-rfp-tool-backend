@@ -102,6 +102,8 @@ export interface InvitationAcceptanceStore {
     passwordHash: string;
     // Set when the account is created from a Google identity (accept with Google).
     googleId?: string;
+    // Set when the account is created from a Microsoft or company-OIDC identity.
+    federatedIdentity?: { provider: "microsoft" | "company_oidc"; issuer: string; subject: string };
     avatar?: string;
     now: Date;
   }): Promise<JoinResult>;

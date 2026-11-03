@@ -33,6 +33,7 @@ import { safeLog } from "../../shared/observability/safeTelemetry";
 import { ensureIdentityProjection } from "../dataFoundation/composition";
 import { REFRESH_TOKEN_EXPIRY_MS } from "../../../config/jwt";
 import crypto from 'node:crypto';
+import { mongoSsoRequiredFor } from "../sso/infrastructure/mongoSsoRepositories";
 
 export const requestAuthenticationOtp = createRequestOtp({
   users: mongoAuthUserLookup,
@@ -108,6 +109,7 @@ export const authenticateGoogleIdentity = createAuthenticateGoogleIdentity({
   secrets: cryptoSecretGenerator,
   passwords: bcryptPasswordHasher,
   tokens: jwtAccessTokenIssuer,
+  ssoRequiredFor: mongoSsoRequiredFor,
 });
 
 export const authenticationSessions = createSessionManager({

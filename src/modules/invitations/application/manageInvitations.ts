@@ -134,8 +134,20 @@ export type AcceptOutcome = TokenOutcome<
   | { kind: "wrong_password" }
   | { kind: "blocked" }
   | { kind: "conflict"; code: "ALREADY_MEMBER" | "EMAIL_IN_ANOTHER_ORGANIZATION" | "LEGACY_ACCOUNT_PENDING_PLACEMENT" | "MEMBER_DEACTIVATED"; message: string }
-  | { kind: "accepted"; userId: string; organizationId: string; role: InvitableRole; method: "password" | "sso" }
+  | { kind: "sso_required" }
+  | { kind: "accepted"; userId: string; organizationId: string; role: InvitableRole; method: AcceptMethod }
 >;
+
+export type AcceptMethod = "password" | "sso" | "company_sso";
+
+/** An identity a provider has already verified (Google, Microsoft or the company's own IdP). */
+export type VerifiedInvitee = {
+  email: string;
+  name?: string;
+  avatar?: string;
+  googleId?: string;
+  federatedIdentity?: { provider: "microsoft" | "company_oidc"; issuer: string; subject: string };
+};
 
 export type InvitationServiceDependencies = {
   invitations: InvitationRepository;
@@ -151,6 +163,10 @@ export type InvitationServiceDependencies = {
   google: GoogleIdentityVerifier;
   // A random secret for a Google-created account's unusable password, as Google sign-up does.
   randomSecret(): string;
+  /** Require SSO: this email must use its organization's company sign-in, not Google/Microsoft. */
+  ssoRequiredFor?(email: string): Promise<boolean>;
+  // True when this organization has an active company SSO connection for the email's domain.
+  companySsoFor?(organizationId: string, email: string): Promise<boolean>;
   dailyEmailLimit?: number;
   resendCooldownMs?: number;
   now?: () => Date;
@@ -308,7 +324,7 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
     invitation: InvitationRecord,
     result: Awaited<ReturnType<InvitationAcceptanceStore["joinExistingAccount"]>>,
     correlationId: string,
-    reason: "new_account" | "existing_account" | "google_new_account" | "google_existing_account",
+    reason: "new_account" | "existing_account" | `${"google" | "microsoft" | "company_oidc" | "sso"}_${"new" | "existing"}_account`,
   ) => {
     if (result.kind !== "joined") return Promise.resolve();
     return deps.audit.append({
@@ -340,7 +356,7 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
   const joinOutcome = (
     result: Awaited<ReturnType<InvitationAcceptanceStore["joinExistingAccount"]>>,
     invitation: InvitationRecord,
-    method: "password" | "sso" = "password",
+    method: AcceptMethod = "password",
   ): AcceptOutcome => {
     if (result.kind === "joined") {
       return { kind: "accepted", userId: result.userId, organizationId: invitation.organizationId, role: invitation.role, method };
@@ -436,11 +452,12 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
       const resolved = await resolveToken(token);
       if ("refusal" in resolved) return { kind: "refused" as const, code: resolved.refusal };
       const { invitation } = resolved;
-      const [organization, inviterName, teams, credentials] = await Promise.all([
+      const [organization, inviterName, teams, credentials, companySso] = await Promise.all([
         deps.organizations.find(invitation.organizationId),
         deps.organizations.userName(invitation.invitedBy),
         invitation.teamId ? deps.teams.findTeams(invitation.organizationId, [invitation.teamId]) : Promise.resolve(new Map()),
         deps.credentials.emailExists(invitation.email),
+        deps.companySsoFor ? deps.companySsoFor(invitation.organizationId, invitation.email) : Promise.resolve(false),
       ]);
       if (!organization) return { kind: "refused" as const, code: "INVITATION_INVALID" as const };
       return {
@@ -454,6 +471,8 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
           expiresAt: invitation.expiresAt.toISOString(),
           // Tells the page whether to offer sign-in or sign-up.
           accountExists: credentials,
+          // Tells the page whether to offer "Sign in with your company".
+          companySso,
         },
       };
     },
@@ -484,7 +503,6 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
     async acceptWithGoogle(input: { token?: unknown; idToken?: unknown }, correlationId: string): Promise<AcceptOutcome> {
       const resolved = await resolveToken(input.token);
       if ("refusal" in resolved) return { kind: "refused", code: resolved.refusal };
-      const { invitation, tokenHash } = resolved;
       if (typeof input.idToken !== "string" || !input.idToken.trim()) {
         return { kind: "validation", code: "INVALID_INPUT", message: "A Google ID token is required." };
       }
@@ -494,28 +512,51 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
       } catch {
         return { kind: "invalid_identity" };
       }
-      const email = normalizeEmail(identity.email);
+      return this.acceptWithVerifiedIdentity(
+        input.token,
+        { email: identity.email, name: identity.name, avatar: identity.avatar, googleId: identity.subject },
+        "sso",
+        correlationId,
+      );
+    },
+
+    // Shared by Google, Microsoft and company SSO: the provider has already proven the email.
+    // Company SSO (`company_sso`) is the organization's own IdP, so Require SSO never blocks it.
+    async acceptWithVerifiedIdentity(token: unknown, invitee: VerifiedInvitee, method: "sso" | "company_sso", correlationId: string): Promise<AcceptOutcome> {
+      const resolved = await resolveToken(token);
+      if ("refusal" in resolved) return { kind: "refused", code: resolved.refusal };
+      const { invitation, tokenHash } = resolved;
+      const email = normalizeEmail(invitee.email);
       if (email !== invitation.email) return { kind: "email_mismatch" };
+      if (method === "sso" && (await deps.ssoRequiredFor?.(email))) return { kind: "sso_required" };
+      const via: "google" | "microsoft" | "company_oidc" | "sso" = invitee.googleId ? "google" : invitee.federatedIdentity?.provider ?? "sso";
       const account = await deps.credentials.findCredentials(email);
       if (account) {
         if (account.isBlocked) return { kind: "blocked" };
         const conflict = conflictFor((await deps.invitees.standings(invitation.organizationId, [email])).get(email));
         if (conflict) return conflict;
         const result = await deps.acceptance.joinExistingAccount({ invitationId: invitation.id, tokenHash, userId: account.user.id, now: now() });
-        await auditAccepted(invitation, result, correlationId, "google_existing_account");
-        return joinOutcome(result, invitation, "sso");
+        await auditAccepted(invitation, result, correlationId, `${via}_existing_account`);
+        return joinOutcome(result, invitation, method);
       }
       const result = await deps.acceptance.joinNewAccount({
         invitationId: invitation.id,
         tokenHash,
-        name: (identity.name?.trim() || email.split("@")[0]).slice(0, 200),
+        name: (invitee.name?.trim() || email.split("@")[0]).slice(0, 200),
         passwordHash: await deps.passwords.hash(deps.randomSecret()),
-        googleId: identity.subject,
-        avatar: identity.avatar,
+        googleId: invitee.googleId,
+        federatedIdentity: invitee.federatedIdentity,
+        avatar: invitee.avatar,
         now: now(),
       });
-      await auditAccepted(invitation, result, correlationId, "google_new_account");
-      return joinOutcome(result, invitation, "sso");
+      await auditAccepted(invitation, result, correlationId, `${via}_new_account`);
+      return joinOutcome(result, invitation, method);
+    },
+
+    /** The organization an invitation token belongs to, or null when the link isn't live. */
+    async organizationOfToken(token: unknown): Promise<string | null> {
+      const resolved = await resolveToken(token);
+      return "refusal" in resolved ? null : resolved.invitation.organizationId;
     },
 
     // A new account is created with the invited email: the link reached that inbox, which is the
