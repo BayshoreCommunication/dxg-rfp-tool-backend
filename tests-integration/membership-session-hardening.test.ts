@@ -7,6 +7,7 @@ import { after, before, beforeEach, test } from "node:test";
 import type http from "node:http";
 import mongoose from "mongoose";
 import { closePostgres } from "../config/postgres";
+import OrganizationMembership from "../modal/organizationMembershipModel";
 import RefreshSession from "../modal/refreshSessionModel";
 import { authenticationSessions, membershipSessions } from "../src/modules/auth/composition";
 import { cleanupOrganizations, seedOrganization, signIn, startApp, stopApp, type Fixture, type Member } from "./memberFixtures";
@@ -104,4 +105,31 @@ test("a 2FA reset revokes the member's other sessions, keeping the acting one", 
   assert.equal(await sessionStatus(planner.sessionId), "active");
   assert.equal(await sessionStatus(plannerOther.sessionId), "revoked");
   assert.equal(await sessionStatus(other.sessionId), "revoked");
+});
+
+test("a demotion by someone else ends every session of the member at once", async () => {
+  const member = org.members.team_manager;
+  const other = await secondSession(member);
+  const admin = org.members.organization_admin;
+  const res = await call(admin.accessToken, "PATCH", `/api/organization/members/${member.userId}/role`, { role: "planner", version: 1 });
+  assert.equal(res.status, 200);
+  // No request from the member was needed.
+  assert.equal(await sessionStatus(member.sessionId), "revoked");
+  assert.equal(await sessionStatus(other.sessionId), "revoked");
+  assert.equal(await canRefresh(member.refreshToken), false);
+  assert.notEqual((await call(member.accessToken, "GET", "/me")).status, 200);
+  assert.equal(await sessionStatus(admin.sessionId), "active");
+});
+
+test("the pending flag clears only after the revocation, and only for the session holding the claim", async () => {
+  const member = org.members.planner;
+  const other = await secondSession(member);
+  await call(org.members.organization_admin.accessToken, "PATCH", `/api/organization/members/${member.userId}/role`, { role: "team_manager", version: 1 });
+  const pending = async () => (await OrganizationMembership.findOne({ organizationId: org.organizationId, userId: member.userId }).lean())?.sessionRevocationPending;
+  assert.equal(await pending(), true);
+  // Both sessions ask at once: exactly one keeps itself.
+  await Promise.all([call(member.accessToken, "GET", "/me"), call(other.accessToken, "GET", "/me")]);
+  const statuses = [await sessionStatus(member.sessionId), await sessionStatus(other.sessionId)];
+  assert.deepEqual(statuses.filter((s) => s === "active").length, 1, JSON.stringify(statuses));
+  assert.equal(await pending(), false);
 });

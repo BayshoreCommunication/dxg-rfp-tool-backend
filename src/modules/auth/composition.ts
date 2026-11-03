@@ -190,14 +190,35 @@ export const beginAuthenticatedSession = async (input: {
 };
 
 // ORG-307 hooks for membership changes. ORG-304's 2FA reset calls afterTwoFactorReset.
+// A claim is a lease: a request that died mid-revocation frees it after REVOCATION_LEASE_MS.
+const REVOCATION_LEASE_MS = 30_000;
+const membershipFilter = (organizationId: string, userId: string) => ({ organizationId, userId });
 export const membershipSessions = createMembershipSessionHardening({
   revokeOtherSessions: (input) => authenticationSessions.revokeOtherSessions(input),
+  // Re-flagging drops any lease, so a revocation already running can't clear the newer flag.
   markRevocationPending: async ({ organizationId, userId }) => {
-    await OrganizationMembership.updateOne({ organizationId, userId }, { $set: { sessionRevocationPending: true } });
+    await OrganizationMembership.updateOne(membershipFilter(organizationId, userId), { $set: { sessionRevocationPending: true, sessionRevocationClaim: null } });
   },
-  claimRevocationPending: async ({ organizationId, userId }) =>
-    (await OrganizationMembership.updateOne(
-      { organizationId, userId, sessionRevocationPending: true },
-      { $set: { sessionRevocationPending: false } },
-    )).modifiedCount === 1,
+  claimRevocationPending: async ({ organizationId, userId, sessionId }) => {
+    const now = new Date();
+    return (await OrganizationMembership.updateOne(
+      {
+        ...membershipFilter(organizationId, userId), sessionRevocationPending: true,
+        $or: [{ sessionRevocationClaim: null }, { "sessionRevocationClaim.at": { $lt: new Date(now.getTime() - REVOCATION_LEASE_MS) } }],
+      },
+      { $set: { sessionRevocationClaim: { sessionId, at: now } } },
+    )).modifiedCount === 1;
+  },
+  completeRevocationPending: async ({ organizationId, userId, sessionId }) => {
+    await OrganizationMembership.updateOne(
+      { ...membershipFilter(organizationId, userId), "sessionRevocationClaim.sessionId": sessionId },
+      { $set: { sessionRevocationPending: false, sessionRevocationClaim: null } },
+    );
+  },
+  releaseRevocationClaim: async ({ organizationId, userId, sessionId }) => {
+    await OrganizationMembership.updateOne(
+      { ...membershipFilter(organizationId, userId), "sessionRevocationClaim.sessionId": sessionId },
+      { $set: { sessionRevocationClaim: null } },
+    );
+  },
 });

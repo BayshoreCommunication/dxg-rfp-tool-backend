@@ -5,12 +5,24 @@ const { createMembershipSessionHardening } = require("../src/modules/auth/applic
 const harness = () => {
   const revoked = [];
   let pending = false;
+  let claim = null;
+  let failNext = false;
   const hooks = createMembershipSessionHardening({
-    revokeOtherSessions: async (input) => { revoked.push(input); return 2; },
-    markRevocationPending: async () => { pending = true; },
-    claimRevocationPending: async () => { const had = pending; pending = false; return had; },
+    revokeOtherSessions: async (input) => {
+      if (failNext) { failNext = false; throw new Error("session store down"); }
+      revoked.push(input);
+      return 2;
+    },
+    markRevocationPending: async () => { pending = true; claim = null; },
+    claimRevocationPending: async ({ sessionId }) => {
+      if (!pending || claim) return false;
+      claim = sessionId;
+      return true;
+    },
+    completeRevocationPending: async ({ sessionId }) => { if (claim === sessionId) { pending = false; claim = null; } },
+    releaseRevocationClaim: async ({ sessionId }) => { if (claim === sessionId) claim = null; },
   });
-  return { hooks, revoked, isPending: () => pending };
+  return { hooks, revoked, isPending: () => pending, failNextRevocation: () => { failNext = true; } };
 };
 const change = (over = {}) => ({ organizationId: "o", userId: "member", actorUserId: "admin", actorSessionId: "admin-session", correlationId: "c", ...over });
 
@@ -43,4 +55,28 @@ test("deactivation ends every session", async () => {
   await hooks.afterDeactivation(change({ actorUserId: "member", actorSessionId: "mine" }));
   assert.equal(revoked[0].exceptSessionId, undefined);
   assert.equal(revoked[0].reason, "membership_deactivated");
+});
+
+test("a failed revocation keeps the flag, so the next request revokes", async () => {
+  const { hooks, revoked, isPending, failNextRevocation } = harness();
+  await hooks.afterRoleChange(change());
+  failNextRevocation();
+  await assert.rejects(hooks.onRequestWithPendingRevocation({ organizationId: "o", userId: "member", sessionId: "s1", correlationId: "c" }));
+  assert.equal(isPending(), true, "the flag must survive a failed revocation");
+  assert.equal(await hooks.onRequestWithPendingRevocation({ organizationId: "o", userId: "member", sessionId: "s2", correlationId: "c" }), 2);
+  assert.equal(revoked[0].exceptSessionId, "s2");
+  assert.equal(isPending(), false);
+});
+
+test("a demotion by someone else ends every session of the member now; a promotion waits", async () => {
+  const { hooks, revoked, isPending } = harness();
+  assert.equal(await hooks.afterRoleChange(change({ demoted: true })), 2);
+  assert.deepEqual(revoked[0], { organizationId: "o", userId: "member", actorUserId: "admin", actorSessionId: "admin-session", correlationId: "c", demoted: true, exceptSessionId: undefined, reason: "membership_role_demoted" });
+  assert.equal(isPending(), false);
+  await hooks.afterRoleChange(change({ demoted: false }));
+  assert.equal(revoked.length, 1);
+  assert.equal(isPending(), true);
+  // A self change keeps the acting session even when it is a demotion (an Owner who transferred).
+  await hooks.afterRoleChange(change({ actorUserId: "member", actorSessionId: "mine", demoted: true }));
+  assert.equal(revoked.at(-1).exceptSessionId, "mine");
 });
