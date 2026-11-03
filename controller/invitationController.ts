@@ -103,6 +103,9 @@ export const createInvitationController = (service: InvitationService = invitati
       case "blocked":
         res.status(403).json({ success: false, code: "USER_BLOCKED", message: "Your account has been blocked. Please contact support." });
         return;
+      case "sso_required":
+        res.status(403).json({ success: false, code: "SSO_REQUIRED", message: "Your company requires you to sign in with its own sign-in. Use \"Sign in with your company\"." });
+        return;
       case "conflict":
         res.status(409).json({ success: false, code: outcome.code, message: outcome.message });
         return;

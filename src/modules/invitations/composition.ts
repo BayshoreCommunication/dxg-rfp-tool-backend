@@ -16,6 +16,7 @@ import { mongoInvitationEmailQuota } from "./infrastructure/mongoInvitationEmail
 import { mongoInviteeDirectory, mongoOrganizationDirectory } from "./infrastructure/mongoInviteeDirectory";
 import { placeInTeam, teamsInvitationDirectory, type TeamPlacement } from "./infrastructure/teamsInvitationDirectory";
 import { defaultInvitationMailer } from "./infrastructure/invitationMailer";
+import { mongoCompanySsoFor, mongoSsoRequiredFor } from "../sso/infrastructure/mongoSsoRepositories";
 
 // The dashboard's accept page (ORG-205). FRONTEND_URL is the dashboard origin.
 export const invitationAcceptUrl = (token: string): string => {
@@ -63,6 +64,8 @@ export const createInvitationModule = (overrides: {
     quota: overrides.quota ?? mongoInvitationEmailQuota,
     google: overrides.google ?? googleIdTokenVerifier,
     randomSecret: () => cryptoSecretGenerator.generate(),
+    ssoRequiredFor: mongoSsoRequiredFor,
+    companySsoFor: mongoCompanySsoFor,
     dailyEmailLimit: overrides.dailyEmailLimit ?? dailyInvitationEmailLimit(),
     resendCooldownMs: overrides.resendCooldownMs,
     now: overrides.now,

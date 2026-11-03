@@ -1,4 +1,5 @@
 import { Router, type Request } from "express";
+import { requirePasswordSignIn } from "../middleware/passwordSignIn";
 import { createInvitationController } from "../controller/invitationController";
 import { authenticate, type AuthRequest } from "../middleware/auth";
 import { emailAndIpIdentity, securityRateLimit } from "../middleware/securityRateLimit";
@@ -26,8 +27,8 @@ export const createInvitationRouter = (controller = createInvitationController()
 
   // The accept page (dashboard /invite/[token]). Public: the token is the credential.
   router.post("/invitations/lookup", lookupLimit, controller.lookup);
-  router.post("/invitations/accept", acceptLimit, controller.acceptWithExistingAccount);
-  router.post("/invitations/accept/register", acceptLimit, controller.acceptWithNewAccount);
+  router.post("/invitations/accept", requirePasswordSignIn, acceptLimit, controller.acceptWithExistingAccount);
+  router.post("/invitations/accept/register", requirePasswordSignIn, acceptLimit, controller.acceptWithNewAccount);
   // For accounts with no usable password (created by Google sign-in) and Google sign-up.
   router.post("/invitations/accept/google", acceptLimit, controller.acceptWithGoogle);
   return router;

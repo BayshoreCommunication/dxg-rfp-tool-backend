@@ -112,6 +112,7 @@ export const createMongoInvitationAcceptance = (placeInTeam: TeamPlacement = pla
               email,
               ...(input.phone ? { phone: input.phone } : {}),
               ...(input.googleId ? { googleId: input.googleId } : {}),
+              ...(input.federatedIdentity ? { federatedIdentities: [{ ...input.federatedIdentity, linkedAt: input.now }] } : {}),
               ...(input.avatar ? { avatar: input.avatar } : {}),
               password: input.passwordHash,
               organizationId: invitation.organizationId,

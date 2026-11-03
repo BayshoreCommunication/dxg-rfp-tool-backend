@@ -29,6 +29,8 @@ export const TEST_MONGODB_DB_NAME = "rfpilot_test";
 const overrides: Record<string, string> = {
   NODE_ENV: "test",
   AI_ENVIRONMENT: "test",
+  // Legacy password and OTP flows are still exercised by the older suites; sso.test.ts checks the 410s.
+  PASSWORD_SIGN_IN_ENABLED: "true",
 
   POSTGRES_FOUNDATION_ENABLED: "true",
   POSTGRES_URL: TEST_POSTGRES_URL,

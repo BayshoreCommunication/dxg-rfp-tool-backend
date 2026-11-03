@@ -10,6 +10,7 @@ type GoogleAuthenticationResult =
   | { kind: "validation" }
   | { kind: "invalid_identity" }
   | { kind: "blocked" }
+  | { kind: "sso_required" }
   | {
       kind: "authenticated";
       user: Awaited<ReturnType<GoogleAccountRepository["createGoogleAccount"]>>;
@@ -23,6 +24,8 @@ export const createAuthenticateGoogleIdentity = (dependencies: {
   secrets: RandomSecretGenerator;
   passwords: PasswordHasher;
   tokens: AccessTokenIssuer;
+  /** Require SSO: the email's organization makes its members use the company sign-in. */
+  ssoRequiredFor?: (email: string) => Promise<boolean>;
 }) => async (idToken: unknown): Promise<GoogleAuthenticationResult> => {
   if (typeof idToken !== "string" || !idToken.trim()) return { kind: "validation" };
   let identity;
@@ -31,6 +34,8 @@ export const createAuthenticateGoogleIdentity = (dependencies: {
   } catch {
     return { kind: "invalid_identity" };
   }
+  // Before any account is linked or created, so a blocked sign-in leaves nothing behind.
+  if (await dependencies.ssoRequiredFor?.(identity.email.toLowerCase().trim())) return { kind: "sso_required" };
   const existing = await dependencies.accounts.findAndLinkExisting(identity);
   if (existing?.isBlocked) return { kind: "blocked" };
   const user = existing?.user ?? await dependencies.accounts.createGoogleAccount({

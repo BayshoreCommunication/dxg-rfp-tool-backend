@@ -369,7 +369,7 @@ test("lookup shows the accept page what it needs for a live link", async () => {
   assert.equal(found.kind, "found");
   assert.deepEqual(
     { ...found.invitation, expiresAt: undefined },
-    { email: "has-account@example.com", role: "viewer", organizationName: "Acme Events", inviterName: "Ada Admin", teamName: "Team", expiresAt: undefined, accountExists: true },
+    { email: "has-account@example.com", role: "viewer", organizationName: "Acme Events", inviterName: "Ada Admin", teamName: "Team", expiresAt: undefined, accountExists: true, companySso: false },
   );
 });
 
