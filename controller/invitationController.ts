@@ -109,8 +109,10 @@ export const createInvitationController = (service: InvitationService = invitati
       case "accepted": {
         const user = await getAuthenticatedUserAccount(outcome.userId);
         if (!user) throw new Error("Accepted account is missing");
-        // The membership is in place; a Google accept still passes 2FA like /api/auth/google does.
-        if (outcome.method === "sso" && await respondWithSecondFactorStep(req, res, { id: outcome.userId, organizationId: outcome.organizationId }, "sso")) return;
+        // The membership is in place; every accept still passes 2FA like /api/auth/login and
+        // /api/auth/google do, so an invitation never skips an enrolled factor or the inviting
+        // organization's 2FA requirement.
+        if (await respondWithSecondFactorStep(req, res, { id: outcome.userId, organizationId: outcome.organizationId }, outcome.method)) return;
         const session = await createSession(req, res, { id: outcome.userId, organizationId: outcome.organizationId });
         res.status(200).json({
           success: true,

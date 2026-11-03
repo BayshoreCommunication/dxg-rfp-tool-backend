@@ -43,10 +43,10 @@ const clientIp = `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random
 
 const email = (who: string) => { const value = `inv-${who}-${tag}@example.com`; emails.push(value); return value; };
 
-const request = async (method: string, path: string, body?: unknown, token?: string) => {
+const request = async (method: string, path: string, body?: unknown, token?: string, ip = clientIp) => {
   const res = await fetch(`${baseUrl}${path}`, {
     method,
-    headers: { 'content-type': 'application/json', 'x-forwarded-for': clientIp, ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': ip, ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, any> };
@@ -164,6 +164,27 @@ test('a new planner accepts by creating an account, lands in the inviting organi
   assert.equal(again.status, 410);
   assert.equal(again.body.code, 'INVITATION_ALREADY_USED');
   assert.equal((await request('POST', '/api/v1/invitations/lookup', { token })).body.code, 'INVITATION_ALREADY_USED');
+});
+
+test('accepting into an organization that requires 2FA returns the enrolment step, not a session', async () => {
+  await Organization.updateOne({ _id: owner.organizationId }, { $set: { requireTwoFactor: true } });
+  try {
+    const to = email('needs-2fa');
+    assert.equal((await invite({ email: to, role: 'planner' })).status, 201);
+    // Its own address, so this accept doesn't spend the file's shared per-IP accept allowance.
+    const accepted = await request('POST', '/api/v1/invitations/accept/register', { token: lastLinkTo(to), name: 'Ena Enrol', password: PASSWORD }, undefined, `${clientIp.split('.').slice(0, 3).join('.')}.251`);
+    assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+    assert.equal(accepted.body.twoFactorRequired, true);
+    assert.equal(accepted.body.nextStep, 'two_factor_enrolment');
+    assert.ok(accepted.body.challengeToken);
+    assert.equal(accepted.body.accessToken, undefined, 'no session before the second factor');
+    const user = await User.findOne({ email: to }).lean();
+    assert.equal(await RefreshSession.countDocuments({ userId: user!._id }), 0);
+    // The membership itself is in place; only the session waits for 2FA.
+    assert.equal((await OrganizationMembership.findOne({ userId: user!._id }).lean())!.status, 'active');
+  } finally {
+    await Organization.updateOne({ _id: owner.organizationId }, { $set: { requireTwoFactor: false } });
+  }
 });
 
 test('two accepts of one link race and exactly one wins', async () => {
