@@ -19,6 +19,11 @@ export const mongoOrganizationTwoFactorDirectory: OrganizationTwoFactorDirectory
     const membership = await OrganizationMembership.findOne({ organizationId, userId }).select("roles status").lean();
     return membership ? { roles: [...membership.roles], status: membership.status } : null;
   },
+  async activeElsewhere(organizationId, userId) {
+    if (!mongoose.isValidObjectId(userId)) return false;
+    // scope-exempt: deliberately looks across organizations, and returns only a yes/no.
+    return Boolean(await OrganizationMembership.exists({ userId, status: "active", organizationId: { $ne: organizationId } }));
+  },
   async activeMemberIds(organizationId) {
     const rows = await OrganizationMembership.find({ organizationId, status: "active" }).select("userId").lean();
     return rows.map((row) => String(row.userId));

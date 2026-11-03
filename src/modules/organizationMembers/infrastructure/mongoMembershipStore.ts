@@ -2,10 +2,10 @@ import mongoose, { type ClientSession } from "mongoose";
 import OrganizationMembership from "../../../../modal/organizationMembershipModel";
 import Proposal from "../../../../modal/proposalsModel";
 import User from "../../../../modal/userModel";
-import { withCustomerRole, type MemberStatus } from "../domain/memberPolicy";
+import { canOwnRfps, withCustomerRole, type MemberStatus } from "../domain/memberPolicy";
+import type { MemberRecord, MembershipStore, RfpReassignmentStore } from "../domain/ports";
 
 const RFP_OWNER_ROLES = ["owner", "organization_admin", "team_manager", "planner"];
-import type { MemberRecord, MembershipStore, RfpReassignmentStore } from "../domain/ports";
 
 type MembershipRow = {
   _id: unknown; userId: unknown; roles?: string[]; status: MemberStatus; version?: number;
@@ -77,8 +77,29 @@ export const mongoMembershipStore: MembershipStore = {
 
   countOwnedRfps: (organizationId, userId) => countOwnedRfps(organizationId, userId),
 
+  // Like deactivate: when the new roles can't own RFPs (Viewer), the role write and the ownership
+  // count commit together, so a concurrent reassignment to this member (which writes the same
+  // membership in its transaction) either sees the Viewer and refuses or is counted here.
   async setRoles(input) {
-    const row = await updateVersioned(input, {}, { $set: { roles: input.roles } });
+    if (canOwnRfps(input.roles)) {
+      const row = await updateVersioned(input, {}, { $set: { roles: input.roles } });
+      return row ? ((await withUser(row)) as MemberRecord) : "stale";
+    }
+    const session = await mongoose.startSession();
+    let row = null as MembershipRow | null;
+    try {
+      await session.withTransaction(async () => {
+        row = await updateVersioned(input, {}, { $set: { roles: input.roles } }, session);
+        if (!row) return;
+        const owned = await countOwnedRfps(input.organizationId, input.userId, session);
+        if (owned > 0) throw new OwnedRfps(owned);
+      });
+    } catch (error) {
+      if (error instanceof OwnedRfps) return { ownedRfpCount: error.count };
+      throw error;
+    } finally {
+      await session.endSession();
+    }
     return row ? ((await withUser(row)) as MemberRecord) : "stale";
   },
 

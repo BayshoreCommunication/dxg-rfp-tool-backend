@@ -38,7 +38,7 @@ export const mongoTwoFactorRepository: TwoFactorRepository = {
       await UserTwoFactor.updateOne(
         { userId: input.userId, status: "pending" },
         {
-          $set: { organizationId: input.organizationId, secretCiphertext: input.secretCiphertext, lastUsedStep: -1, failedAttempts: 0, lockedUntil: null },
+          $set: { organizationId: input.organizationId, secretCiphertext: input.secretCiphertext, lastUsedStep: -1, failedAttempts: 0, lockedUntil: null, lockCount: 0 },
           $setOnInsert: { userId: input.userId, status: "pending", recoveryCodes: [], enabledAt: null },
         },
         { upsert: true },
@@ -60,6 +60,7 @@ export const mongoTwoFactorRepository: TwoFactorRepository = {
           enabledAt: input.now,
           failedAttempts: 0,
           lockedUntil: null,
+          lockCount: 0,
         },
       },
     );
@@ -68,29 +69,42 @@ export const mongoTwoFactorRepository: TwoFactorRepository = {
   async acceptStep(input) {
     const result = await UserTwoFactor.updateOne(
       { userId: input.userId, status: "enabled", lastUsedStep: { $lt: input.step } },
-      { $set: { lastUsedStep: input.step, failedAttempts: 0, lockedUntil: null } },
+      { $set: { lastUsedStep: input.step, failedAttempts: 0, lockedUntil: null, lockCount: 0 } },
     );
     return result.modifiedCount === 1;
   },
   async consumeRecoveryCode(input) {
     const result = await UserTwoFactor.updateOne(
       { userId: input.userId, status: "enabled", recoveryCodes: { $elemMatch: { hash: input.hash, usedAt: null } } },
-      { $set: { "recoveryCodes.$.usedAt": input.now, failedAttempts: 0, lockedUntil: null } },
+      { $set: { "recoveryCodes.$.usedAt": input.now, failedAttempts: 0, lockedUntil: null, lockCount: 0 } },
     );
     return result.modifiedCount === 1;
   },
-  async recordFailure(input) {
-    const row = await UserTwoFactor.findOneAndUpdate(
-      { userId: input.userId },
+  async claimAttempt(input) {
+    const result = await UserTwoFactor.updateOne(
+      {
+        userId: input.userId,
+        status: "enabled",
+        failedAttempts: { $lt: input.maxFailures },
+        $or: [{ lockedUntil: null }, { lockedUntil: { $lte: input.now } }],
+      },
       { $inc: { failedAttempts: 1 } },
-      { new: true },
-    ).select("failedAttempts").lean<{ failedAttempts: number } | null>();
-    if (row && row.failedAttempts >= input.maxFailures) {
-      await UserTwoFactor.updateOne(
-        { userId: input.userId },
-        { $set: { lockedUntil: new Date(input.now.getTime() + input.lockMs), failedAttempts: 0 } },
-      );
-    }
+    );
+    return result.modifiedCount === 1;
+  },
+  async lockIfExhausted(input) {
+    // One pipeline update so the lock's length reads the lock count it increments.
+    const lockCount = { $ifNull: ["$lockCount", 0] };
+    await UserTwoFactor.updateOne(
+      { userId: input.userId, failedAttempts: { $gte: input.maxFailures } },
+      [{
+        $set: {
+          lockedUntil: { $add: [input.now, { $min: [input.maxLockMs, { $multiply: [input.lockMs, { $pow: [2, lockCount] }] }] }] },
+          lockCount: { $add: [lockCount, 1] },
+          failedAttempts: 0,
+        },
+      }],
+    );
   },
   async replaceRecoveryCodes(input) {
     await UserTwoFactor.updateOne(

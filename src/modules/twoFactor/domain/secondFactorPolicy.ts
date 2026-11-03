@@ -27,10 +27,20 @@ export const decideSecondFactor = (input: {
   return "none";
 };
 
+/* Re-authentication for turning 2FA off. A password, when one is given, must match. An
+   SSO-linked account may have no password its owner knows (Google sign-up stores a random
+   one), so without a password the current TOTP or recovery code the disable already
+   demands is the proof. Accounts that aren't SSO-linked always need the password. */
+export type Reauthentication = "password" | "second_factor" | "refused";
+export const reauthenticationForDisable = (input: { passwordSupplied: boolean; passwordMatches: boolean; ssoLinked: boolean }): Reauthentication => {
+  if (input.passwordSupplied) return input.passwordMatches ? "password" : "refused";
+  return input.ssoLinked ? "second_factor" : "refused";
+};
+
 export const RECOVERY_CODE_COUNT = 10;
 const RECOVERY_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"; // no 0/o, 1/l/i
 
-/** Ten codes like `k7mq-x2dr-p9fh` (about 74 bits each), shown once and stored hashed. */
+/** Ten codes like `k7mq-x2dr-p9fh` (12 characters from 31: about 59 bits each), shown once and stored hashed. */
 export const generateRecoveryCodes = (count = RECOVERY_CODE_COUNT): string[] =>
   Array.from({ length: count }, () => {
     const chars = Array.from({ length: 12 }, () => RECOVERY_ALPHABET[crypto.randomInt(RECOVERY_ALPHABET.length)]);

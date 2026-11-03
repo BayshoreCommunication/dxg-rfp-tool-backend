@@ -149,7 +149,7 @@ test('adding returns the TXT record; the job verifies, re-checks weekly, and un-
   assert.ok(await SecurityAuditEvent.exists({ organizationId: orgA, action: 'organization.domain.unverified', targetId: id }));
 });
 
-test('a domain verified by one organization cannot be verified or added by another', async () => {
+test("a domain verified by one organization never verifies for another, which isn't told why", async () => {
   const name = domain('shared');
   const a = await call('POST', '/api/organization/domains', adminA, { domain: name });
   const b = await call('POST', '/api/organization/domains', adminB, { domain: name });
@@ -162,9 +162,15 @@ test('a domain verified by one organization cannot be verified or added by anoth
   const winner = (await OrganizationDomain.findOne({ domain: name, status: 'verified' }).lean())!;
   const loserToken = String(winner.organizationId) === orgA ? adminB : adminA;
   await OrganizationDomain.deleteOne({ domain: name, status: 'pending' });
-  const refused = await call('POST', '/api/organization/domains', loserToken, { domain: name });
-  assert.equal(refused.status, 409);
-  assert.equal(refused.body.code, 'DOMAIN_UNAVAILABLE');
+  const again = await call('POST', '/api/organization/domains', loserToken, { domain: name });
+  assert.equal(again.status, 201, 'added like any other domain: the answer does not reveal it is taken');
+  assert.equal(again.body.domain.status, 'pending');
+  dns.set(name, { kind: 'records', values: [a.body.domain.verification.value, b.body.domain.verification.value, again.body.domain.verification.value] });
+  // The app's own /check uses real DNS; the job holds the mocked resolver, so it does the check.
+  await sweepOurs();
+  const listed = (await call('GET', '/api/organization/domains', loserToken)).body.domains.find((d: any) => d.id === again.body.domain.id);
+  assert.equal(listed.status, 'pending');
+  assert.equal(listed.lastCheckOutcome, 'not_verified');
   assert.equal(txtRecordValue('x'), 'rfpilot-domain-verification=x');
 });
 

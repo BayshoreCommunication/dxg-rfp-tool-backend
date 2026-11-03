@@ -1,8 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
-const { createTwoFactorService, CHALLENGE_MAX_ATTEMPTS, MAX_CONSECUTIVE_FAILURES } = require("../src/modules/twoFactor/application/manageTwoFactor");
-const { decideSecondFactor, ssoPolicyFromEnv, generateRecoveryCodes } = require("../src/modules/twoFactor/domain/secondFactorPolicy");
+const { createTwoFactorService, CHALLENGE_MAX_ATTEMPTS, MAX_CONSECUTIVE_FAILURES, LOCK_MS, MAX_LOCK_MS } = require("../src/modules/twoFactor/application/manageTwoFactor");
+const { decideSecondFactor, ssoPolicyFromEnv, generateRecoveryCodes, reauthenticationForDisable } = require("../src/modules/twoFactor/domain/secondFactorPolicy");
 const { totpAt } = require("../src/modules/twoFactor/domain/totp");
 const { createSecretBox } = require("../src/shared/security/secretBox");
 
@@ -29,19 +29,29 @@ const setup = (options = {}) => {
     async acceptStep(input) {
       const row = rows.get(input.userId);
       if (!row || row.status !== "enabled" || row.lastUsedStep >= input.step) return false;
-      Object.assign(row, { lastUsedStep: input.step, failedAttempts: 0, lockedUntil: null });
+      Object.assign(row, { lastUsedStep: input.step, failedAttempts: 0, lockedUntil: null, lockCount: 0 });
       return true;
     },
     async consumeRecoveryCode(input) {
-      const code = rows.get(input.userId)?.recoveryCodes.find((c) => c.hash === input.hash && !c.usedAt);
+      const row = rows.get(input.userId);
+      const code = row?.recoveryCodes.find((c) => c.hash === input.hash && !c.usedAt);
       if (!code) return false;
       code.usedAt = input.now;
+      Object.assign(row, { failedAttempts: 0, lockedUntil: null, lockCount: 0 });
       return true;
     },
-    async recordFailure(input) {
+    // Same filters as the Mongo conditional updates; one synchronous step each, so atomic here too.
+    async claimAttempt(input) {
       const row = rows.get(input.userId);
+      if (!row || row.status !== "enabled" || row.failedAttempts >= input.maxFailures || (row.lockedUntil && row.lockedUntil > input.now)) return false;
       row.failedAttempts += 1;
-      if (row.failedAttempts >= input.maxFailures) Object.assign(row, { lockedUntil: new Date(input.now.getTime() + input.lockMs), failedAttempts: 0 });
+      return true;
+    },
+    async lockIfExhausted(input) {
+      const row = rows.get(input.userId);
+      if (!row || row.failedAttempts < input.maxFailures) return;
+      const lockCount = row.lockCount ?? 0;
+      Object.assign(row, { lockedUntil: new Date(input.now.getTime() + Math.min(input.maxLockMs, input.lockMs * 2 ** lockCount)), lockCount: lockCount + 1, failedAttempts: 0 });
     },
     async replaceRecoveryCodes(input) { rows.get(input.userId).recoveryCodes = input.hashes.map((hash) => ({ hash, usedAt: null })); },
     async remove(userId) { return rows.delete(userId); },
@@ -209,6 +219,60 @@ test("consecutive failures across challenges lock the account's second factor", 
   assert.equal((await ctx.service.completeChallenge({ challengeToken: d.challengeToken, code: totpAt(secret, ctx.now()), correlationId: "c" })).kind, "verified");
 });
 
+test("concurrent guesses across many challenges get at most the per-account cap checked", async () => {
+  const ctx = setup();
+  const { secret } = await enrol(ctx);
+  const challenges = [];
+  for (let i = 0; i < 30; i++) challenges.push(await ctx.service.assessSignIn({ userId: "u1", organizationId: "o1", method: "password" }));
+  const results = await Promise.all(challenges.map((c) => ctx.service.completeChallenge({ challengeToken: c.challengeToken, code: "000000", correlationId: "c" })));
+  assert.equal(results.filter((r) => r.kind === "invalid_code").length, MAX_CONSECUTIVE_FAILURES);
+  assert.equal(results.filter((r) => r.kind === "locked").length, 30 - MAX_CONSECUTIVE_FAILURES);
+  const row = ctx.rows.get("u1");
+  assert.equal(row.lockCount, 1, "one lock, however many guesses raced");
+  const c = await ctx.service.assessSignIn({ userId: "u1", organizationId: "o1", method: "password" });
+  assert.equal((await ctx.service.completeChallenge({ challengeToken: c.challengeToken, code: totpAt(secret, ctx.now()), correlationId: "c" })).kind, "locked");
+});
+
+test("repeated lockouts double up to a day; a success resets the escalation", async () => {
+  const ctx = setup();
+  const { secret } = await enrol(ctx);
+  const exhaust = async () => {
+    let last;
+    for (let i = 0; i <= MAX_CONSECUTIVE_FAILURES; i++) {
+      const c = await ctx.service.assessSignIn({ userId: "u1", organizationId: "o1", method: "password" });
+      last = await ctx.service.completeChallenge({ challengeToken: c.challengeToken, code: "000000", correlationId: "c" });
+    }
+    assert.equal(last.kind, "locked");
+    return last.retryAfterSeconds;
+  };
+  const expected = [];
+  const seen = [];
+  for (let lock = 0; lock < 9; lock++) {
+    expected.push(Math.min(MAX_LOCK_MS, LOCK_MS * 2 ** lock) / 1000);
+    seen.push(await exhaust());
+    ctx.tick(MAX_LOCK_MS);
+  }
+  assert.deepEqual(seen, expected);
+  assert.equal(seen.at(-1), 24 * 60 * 60, "capped at a day");
+
+  const c = await ctx.service.assessSignIn({ userId: "u1", organizationId: "o1", method: "password" });
+  assert.equal((await ctx.service.completeChallenge({ challengeToken: c.challengeToken, code: totpAt(secret, ctx.now()), correlationId: "c" })).kind, "verified");
+  assert.equal(ctx.rows.get("u1").lockCount, 0);
+  assert.equal(await exhaust(), LOCK_MS / 1000, "back to the first lock's length");
+});
+
+test("an attempt whose check never finished still ends in a lock", async () => {
+  const ctx = setup();
+  await enrol(ctx);
+  // As if the process died after claiming the last attempt.
+  Object.assign(ctx.rows.get("u1"), { failedAttempts: MAX_CONSECUTIVE_FAILURES, lockedUntil: null });
+  const c = await ctx.service.assessSignIn({ userId: "u1", organizationId: "o1", method: "password" });
+  const result = await ctx.service.completeChallenge({ challengeToken: c.challengeToken, code: "000000", correlationId: "c" });
+  assert.deepEqual(result, { kind: "locked", retryAfterSeconds: LOCK_MS / 1000 });
+  assert.equal(ctx.rows.get("u1").failedAttempts, 0);
+  assert.ok(ctx.rows.get("u1").lockedUntil > ctx.now());
+});
+
 test("ORG-304: a required organization routes a non-enrolled member to enrolment, which then signs them in", async () => {
   const ctx = setup({ requires: true });
   const step = await ctx.service.assessSignIn({ userId: "u1", organizationId: "o1", method: "password" });
@@ -242,6 +306,22 @@ test("disable needs a current code, is audited, and is refused when the org requ
   assert.equal((await ctx.service.disable({ userId: "u1", organizationId: "o1", code: totpAt(secret, ctx.now()), correlationId: "c" })).kind, "disabled");
   assert.equal(ctx.rows.has("u1"), false);
   assert.equal(ctx.audits.filter((a) => a.action === "auth.two_factor.disabled").length, 1);
+});
+
+test("disable re-authentication: a given password must match; without one, only an SSO-linked account may rely on its code", async () => {
+  const decide = (passwordSupplied, passwordMatches, ssoLinked) => reauthenticationForDisable({ passwordSupplied, passwordMatches, ssoLinked });
+  assert.equal(decide(true, true, false), "password");
+  assert.equal(decide(true, false, false), "refused");
+  assert.equal(decide(true, false, true), "refused", "a wrong password is never ignored");
+  assert.equal(decide(false, false, false), "refused", "password accounts still need it");
+  assert.equal(decide(false, false, true), "second_factor");
+
+  // The second factor is still checked, and the audit says which proof was used.
+  const ctx = setup();
+  const { recoveryCodes } = await enrol(ctx);
+  assert.equal((await ctx.service.disable({ userId: "u1", organizationId: "o1", correlationId: "c", reauthentication: "second_factor" })).kind, "invalid_code");
+  assert.equal((await ctx.service.disable({ userId: "u1", organizationId: "o1", recoveryCode: recoveryCodes[0], correlationId: "c", reauthentication: "second_factor" })).kind, "disabled");
+  assert.deepEqual(ctx.audits.find((a) => a.action === "auth.two_factor.disabled").metadata, { reauthentication: "second_factor" });
 });
 
 test("regenerating recovery codes voids the old ones", async () => {

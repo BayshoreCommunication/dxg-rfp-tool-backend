@@ -45,9 +45,6 @@ export const mongoDomainRepository: DomainRepository = {
   countForOrganization(organizationId) {
     return OrganizationDomain.countDocuments({ organizationId });
   },
-  async isVerifiedElsewhere(domain, organizationId) {
-    return Boolean(await OrganizationDomain.exists({ domain, status: "verified", organizationId: { $ne: organizationId } }));
-  },
   async create(input) {
     try {
       const row = await OrganizationDomain.create({ ...input, status: "pending" });
@@ -102,5 +99,14 @@ export const mongoDomainRepository: DomainRepository = {
     // scope-exempt: the background re-check runs across every organization.
     const rows = await OrganizationDomain.find({ nextCheckAt: { $lte: now } }).sort({ nextCheckAt: 1 }).limit(limit).lean<Row[]>();
     return rows.map(toRecord);
+  },
+  async claimDue(input) {
+    if (!mongoose.isValidObjectId(input.id)) return false;
+    // scope-exempt: the background re-check; the id comes from due() above.
+    const result = await OrganizationDomain.updateOne(
+      { _id: input.id, nextCheckAt: { $lte: input.now } },
+      { $set: { nextCheckAt: input.leaseUntil } },
+    );
+    return result.modifiedCount === 1;
   },
 };

@@ -47,7 +47,7 @@ export const inPostgres = async <T>(pool: Pool, commit: boolean, work: (client: 
 export const postgresOrganizationId = async (client: PoolClient, mongoId: string): Promise<string | null> =>
   (await client.query<{ id: string }>("SELECT id FROM rfpilot.organizations WHERE external_mongo_id = $1", [mongoId])).rows[0]?.id ?? null;
 
-const ensurePostgresOrganization = async (client: PoolClient, mongoId: string, name: string): Promise<string> =>
+export const ensurePostgresOrganization = async (client: PoolClient, mongoId: string, name: string): Promise<string> =>
   (await postgresOrganizationId(client, mongoId)) ??
   (await client.query<{ id: string }>("INSERT INTO rfpilot.organizations(external_mongo_id, name) VALUES($1, $2) RETURNING id", [mongoId, name.slice(0, 200)])).rows[0].id;
 

@@ -1,14 +1,19 @@
 // ORG-110: a DXG admin places a legacy customer (in a holding tenant since ORG-107) into a new or
 // an existing organization through the admin API, on real MongoDB and Postgres, and rolls each
-// placement back by run id. ORG-109's checks pass after every run.
+// placement back by run id. ORG-109's checks pass after every run. Rollback moves back only what
+// the run moved; a failed MongoDB half or failed checks leave nothing moved; a double submit
+// places once.
 import { TEST_MONGODB_DB_NAME } from "./env";
 import { connectMongo, disconnectMongo, ensureMigrated, ensureServices, randomMongoId } from "./setup";
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type { AddressInfo } from "node:net";
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import mongoose from "mongoose";
 import app from "../server";
+import Team from "../modal/teamModel";
+import TeamMembership from "../modal/teamMembershipModel";
 import Admin from "../modal/adminModel";
 import Organization from "../modal/organizationModel";
 import OrganizationMembership from "../modal/organizationMembershipModel";
@@ -34,11 +39,16 @@ let customerToken: string;
 let receiving: Fixture;
 const dxg = { org: oid(), admin: oid() };
 type Legacy = { userId: mongoose.Types.ObjectId; holding: mongoose.Types.ObjectId; proposals: mongoose.Types.ObjectId[]; pgOrg?: string };
-const legacy: Record<"ana" | "ben" | "cy", Legacy> = {
+const legacy: Record<"ana" | "ben" | "cy" | "dee" | "eve" | "fay" | "gus", Legacy> = {
   ana: { userId: oid(), holding: oid(), proposals: [oid(), oid()] },
   ben: { userId: oid(), holding: oid(), proposals: [oid()] },
   cy: { userId: oid(), holding: oid(), proposals: [] },
+  dee: { userId: oid(), holding: oid(), proposals: [oid()] },
+  eve: { userId: oid(), holding: oid(), proposals: [oid()] },
+  fay: { userId: oid(), holding: oid(), proposals: [oid()] },
+  gus: { userId: oid(), holding: oid(), proposals: [oid()] },
 };
+let second: Fixture;
 
 const api = async (token: string, method: string, path: string, body?: unknown) => {
   const res = await fetch(`${baseUrl}/api/admin/legacy-customers${path}`, {
@@ -81,7 +91,9 @@ before(async () => {
   await seedLegacy("Ana", legacy.ana);
   await seedLegacy("Ben", legacy.ben);
   await seedLegacy("Cy", legacy.cy);
+  for (const name of ["Dee", "Eve", "Fay", "Gus"] as const) await seedLegacy(name, legacy[name.toLowerCase() as "dee" | "eve" | "fay" | "gus"]);
   receiving = await seedOrganization("Receiving Org");
+  second = await seedOrganization("Second Receiving Org");
   customerToken = receiving.members.organization_admin.accessToken;
   server = http.createServer(app).listen(0);
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -92,10 +104,12 @@ after(async () => {
   server?.close();
   if (mongoose.connection.readyState === 1) {
     const holdings = Object.values(legacy).map((l) => l.holding);
-    const placed = await Organization.find({ name: /^Ana Events / }).select("_id").lean();
+    const placed = await Organization.find({ name: { $in: [new RegExp(`^Ana Events ${tag}`), new RegExp(`^Eve Events ${tag}`)] } }).select("_id").lean();
     const orgIds = [dxg.org, ...holdings, ...placed.map((o) => o._id)];
     await OrganizationMembership.collection.deleteMany({ organizationId: { $in: orgIds } });
     await Proposal.collection.deleteMany({ organizationId: { $in: orgIds } });
+    await TeamMembership.collection.deleteMany({ organizationId: { $in: [new mongoose.Types.ObjectId(second.organizationId)] } });
+    await Team.collection.deleteMany({ organizationId: new mongoose.Types.ObjectId(second.organizationId) });
     await User.collection.deleteMany({ _id: { $in: Object.values(legacy).map((l) => l.userId) } });
     await Admin.collection.deleteOne({ _id: dxg.admin });
     await Organization.collection.deleteMany({ _id: { $in: orgIds } });
@@ -179,7 +193,7 @@ test("placing into an existing organization: the receiving Admin sees the propos
     assert.equal(refused.body.code, "INVALID_ROLE", role);
   }
   const withTeam = await api(adminToken, "POST", `/${legacy.ben.userId}/placements`, { target: "existing", organizationId: target, role: "planner", teamId: randomMongoId() });
-  assert.equal(withTeam.body.code, "TEAMS_UNAVAILABLE");
+  assert.equal(withTeam.body.code, "UNKNOWN_TEAM");
 
   const placed = await api(adminToken, "POST", `/${legacy.ben.userId}/placements`, { target: "existing", organizationId: target, role: "team_manager" });
   assert.equal(placed.status, 201, JSON.stringify(placed.body));
@@ -215,4 +229,103 @@ test("a user who isn't waiting in a holding tenant can't be placed", async () =>
   assert.equal(res.body.code, "NOT_A_LEGACY_CUSTOMER");
   const missingName = await api(adminToken, "POST", `/${legacy.cy.userId}/placements`, { target: "new", organization: {} });
   assert.equal(missingName.body.code, "ORGANIZATION_NAME_REQUIRED");
+});
+
+// The review's case: after placement an Admin gives the user a colleague's RFP. Rolling back moves
+// only what the placement moved; the colleague's RFP and its Postgres rows stay in the organization.
+test("rollback from an existing organization moves back only what the placement moved", async () => {
+  const target = second.organizationId;
+  const team = await Team.create({ organizationId: target, name: `East ${tag}` });
+  const placed = await api(adminToken, "POST", `/${legacy.dee.userId}/placements`, { target: "existing", organizationId: target, role: "planner", teamId: String(team._id) });
+  assert.equal(placed.status, 201, JSON.stringify(placed.body));
+  const placement = placed.body.data.placement;
+  assert.ok(await TeamMembership.exists({ teamId: team._id, userId: legacy.dee.userId }), "the placement puts the user on the team");
+
+  // The colleague's RFP, mirrored in Postgres with a conversation hanging off it.
+  const pool = postgresPool();
+  const pgTarget = (await pgOrganization(target))!;
+  const colleague = second.members.planner;
+  const colleagueRfp = oid();
+  await Proposal.collection.insertOne({ _id: colleagueRfp, organizationId: new mongoose.Types.ObjectId(target), userId: new mongoose.Types.ObjectId(colleague.userId), status: "unsubmitted", isDraft: true, event: { eventName: "Colleague" } });
+  const pgColleague = (await pool.query<{ id: string }>("INSERT INTO rfpilot.users(organization_id,external_mongo_id) VALUES($1,$2) RETURNING id", [pgTarget, colleague.userId])).rows[0].id;
+  const colleagueRef = (await pool.query<{ id: string }>("INSERT INTO rfpilot.proposal_references(organization_id,owner_user_id,external_mongo_id) VALUES($1,$2,$3) RETURNING id", [pgTarget, pgColleague, String(colleagueRfp)])).rows[0].id;
+  const conversation = randomUUID();
+  await pool.query("INSERT INTO rfpilot.conversations(id,organization_id,proposal_reference_id,owner_external_user_id) VALUES($1,$2,$3,$4)", [conversation, pgTarget, colleagueRef, colleague.userId]);
+
+  // The Admin reassigns it to the placed user, in both stores.
+  await Proposal.collection.updateOne({ _id: colleagueRfp }, { $set: { userId: legacy.dee.userId } });
+  const pgDee = (await pool.query<{ id: string }>("SELECT id FROM rfpilot.users WHERE organization_id=$1 AND external_mongo_id=$2", [pgTarget, String(legacy.dee.userId)])).rows[0].id;
+  await pool.query("UPDATE rfpilot.proposal_references SET owner_user_id=$1 WHERE id=$2", [pgDee, colleagueRef]);
+
+  const rolled = await api(adminToken, "POST", `/placements/${placement.runId}/rollback`);
+  assert.equal(rolled.status, 200, JSON.stringify(rolled.body));
+  assert.deepEqual(rolled.body.data.rollback.leftInTarget, { proposals: 1 });
+
+  const pgOrgOf = async (table: string, id: string) => (await pool.query<{ organization_id: string }>(`SELECT organization_id FROM rfpilot.${table} WHERE id=$1`, [id])).rows[0]?.organization_id;
+  assert.equal(String((await Proposal.collection.findOne({ _id: colleagueRfp }))?.organizationId), target, "the colleague's RFP stays");
+  assert.equal(await pgOrgOf("proposal_references", colleagueRef), pgTarget);
+  assert.equal(await pgOrgOf("conversations", conversation), pgTarget);
+  assert.equal(await pgOrgOf("users", pgColleague), pgTarget);
+  // What the placement moved went back.
+  assert.equal(await ownedIn(legacy.dee.holding, legacy.dee.userId), 1);
+  assert.equal(await pgReferences(legacy.dee.pgOrg!), 1);
+  assert.equal(await pgOrgOf("users", pgDee), legacy.dee.pgOrg);
+  assert.equal(await TeamMembership.exists({ teamId: team._id, userId: legacy.dee.userId }), null);
+  assert.equal(await OrganizationMembership.countDocuments({ organizationId: target }), 5);
+});
+
+test("concurrent placements of one user: exactly one runs and one organization is created", async () => {
+  const body = { target: "new", organization: { name: `Eve Events ${tag}` } };
+  const results = await Promise.all([1, 2, 3].map(() => api(adminToken, "POST", `/${legacy.eve.userId}/placements`, body)));
+  assert.equal(results.filter((r) => r.status === 201).length, 1, JSON.stringify(results.map((r) => r.body.code)));
+  for (const r of results.filter((x) => x.status !== 201)) assert.ok(["PLACEMENT_IN_PROGRESS", "NOT_A_LEGACY_CUSTOMER"].includes(r.body.code), r.body.code);
+  const created = await Organization.find({ name: `Eve Events ${tag}` }).select("_id").lean();
+  assert.equal(created.length, 1);
+  assert.equal(await OrganizationMembership.countDocuments({ userId: legacy.eve.userId, status: "active", roles: "owner" }), 1);
+
+  // Two rollbacks at once: one runs, the other is refused.
+  const runId = results.find((r) => r.status === 201)!.body.data.placement.runId;
+  const rollbacks = await Promise.all([1, 2].map(() => api(adminToken, "POST", `/placements/${runId}/rollback`)));
+  assert.equal(rollbacks.filter((r) => r.status === 200).length, 1, JSON.stringify(rollbacks.map((r) => r.body.code)));
+  assert.ok(["ROLLBACK_IN_PROGRESS", "ALREADY_ROLLED_BACK"].includes(rollbacks.find((r) => r.status !== 200)!.body.code));
+  assert.equal(await ownedIn(legacy.eve.holding, legacy.eve.userId), 1);
+  assert.equal(await Organization.exists({ name: `Eve Events ${tag}` }), null);
+});
+
+test("a MongoDB failure mid-placement leaves Postgres untouched and reports an error", async () => {
+  const target = second.organizationId;
+  const team = await Team.create({ organizationId: target, name: `West ${tag}` });
+  // A stale team membership makes the MongoDB transaction fail after Postgres has moved.
+  await TeamMembership.collection.insertOne({ organizationId: new mongoose.Types.ObjectId(target), teamId: team._id, userId: legacy.fay.userId, isManager: false });
+  const res = await api(adminToken, "POST", `/${legacy.fay.userId}/placements`, { target: "existing", organizationId: target, role: "planner", teamId: String(team._id) });
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.equal(res.body.code, "PLACEMENT_FAILED");
+  assert.equal(await pgReferences(legacy.fay.pgOrg!), 1, "the Postgres move was not committed");
+  assert.equal(await ownedIn(legacy.fay.holding, legacy.fay.userId), 1);
+  assert.equal((await Organization.findById(legacy.fay.holding).lean())?.status, "active");
+  assert.equal(await OrganizationMembership.exists({ organizationId: target, userId: legacy.fay.userId }), null);
+  const runId = (await mongoose.connection.collection("legacycustomerplacements").findOne({ userId: String(legacy.fay.userId) }, { sort: { createdAt: -1 } }))!.runId;
+  assert.equal((await api(adminToken, "GET", `/placements/${runId}`)).body.data.placement.state, "aborted");
+  assert.equal((await api(adminToken, "POST", `/placements/${runId}/rollback`)).body.code, "NOTHING_TO_ROLL_BACK");
+  await TeamMembership.collection.deleteMany({ userId: legacy.fay.userId });
+  // Once the cause is gone the same placement goes through.
+  const retried = await api(adminToken, "POST", `/${legacy.fay.userId}/placements`, { target: "existing", organizationId: target, role: "planner" });
+  assert.equal(retried.status, 201, JSON.stringify(retried.body));
+});
+
+test("a placement whose checks fail is rolled back and reported as an error", async () => {
+  // Someone else's proposal in the holding tenant can't move with the user, so the holding
+  // tenant isn't empty afterwards and ORG-109's check fails.
+  const stray = oid();
+  await Proposal.collection.insertOne({ _id: stray, organizationId: legacy.gus.holding, userId: oid(), status: "unsubmitted", isDraft: true });
+  const res = await api(adminToken, "POST", `/${legacy.gus.userId}/placements`, { target: "existing", organizationId: second.organizationId, role: "planner" });
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.equal(res.body.code, "PLACEMENT_VERIFICATION_FAILED");
+  assert.equal(res.body.details.rolledBack, true);
+  assert.equal(res.body.details.verification.passed, false);
+  assert.equal(await ownedIn(legacy.gus.holding, legacy.gus.userId), 1);
+  assert.equal(await pgReferences(legacy.gus.pgOrg!), 1);
+  assert.equal((await Organization.findById(legacy.gus.holding).lean())?.status, "active");
+  assert.equal(await OrganizationMembership.exists({ organizationId: second.organizationId, userId: legacy.gus.userId }), null);
+  await Proposal.collection.deleteOne({ _id: stray });
 });

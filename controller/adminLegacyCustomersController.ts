@@ -43,7 +43,7 @@ const body = (req: AuthRequest): Record<string, unknown> =>
 
 const fail = (res: Response, error: unknown) => {
   if (error instanceof PlacementError) {
-    res.status(error.status).json({ success: false, code: error.code, message: error.message });
+    res.status(error.status).json({ success: false, code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) });
     return;
   }
   console.error("Legacy customer placement error:", error instanceof Error ? error.message : error);

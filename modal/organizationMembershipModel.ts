@@ -35,6 +35,8 @@ export interface IOrganizationMembership extends Document {
   // ORG-307: set when someone else changed this member's role. The member's next request claims
   // it, keeps that session and revokes their other sessions.
   sessionRevocationPending?: boolean;
+  // The request currently revoking for the pending flag; the flag clears only after it succeeds.
+  sessionRevocationClaim?: { sessionId: string; at: Date } | null;
   migrationRunId?: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -58,6 +60,7 @@ const organizationMembershipSchema = new Schema<IOrganizationMembership>(
     removedAt: { type: Date, default: null },
     lastSignedInAt: { type: Date, default: null },
     sessionRevocationPending: { type: Boolean, default: false },
+    sessionRevocationClaim: { type: new Schema({ sessionId: String, at: Date }, { _id: false }), default: null },
     migrationRunId: { type: String, trim: true, default: null },
   },
   { timestamps: true },

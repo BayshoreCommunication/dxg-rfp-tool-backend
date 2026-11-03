@@ -1,6 +1,8 @@
 import {
+  DEFAULT_DAILY_INVITATION_EMAIL_LIMIT,
   INVITATION_TTL_MS,
   MAX_BULK_INVITATIONS,
+  RESEND_COOLDOWN_MS,
   hashInvitationToken,
   inviteRefusal,
   isInvitableRole,
@@ -16,9 +18,11 @@ import {
   type InvitingActor,
   type TokenRefusal,
 } from "../domain/invitationRules";
+import type { GoogleIdentityVerifier, VerifiedGoogleIdentity } from "../../auth/domain/ports/googleIdentityPorts";
 import type {
   InvitationAcceptanceStore,
   InvitationAuditWriter,
+  InvitationEmailQuota,
   InvitationRecord,
   InvitationRepository,
   InvitationTeamDirectory,
@@ -105,9 +109,18 @@ export type BulkRow =
   | { row: number; email: string; outcome: "invited"; invitation: InvitationView }
   | { row: number; email: string; outcome: "refused"; code: RowRefusal; message: string };
 
+export type DailyLimitReached = {
+  kind: "limited";
+  code: "INVITATION_DAILY_LIMIT";
+  message: string;
+  remaining: number;
+  retryAfterSeconds: number;
+};
+
 export type CreateOutcome =
   | { kind: "validation"; code: "INVALID_ROLE" | "INVALID_TEAM" | "NO_EMAILS" | "TOO_MANY_EMAILS"; message: string }
   | { kind: "forbidden"; code: InviteRefusal | "TEAM_NOT_FOUND" | "ORGANIZATION_UNAVAILABLE"; message: string }
+  | DailyLimitReached
   | { kind: "done"; rows: BulkRow[] };
 
 export type TokenOutcome<T> = { kind: "refused"; code: TokenRefusal } | T;
@@ -115,12 +128,13 @@ export type TokenOutcome<T> = { kind: "refused"; code: TokenRefusal } | T;
 export type AcceptOutcome = TokenOutcome<
   | { kind: "validation"; code: "INVALID_INPUT" | "WEAK_PASSWORD"; message: string }
   | { kind: "email_mismatch" }
+  | { kind: "invalid_identity" }
   | { kind: "account_not_found" }
   | { kind: "account_exists" }
   | { kind: "wrong_password" }
   | { kind: "blocked" }
   | { kind: "conflict"; code: "ALREADY_MEMBER" | "EMAIL_IN_ANOTHER_ORGANIZATION" | "LEGACY_ACCOUNT_PENDING_PLACEMENT" | "MEMBER_DEACTIVATED"; message: string }
-  | { kind: "accepted"; userId: string; organizationId: string; role: InvitableRole }
+  | { kind: "accepted"; userId: string; organizationId: string; role: InvitableRole; method: "password" | "sso" }
 >;
 
 export type InvitationServiceDependencies = {
@@ -133,11 +147,38 @@ export type InvitationServiceDependencies = {
   passwords: { hash(password: string): Promise<string>; verify(password: string, hash: string): Promise<boolean> };
   dispatcher: Pick<InvitationDispatcher, "dispatch" | "dispatchInBackground">;
   audit: InvitationAuditWriter;
+  quota: InvitationEmailQuota;
+  google: GoogleIdentityVerifier;
+  // A random secret for a Google-created account's unusable password, as Google sign-up does.
+  randomSecret(): string;
+  dailyEmailLimit?: number;
+  resendCooldownMs?: number;
   now?: () => Date;
+};
+
+const secondsUntilNextUtcDay = (at: Date): number => {
+  const next = Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate() + 1);
+  return Math.max(1, Math.ceil((next - at.getTime()) / 1000));
 };
 
 export const createInvitationService = (deps: InvitationServiceDependencies) => {
   const now = deps.now ?? (() => new Date());
+  const dailyEmailLimit = deps.dailyEmailLimit ?? DEFAULT_DAILY_INVITATION_EMAIL_LIMIT;
+  const resendCooldownMs = deps.resendCooldownMs ?? RESEND_COOLDOWN_MS;
+
+  const reserveEmails = async (organizationId: string, count: number, at: Date): Promise<DailyLimitReached | null> => {
+    const reserved = await deps.quota.reserve({ organizationId, count, limit: dailyEmailLimit, now: at });
+    if (reserved.ok) return null;
+    return {
+      kind: "limited",
+      code: "INVITATION_DAILY_LIMIT",
+      message: reserved.remaining > 0
+        ? `Your organization can send ${reserved.remaining} more invitation emails today. Invite fewer people or try again tomorrow.`
+        : "Your organization has sent today's maximum number of invitation emails. Try again tomorrow.",
+      remaining: reserved.remaining,
+      retryAfterSeconds: secondsUntilNextUtcDay(at),
+    };
+  };
 
   const auditSent = (actor: InvitingActor, invitation: InvitationRecord, correlationId: string, action = "organization.invitation.sent") =>
     deps.audit.append({
@@ -185,6 +226,7 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
     const at = now();
     const emails = rawEmails.map(normalizeEmail);
     const valid = [...new Set(emails.filter(isValidEmail))];
+    await deps.invitations.expireLapsed(actor.organizationId, valid, at);
     const [standings, pending] = await Promise.all([
       deps.invitees.standings(actor.organizationId, valid),
       deps.invitations.pendingEmails(actor.organizationId, valid, at),
@@ -192,16 +234,26 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
 
     const seen = new Set<string>();
     const rows: BulkRow[] = [];
-    const created: InvitationRecord[] = [];
+    const candidates: { index: number; email: string }[] = [];
     for (const [index, email] of emails.entries()) {
-      const row = index + 1;
-      const refuse = (code: RowRefusal) => rows.push({ row, email: rawEmails[index].trim(), outcome: "refused", code, message: ROW_REFUSAL_MESSAGES[code] });
+      const refuse = (code: RowRefusal) => { rows[index] = { row: index + 1, email: rawEmails[index].trim(), outcome: "refused", code, message: ROW_REFUSAL_MESSAGES[code] }; };
       if (!isValidEmail(email)) { refuse("INVALID_EMAIL"); continue; }
       if (seen.has(email)) { refuse("DUPLICATE_IN_LIST"); continue; }
       seen.add(email);
       const blocked = standingRefusal(standings.get(email));
       if (blocked) { refuse(blocked); continue; }
       if (pending.has(email)) { refuse("ALREADY_INVITED"); continue; }
+      candidates.push({ index, email });
+    }
+
+    // Every row that would get an email counts against the day's allowance, before any is written.
+    if (candidates.length) {
+      const limited = await reserveEmails(actor.organizationId, candidates.length, at);
+      if (limited) return limited;
+    }
+
+    const created: InvitationRecord[] = [];
+    for (const { index, email } of candidates) {
       const inserted = await deps.invitations.insertPending({
         organizationId: actor.organizationId,
         email,
@@ -210,10 +262,13 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
         invitedBy: actor.userId,
         expiresAt: new Date(at.getTime() + INVITATION_TTL_MS),
       });
-      if (inserted.kind === "duplicate") { refuse("ALREADY_INVITED"); continue; }
+      if (inserted.kind === "duplicate") {
+        rows[index] = { row: index + 1, email, outcome: "refused", code: "ALREADY_INVITED", message: ROW_REFUSAL_MESSAGES.ALREADY_INVITED };
+        continue;
+      }
       created.push(inserted.invitation);
       await auditSent(actor, inserted.invitation, options.correlationId);
-      rows.push({ row, email, outcome: "invited", invitation: toInvitationView(inserted.invitation, at) });
+      rows[index] = { row: index + 1, email, outcome: "invited", invitation: toInvitationView(inserted.invitation, at) };
     }
 
     if (options.deliverInline) {
@@ -249,25 +304,46 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
     return { invitation: found.invitation, tokenHash };
   };
 
-  const auditAccepted = (invitation: InvitationRecord, userId: string, correlationId: string, newAccount: boolean) =>
-    deps.audit.append({
+  const auditAccepted = (
+    invitation: InvitationRecord,
+    result: Awaited<ReturnType<InvitationAcceptanceStore["joinExistingAccount"]>>,
+    correlationId: string,
+    reason: "new_account" | "existing_account" | "google_new_account" | "google_existing_account",
+  ) => {
+    if (result.kind !== "joined") return Promise.resolve();
+    return deps.audit.append({
       organizationId: invitation.organizationId,
-      actorUserId: userId,
+      actorUserId: result.userId,
       action: "organization.invitation.accepted",
       targetType: "invitation",
       targetId: invitation.id,
       decision: "allowed",
-      reason: newAccount ? "new_account" : "existing_account",
+      reason,
       correlationId,
-      metadata: { role: invitation.role, teamId: invitation.teamId, invitedBy: invitation.invitedBy },
+      metadata: {
+        role: invitation.role,
+        teamId: invitation.teamId,
+        invitedBy: invitation.invitedBy,
+        ...(invitation.teamId ? { placedInTeam: result.placedInTeam } : {}),
+      },
     });
+  };
+
+  const conflictFor = (standing: InviteeStanding | undefined): AcceptOutcome | null => {
+    const refusal = standingRefusal(standing);
+    if (refusal === "ALREADY_MEMBER" || refusal === "MEMBER_DEACTIVATED" || refusal === "EMAIL_IN_ANOTHER_ORGANIZATION" || refusal === "LEGACY_ACCOUNT_PENDING_PLACEMENT") {
+      return { kind: "conflict", code: refusal, message: ROW_REFUSAL_MESSAGES[refusal] };
+    }
+    return null;
+  };
 
   const joinOutcome = (
     result: Awaited<ReturnType<InvitationAcceptanceStore["joinExistingAccount"]>>,
     invitation: InvitationRecord,
+    method: "password" | "sso" = "password",
   ): AcceptOutcome => {
     if (result.kind === "joined") {
-      return { kind: "accepted", userId: result.userId, organizationId: invitation.organizationId, role: invitation.role };
+      return { kind: "accepted", userId: result.userId, organizationId: invitation.organizationId, role: invitation.role, method };
     }
     // The invitation changed between the check and the write: revoked, resent, expired or used.
     if (result.kind === "stale") return { kind: "refused", code: "INVITATION_ALREADY_USED" };
@@ -308,11 +384,28 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
       if (!["pending", "expired"].includes(effectiveStatus(invitation, at))) {
         return { kind: "not_pending" as const, status: invitation.status };
       }
+      const cooldown = (record: InvitationRecord) => {
+        const waitMs = record.emailQueuedAt.getTime() + resendCooldownMs - at.getTime();
+        return waitMs > 0 ? { kind: "cooldown" as const, retryAfterSeconds: Math.ceil(waitMs / 1000) } : null;
+      };
+      const tooSoon = cooldown(invitation);
+      if (tooSoon) return tooSoon;
       const standings = await deps.invitees.standings(actor.organizationId, [invitation.email]);
       const blocked = standingRefusal(standings.get(invitation.email));
       if (blocked) return { kind: "refused" as const, code: blocked, message: ROW_REFUSAL_MESSAGES[blocked] };
-      const prepared = await deps.invitations.prepareResend(actor.organizationId, id, { now: at, expiresAt: new Date(at.getTime() + INVITATION_TTL_MS) });
-      if (!prepared) return { kind: "not_pending" as const, status: invitation.status };
+      const limited = await reserveEmails(actor.organizationId, 1, at);
+      if (limited) return limited;
+      const prepared = await deps.invitations.prepareResend(actor.organizationId, id, {
+        now: at,
+        expiresAt: new Date(at.getTime() + INVITATION_TTL_MS),
+        queuedBefore: new Date(at.getTime() - resendCooldownMs),
+      });
+      if (!prepared) {
+        // A concurrent resend got there first, or the invitation was accepted or revoked meanwhile.
+        const current = await deps.invitations.findById(actor.organizationId, id);
+        const raced = current && ["pending", "expired"].includes(current.status) ? cooldown(current) : null;
+        return raced ?? { kind: "not_pending" as const, status: current?.status ?? invitation.status };
+      }
       await auditSent(actor, prepared, correlationId, "organization.invitation.resent");
       const delivered = await deps.dispatcher.dispatch(prepared.id);
       return { kind: "resent" as const, invitation: { ...toInvitationView(prepared, at), emailDelivery: delivered } };
@@ -378,15 +471,51 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
       if (!account) return { kind: "account_not_found" };
       if (!(await deps.passwords.verify(password, account.passwordHash))) return { kind: "wrong_password" };
       if (account.isBlocked) return { kind: "blocked" };
-      const standing = (await deps.invitees.standings(invitation.organizationId, [email])).get(email);
-      const refusal = standingRefusal(standing);
-      if (refusal === "ALREADY_MEMBER" || refusal === "MEMBER_DEACTIVATED" || refusal === "EMAIL_IN_ANOTHER_ORGANIZATION" || refusal === "LEGACY_ACCOUNT_PENDING_PLACEMENT") {
-        return { kind: "conflict", code: refusal, message: ROW_REFUSAL_MESSAGES[refusal] };
-      }
+      const conflict = conflictFor((await deps.invitees.standings(invitation.organizationId, [email])).get(email));
+      if (conflict) return conflict;
       const result = await deps.acceptance.joinExistingAccount({ invitationId: invitation.id, tokenHash, userId: account.user.id, now: now() });
-      const outcome = joinOutcome(result, invitation);
-      if (outcome.kind === "accepted") await auditAccepted(invitation, outcome.userId, correlationId, false);
-      return outcome;
+      await auditAccepted(invitation, result, correlationId, "existing_account");
+      return joinOutcome(result, invitation);
+    },
+
+    // Google proves the email the way a password does, so an account with no usable password
+    // (created by Google sign-in) can accept, and a new invitee can sign up with Google without
+    // getting an organization of their own. The verified Google email must equal the invited one.
+    async acceptWithGoogle(input: { token?: unknown; idToken?: unknown }, correlationId: string): Promise<AcceptOutcome> {
+      const resolved = await resolveToken(input.token);
+      if ("refusal" in resolved) return { kind: "refused", code: resolved.refusal };
+      const { invitation, tokenHash } = resolved;
+      if (typeof input.idToken !== "string" || !input.idToken.trim()) {
+        return { kind: "validation", code: "INVALID_INPUT", message: "A Google ID token is required." };
+      }
+      let identity: VerifiedGoogleIdentity;
+      try {
+        identity = await deps.google.verify(input.idToken.trim());
+      } catch {
+        return { kind: "invalid_identity" };
+      }
+      const email = normalizeEmail(identity.email);
+      if (email !== invitation.email) return { kind: "email_mismatch" };
+      const account = await deps.credentials.findCredentials(email);
+      if (account) {
+        if (account.isBlocked) return { kind: "blocked" };
+        const conflict = conflictFor((await deps.invitees.standings(invitation.organizationId, [email])).get(email));
+        if (conflict) return conflict;
+        const result = await deps.acceptance.joinExistingAccount({ invitationId: invitation.id, tokenHash, userId: account.user.id, now: now() });
+        await auditAccepted(invitation, result, correlationId, "google_existing_account");
+        return joinOutcome(result, invitation, "sso");
+      }
+      const result = await deps.acceptance.joinNewAccount({
+        invitationId: invitation.id,
+        tokenHash,
+        name: (identity.name?.trim() || email.split("@")[0]).slice(0, 200),
+        passwordHash: await deps.passwords.hash(deps.randomSecret()),
+        googleId: identity.subject,
+        avatar: identity.avatar,
+        now: now(),
+      });
+      await auditAccepted(invitation, result, correlationId, "google_new_account");
+      return joinOutcome(result, invitation, "sso");
     },
 
     // A new account is created with the invited email: the link reached that inbox, which is the
@@ -408,9 +537,8 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
         passwordHash: await deps.passwords.hash(password),
         now: now(),
       });
-      const outcome = joinOutcome(result, invitation);
-      if (outcome.kind === "accepted") await auditAccepted(invitation, outcome.userId, correlationId, true);
-      return outcome;
+      await auditAccepted(invitation, result, correlationId, "new_account");
+      return joinOutcome(result, invitation);
     },
   };
 };

@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const { createOrganizationTwoFactorPolicy } = require("../src/modules/twoFactor/application/organizationTwoFactorPolicy");
 
 const setup = () => {
-  const state = { requires: false, members: new Map([["owner", ["owner"]], ["admin", ["organization_admin"]], ["planner", ["planner"]], ["viewer", ["viewer"]]]), enrolled: new Set(["owner", "admin"]) };
+  const state = { requires: false, members: new Map([["owner", ["owner"]], ["admin", ["organization_admin"]], ["planner", ["planner"]], ["viewer", ["viewer"]]]), enrolled: new Set(["owner", "admin"]), elsewhere: new Set() };
   const revoked = [];
   const resets = [];
   const audits = [];
@@ -12,6 +12,7 @@ const setup = () => {
       async requiresTwoFactor() { return state.requires; },
       async setRequiresTwoFactor(_org, value) { state.requires = value; },
       async membership(_org, userId) { const roles = state.members.get(userId); return roles ? { roles, status: "active" } : null; },
+      async activeElsewhere(_org, userId) { return state.elsewhere.has(userId); },
       async activeMemberIds() { return [...state.members.keys()]; },
       async enrolledUserIds(ids) { return ids.filter((id) => state.enrolled.has(id)); },
     },
@@ -59,4 +60,14 @@ test("reset: members of the organization only, never yourself, and only the Owne
   assert.equal((await reset("admin", ["organization_admin"], "owner")).kind, "forbidden");
   assert.equal((await reset("owner", ["owner"], "admin")).kind, "reset");
   assert.deepEqual(ctx.resets.map((r) => [r.actorUserId, r.targetUserId]), [["admin", "planner"], ["owner", "admin"]]);
+});
+
+test("reset is refused when the member also belongs to another organization, whose factor it would remove", async () => {
+  const ctx = setup();
+  ctx.state.elsewhere.add("planner");
+  const result = await ctx.policy.resetMember({ organizationId: "o1", actorUserId: "owner", actorRoles: ["owner"], targetUserId: "planner", correlationId: "c" });
+  assert.equal(result.kind, "member_of_other_organization");
+  assert.deepEqual(ctx.resets, []);
+  // Membership and role checks still come first: a stranger is still not_found.
+  assert.equal((await ctx.policy.resetMember({ organizationId: "o1", actorUserId: "owner", actorRoles: ["owner"], targetUserId: "stranger", correlationId: "c" })).kind, "not_found");
 });

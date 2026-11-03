@@ -89,3 +89,37 @@ export const mongoOrganizationMemberDirectory: OrganizationMemberDirectory = {
 };
 
 export const isValidTeamId = (value: string) => mongoose.isValidObjectId(value) && /^[0-9a-f]{24}$/i.test(value);
+
+// Active teams of one organization among the ids given; archived, foreign or malformed ids are left out.
+export const findActiveTeams = async (organizationId: string, teamIds: readonly string[]): Promise<TeamRecord[]> => {
+  const ids = teamIds.filter(isValidTeamId);
+  if (ids.length === 0) return [];
+  const teams = await Team.find({ _id: { $in: ids }, organizationId, archived: false }).lean<TeamDocument[]>();
+  return teams.map(toRecord);
+};
+
+// Places a member in a team inside the caller's transaction (invitation accept). False when the
+// team is missing, archived or in another organization. The team document is written, not just
+// read, so a concurrent archive conflicts with the transaction instead of slipping past it.
+export const addMemberInTransaction = async (input: {
+  organizationId: string;
+  teamId: string;
+  userId: string;
+  at: Date;
+  session: mongoose.ClientSession;
+}): Promise<boolean> => {
+  if (!isValidTeamId(input.teamId)) return false;
+  const team = await Team.updateOne(
+    { _id: input.teamId, organizationId: input.organizationId, archived: false },
+    { $set: { updatedAt: input.at } },
+    { session: input.session, timestamps: false },
+  );
+  if (team.matchedCount !== 1) return false;
+  // A returning member may still be on the team; their row is kept as it is.
+  await TeamMembership.updateOne(
+    { teamId: input.teamId, userId: input.userId },
+    { $setOnInsert: { organizationId: input.organizationId, teamId: input.teamId, userId: input.userId, isManager: false } },
+    { upsert: true, session: input.session },
+  );
+  return true;
+};

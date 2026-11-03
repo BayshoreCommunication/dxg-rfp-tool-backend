@@ -69,6 +69,10 @@ export const resetMemberTwoFactor = async (req: AuthRequest, res: Response): Pro
       fail(res, 403, "FORBIDDEN", "Only the Owner can reset the Owner's two-factor authentication");
       return;
     }
+    if (result.kind === "member_of_other_organization") {
+      fail(res, 409, "TWO_FACTOR_RESET_SHARED_ACCOUNT", "This member also belongs to another organization. Contact support to reset their two-factor authentication.");
+      return;
+    }
     res.status(200).json({ success: true, wasEnrolled: result.wasEnrolled, revokedSessions: result.revokedSessions });
   } catch (error) {
     handleError(res, error, "reset");

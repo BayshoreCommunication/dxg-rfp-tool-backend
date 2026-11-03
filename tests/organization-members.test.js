@@ -37,6 +37,7 @@ const setup = (owned = {}) => {
   ], owned);
   const events = [];
   let teamResult = () => "unavailable";
+  let memberTeamsResult = { previousTeamIds: [] };
   const sessionCalls = [];
   const reassignCalls = [];
   const mirrorCalls = [];
@@ -46,15 +47,15 @@ const setup = (owned = {}) => {
     teams: {
       teamsFor: async () => new Map([[ids.planner, [{ id: "t1", name: "East" }]]]),
       activeTeamIds: async (_org, teamIds) => teamResult(teamIds),
-      setMemberTeams: async () => ({ previousTeamIds: [] }),
+      setMemberTeams: async () => memberTeamsResult,
     },
     audit: { append: async (event) => { events.push(event); } },
     reassignments: { reassign: async (input) => { reassignCalls.push(input); return reassignResult; } },
     ownershipMirror: { afterReassign: async (input) => { mirrorCalls.push(input); } },
-    sessions: { afterRoleChange: async (c) => { sessionCalls.push(["role", c.userId, c.actorSessionId]); }, afterDeactivation: async (c) => { sessionCalls.push(["deactivated", c.userId]); } },
+    sessions: { afterRoleChange: async (c) => { sessionCalls.push(["role", c.userId, c.actorSessionId, ...(c.demoted ? ["demoted"] : [])]); }, afterDeactivation: async (c) => { sessionCalls.push(["deactivated", c.userId]); } },
   });
   const actor = (role) => ({ organizationId: ORG, userId: ids[role], roles: [role === "admin" ? "organization_admin" : role === "manager" ? "team_manager" : role], correlationId: "c" });
-  return { setTeamResult: (fn) => { teamResult = fn; }, store, events, members, actor, sessionCalls, reassignCalls, mirrorCalls, setReassignResult: (r) => { reassignResult = r; } };
+  return { setTeamResult: (fn) => { teamResult = fn; }, setMemberTeamsResult: (r) => { memberTeamsResult = r; }, store, events, members, actor, sessionCalls, reassignCalls, mirrorCalls, setReassignResult: (r) => { reassignResult = r; } };
 };
 
 test("role changes follow the Owner and RFP-ownership rules for every actor", () => {
@@ -280,4 +281,36 @@ test("changing teams is optimistic, audited, and unavailable until teams exist",
   const unknown = await members.changeTeams(actor("admin"), { userId: ids.planner, teamIds: [t], version: 2 });
   assert.equal(unknown.code, "UNKNOWN_TEAMS");
   assert.deepEqual(unknown.details, { unknownTeamIds: [t] });
+});
+
+test("a demotion is flagged to the session hooks; promotions and lateral moves aren't", async () => {
+  assert.equal(policy.isDemotion(["planner"], ["viewer"]), true);
+  assert.equal(policy.isDemotion(["organization_admin", "knowledge_editor"], ["planner", "knowledge_editor"]), true);
+  assert.equal(policy.isDemotion(["planner"], ["team_manager"]), false);
+  assert.equal(policy.isDemotion(["planner", "knowledge_editor"], ["planner"]), true, "a lost knowledge role is a demotion");
+  const { members, actor, sessionCalls } = setup();
+  await members.changeRole(actor("admin"), { userId: ids.manager, role: "planner", version: 1 });
+  await members.changeRole(actor("admin"), { userId: ids.viewer, role: "planner", version: 1 });
+  assert.deepEqual(sessionCalls, [["role", ids.manager, undefined, "demoted"], ["role", ids.viewer, undefined]]);
+});
+
+test("a Viewer change refused at commit (an RFP arrived meanwhile) is a 409 with the count", async () => {
+  const { members, actor, store, events, sessionCalls } = setup();
+  store.setRoles = async () => ({ ownedRfpCount: 1 });
+  const refused = await members.changeRole(actor("admin"), { userId: ids.planner, role: "viewer", version: 1 });
+  assert.equal(refused.code, "OWNER_HAS_RFPS");
+  assert.deepEqual(refused.details, { ownedRfpCount: 1 });
+  assert.equal(events.at(-1).decision, "denied");
+  assert.equal(sessionCalls.length, 0);
+});
+
+test("a team archived between the check and the write refuses the change", async () => {
+  const { members, actor, events, setTeamResult, setMemberTeamsResult } = setup();
+  const t = "d".repeat(24);
+  setTeamResult((teamIds) => teamIds);
+  setMemberTeamsResult({ unknownTeamIds: [t] });
+  const refused = await members.changeTeams(actor("admin"), { userId: ids.planner, teamIds: [t], version: 1 });
+  assert.equal(refused.code, "UNKNOWN_TEAMS");
+  assert.deepEqual(refused.details, { unknownTeamIds: [t] });
+  assert.equal(events.some((e) => e.action === "organization.member.teams_changed" && e.decision === "allowed"), false);
 });

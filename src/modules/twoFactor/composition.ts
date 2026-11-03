@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import Organization from "../../../modal/organizationModel";
+import User from "../../../modal/userModel";
 import { createSecretBox, parseEncryptionKey, type SecretBox } from "../../shared/security/secretBox";
 import { hmacOtpCodeHasher } from "../auth/infrastructure/security/hmacOtpCodeHasher";
 import { mongoSecurityAuditWriter } from "../auth/infrastructure/audit/mongoSecurityAuditWriter";
@@ -39,6 +40,10 @@ export const organizationRequiresTwoFactor = async (organizationId: string): Pro
   const organization = await Organization.findById(organizationId).select("requireTwoFactor").lean<{ requireTwoFactor?: boolean } | null>();
   return Boolean(organization?.requireTwoFactor);
 };
+
+// Google-linked: the account may have only the random password Google sign-up stored.
+export const accountIsSsoLinked = async (userId: string): Promise<boolean> =>
+  Boolean(await User.exists({ _id: userId, googleId: { $nin: [null, ""] } }));
 
 export const twoFactor = createTwoFactorService({
   records: mongoTwoFactorRepository,

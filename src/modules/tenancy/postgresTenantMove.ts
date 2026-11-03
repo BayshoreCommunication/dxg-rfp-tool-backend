@@ -34,8 +34,11 @@ const POLYMORPHIC_REFERENCES = [
 ] as const;
 
 type Edge = { child: string; childColumns: string[]; parent: string; parentColumns: string[]; composite: boolean };
-export type TenantSchema = { tables: string[]; doerColumns: Record<string, string[]>; edges: Edge[]; idTables: string[] };
+export type TenantSchema = { tables: string[]; doerColumns: Record<string, string[]>; edges: Edge[]; idTables: string[]; primaryKeys: Record<string, string[]> };
 export type MoveCounts = Record<string, number>;
+// Primary keys of the rows a move changed, per table, as keyOf() renders them (ORG-110 rolls a
+// placement back by exactly these rows).
+export type MovedKeys = Record<string, string[]>;
 export type IntegrityViolation = { child: string; parent: string; columns: string[]; organizationId: string; rows: number };
 
 const quoteIdent = (name: string) => `"${name.replace(/"/g, '""')}"`;
@@ -92,7 +95,23 @@ export const loadTenantSchema = async (client: PoolClient): Promise<TenantSchema
         AND a.atttypid = 'uuid'::regtype`,
   );
   const idTables = ids.rows.map((row) => row.name).filter((name) => tenant.has(name) && !STAY_TABLES.has(name)).sort();
-  return { tables, doerColumns, edges, idTables };
+  const pks = await client.query<{ name: string; columns: string[] }>(
+    `SELECT c.relname AS name,
+            ARRAY(SELECT a.attname FROM unnest(i.indkey) WITH ORDINALITY k(n, ord)
+                    JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.n ORDER BY k.ord)::text[] AS columns
+       FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'rfpilot' AND c.relkind = 'r' AND i.indisprimary`,
+  );
+  const primaryKeys: Record<string, string[]> = {};
+  for (const row of pks.rows) if (tenant.has(row.name)) primaryKeys[row.name] = row.columns;
+  return { tables, doerColumns, edges, idTables, primaryKeys };
+};
+
+// One text value per row for its primary key, e.g. ["<uuid>"] or ["<uuid>","3"].
+const keyOf = (schema: TenantSchema, name: string) => {
+  const pk = schema.primaryKeys[name];
+  if (!pk?.length) throw new Error(`Table ${name} has no primary key; its rows can't be journaled`);
+  return `jsonb_build_array(${pk.map((column) => `${quoteIdent(column)}::text`).join(",")})::text`;
 };
 
 const add = (counts: MoveCounts, name: string, rows: number | null) => {
@@ -104,17 +123,19 @@ const add = (counts: MoveCounts, name: string, rows: number | null) => {
 export const moveCustomerRows = async (
   client: PoolClient,
   schema: TenantSchema,
-  input: { fromOrganizationId: string; toOrganizationId: string; userMongoId: string },
+  // When given, collects the primary key of every row moved.
+  input: { fromOrganizationId: string; toOrganizationId: string; userMongoId: string; keys?: MovedKeys },
 ): Promise<MoveCounts> => {
-  const { fromOrganizationId: from, toOrganizationId: to } = input;
+  const { fromOrganizationId: from, toOrganizationId: to, keys } = input;
   const counts: MoveCounts = {};
   const update = async (name: string, where: string, params: unknown[]) => {
     if (STAY_TABLES.has(name)) return 0;
-    const result = await client.query(
-      `UPDATE ${table(name)} SET organization_id = $1 WHERE organization_id = $2 AND (${where})`,
+    const result = await client.query<{ key: string }>(
+      `UPDATE ${table(name)} SET organization_id = $1 WHERE organization_id = $2 AND (${where})${keys ? ` RETURNING ${keyOf(schema, name)} AS key` : ""}`,
       [to, from, ...params],
     );
     add(counts, name, result.rowCount);
+    if (keys && result.rows.length) (keys[name] ??= []).push(...result.rows.map((row) => row.key));
     return result.rowCount ?? 0;
   };
 
@@ -143,6 +164,27 @@ export const moveCustomerRows = async (
     for (const reference of POLYMORPHIC_REFERENCES) {
       if (!schema.tables.includes(reference.table)) continue;
       moved += await update(reference.table, `${quoteIdent(reference.column)} IN (${movedIds(reference.text)})`, []);
+    }
+  }
+  return counts;
+};
+
+// Moves exactly the rows a journaled move recorded, and nothing else (ORG-110 rollback, and the
+// compensation of a placement whose MongoDB half failed). Rows that have since left `from` stay put.
+export const moveRowsByKey = async (
+  client: PoolClient,
+  schema: TenantSchema,
+  input: { fromOrganizationId: string; toOrganizationId: string; keys: MovedKeys },
+): Promise<MoveCounts> => {
+  const counts: MoveCounts = {};
+  for (const [name, keys] of Object.entries(input.keys)) {
+    if (!schema.tables.includes(name) || STAY_TABLES.has(name)) continue;
+    for (let i = 0; i < keys.length; i += 5000) {
+      const result = await client.query(
+        `UPDATE ${table(name)} SET organization_id = $1 WHERE organization_id = $2 AND ${keyOf(schema, name)} = ANY($3::text[])`,
+        [input.toOrganizationId, input.fromOrganizationId, keys.slice(i, i + 5000)],
+      );
+      add(counts, name, result.rowCount);
     }
   }
   return counts;

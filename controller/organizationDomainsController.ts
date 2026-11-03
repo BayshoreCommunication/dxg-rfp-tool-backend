@@ -52,7 +52,6 @@ export const addDomain = async (req: AuthRequest, res: Response): Promise<void> 
       case "invalid": fail(res, 400, "DOMAIN_INVALID", "Enter a domain like example.com"); return;
       case "not_verifiable": fail(res, 422, "DOMAIN_NOT_VERIFIABLE", "Public email domains can't be verified"); return;
       case "limit": fail(res, 409, "DOMAIN_LIMIT_REACHED", "This organization has the maximum number of domains"); return;
-      case "unavailable": fail(res, 409, "DOMAIN_UNAVAILABLE", "This domain can't be added"); return;
       case "already_added": fail(res, 409, "DOMAIN_ALREADY_ADDED", "This domain is already on your organization"); return;
       default: res.status(201).json({ success: true, domain: present(result.record) });
     }

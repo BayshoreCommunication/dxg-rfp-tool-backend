@@ -8,6 +8,9 @@ import type http from "node:http";
 import mongoose from "mongoose";
 import { closePostgres } from "../config/postgres";
 import OrganizationMembership from "../modal/organizationMembershipModel";
+import Proposal from "../modal/proposalsModel";
+import Team from "../modal/teamModel";
+import TeamMembership from "../modal/teamMembershipModel";
 import { auditEvents, cleanupOrganizations, createProposals, membershipOf, seedOrganization, startApp, stopApp, type Fixture } from "./memberFixtures";
 
 let server: http.Server;
@@ -174,4 +177,58 @@ test("concurrent transfers to two members leave exactly one Owner", async () => 
   const owners = await activeOwners(org.organizationId);
   assert.equal(owners.length, 1);
   assert.notEqual(owners[0], org.members.owner.userId);
+});
+
+test("changing a member's teams uses real Teams: active teams of the organization only", async () => {
+  const member = org.members.planner;
+  const path = `/api/organization/members/${member.userId}/teams`;
+  const [east, west, archived] = await Team.create([
+    { organizationId: org.organizationId, name: "East" },
+    { organizationId: org.organizationId, name: "West" },
+    { organizationId: org.organizationId, name: "Old", archived: true, archivedAt: new Date() },
+  ]);
+  const other = await seedOrganization("Other Teams Org");
+  const foreign = await Team.create({ organizationId: other.organizationId, name: "Foreign" });
+  // A manager flag on a team the member stays on is kept.
+  await TeamMembership.create({ organizationId: org.organizationId, teamId: east._id, userId: member.userId, isManager: true });
+  await TeamMembership.create({ organizationId: org.organizationId, teamId: archived._id, userId: member.userId, isManager: false });
+
+  const changed = await call(org.members.organization_admin.accessToken, "PUT", path, { teamIds: [String(east._id), String(west._id)], version: 1 });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  assert.deepEqual(changed.body.data.member.teams.map((t: { name: string }) => t.name), ["East", "West"]);
+  assert.equal(changed.body.data.member.version, 2);
+  assert.equal((await TeamMembership.findOne({ teamId: east._id, userId: member.userId }).lean())?.isManager, true);
+  assert.ok(await TeamMembership.exists({ teamId: archived._id, userId: member.userId }), "archived history is kept");
+  const event = (await auditEvents(org.organizationId, "organization.member.teams_changed")).at(-1)!;
+  assert.deepEqual(event.metadata, { previousTeamIds: [String(east._id)], teamIds: [String(east._id), String(west._id)], version: 2 });
+
+  for (const teamId of [archived._id, foreign._id]) {
+    const refused = await call(org.members.organization_admin.accessToken, "PUT", path, { teamIds: [String(teamId)], version: 2 });
+    assert.equal(refused.status, 400);
+    assert.equal(refused.body.code, "UNKNOWN_TEAMS");
+    assert.deepEqual(refused.body.unknownTeamIds, [String(teamId)]);
+  }
+  assert.equal(await TeamMembership.exists({ teamId: foreign._id, userId: member.userId }), null);
+
+  const cleared = await call(org.members.owner.accessToken, "PUT", path, { teamIds: [String(west._id)], version: 2 });
+  assert.equal(cleared.status, 200);
+  assert.equal(await TeamMembership.exists({ teamId: east._id, userId: member.userId }), null);
+  const listed = await call(org.members.owner.accessToken, "GET", "/api/organization/members");
+  assert.deepEqual(listed.body.data.members.find((m: { userId: string }) => m.userId === member.userId).teams, [{ id: String(west._id), name: "West" }]);
+});
+
+test("a member never ends up a Viewer who owns RFPs, even racing a reassignment", async () => {
+  for (let round = 0; round < 4; round++) {
+    const fresh = await seedOrganization(`Viewer Race ${round}`);
+    const [from, to] = [fresh.members.planner, fresh.members.team_manager];
+    await createProposals(fresh.organizationId, from.userId, 2);
+    const [toViewer] = await Promise.all([
+      call(fresh.members.organization_admin.accessToken, "PATCH", `/api/organization/members/${to.userId}/role`, { role: "viewer", version: 1 }),
+      call(fresh.members.organization_admin.accessToken, "POST", `/api/organization/members/${from.userId}/reassign-rfps`, { toUserId: to.userId }),
+    ]);
+    const membership = await membershipOf(fresh.organizationId, to.userId);
+    const owned = await Proposal.countDocuments({ organizationId: fresh.organizationId, userId: to.userId });
+    assert.ok(!(membership!.roles.includes("viewer") && owned > 0), `round ${round}: viewer owns ${owned}`);
+    if (toViewer.status !== 200) assert.equal(toViewer.body.code, "OWNER_HAS_RFPS");
+  }
 });

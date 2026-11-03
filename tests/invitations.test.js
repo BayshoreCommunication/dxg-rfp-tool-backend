@@ -90,7 +90,7 @@ const harness = (options = {}) => {
   const invitations = {
     async insertPending(input) {
       if ([...rows.values()].some((row) => row.status === "pending" && row.organizationId === input.organizationId && row.email === input.email)) return { kind: "duplicate" };
-      const row = { ...input, id: id(), status: "pending", createdAt: clock, acceptedAt: null, revokedAt: null, tokenHash: null, previous: [], delivery: { state: "pending", kind: "invite", attempts: 0, sentAt: null } };
+      const row = { ...input, id: id(), status: "pending", createdAt: clock, emailQueuedAt: clock, acceptedAt: null, revokedAt: null, tokenHash: null, previous: [], delivery: { state: "pending", kind: "invite", attempts: 0, sentAt: null } };
       rows.set(row.id, row);
       return { kind: "created", invitation: record(row) };
     },
@@ -98,6 +98,11 @@ const harness = (options = {}) => {
     async list(organizationId) { return [...rows.values()].filter((row) => row.organizationId === organizationId).map(record); },
     async pendingEmails(organizationId, emailList, now) {
       return new Set([...rows.values()].filter((row) => row.organizationId === organizationId && row.status === "pending" && row.expiresAt > now && emailList.includes(row.email)).map((row) => row.email));
+    },
+    async expireLapsed(organizationId, emailList, now) {
+      for (const row of rows.values()) {
+        if (row.organizationId === organizationId && row.status === "pending" && row.expiresAt <= now && emailList.includes(row.email)) row.status = "expired";
+      }
     },
     async findByTokenHash(hash) {
       for (const row of rows.values()) {
@@ -108,9 +113,10 @@ const harness = (options = {}) => {
     },
     async prepareResend(organizationId, rowId, input) {
       const row = rows.get(rowId);
-      if (!row || !["pending", "expired"].includes(row.status)) return null;
+      if (!row || !["pending", "expired"].includes(row.status) || row.emailQueuedAt > input.queuedBefore) return null;
+      if ([...rows.values()].some((other) => other !== row && other.status === "pending" && other.organizationId === row.organizationId && other.email === row.email)) return null;
       if (row.tokenHash) row.previous.push(row.tokenHash);
-      Object.assign(row, { status: "pending", tokenHash: null, expiresAt: input.expiresAt, delivery: { state: "pending", kind: "resend", attempts: 0, sentAt: null } });
+      Object.assign(row, { status: "pending", emailQueuedAt: input.now, tokenHash: null, expiresAt: input.expiresAt, delivery: { state: "pending", kind: "resend", attempts: 0, sentAt: null } });
       return record(row);
     },
     async revoke(organizationId, rowId, input) {
@@ -147,8 +153,27 @@ const harness = (options = {}) => {
     const row = rows.get(input.invitationId);
     if (!row || row.tokenHash !== input.tokenHash || row.status !== "pending") return { kind: "stale" };
     row.status = "accepted";
-    joined.push({ userId, organizationId: row.organizationId, role: row.role, teamId: row.teamId });
-    return { kind: "joined", userId };
+    joined.push({ userId, organizationId: row.organizationId, role: row.role, teamId: row.teamId, ...(input.googleId ? { googleId: input.googleId, name: input.name } : {}) });
+    return { kind: "joined", userId, placedInTeam: Boolean(row.teamId) };
+  };
+  // Same contract as the Mongo counter: all or nothing per UTC day.
+  const quotaUsed = new Map();
+  const quota = {
+    async reserve({ organizationId, count, limit, now }) {
+      const key = `${organizationId}:${now.toISOString().slice(0, 10)}`;
+      const used = quotaUsed.get(key) ?? 0;
+      if (used + count > limit) return { ok: false, remaining: Math.max(0, limit - used) };
+      quotaUsed.set(key, used + count);
+      return { ok: true };
+    },
+  };
+  // A Google ID token here is "google:<email>"; anything else fails verification.
+  const google = {
+    async verify(idToken) {
+      if (!idToken.startsWith("google:")) throw new Error("bad token");
+      const email = idToken.slice("google:".length);
+      return { subject: `sub-${email}`, email, name: "Gia Google" };
+    },
   };
   const service = createInvitationService({
     invitations,
@@ -166,11 +191,15 @@ const harness = (options = {}) => {
     passwords: { async hash(value) { return `hash:${value}`; }, async verify(value, hash) { return hash === `hash:${value}`; } },
     dispatcher,
     audit: { async append(event) { audits.push(event); } },
+    quota,
+    google,
+    randomSecret: () => "random-secret",
+    dailyEmailLimit: options.dailyEmailLimit,
     now: () => clock,
   });
   const lastToken = () => emails.at(-1).acceptUrl.split("/invite/")[1];
   const settle = () => new Promise((resolve) => setImmediate(resolve));
-  return { service, rows, audits, emails, joined, standings, lastToken, settle, advance: (ms) => { clock = new Date(clock.getTime() + ms); } };
+  return { service, rows, audits, emails, joined, standings, accounts, quotaUsed, lastToken, settle, advance: (ms) => { clock = new Date(clock.getTime() + ms); } };
 };
 
 const standing = (overrides = {}) => ({ userId: "5".repeat(24), blocked: false, membershipHere: null, activeElsewhere: false, inLegacyHolding: false, ...overrides });
@@ -412,4 +441,93 @@ test("expired invitations list as expired and can be resent", async () => {
   assert.deepEqual(await h.service.list(admin, { status: "pending" }), []);
   assert.equal((await h.service.resend(admin, created.id, "c")).kind, "resent");
   assert.equal((await h.service.lookup(h.lastToken())).kind, "found");
+});
+
+test("re-inviting an email whose invitation lapsed but isn't swept yet creates a new invitation", async () => {
+  const h = harness();
+  const first = (await h.service.create(admin, { email: "lapsed@example.com", role: "planner" }, "c")).rows[0].invitation;
+  h.advance(rules.INVITATION_TTL_MS + 1);
+  const again = await h.service.create(admin, { email: "lapsed@example.com", role: "viewer" }, "c");
+  assert.equal(again.rows[0].outcome, "invited");
+  assert.notEqual(again.rows[0].invitation.id, first.id);
+  assert.equal(h.rows.get(first.id).status, "expired");
+  // Still live: refused as before.
+  assert.equal((await h.service.create(admin, { email: "lapsed@example.com", role: "viewer" }, "c")).rows[0].code, "ALREADY_INVITED");
+});
+
+test("each organization's invitation emails are capped per day, counting every bulk row and resend", async () => {
+  const h = harness({ dailyEmailLimit: 5 });
+  // Six would-be emails (the invalid and duplicate rows don't count) exceed five: nothing is written.
+  const over = await h.service.createBulk(admin, { emails: ["a@example.com", "b@example.com", "c@example.com", "d@example.com", "e@example.com", "f@example.com", "bad", "A@example.com"], role: "planner" }, "c");
+  assert.equal(over.kind, "limited");
+  assert.equal(over.code, "INVITATION_DAILY_LIMIT");
+  assert.equal(over.remaining, 5);
+  assert.ok(over.retryAfterSeconds > 0 && over.retryAfterSeconds <= 12 * 60 * 60, "until the next UTC day");
+  assert.equal(h.rows.size, 0);
+
+  const four = await h.service.createBulk(admin, { emails: ["a@example.com", "b@example.com", "c@example.com", "d@example.com", "bad"], role: "planner" }, "c");
+  assert.equal(four.kind, "done");
+  assert.equal(four.rows.filter((row) => row.outcome === "invited").length, 4);
+  const fifth = await h.service.create(admin, { email: "e@example.com", role: "planner" }, "c");
+  assert.equal(fifth.rows[0].outcome, "invited");
+  const sixth = await h.service.create(admin, { email: "f@example.com", role: "planner" }, "c");
+  assert.equal(sixth.kind, "limited");
+  assert.equal(sixth.remaining, 0);
+  h.advance(rules.RESEND_COOLDOWN_MS);
+  assert.equal((await h.service.resend(admin, fifth.rows[0].invitation.id, "c")).kind, "limited");
+
+  // The next UTC day starts a fresh allowance.
+  h.advance(24 * 60 * 60 * 1000);
+  assert.equal((await h.service.create(admin, { email: "f@example.com", role: "planner" }, "c")).rows[0].outcome, "invited");
+});
+
+test("an invitation can be resent once every five minutes", async () => {
+  const h = harness();
+  const created = (await h.service.create(admin, { email: "cool@example.com", role: "planner" }, "c")).rows[0].invitation;
+  const early = await h.service.resend(admin, created.id, "c");
+  assert.deepEqual(early, { kind: "cooldown", retryAfterSeconds: 300 });
+  assert.equal(h.emails.length, 1);
+  h.advance(rules.RESEND_COOLDOWN_MS - 1000);
+  assert.equal((await h.service.resend(admin, created.id, "c")).retryAfterSeconds, 1);
+  h.advance(1000);
+  assert.equal((await h.service.resend(admin, created.id, "c")).kind, "resent");
+  assert.equal((await h.service.resend(admin, created.id, "c")).kind, "cooldown", "the cooldown restarts from the resend");
+  assert.equal(h.emails.length, 2);
+});
+
+test("an account with no usable password accepts with Google; the Google email must be the invited one", async () => {
+  // Created by Google sign-in: the stored password is a random secret nobody knows.
+  const h = harness({
+    accounts: { "gia@example.com": { id: "7".repeat(24), password: "unknown-random-secret" } },
+    standings: { "gia@example.com": standing({ userId: "7".repeat(24), membershipHere: "removed" }) },
+  });
+  await h.service.create(admin, { email: "gia@example.com", role: "planner", teamId: TEAM }, "c");
+  const token = h.lastToken();
+  assert.equal((await h.service.acceptWithGoogle({ token, idToken: "google:someone-else@example.com" }, "c")).kind, "email_mismatch");
+  assert.equal((await h.service.acceptWithGoogle({ token, idToken: "forged" }, "c")).kind, "invalid_identity");
+  assert.equal((await h.service.acceptWithGoogle({ token }, "c")).code, "INVALID_INPUT");
+  assert.equal((await h.service.acceptWithGoogle({ token: "x".repeat(43), idToken: "google:gia@example.com" }, "c")).code, "INVITATION_INVALID");
+  assert.deepEqual(h.joined, []);
+
+  const accepted = await h.service.acceptWithGoogle({ token, idToken: "google:GIA@example.com" }, "c-google");
+  assert.equal(accepted.kind, "accepted");
+  assert.equal(accepted.method, "sso");
+  assert.deepEqual(h.joined, [{ userId: "7".repeat(24), organizationId: ORG, role: "planner", teamId: TEAM }]);
+  const audit = h.audits.find((event) => event.action === "organization.invitation.accepted");
+  assert.equal(audit.reason, "google_existing_account");
+  assert.equal(audit.metadata.placedInTeam, true);
+});
+
+test("a new invitee signs up with Google into the inviting organization; Google accounts elsewhere are refused", async () => {
+  const h = harness({ accounts: { "busy@example.com": { id: "1".repeat(24), password: "x" } }, standings: { "busy@example.com": standing({ userId: "1".repeat(24) }) } });
+  await h.service.create(admin, { email: "fresh-google@example.com", role: "viewer" }, "c");
+  const accepted = await h.service.acceptWithGoogle({ token: h.lastToken(), idToken: "google:fresh-google@example.com" }, "c");
+  assert.equal(accepted.kind, "accepted");
+  assert.deepEqual(h.joined, [{ userId: "9".repeat(24), organizationId: ORG, role: "viewer", teamId: null, googleId: "sub-fresh-google@example.com", name: "Gia Google" }]);
+  assert.equal(h.audits.find((event) => event.action === "organization.invitation.accepted").reason, "google_new_account");
+
+  await h.service.create(admin, { email: "busy@example.com", role: "viewer" }, "c");
+  const token = h.lastToken();
+  h.standings.set("busy@example.com", standing({ userId: "1".repeat(24), activeElsewhere: true }));
+  assert.equal((await h.service.acceptWithGoogle({ token, idToken: "google:busy@example.com" }, "c")).code, "EMAIL_IN_ANOTHER_ORGANIZATION");
 });
