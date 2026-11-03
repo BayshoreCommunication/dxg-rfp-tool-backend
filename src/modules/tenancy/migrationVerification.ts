@@ -132,9 +132,10 @@ export const findCustomerLeftovers = async (input: { organizationId: string; poo
 
 // Proposals whose owner has no active membership in the proposal's organization. Run after the
 // migration and nightly (PRD metric "orphaned RFPs = 0").
-export const findOrphanedProposals = async (input: { sampleSize?: number } = {}) => {
+// organizationId narrows the scan to one organization (ORG-110 checks only its target).
+export const findOrphanedProposals = async (input: { sampleSize?: number; organizationId?: string } = {}) => {
   const rows = await Proposal.collection.aggregate<{ _id: unknown; count: number; sample: unknown[] }>([
-    { $match: { userId: { $ne: null } } },
+    { $match: { userId: { $ne: null }, ...(input.organizationId ? { organizationId: new mongoose.Types.ObjectId(input.organizationId) } : {}) } },
     {
       $lookup: {
         from: OrganizationMembership.collection.collectionName,

@@ -27,6 +27,8 @@ type AnyModel = Model<any>; // eslint-disable-line @typescript-eslint/no-explici
 type Rule = { name: string; model: AnyModel; filter: (ids: OwnedIds) => Record<string, unknown> };
 type OwnedIds = { userId: mongoose.Types.ObjectId; proposalIds: mongoose.Types.ObjectId[]; ticketIds: mongoose.Types.ObjectId[] };
 export type MongoMoveCounts = Record<string, number>;
+// _ids of the documents a move changed, per collection (ORG-110 rolls back exactly these).
+export type MovedDocumentIds = Record<string, unknown[]>;
 
 const OWNED_BY_USER: Rule[] = [
   { name: "users", model: User, filter: ({ userId }) => ({ _id: userId }) },
@@ -59,19 +61,42 @@ const ownedIds = async (from: mongoose.Types.ObjectId, userId: mongoose.Types.Ob
 
 // Counts (dry run) or moves (apply) one customer's documents. Raw collection writes on purpose:
 // they change only organizationId and skip model hooks such as the user's password hashing.
+// With movedIds (apply only, inside the caller's transaction), records each moved document's _id.
 export const moveCustomerDocuments = async (input: {
-  fromOrganizationId: string; toOrganizationId: string; userId: string; apply: boolean; session?: ClientSession;
+  fromOrganizationId: string; toOrganizationId: string; userId: string; apply: boolean; session?: ClientSession; movedIds?: MovedDocumentIds;
 }): Promise<MongoMoveCounts> => {
   const from = objectId(input.fromOrganizationId);
   const to = objectId(input.toOrganizationId);
   const ids = await ownedIds(from, objectId(input.userId), input.session);
   const counts: MongoMoveCounts = {};
   for (const rule of [...OWNED_THROUGH_TICKETS, ...OWNED_THROUGH_PROPOSALS, ...OWNED_BY_USER]) {
-    const filter = { ...rule.filter(ids), organizationId: from };
+    let filter: Record<string, unknown> = { ...rule.filter(ids), organizationId: from };
+    if (input.apply && input.movedIds) {
+      const docs = await rule.model.collection.find(filter, { projection: { _id: 1 }, session: input.session }).toArray();
+      if (docs.length) input.movedIds[rule.name] = docs.map((d) => d._id);
+      filter = { _id: { $in: docs.map((d) => d._id) }, organizationId: from };
+    }
     const n = input.apply
       ? (await rule.model.collection.updateMany(filter, { $set: { organizationId: to } }, { session: input.session })).modifiedCount
       : await rule.model.collection.countDocuments(filter, { session: input.session });
     if (n) counts[rule.name] = n;
+  }
+  return counts;
+};
+
+// Moves exactly the documents a journaled move recorded; ones that have since left `from` stay.
+export const moveDocumentsById = async (input: {
+  fromOrganizationId: string; toOrganizationId: string; ids: MovedDocumentIds; session?: ClientSession;
+}): Promise<MongoMoveCounts> => {
+  const from = objectId(input.fromOrganizationId);
+  const to = objectId(input.toOrganizationId);
+  const rules = new Map([...OWNED_BY_USER, ...OWNED_THROUGH_PROPOSALS, ...OWNED_THROUGH_TICKETS].map((rule) => [rule.name, rule]));
+  const counts: MongoMoveCounts = {};
+  for (const [name, ids] of Object.entries(input.ids)) {
+    const rule = rules.get(name);
+    if (!rule || ids.length === 0) continue;
+    const n = (await rule.model.collection.updateMany({ _id: { $in: ids as mongoose.Types.ObjectId[] }, organizationId: from }, { $set: { organizationId: to } }, { session: input.session })).modifiedCount;
+    if (n) counts[name] = n;
   }
   return counts;
 };

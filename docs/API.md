@@ -63,6 +63,20 @@ Team administration (ORG-201) lives in `routes/teamsRoute.ts`; rules in `src/mod
 - `POST /api/v1/teams/:teamId/members` `{ userId, isManager? }`, `PATCH /api/v1/teams/:teamId/members/:userId` `{ isManager }`, `DELETE /api/v1/teams/:teamId/members/:userId` — Owner/Admin only. Members must be active in the organization; a manager must hold the `team_manager` role (422 `TEAM_MANAGER_ROLE_REQUIRED`).
 - Proposal team (ORG-202): `POST /api/proposals` and copy put a new proposal on its creator's team when they're on exactly one active team (a client-sent `teamId` is ignored). `PUT /api/proposals/:id` with `teamId` (an active team in the organization, or `null`) changes it for anyone allowed to edit; anything else is 422 `TEAM_NOT_ASSIGNABLE`. Resending the current team's id is accepted even after that team is archived.
 
+## Organization members
+
+Membership management (ORG-206, ORG-207, ORG-307) lives in `routes/organizationMembersRoute.ts`, mounted at `/api/organization`, Owner/Admin only; rules in `src/modules/organizationMembers/application/manageMembers.ts`. Every write takes the member's current `version` (409 `STALE_VERSION` otherwise).
+
+- `PATCH /members/:userId/role` `{ role, version }`. Becoming a Viewer while owning RFPs is 409 `OWNER_HAS_RFPS` with `ownedRfpCount`, checked again in the same transaction as the write. A demotion by someone else revokes all the member's sessions at once; any other role change revokes the member's other sessions on their next request (see DECISIONS.md).
+- `PUT /members/:userId/teams` `{ teamIds, version }` makes the member's active teams exactly `teamIds` (ORG-201 Teams), keeping manager flags on teams they stay on and leaving archived teams' memberships as history. An archived team or another organization's team is 400 `UNKNOWN_TEAMS` with `unknownTeamIds`.
+
+## Legacy customer placement
+
+ORG-110, DXG admins only, at `/api/admin/legacy-customers` (`routes/adminLegacyCustomersRoute.ts`, `src/modules/tenancy/legacyCustomerPlacement.ts`).
+
+- `POST /:userId/placements` `{ target: "new", organization }` or `{ target: "existing", organizationId, role, teamId? }`. `teamId` must be an active team of that organization (400 `UNKNOWN_TEAM`). A second placement of the same user while one runs is 409 `PLACEMENT_IN_PROGRESS`. A failure leaves nothing moved (409 `PLACEMENT_FAILED`); a run whose ORG-109 checks fail is rolled back at once and answers 409 `PLACEMENT_VERIFICATION_FAILED` with `details.verification`.
+- `POST /placements/:runId/rollback` moves back exactly the records the run moved (journaled ids); RFPs given to the user afterwards stay and are counted in `leftInTarget`. One rollback runs at a time (409 `ROLLBACK_IN_PROGRESS`, `ALREADY_ROLLED_BACK`); 409 `ROLLBACK_CONFLICT` when Postgres rows created since still depend on the user's rows.
+
 ## Proposal sharing
 
 Sharing (ORG-208) lives in `routes/rfpSharesRoute.ts`; rules in `src/modules/rfpSharing/application/manageRfpShares.ts`. Who may share is the access policy's `share` decision: the proposal's owner, a manager of its (active) team, or an Owner/Admin.
