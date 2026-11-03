@@ -133,7 +133,7 @@ export const bffRequestsAccountOnly = (req: Request) =>
    token is issued here; the client gets a short-lived challenge token that is
    only accepted by /api/auth/2fa/challenge or the /api/auth/2fa/enrolment pair.
    Returns true when it has answered the request. */
-const respondWithSecondFactorStep = async (
+export const respondWithSecondFactorStep = async (
   req: Request,
   res: Response,
   user: { id: string; organizationId?: string },

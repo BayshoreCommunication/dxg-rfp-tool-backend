@@ -19,6 +19,7 @@ type InvitationDocument = {
   createdAt: Date;
   acceptedAt?: Date | null;
   revokedAt?: Date | null;
+  emailQueuedAt?: Date | null;
   delivery?: { state?: InvitationRecord["delivery"]["state"]; kind?: InvitationRecord["delivery"]["kind"]; attempts?: number; sentAt?: Date | null };
 };
 
@@ -34,6 +35,8 @@ export const toInvitationRecord = (doc: InvitationDocument): InvitationRecord =>
   createdAt: doc.createdAt,
   acceptedAt: doc.acceptedAt ?? null,
   revokedAt: doc.revokedAt ?? null,
+  // Rows written before resends were stamped count from their creation, the first email.
+  emailQueuedAt: doc.emailQueuedAt ?? doc.createdAt,
   delivery: {
     state: doc.delivery?.state ?? "pending",
     kind: doc.delivery?.kind ?? "invite",
@@ -97,6 +100,15 @@ export const mongoInvitationRepository: InvitationRepository = {
     return new Set(docs.map((doc) => doc.email));
   },
 
+  async expireLapsed(organizationId, emails, now) {
+    if (!emails.length) return;
+    // The same write the sweep makes, for just these emails.
+    await Invitation.updateMany(
+      { organizationId, email: { $in: emails }, status: "pending", expiresAt: { $lte: now } },
+      { $set: { status: "expired", expiredAt: now } },
+    );
+  },
+
   async findByTokenHash(tokenHash) {
     const current = await Invitation.findOne({ tokenHash }).lean<InvitationDocument>();
     if (current) return { invitation: toInvitationRecord(current), current: true };
@@ -110,10 +122,17 @@ export const mongoInvitationRepository: InvitationRepository = {
       // An expired row whose email has since been re-invited hits the one-pending index and is
       // refused; the newer invitation is the one to resend.
       const doc = await Invitation.findOneAndUpdate(
-        { _id: id, organizationId, status: { $in: ["pending", "expired"] } },
+        {
+          _id: id,
+          organizationId,
+          status: { $in: ["pending", "expired"] },
+          // The cooldown is checked in the write, so two quick resends can't both send.
+          $expr: { $lte: [{ $ifNull: ["$emailQueuedAt", "$createdAt"] }, input.queuedBefore] },
+        },
         [{
           $set: {
             status: "pending",
+            emailQueuedAt: input.now,
             expiredAt: null,
             expiresAt: input.expiresAt,
             previousTokenHashes: retireCurrentToken,
