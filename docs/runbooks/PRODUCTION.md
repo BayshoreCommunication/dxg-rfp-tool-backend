@@ -34,6 +34,9 @@ sit in `scan_failed` if ClamAV is down.
 - Secrets (worker env only where possible): `OPENAI_API_KEY`, `JWT_SECRET`,
   `OTP_PEPPER`, `TELEMETRY_PSEUDONYM_KEY` (required when observability is on),
   `DOCUMENT_STORAGE_*`, `POSTGRES_URL`, `MONGODB_URL`, `REDIS_URL`.
+- `OTP_PEPPER` is required: with `NODE_ENV=production` the API, worker and cron fail at startup
+  without it (no fallback to `JWT_SECRET`). Never change it in place: it keys the hashes of
+  2FA recovery codes and sign-in codes, so a new value voids every member's recovery codes.
 - Two-factor: `TWO_FACTOR_ENCRYPTION_KEY` (32 bytes, `openssl rand -hex 32`) is required in
   production; without it enrolment and sign-in challenges answer 503 `TWO_FACTOR_NOT_CONFIGURED`.
   Never change it in place: put the old key in `TWO_FACTOR_ENCRYPTION_PREVIOUS_KEYS` first, or every
