@@ -126,7 +126,7 @@ test('a new planner accepts by creating an account, lands in the inviting organi
   assert.equal(lookup.status, 200);
   assert.deepEqual(
     { ...lookup.body.invitation, expiresAt: undefined },
-    { email: to, role: 'planner', organizationName: 'Acme Events', inviterName: owner.name, teamName: null, accountExists: false, expiresAt: undefined },
+    { email: to, role: 'planner', organizationName: 'Acme Events', inviterName: owner.name, teamName: null, accountExists: false, companySso: false, expiresAt: undefined },
   );
 
   // Role and organization in the request body are ignored: they come from the invitation.

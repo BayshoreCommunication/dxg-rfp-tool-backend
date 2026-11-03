@@ -15,11 +15,12 @@ export const mongoInvitationEmailQuota: InvitationEmailQuotaPort = {
       return Math.max(0, limit - (current?.count ?? 0));
     };
     if (count > limit) return { ok: false, remaining: await remainingNow() };
-    // Twice at most: a lost race on the first insert of the day retries as an increment.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const taken = await InvitationEmailQuota.updateOne({ organizationId, day, count: { $lte: limit - count } }, { $inc: { count } });
-      if (taken.modifiedCount === 1) return { ok: true };
-      if (await InvitationEmailQuota.exists({ organizationId, day })) return { ok: false, remaining: await remainingNow() };
+    const increment = async () =>
+      (await InvitationEmailQuota.updateOne({ organizationId, day, count: { $lte: limit - count } }, { $inc: { count } })).modifiedCount === 1;
+    if (await increment()) return { ok: true };
+    // No row yet for today: the first insert wins. A request that loses that race (or found the
+    // row created since its increment) tries the conditional increment once more before refusing.
+    if (!(await InvitationEmailQuota.exists({ organizationId, day }))) {
       try {
         await InvitationEmailQuota.create({ organizationId, day, count, expiresAt: new Date(Date.parse(`${day}T00:00:00Z`) + 2 * DAY_MS) });
         return { ok: true };
@@ -27,6 +28,7 @@ export const mongoInvitationEmailQuota: InvitationEmailQuotaPort = {
         if (!isDuplicateKey(error)) throw error;
       }
     }
+    if (await increment()) return { ok: true };
     return { ok: false, remaining: await remainingNow() };
   },
 };
