@@ -12,8 +12,11 @@ export interface IUserTwoFactor extends Document {
   // The highest TOTP step ever accepted. A code at or below it is a replay.
   lastUsedStep: number;
   recoveryCodes: Array<{ hash: string; usedAt: Date | null }>;
+  // Wrong codes since the last success or lock. Each attempt is claimed before it is checked.
   failedAttempts: number;
   lockedUntil: Date | null;
+  // Locks since the last success; each doubles the next lock's length.
+  lockCount: number;
   enabledAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -33,6 +36,7 @@ const userTwoFactorSchema = new Schema<IUserTwoFactor>(
     },
     failedAttempts: { type: Number, required: true, default: 0 },
     lockedUntil: { type: Date, default: null },
+    lockCount: { type: Number, required: true, default: 0 },
     enabledAt: { type: Date, default: null },
   },
   { timestamps: true },

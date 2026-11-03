@@ -7,6 +7,8 @@ export interface OrganizationTwoFactorDirectory {
   requiresTwoFactor(organizationId: string): Promise<boolean>;
   setRequiresTwoFactor(organizationId: string, value: boolean): Promise<void>;
   membership(organizationId: string, userId: string): Promise<{ roles: string[]; status: string } | null>;
+  /** True when the user is also an active member of any other organization. */
+  activeElsewhere(organizationId: string, userId: string): Promise<boolean>;
   activeMemberIds(organizationId: string): Promise<string[]>;
   enrolledUserIds(userIds: string[]): Promise<string[]>;
 }
@@ -75,6 +77,10 @@ export const createOrganizationTwoFactorPolicy = (dependencies: Dependencies) =>
     if (!target || target.status === "removed") return { kind: "not_found" as const };
     // An organization_admin can't strip the Owner's second factor; the Owner can reset anyone.
     if (target.roles.includes("owner") && !input.actorRoles.includes("owner")) return { kind: "forbidden" as const };
+    // The enrolment is per user, not per organization: removing it here would strip the factor
+    // another organization relies on and leave that organization's sessions running. DXG
+    // support resets those through twoFactor.adminReset directly.
+    if (await dependencies.directory.activeElsewhere(input.organizationId, input.targetUserId)) return { kind: "member_of_other_organization" as const };
     return dependencies.twoFactor.adminReset({
       actorUserId: input.actorUserId,
       targetUserId: input.targetUserId,

@@ -12,11 +12,12 @@ import {
 import { authenticate, AuthRequest } from "../middleware/auth";
 import { securityRateLimit } from "../middleware/securityRateLimit";
 
-// Mounted at /api/auth/2fa. Brute force is held by the shared limiter at three levels:
-// per challenge token, per IP, and (in the service) a per-account lock after 10 failures.
+// Mounted at /api/auth/2fa. Brute force is held by the shared limiter
+// per challenge token, per IP, per signed-in user, and (in the service) a per-account lock.
 const router = Router();
 const challengeIdentity = (req: Request) => `${req.ip}:${String(req.body?.challengeToken ?? "")}`;
-const userIdentity = (req: Request) => `${req.ip}:${(req as AuthRequest).user?.userId ?? ""}`;
+// By user alone, so changing IPs doesn't buy a signed-in account more attempts.
+export const userIdentity = (req: Request) => `user:${(req as AuthRequest).user?.userId ?? ""}`;
 const perChallenge = securityRateLimit({ name: "2fa-challenge", limit: 10, windowMs: 15 * 60_000, identity: challengeIdentity });
 const perIp = securityRateLimit({ name: "2fa-ip", limit: 30, windowMs: 15 * 60_000 });
 const perUser = securityRateLimit({ name: "2fa-user", limit: 10, windowMs: 15 * 60_000, identity: userIdentity });
