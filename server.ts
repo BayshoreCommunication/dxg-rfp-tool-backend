@@ -9,6 +9,8 @@ import morgan from "morgan";
 import connectDB from "./config/db";
 import { checkPostgres, checkRowLevelSecurity, closePostgres, postgresEnabled } from "./config/postgres";
 import authRoutes from "./routes/authRoute";
+import twoFactorRoutes from "./routes/twoFactorRoute";
+import organizationSecurityRoutes from "./routes/organizationSecurityRoute";
 import adminRoutes from "./routes/adminRoute";
 import adminUserRoutes from "./routes/adminUserRoute";
 import allClientsRoutes from "./routes/allClientsRoute";
@@ -178,7 +180,11 @@ app.get("/api", (_req: Request, res: Response) => {
 });
 
 // Auth routes
+app.use("/api/auth/2fa", twoFactorRoutes);
 app.use("/api/auth", authRoutes);
+
+// Organization security: mandatory 2FA and member 2FA reset (ORG-304)
+app.use("/api/organization", organizationSecurityRoutes);
 
 // Admin routes
 app.use("/api/admin", adminRoutes);
