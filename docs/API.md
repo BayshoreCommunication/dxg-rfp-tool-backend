@@ -101,6 +101,13 @@ Routes under `/api/organization/domains` (`organization:manage`); rules in `src/
 - `POST /api/organization/domains` `{ domain }` answers 201 with the TXT record to publish, also for a domain another organization already holds verified: the response never says a domain is taken. Such a domain stays `pending` and its checks report `lastCheckOutcome: "not_verified"`, because only one organization can hold a domain verified. Refusals: 400 `DOMAIN_INVALID`, 422 `DOMAIN_NOT_VERIFIABLE` (public mail providers), 409 `DOMAIN_LIMIT_REACHED`, 409 `DOMAIN_ALREADY_ADDED`.
 - The cron worker checks due domains every 15 minutes, five at a time, leasing each record so concurrent tasks don't check it twice. A check that errors is retried after an hour (`dns_error:<code>` or `check_failed`).
 
+## Organization profile
+
+Routes under `/api/organization/profile`; rules in `src/modules/organizationProfile/`.
+
+- `GET /api/organization/profile` (any member) answers `{ name, needsName, canEditName }`. `needsName` is true for an organization created at a Google or Microsoft sign-up without a company, which is named "<Name>'s organization" until the Owner names it; the dashboard asks for the company name right after sign-up when `needsName && canEditName`.
+- `PUT /api/organization/profile` `{ name }` (`organization:manage`) renames the organization and clears `needsName`. The name is trimmed with inner whitespace collapsed, 1–200 characters; otherwise 400 `VALIDATION_ERROR`. Audited as `organization.settings.updated` (`organization_named` or `organization_renamed`).
+
 ## Sign-in: Google, Microsoft and company SSO
 
 Customers sign in with Google, Microsoft or their organization's own OpenID Connect provider; there is no customer email/password. The password, signup-OTP and reset routes (and password invitation accept) answer 410 `PASSWORD_SIGN_IN_DISABLED` unless `PASSWORD_SIGN_IN_ENABLED=true`. Setup for operators and customer IT: [SSO_SETUP.md](SSO_SETUP.md). Rules in `src/modules/sso/`.

@@ -43,6 +43,8 @@ export interface IOrganization extends Document {
   requireTwoFactor: boolean;
   requireSso: boolean;
   allowManagerInvites: boolean;
+  /** Created at a Google or Microsoft sign-up with no company given; the Owner is asked to name it. */
+  needsName: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -88,6 +90,7 @@ const organizationSchema = new Schema<IOrganization>(
     // Members whose email is on the SSO connection's domains must use it (the Owner is exempt).
     requireSso: { type: Boolean, default: false },
     allowManagerInvites: { type: Boolean, default: false },
+    needsName: { type: Boolean, default: false },
   },
   { timestamps: true },
 );

@@ -13,6 +13,7 @@ import twoFactorRoutes from "./routes/twoFactorRoute";
 import organizationSecurityRoutes from "./routes/organizationSecurityRoute";
 import ssoRoutes from "./routes/ssoRoute";
 import organizationSsoRoutes from "./routes/organizationSsoRoute";
+import organizationProfileRoutes from "./routes/organizationProfileRoute";
 import adminRoutes from "./routes/adminRoute";
 import adminUserRoutes from "./routes/adminUserRoute";
 import allClientsRoutes from "./routes/allClientsRoute";
@@ -189,6 +190,7 @@ app.use("/api/auth", authRoutes);
 // Organization security: mandatory 2FA and member 2FA reset (ORG-304)
 app.use("/api/organization", organizationSecurityRoutes);
 app.use("/api/organization", organizationSsoRoutes);
+app.use("/api/organization", organizationProfileRoutes);
 
 // Admin routes
 app.use("/api/admin", adminRoutes);
