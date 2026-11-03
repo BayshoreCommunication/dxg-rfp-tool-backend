@@ -3,7 +3,8 @@ import Invitation from "../../../../modal/invitationModel";
 import OrganizationMembership from "../../../../modal/organizationMembershipModel";
 import User from "../../../../modal/userModel";
 import type { InvitationAcceptanceStore, JoinResult } from "../domain/ports";
-import { noTeamPlacementYet, standingsForUsers, type TeamPlacement } from "./mongoInviteeDirectory";
+import { standingsForUsers } from "./mongoInviteeDirectory";
+import { placeInTeam as placeInTeamsModule, type TeamPlacement } from "./teamsInvitationDirectory";
 
 class StaleInvitation extends Error {}
 class RefusedJoin extends Error {
@@ -20,7 +21,7 @@ const isDuplicateKey = (error: unknown) => (error as { code?: number })?.code ==
 // commit together. The invitation is re-read inside the transaction by its current token, so a
 // link that was revoked, resent, expired or used a moment ago can't slip through, and two accepts
 // of one link race on the same invitation document: exactly one commits.
-export const createMongoInvitationAcceptance = (placeInTeam: TeamPlacement = noTeamPlacementYet): InvitationAcceptanceStore => {
+export const createMongoInvitationAcceptance = (placeInTeam: TeamPlacement = placeInTeamsModule): InvitationAcceptanceStore => {
   const run = async (
     input: { invitationId: string; tokenHash: string; now: Date },
     resolveUser: (invitation: OpenInvitation, session: mongoose.ClientSession) => Promise<mongoose.Types.ObjectId>,
@@ -28,6 +29,7 @@ export const createMongoInvitationAcceptance = (placeInTeam: TeamPlacement = noT
     const session = await mongoose.startSession();
     try {
       let userId = "";
+      let placedInTeam = false;
       await session.withTransaction(async () => {
         const invitation = await Invitation.findOne({
           _id: input.invitationId,
@@ -63,12 +65,12 @@ export const createMongoInvitationAcceptance = (placeInTeam: TeamPlacement = noT
           { session },
         );
         if (used.modifiedCount !== 1) throw new StaleInvitation();
-        if (invitation.teamId) {
-          await placeInTeam({ organizationId, userId: String(resolvedUserId), teamId: String(invitation.teamId), session });
-        }
+        placedInTeam = invitation.teamId
+          ? await placeInTeam({ organizationId, userId: String(resolvedUserId), teamId: String(invitation.teamId), at: input.now, session })
+          : false;
         userId = String(resolvedUserId);
       });
-      return { kind: "joined", userId };
+      return { kind: "joined", userId, placedInTeam };
     } catch (error) {
       if (error instanceof StaleInvitation) return { kind: "stale" };
       if (error instanceof RefusedJoin) return { kind: "refused", code: error.code };
@@ -109,6 +111,8 @@ export const createMongoInvitationAcceptance = (placeInTeam: TeamPlacement = noT
               name: input.name,
               email,
               ...(input.phone ? { phone: input.phone } : {}),
+              ...(input.googleId ? { googleId: input.googleId } : {}),
+              ...(input.avatar ? { avatar: input.avatar } : {}),
               password: input.passwordHash,
               organizationId: invitation.organizationId,
               role: "customer",

@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import Organization from "../../../../modal/organizationModel";
 import OrganizationMembership from "../../../../modal/organizationMembershipModel";
 import User from "../../../../modal/userModel";
-import type { InvitationTeamDirectory, InviteeDirectory, InviteeStanding, OrganizationDirectory } from "../domain/ports";
+import type { InviteeDirectory, InviteeStanding, OrganizationDirectory } from "../domain/ports";
 
 type UserRow = { _id: mongoose.Types.ObjectId; email: string; organizationId?: mongoose.Types.ObjectId | null; isBlocked?: boolean };
 type MembershipRow = { userId: mongoose.Types.ObjectId; organizationId: mongoose.Types.ObjectId; status: InviteeStanding["membershipHere"] };
@@ -77,22 +77,3 @@ export const mongoOrganizationDirectory: OrganizationDirectory = {
     return user?.name?.trim() || null;
   },
 };
-
-// Placeholder until ORG-201's Team model is on main: every well-formed id is accepted with no
-// name, and nothing is written on accept. The manager check doesn't depend on this; it uses the
-// actor's managed team ids, which stay empty until ORG-201 wires resolveRfpActor's lookups.
-export const unverifiedTeamDirectory: InvitationTeamDirectory = {
-  async findTeams(_organizationId, teamIds) {
-    return new Map(teamIds.filter((id) => /^[a-f0-9]{24}$/i.test(id)).map((id) => [id, { id, name: null }]));
-  },
-};
-
-// Called inside the accept transaction. ORG-201 replaces it with a TeamMembership upsert.
-export type TeamPlacement = (input: {
-  organizationId: string;
-  userId: string;
-  teamId: string;
-  session: mongoose.ClientSession;
-}) => Promise<void>;
-
-export const noTeamPlacementYet: TeamPlacement = async () => undefined;

@@ -31,6 +31,8 @@ export interface IInvitation extends Document {
   };
   // Set when the day-six reminder is queued, so it goes out once per link lifetime.
   reminderQueuedAt: Date | null;
+  // Set by each resend; the resend cooldown counts from it (or from createdAt before any resend).
+  emailQueuedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -61,6 +63,7 @@ const invitationSchema = new Schema<IInvitation>(
       sentAt: { type: Date, default: null },
     },
     reminderQueuedAt: { type: Date, default: null },
+    emailQueuedAt: { type: Date, default: null },
   },
   { timestamps: true },
 );

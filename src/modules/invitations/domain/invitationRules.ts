@@ -11,6 +11,11 @@ export const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // The reminder goes out once the invitation has a day or less left, i.e. on day six.
 export const REMINDER_LEAD_MS = 24 * 60 * 60 * 1000;
 export const MAX_BULK_INVITATIONS = 500;
+// Self-serve signup makes anyone an Owner whose organization name goes into the email subject,
+// so sending is capped: per organization per UTC day (INVITATION_DAILY_EMAIL_LIMIT overrides),
+// and one resend per invitation every five minutes.
+export const DEFAULT_DAILY_INVITATION_EMAIL_LIMIT = 500;
+export const RESEND_COOLDOWN_MS = 5 * 60 * 1000;
 
 const ADMIN_ROLES = ["owner", "organization_admin"];
 // A Team Manager invites people to work in their team, never people who would manage others.

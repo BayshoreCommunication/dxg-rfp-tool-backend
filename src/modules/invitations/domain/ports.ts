@@ -15,6 +15,8 @@ export type InvitationRecord = {
   createdAt: Date;
   acceptedAt: Date | null;
   revokedAt: Date | null;
+  // When the last invite or resend email was queued; the resend cooldown counts from here.
+  emailQueuedAt: Date;
   delivery: { state: DeliveryState; kind: DeliveryKind; attempts: number; sentAt: Date | null };
 };
 
@@ -31,10 +33,14 @@ export interface InvitationRepository {
   findById(organizationId: string, id: string): Promise<InvitationRecord | null>;
   list(organizationId: string, filter: { status?: InvitationStatus }): Promise<InvitationRecord[]>;
   pendingEmails(organizationId: string, emails: readonly string[], now: Date): Promise<Set<string>>;
+  // Marks these emails' pending invitations that are past their expiry as expired, ahead of the
+  // sweep, so a re-invite isn't refused by the one-pending-invitation index.
+  expireLapsed(organizationId: string, emails: readonly string[], now: Date): Promise<void>;
   // The invitation a presented token hash points at, and whether it's the current link.
   findByTokenHash(tokenHash: string): Promise<{ invitation: InvitationRecord; current: boolean } | null>;
-  // Kills the current link at once, extends the expiry and queues a fresh email.
-  prepareResend(organizationId: string, id: string, input: { now: Date; expiresAt: Date }): Promise<InvitationRecord | null>;
+  // Kills the current link at once, extends the expiry and queues a fresh email. Null unless the
+  // invitation is pending or expired and its last email was queued at or before `queuedBefore`.
+  prepareResend(organizationId: string, id: string, input: { now: Date; expiresAt: Date; queuedBefore: Date }): Promise<InvitationRecord | null>;
   revoke(organizationId: string, id: string, input: { by: string; now: Date }): Promise<InvitationRecord | null>;
   // Claims the invitation for one delivery attempt and swaps in a new link in the same write.
   claimDelivery(id: string, input: { now: Date; leaseUntil: Date; tokenHash: string; maxAttempts: number }): Promise<InvitationRecord | null>;
@@ -61,14 +67,20 @@ export interface OrganizationDirectory {
   userName(userId: string): Promise<string | null>;
 }
 
-// Teams arrive with ORG-201. Until that model is on main the directory can't verify a team, so
-// the invitation stores the id and the manager check runs on the actor's managed team ids.
+// Only the organization's active teams; an archived or foreign id is simply absent from the map.
 export interface InvitationTeamDirectory {
-  findTeams(organizationId: string, teamIds: readonly string[]): Promise<Map<string, { id: string; name: string | null }>>;
+  findTeams(organizationId: string, teamIds: readonly string[]): Promise<Map<string, { id: string; name: string }>>;
+}
+
+// Each organization's daily allowance of invitation emails (one per recipient: invites and resends).
+export interface InvitationEmailQuota {
+  // All or nothing: takes `count` from today's (UTC) allowance, or refuses and says what's left.
+  reserve(input: { organizationId: string; count: number; limit: number; now: Date }): Promise<{ ok: true } | { ok: false; remaining: number }>;
 }
 
 export type JoinResult =
-  | { kind: "joined"; userId: string }
+  // placedInTeam is false when the invitation named a team that was archived before the accept.
+  | { kind: "joined"; userId: string; placedInTeam: boolean }
   | { kind: "stale" }
   | { kind: "account_exists" }
   | { kind: "refused"; code: "ALREADY_MEMBER" | "EMAIL_IN_ANOTHER_ORGANIZATION" | "LEGACY_ACCOUNT_PENDING_PLACEMENT" };
@@ -88,6 +100,9 @@ export interface InvitationAcceptanceStore {
     name: string;
     phone?: string;
     passwordHash: string;
+    // Set when the account is created from a Google identity (accept with Google).
+    googleId?: string;
+    avatar?: string;
     now: Date;
   }): Promise<JoinResult>;
 }

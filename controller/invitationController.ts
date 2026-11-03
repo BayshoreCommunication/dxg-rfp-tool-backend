@@ -6,10 +6,11 @@ import {
   correlationId,
   createSession,
   rejectInvalidBffCredential,
+  respondWithSecondFactorStep,
 } from "./authController";
 import { getAuthenticatedUserAccount } from "../src/modules/auth/composition";
 import { invitations } from "../src/modules/invitations/composition";
-import type { AcceptOutcome, CreateOutcome, InvitationService } from "../src/modules/invitations/application/manageInvitations";
+import type { AcceptOutcome, CreateOutcome, DailyLimitReached, InvitationService } from "../src/modules/invitations/application/manageInvitations";
 import { TOKEN_REFUSAL_MESSAGES, isOrganizationAdmin, type InvitingActor, type TokenRefusal } from "../src/modules/invitations/domain/invitationRules";
 
 const actorOf = (req: AuthRequest): InvitingActor | null => {
@@ -29,7 +30,16 @@ const fail = (res: Response) => (error: unknown) => {
   if (!res.headersSent) res.status(500).json({ success: false, message: "Something went wrong with the invitation. Try again." });
 };
 
+const respondToDailyLimit = (res: Response, outcome: DailyLimitReached) => {
+  res.setHeader("Retry-After", outcome.retryAfterSeconds);
+  res.status(429).json({ success: false, code: outcome.code, message: outcome.message, remaining: outcome.remaining });
+};
+
 const respondToCreate = (res: Response, outcome: CreateOutcome, single: boolean) => {
+  if (outcome.kind === "limited") {
+    respondToDailyLimit(res, outcome);
+    return;
+  }
   if (outcome.kind === "validation") {
     res.status(400).json({ success: false, code: outcome.code, message: outcome.message });
     return;
@@ -75,6 +85,9 @@ export const createInvitationController = (service: InvitationService = invitati
       case "validation":
         res.status(400).json({ success: false, code: outcome.code, message: outcome.message });
         return;
+      case "invalid_identity":
+        res.status(401).json({ success: false, code: "INVALID_GOOGLE_IDENTITY", message: "We couldn't verify your Google sign-in. Please try again." });
+        return;
       case "email_mismatch":
         res.status(403).json({ success: false, code: "INVITATION_EMAIL_MISMATCH", message: "This invitation was sent to a different email address. Sign in with the invited email." });
         return;
@@ -96,6 +109,8 @@ export const createInvitationController = (service: InvitationService = invitati
       case "accepted": {
         const user = await getAuthenticatedUserAccount(outcome.userId);
         if (!user) throw new Error("Accepted account is missing");
+        // The membership is in place; a Google accept still passes 2FA like /api/auth/google does.
+        if (outcome.method === "sso" && await respondWithSecondFactorStep(req, res, { id: outcome.userId, organizationId: outcome.organizationId }, "sso")) return;
         const session = await createSession(req, res, { id: outcome.userId, organizationId: outcome.organizationId });
         res.status(200).json({
           success: true,
@@ -133,6 +148,16 @@ export const createInvitationController = (service: InvitationService = invitati
         res.status(409).json({ success: false, code: "INVITATION_NOT_PENDING", message: `This invitation is ${outcome.status} and can't be resent.` });
       } else if (outcome.kind === "refused") {
         res.status(409).json({ success: false, code: outcome.code, message: outcome.message });
+      } else if (outcome.kind === "cooldown") {
+        res.setHeader("Retry-After", outcome.retryAfterSeconds);
+        res.status(429).json({
+          success: false,
+          code: "INVITATION_RESEND_COOLDOWN",
+          message: "This invitation was emailed a moment ago. Wait a few minutes before resending it.",
+          retryAfterSeconds: outcome.retryAfterSeconds,
+        });
+      } else if (outcome.kind === "limited") {
+        respondToDailyLimit(res, outcome);
       } else {
         res.json({ success: true, invitation: outcome.invitation });
       }
@@ -167,6 +192,13 @@ export const createInvitationController = (service: InvitationService = invitati
     acceptWithNewAccount: (req: Request, res: Response): void => {
       if (rejectInvalidBffCredential(req, res)) return;
       service.acceptWithNewAccount(req.body ?? {}, correlationId(req))
+        .then((outcome) => respondToAccept(req, res, outcome))
+        .catch(fail(res));
+    },
+
+    acceptWithGoogle: (req: Request, res: Response): void => {
+      if (rejectInvalidBffCredential(req, res)) return;
+      service.acceptWithGoogle(req.body ?? {}, correlationId(req))
         .then((outcome) => respondToAccept(req, res, outcome))
         .catch(fail(res));
     },
