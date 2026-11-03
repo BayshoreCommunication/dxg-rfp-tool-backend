@@ -166,9 +166,11 @@ test("a domain verified by one organization never verifies for another, which is
   assert.equal(again.status, 201, 'added like any other domain: the answer does not reveal it is taken');
   assert.equal(again.body.domain.status, 'pending');
   dns.set(name, { kind: 'records', values: [a.body.domain.verification.value, b.body.domain.verification.value, again.body.domain.verification.value] });
-  const checked = await call('POST', `/api/organization/domains/${again.body.domain.id}/check`, loserToken);
-  assert.equal(checked.body.domain.status, 'pending');
-  assert.equal(checked.body.domain.lastCheckOutcome, 'not_verified');
+  // The app's own /check uses real DNS; the job holds the mocked resolver, so it does the check.
+  await sweepOurs();
+  const listed = (await call('GET', '/api/organization/domains', loserToken)).body.domains.find((d: any) => d.id === again.body.domain.id);
+  assert.equal(listed.status, 'pending');
+  assert.equal(listed.lastCheckOutcome, 'not_verified');
   assert.equal(txtRecordValue('x'), 'rfpilot-domain-verification=x');
 });
 
