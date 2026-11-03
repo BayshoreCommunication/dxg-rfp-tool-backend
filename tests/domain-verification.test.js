@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { normalizeDomain, isPublicMailDomain, allowedVerificationMethods, txtRecordValue } = require("../src/modules/domainVerification/domain/domainRules");
-const { createDomainVerification, RECHECK_VERIFIED_MS } = require("../src/modules/domainVerification/application/manageDomains");
+const { createDomainVerification, RECHECK_VERIFIED_MS, RETRY_DNS_ERROR_MS, SWEEP_CONCURRENCY } = require("../src/modules/domainVerification/application/manageDomains");
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -19,7 +19,6 @@ const setup = (options = {}) => {
     async list(org) { return [...rows.values()].filter((r) => r.organizationId === org).map((r) => ({ ...r })); },
     async findById(org, id) { const r = rows.get(id); return r && r.organizationId === org ? { ...r } : null; },
     async countForOrganization(org) { return [...rows.values()].filter((r) => r.organizationId === org).length; },
-    async isVerifiedElsewhere(domain, org) { return [...rows.values()].some((r) => r.domain === domain && r.status === "verified" && r.organizationId !== org); },
     async create(input) {
       if ([...rows.values()].some((r) => r.organizationId === input.organizationId && r.domain === input.domain)) return "duplicate";
       const record = { id: `d${++seq}`, ...input, status: "pending", method: null, verifiedByUserId: null, verifiedAt: null, lastCheckedAt: null, lastCheckOutcome: null, createdAt: clock };
@@ -46,21 +45,42 @@ const setup = (options = {}) => {
       mirror.get(org)?.delete(r.domain);
       return r;
     },
+    // Same filter as the Mongo conditional update.
+    async claimDue(input) {
+      const r = rows.get(input.id);
+      if (!r || r.nextCheckAt > input.now) return false;
+      r.nextCheckAt = input.leaseUntil;
+      return true;
+    },
     async due(now, limit) { return [...rows.values()].filter((r) => r.nextCheckAt <= now).sort((a, b) => a.nextCheckAt - b.nextCheckAt).slice(0, limit).map((r) => ({ ...r })); },
   };
   let adminEmail = options.adminEmail ?? false;
   let qualifies = true;
-  const service = createDomainVerification({
+  const load = { inFlight: 0, peak: 0 };
+  // A second service over the same repository stands in for another Fargate task.
+  const createService = () => createDomainVerification({
     domains,
-    resolver: { async resolve(domain) { lookups.push(domain); return dns.get(domain) ?? { kind: "none" }; } },
+    resolver: {
+      async resolve(domain) {
+        lookups.push(domain);
+        load.inFlight += 1;
+        load.peak = Math.max(load.peak, load.inFlight);
+        if (options.resolveDelayMs) await new Promise((resolve) => setTimeout(resolve, options.resolveDelayMs));
+        load.inFlight -= 1;
+        const answer = dns.get(domain) ?? { kind: "none" };
+        if (answer.kind === "throw") throw new Error("resolver blew up");
+        return answer;
+      },
+    },
     adminEmails: { async qualifies() { return qualifies; } },
     audit: { async append(event) { audits.push(event); } },
     methods: () => ({ dnsTxt: true, adminEmail }),
     now: () => clock,
     token: () => `token${seq + 1}`,
   });
+  const service = createService();
   return {
-    service, rows, mirror, audits, dns, lookups,
+    service, createService, rows, load, mirror, audits, dns, lookups,
     tick: (ms) => { clock = new Date(clock.getTime() + ms); },
     publish: (domain, token) => dns.set(domain, { kind: "records", values: ["v=spf1 -all", txtRecordValue(token)] }),
     setQualifies: (v) => { qualifies = v; },
@@ -103,7 +123,7 @@ test("adding a domain returns a TXT token and stays pending until the job finds 
   assert.ok(ctx.audits.some((a) => a.action === "organization.domain.added"));
 
   const first = await ctx.service.sweep();
-  assert.deepEqual(first, { checked: 1, verified: 0, unverified: 0, pending: 1, failed: 0 });
+  assert.deepEqual(first, { checked: 1, verified: 0, unverified: 0, pending: 1, failed: 0, skipped: false });
   assert.equal(ctx.rows.get("d1").lastCheckOutcome, "txt_record_missing");
   assert.equal(ctx.rows.get("d1").nextCheckAt.getTime() - Date.parse("2026-11-02T12:00:00Z"), 15 * 60_000);
 
@@ -174,7 +194,7 @@ test("public, invalid, duplicate and over-limit domains are refused", async () =
   assert.equal((await add(ctx, "one-too-many.com")).kind, "limit");
 });
 
-test("only one organization can hold a domain verified", async () => {
+test("only one organization can hold a domain verified, and the others aren't told who has it", async () => {
   const ctx = setup();
   await add(ctx, "acme.com", "o1");
   await add(ctx, "acme.com", "o2");
@@ -186,9 +206,55 @@ test("only one organization can hold a domain verified", async () => {
   ctx.tick(DAY);
   await ctx.service.sweep();
   assert.equal(ctx.rows.get("d2").status, "pending");
-  assert.equal(ctx.rows.get("d2").lastCheckOutcome, "verified_by_another_organization");
-  assert.equal((await add(ctx, "acme.com", "o3")).kind, "unavailable");
+  assert.equal(ctx.rows.get("d2").lastCheckOutcome, "not_verified");
+  assert.ok(!JSON.stringify(ctx.rows.get("d2")).includes("another"));
+  // A third organization adds it like any other domain, and it stays pending even when "checked now".
+  const third = await add(ctx, "acme.com", "o3");
+  assert.equal(third.kind, "added");
+  assert.equal(third.record.status, "pending");
+  ctx.publish("acme.com", "token3");
+  const checked = await ctx.service.checkNow({ organizationId: "o3", id: third.record.id, actorUserId: "admin", correlationId: "c" });
+  assert.equal(checked.record.status, "pending");
+  assert.equal(checked.record.lastCheckOutcome, "not_verified");
+  assert.equal(ctx.rows.get("d1").status, "verified");
 });
+
+test("a check that throws backs off like a DNS error instead of heading every sweep", async () => {
+  const ctx = setup();
+  await add(ctx, "broken.com");
+  await add(ctx, "fine.com");
+  ctx.dns.set("broken.com", { kind: "throw" });
+  const result = await ctx.service.sweep();
+  assert.equal(result.failed, 1);
+  assert.equal(result.checked, 1);
+  const broken = ctx.rows.get("d1");
+  assert.equal(broken.lastCheckOutcome, "check_failed");
+  assert.equal(broken.nextCheckAt.getTime() - Date.parse("2026-11-02T12:00:00Z"), RETRY_DNS_ERROR_MS);
+  ctx.tick(15 * 60_000);
+  ctx.lookups.length = 0;
+  await ctx.service.sweep();
+  assert.deepEqual(ctx.lookups, ["fine.com"], "the failing record waits its retry interval");
+});
+
+test("overlapping sweeps, in one process or across tasks, check each record once", async () => {
+  const ctx = setup({ resolveDelayMs: 5 });
+  for (let i = 0; i < 12; i++) await add(ctx, `acme${i}.com`);
+  const otherTask = ctx.createService();
+  const [a, again, b] = await Promise.all([ctx.service.sweep(), ctx.service.sweep(), otherTask.sweep()]);
+  assert.equal(again.skipped, true, "single-flight within a process");
+  assert.equal(a.checked + b.checked, 12);
+  assert.equal(ctx.lookups.length, 12);
+  assert.equal(new Set(ctx.lookups).size, 12, "no record was checked twice");
+});
+
+test("a sweep checks at most a few records at once", async () => {
+  const ctx = setup({ resolveDelayMs: 5 });
+  for (let i = 0; i < 12; i++) await add(ctx, `acme${i}.com`);
+  await ctx.service.sweep();
+  assert.equal(ctx.lookups.length, 12);
+  assert.equal(ctx.load.peak, SWEEP_CONCURRENCY);
+});
+
 
 test("removing a domain drops it from the verified set and is audited", async () => {
   const ctx = setup();
