@@ -6,8 +6,10 @@
 #   - REDIS_URL                              composed from the Redis AUTH
 #     secret + the RedisPrimaryEndpoint output (rediss://)
 #   - JWT_SECRET, OTP_PEPPER, BFF_SHARED_SECRET, ADMIN_SIGNUP_SECRET,
-#     AI_SAFETY_IDENTIFIER_SECRET, TELEMETRY_PSEUDONYM_KEY  generated fresh
-#     (64 hex chars) when still REPLACE_ME
+#     AI_SAFETY_IDENTIFIER_SECRET, TELEMETRY_PSEUDONYM_KEY,
+#     TWO_FACTOR_ENCRYPTION_KEY, SSO_SECRET_KEY  generated fresh (64 hex chars)
+#     when missing or still REPLACE_ME. The last two are encryption keys: once
+#     data is sealed under them, never regenerate them (rotate via *_PREVIOUS_KEYS).
 #
 # Keys that reference external services (MONGODB_URL, OPENAI_API_KEY,
 # GOOGLE_CLIENT_ID, SMTP_*) are left alone and listed at the end for the
@@ -65,7 +67,8 @@ app["REDIS_URL"] = "rediss://:{}@{}".format(
 generated = []
 for key in ("JWT_SECRET", "OTP_PEPPER", "BFF_SHARED_SECRET",
             "ADMIN_SIGNUP_SECRET", "AI_SAFETY_IDENTIFIER_SECRET",
-            "TELEMETRY_PSEUDONYM_KEY"):
+            "TELEMETRY_PSEUDONYM_KEY", "TWO_FACTOR_ENCRYPTION_KEY",
+            "SSO_SECRET_KEY"):
     if app.get(key, "REPLACE_ME") == "REPLACE_ME":
         app[key] = secrets.token_hex(32)
         generated.append(key)
