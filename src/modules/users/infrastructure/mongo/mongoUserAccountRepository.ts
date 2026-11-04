@@ -1,3 +1,5 @@
+import mongoose from "mongoose";
+import Proposal from "../../../../../modal/proposalsModel";
 import User from "../../../../../modal/userModel";
 import type { UserAccountRepository } from "../../domain/ports/userAccountRepository";
 import { tenantFilter } from "../../../shared/tenancy/tenantContext";
@@ -45,6 +47,13 @@ export const mongoUserAccountRepository: UserAccountRepository = {
     }).select("-password").lean();
     if (!user) throw new Error("User disappeared during update");
     return safeData(user);
+  },
+  // Proposal.userId is the owner. Counted across organizations on purpose: an
+  // RFP anywhere must not lose its owner.
+  async countOwnedRfps(id) {
+    if (!mongoose.isValidObjectId(id)) return 0;
+    // scope-exempt: deletion guard counts the user's RFPs in every organization, never returns them
+    return Proposal.countDocuments({ userId: new mongoose.Types.ObjectId(id) });
   },
   async deleteById(id) {
     return Boolean(await User.findOneAndDelete({ _id: id, ...tenantFilter() }));

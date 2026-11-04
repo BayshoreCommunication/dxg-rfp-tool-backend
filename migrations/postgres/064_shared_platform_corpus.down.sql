@@ -1,0 +1,16 @@
+DROP POLICY IF EXISTS platform_corpus_read ON rfpilot.knowledge_fragment_embeddings;
+DROP POLICY IF EXISTS platform_corpus_read ON rfpilot.knowledge_source_fragments;
+DROP POLICY IF EXISTS platform_corpus_read ON rfpilot.knowledge_release_fragments;
+DROP POLICY IF EXISTS platform_corpus_read ON rfpilot.knowledge_import_documents;
+DROP POLICY IF EXISTS platform_corpus_read ON rfpilot.knowledge_import_batches;
+DROP POLICY IF EXISTS platform_corpus_read ON rfpilot.knowledge_releases;
+DROP POLICY IF EXISTS platform_corpus_read ON rfpilot.governed_assets;
+DROP POLICY IF EXISTS platform_corpus_read ON rfpilot.expert_rules;
+DROP POLICY IF EXISTS platform_corpus_read ON rfpilot.pricing_confidence_rules;
+DROP POLICY IF EXISTS platform_corpus_read ON rfpilot.pricing_regional_factors;
+DROP POLICY IF EXISTS platform_corpus_read ON rfpilot.pricing_modifiers;
+DROP POLICY IF EXISTS platform_corpus_read ON rfpilot.pricing_records;
+DROP FUNCTION IF EXISTS rfpilot.platform_organization_id();
+DROP POLICY IF EXISTS platform_organization_visible ON rfpilot.organizations;
+DROP INDEX IF EXISTS rfpilot.organizations_single_platform;
+ALTER TABLE rfpilot.organizations DROP COLUMN IF EXISTS is_platform;

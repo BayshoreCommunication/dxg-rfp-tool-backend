@@ -124,7 +124,7 @@ test("applying an accepted candidate mutates Mongo and bumps the version", async
   assert.equal(result.resultReference, applicationId);
 
   const afterDoc = await readProposal();
-  assert.equal(afterDoc.event?.eventName, "Synthetic DXG Conference", "accepted candidate value applied to Mongo");
+  assert.equal(afterDoc.event?.eventName, "Synthetic RFPilot Conference", "accepted candidate value applied to Mongo");
   assert.equal(afterDoc.version, 2, "proposal version incremented exactly once");
   assert.ok(afterDoc.candidateApplicationIds?.includes(applicationId), "application id recorded on the proposal");
 

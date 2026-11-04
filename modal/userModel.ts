@@ -1,6 +1,16 @@
 import bcrypt from "bcryptjs";
 import mongoose, { Document, Schema } from "mongoose";
 
+/* A Microsoft or company-OIDC identity linked to this account. `issuer` + `subject` is
+   the provider's stable id for the person (Microsoft: tenant id + object id), so a
+   later sign-in matches on it rather than on an email that the IdP could change. */
+export type FederatedIdentity = {
+  provider: "microsoft" | "company_oidc";
+  issuer: string;
+  subject: string;
+  linkedAt: Date;
+};
+
 export interface IUser extends Document {
   organizationId?: mongoose.Types.ObjectId;
   name: string;
@@ -9,6 +19,7 @@ export interface IUser extends Document {
   password?: string;
   avatar?: string;
   googleId?: string;
+  federatedIdentities?: FederatedIdentity[];
   company?: string;
   role?: "customer" | "admin" | "super_admin" | "superadmin";
   isBlocked?: boolean;
@@ -56,6 +67,18 @@ const userSchema = new Schema<IUser>(
       unique: true,
       sparse: true,
     },
+    federatedIdentities: {
+      type: [
+        {
+          _id: false,
+          provider: { type: String, enum: ["microsoft", "company_oidc"], required: true },
+          issuer: { type: String, required: true },
+          subject: { type: String, required: true },
+          linkedAt: { type: Date, required: true },
+        },
+      ],
+      default: undefined,
+    },
     company: {
       type: String,
       trim: true,
@@ -87,6 +110,10 @@ userSchema.pre("save", async function (next) {
 });
 
 userSchema.index({ organizationId: 1, email: 1 });
+userSchema.index(
+  { "federatedIdentities.issuer": 1, "federatedIdentities.subject": 1 },
+  { unique: true, partialFilterExpression: { "federatedIdentities.subject": { $exists: true } } },
+);
 
 // Compare password method
 userSchema.methods.comparePassword = async function (

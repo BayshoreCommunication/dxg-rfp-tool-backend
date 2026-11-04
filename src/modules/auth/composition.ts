@@ -1,3 +1,5 @@
+import Organization from "../../../modal/organizationModel";
+import OrganizationMembership from "../../../modal/organizationMembershipModel";
 import { createRequestOtp, createVerifyOtp } from "./application/manageOtp";
 import { createRegisterCustomer, createResetPassword } from "./application/registerAndReset";
 import {
@@ -17,6 +19,7 @@ import { jwtAccessTokenIssuer } from "./infrastructure/security/jwtAccessTokenIs
 import { cryptoSecretGenerator } from "./infrastructure/security/cryptoSecretGenerator";
 import { googleIdTokenVerifier } from "./infrastructure/identity/googleIdTokenVerifier";
 import { createSessionManager } from "./application/manageSessions";
+import { createMembershipSessionHardening } from "./application/membershipSessionHardening";
 import { mongoRefreshSessionRepository } from "./infrastructure/mongo/mongoRefreshSessionRepository";
 import { mongoSessionAccountLoader } from "./infrastructure/mongo/mongoSessionAccountLoader";
 import { jwtSessionAccessTokenIssuer } from "./infrastructure/security/jwtSessionAccessTokenIssuer";
@@ -30,6 +33,7 @@ import { safeLog } from "../../shared/observability/safeTelemetry";
 import { ensureIdentityProjection } from "../dataFoundation/composition";
 import { REFRESH_TOKEN_EXPIRY_MS } from "../../../config/jwt";
 import crypto from 'node:crypto';
+import { mongoSsoRequiredFor } from "../sso/infrastructure/mongoSsoRepositories";
 
 export const requestAuthenticationOtp = createRequestOtp({
   users: mongoAuthUserLookup,
@@ -105,6 +109,7 @@ export const authenticateGoogleIdentity = createAuthenticateGoogleIdentity({
   secrets: cryptoSecretGenerator,
   passwords: bcryptPasswordHasher,
   tokens: jwtAccessTokenIssuer,
+  ssoRequiredFor: mongoSsoRequiredFor,
 });
 
 export const authenticationSessions = createSessionManager({
@@ -134,8 +139,12 @@ const provisionIdentityProjection = async (input: {
   organizationId: string;
   correlationId: string;
 }) => {
+  // The name lets the projection create a new customer organization's row on first sign-in;
+  // without it every organization made at signup would report AI as unavailable.
+  const organization = await Organization.findById(input.organizationId).select("name").lean<{ name?: string } | null>();
   const outcome = await ensureIdentityProjection({
     organizationMongoId: input.organizationId,
+    organizationName: organization?.name,
     userMongoId: input.userId,
     correlationId: input.correlationId,
   });
@@ -173,5 +182,45 @@ export const beginAuthenticatedSession = async (input: {
   const account = await mongoSessionAccountLoader.load(input.userId, input.organizationId);
   if (!account) throw new Error("Active organization membership is required");
   await provisionIdentityProjection(input);
-  return authenticationSessions.begin({ account, ...input });
+  const session = await authenticationSessions.begin({ account, ...input });
+  // For the member list's "last login"; the membership version is untouched.
+  await OrganizationMembership.updateOne(
+    { organizationId: input.organizationId, userId: input.userId },
+    { $set: { lastSignedInAt: new Date() } },
+  ).catch(() => undefined);
+  return session;
 };
+
+// ORG-307 hooks for membership changes. ORG-304's 2FA reset calls afterTwoFactorReset.
+// A claim is a lease: a request that died mid-revocation frees it after REVOCATION_LEASE_MS.
+const REVOCATION_LEASE_MS = 30_000;
+const membershipFilter = (organizationId: string, userId: string) => ({ organizationId, userId });
+export const membershipSessions = createMembershipSessionHardening({
+  revokeOtherSessions: (input) => authenticationSessions.revokeOtherSessions(input),
+  // Re-flagging drops any lease, so a revocation already running can't clear the newer flag.
+  markRevocationPending: async ({ organizationId, userId }) => {
+    await OrganizationMembership.updateOne(membershipFilter(organizationId, userId), { $set: { sessionRevocationPending: true, sessionRevocationClaim: null } });
+  },
+  claimRevocationPending: async ({ organizationId, userId, sessionId }) => {
+    const now = new Date();
+    return (await OrganizationMembership.updateOne(
+      {
+        ...membershipFilter(organizationId, userId), sessionRevocationPending: true,
+        $or: [{ sessionRevocationClaim: null }, { "sessionRevocationClaim.at": { $lt: new Date(now.getTime() - REVOCATION_LEASE_MS) } }],
+      },
+      { $set: { sessionRevocationClaim: { sessionId, at: now } } },
+    )).modifiedCount === 1;
+  },
+  completeRevocationPending: async ({ organizationId, userId, sessionId }) => {
+    await OrganizationMembership.updateOne(
+      { ...membershipFilter(organizationId, userId), "sessionRevocationClaim.sessionId": sessionId },
+      { $set: { sessionRevocationPending: false, sessionRevocationClaim: null } },
+    );
+  },
+  releaseRevocationClaim: async ({ organizationId, userId, sessionId }) => {
+    await OrganizationMembership.updateOne(
+      { ...membershipFilter(organizationId, userId), "sessionRevocationClaim.sessionId": sessionId },
+      { $set: { sessionRevocationClaim: null } },
+    );
+  },
+});

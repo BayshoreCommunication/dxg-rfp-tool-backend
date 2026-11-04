@@ -90,6 +90,7 @@ const mapResult = (proposal: unknown): LegacyPublicProposal | null => {
 
 export const mongoPublicProposalAccessRepository: PublicProposalAccessRepository = {
   async findByLegacyPublicId(proposalId) {
+    // scope-exempt: public route; requirePublicGrant already matched this proposal's grant
     const proposal = await Proposal.findById(proposalId)
       .select(DETAIL_PROPOSAL_SELECT)
       .lean();
@@ -97,6 +98,7 @@ export const mongoPublicProposalAccessRepository: PublicProposalAccessRepository
   },
 
   async incrementViewsByLegacyPublicId(proposalId) {
+    // scope-exempt: public route; requirePublicGrant already matched this proposal's grant
     const proposal = await Proposal.findByIdAndUpdate(
       proposalId,
       { $inc: { viewsCount: 1 } },

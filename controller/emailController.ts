@@ -1,3 +1,4 @@
+import { respondIfProposalAccessDenied } from "../src/modules/identity/application/proposalAccess";
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth";
@@ -191,6 +192,7 @@ export const sendProposalEmailCampaign = async (
       failedRecipients: result.failedRecipients,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Send proposal email campaign error:", error);
     res.status(500).json({
       success: false,
@@ -228,6 +230,7 @@ export const getEmailCampaigns = async (
       pagination: result.pagination,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Get email campaigns error:", error);
     res.status(500).json({
       success: false,
@@ -276,6 +279,7 @@ export const deleteEmailCampaignsByProposal = async (
       deletedCount: result.deletedCount,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Delete email campaigns error:", error);
     res.status(500).json({
       success: false,
@@ -324,6 +328,7 @@ export const deleteEmailCampaignById = async (
       data: { campaignId: result.campaignId },
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Delete email campaign by id error:", error);
     res.status(500).json({
       success: false,
@@ -369,6 +374,7 @@ export const getEmailStats = async (
       data,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Get email stats error:", error);
     res.status(500).json({
       success: false,
@@ -404,6 +410,7 @@ export const markEmailOpened = async (
     );
     res.status(200).send(transparentGif);
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Mark email opened error:", error);
     res.status(200).end();
   }
@@ -425,6 +432,7 @@ export const markEmailClicked = async (
 
     res.redirect(302, redirectUrl);
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Mark email clicked error:", error);
     res.redirect(302, getFrontendBaseUrl());
   }
@@ -446,6 +454,7 @@ export const markVendorResponseClicked = async (
 
     res.redirect(302, redirectUrl);
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Mark vendor response clicked error:", error);
     res.redirect(302, getFrontendBaseUrl());
   }

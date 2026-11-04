@@ -84,11 +84,13 @@ const present = (row: any) => {
 
 export const investmentRepository = {
   async generate(ctx: Ctx & { proposalMongoId: string }) {
-    const proposal = await Proposal.findOne({ _id: ctx.proposalMongoId, userId: ctx.actorUserMongoId }).lean<any>();
+    // AI features stay owner-only until Postgres proposal references stop keying on the owner.
+    const proposal = await Proposal.findOne({ _id: ctx.proposalMongoId, userId: ctx.actorUserMongoId, organizationId: ctx.organizationMongoId }).lean<any>();
     if (!proposal) throw new InvestmentError("PROPOSAL_NOT_FOUND", "Proposal was not found.", 404);
     return withPostgresTransaction(async (c) => {
       const org = await tenant(c, ctx.organizationMongoId);
       const p = await proposalRef(c, ctx.proposalMongoId, ctx.actorUserMongoId);
+      // The customer's own corpus plus DXG's shared platform corpus (migration 064).
       const records = await c.query<any>(
         `SELECT p.id,p.category,p.subcategory,p.spec,p.item_label,p.unit,
                 p.unit_label,p.quantity_dimension,p.calibration_tier,
@@ -98,7 +100,7 @@ export const investmentRepository = {
          JOIN rfpilot.governed_assets g
            ON g.organization_id=p.organization_id
           AND g.asset_type='pricing_record' AND g.asset_id=p.id
-         WHERE p.organization_id=$1 AND p.status='approved'
+         WHERE p.organization_id IN ($1, rfpilot.platform_organization_id()) AND p.status='approved'
            AND g.approval_state='approved' AND g.lifecycle_state='active'
            AND g.effective_at<=now()
            AND (g.expires_at IS NULL OR g.expires_at>now())`,
@@ -111,7 +113,7 @@ export const investmentRepository = {
          JOIN rfpilot.governed_assets g
            ON g.organization_id=r.organization_id
           AND g.asset_type='expert_rule' AND g.asset_id=r.id
-         WHERE r.organization_id=$1 AND r.status='active'
+         WHERE r.organization_id IN ($1, rfpilot.platform_organization_id()) AND r.status='active'
            AND g.approval_state='approved' AND g.lifecycle_state='active'
            AND g.effective_at<=now()
            AND (g.expires_at IS NULL OR g.expires_at>now())`,
@@ -123,7 +125,7 @@ export const investmentRepository = {
          JOIN rfpilot.governed_assets g
            ON g.organization_id=r.organization_id
           AND g.asset_type='pricing_regional_factor' AND g.asset_id=r.id
-         WHERE r.organization_id=$1 AND r.status='approved'
+         WHERE r.organization_id IN ($1, rfpilot.platform_organization_id()) AND r.status='approved'
            AND g.approval_state='approved' AND g.lifecycle_state='active'
            AND g.effective_at<=now()
            AND (g.expires_at IS NULL OR g.expires_at>now())`,
@@ -135,7 +137,7 @@ export const investmentRepository = {
          JOIN rfpilot.governed_assets g
            ON g.organization_id=m.organization_id
           AND g.asset_type='pricing_modifier' AND g.asset_id=m.id
-         WHERE m.organization_id=$1 AND m.status='approved'
+         WHERE m.organization_id IN ($1, rfpilot.platform_organization_id()) AND m.status='approved'
            AND g.approval_state='approved' AND g.lifecycle_state='active'
            AND g.effective_at<=now()
            AND (g.expires_at IS NULL OR g.expires_at>now())`,
@@ -147,7 +149,7 @@ export const investmentRepository = {
          JOIN rfpilot.governed_assets g
            ON g.organization_id=r.organization_id
           AND g.asset_type='pricing_confidence_rule' AND g.asset_id=r.id
-         WHERE r.organization_id=$1 AND r.status='approved'
+         WHERE r.organization_id IN ($1, rfpilot.platform_organization_id()) AND r.status='approved'
            AND g.approval_state='approved' AND g.lifecycle_state='active'
            AND g.effective_at<=now()
            AND (g.expires_at IS NULL OR g.expires_at>now())`,

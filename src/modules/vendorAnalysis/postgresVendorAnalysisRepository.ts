@@ -118,7 +118,7 @@ export const vendorAnalysisRepository={
    return r.rows[0];
   });
   if(meta.status==="succeeded")return{resultReference:input.runId};
-  const response=await VendorResponse.findOne({_id:meta.vendor_response_mongo_id})
+  const response=await VendorResponse.findOne({_id:meta.vendor_response_mongo_id,organizationId:input.organizationMongoId})
    .select("proposalId message documents currentVersionId")
    .lean<any>();
   if(!response||String(response.proposalId)!==String(meta.proposal)){
@@ -142,7 +142,7 @@ export const vendorAnalysisRepository={
   // legacy free-text form was retired, so there is nothing in `message`, and
   // pricing lives in the frozen calculation rather than an uploaded file.
   const submissionVersion=response.currentVersionId
-   ? await VendorSubmissionVersion.findOne({_id:response.currentVersionId})
+   ? await VendorSubmissionVersion.findOne({_id:response.currentVersionId,organizationId:input.organizationMongoId})
       .select("structuredResponse questionnaireSnapshot calculationSnapshot")
       .lean<any>()
    : null;

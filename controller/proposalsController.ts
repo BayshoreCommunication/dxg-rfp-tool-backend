@@ -20,6 +20,8 @@ import {
 } from "../src/modules/proposals/composition";
 import { ProposalFileAccessError } from "../src/modules/proposals/application/proposalFileAccess";
 import { PROPOSAL_STATUSES } from "../src/modules/proposals/application/mutateOwnedProposal";
+import { ProposalTeamNotAssignableError } from "../src/modules/proposals/application/authorOwnedProposal";
+import { respondIfProposalAccessDenied } from "../src/modules/identity/application/proposalAccess";
 
 const isValidProposalId = (id?: string) =>
   typeof id === "string" && mongoose.isValidObjectId(id);
@@ -56,6 +58,7 @@ export const getAllProposals = async (
       ...(result.counts ? { counts: result.counts } : {}),
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Get all proposals error:", error);
     res.status(500).json({
       success: false,
@@ -107,6 +110,7 @@ export const getProposalById = async (
       data: result.proposal,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Get proposal error:", error);
     res.status(500).json({
       success: false,
@@ -140,6 +144,7 @@ export const getProposalByIdPublic = async (
       data: result.proposal,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Get proposal public error:", error);
     res.status(500).json({
       success: false,
@@ -174,6 +179,7 @@ export const incrementProposalViewsPublic = async (
       data: result.proposal,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Increment proposal views public error:", error);
     res.status(500).json({
       success: false,
@@ -204,6 +210,7 @@ export const createProposal = async (
       data: proposal,
     });
   } catch (error: any) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Create proposal error:", error);
 
     if (error.name === "ValidationError") {
@@ -264,6 +271,11 @@ export const updateProposal = async (
       data: result.proposal,
     });
   } catch (error: any) {
+    if (respondIfProposalAccessDenied(res, error)) return;
+    if (error instanceof ProposalTeamNotAssignableError) {
+      res.status(error.status).json({ success: false, code: error.code, message: error.message });
+      return;
+    }
     console.error("Update proposal error:", error);
 
     if (error.name === "ValidationError") {
@@ -331,6 +343,7 @@ export const updateProposalStatus = async (
       data: result.proposal,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Update status error:", error);
     res.status(500).json({
       success: false,
@@ -386,6 +399,7 @@ export const updateProposalMeta = async (
       data: result.proposal,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Update proposal meta error:", error);
     res.status(500).json({
       success: false,
@@ -431,6 +445,7 @@ export const incrementProposalViews = async (
       data: result.proposal,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Increment proposal views error:", error);
     res.status(500).json({
       success: false,
@@ -472,6 +487,7 @@ export const deleteProposal = async (
       message: "Proposal archived. It will be permanently deleted after 30 days.",
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Archive proposal error:", error);
     res.status(500).json({
       success: false,
@@ -513,6 +529,7 @@ export const restoreProposal = async (
       message: "Proposal restored successfully.",
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Restore proposal error:", error);
     res.status(500).json({
       success: false,
@@ -554,6 +571,7 @@ export const permanentlyDeleteProposal = async (
       message: "Proposal permanently deleted.",
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Permanent delete proposal error:", error);
     res.status(500).json({
       success: false,
@@ -603,6 +621,7 @@ export const copyProposal = async (
       data: result.proposal,
     });
   } catch (error: any) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Copy proposal error:", error);
     if (error.name === "ValidationError") {
       const messages = Object.values(error.errors).map((e: any) => e.message);
@@ -633,6 +652,7 @@ export const getProposalFileUrl = async (
     });
     res.status(200).json({ success: true, data: result });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     if (error instanceof ProposalFileAccessError) {
       res.status(error.status).json({ success: false, code: error.code, message: error.message });
       return;
@@ -676,6 +696,7 @@ export const uploadProposalFiles = async (
       data: result.files,
     });
   } catch (error) {
+    if (respondIfProposalAccessDenied(res, error)) return;
     console.error("Upload proposal files error:", error);
     const uploadError = error as { code?: string; message?: string };
     if (uploadError.code === "MALWARE_DETECTED" || uploadError.code === "MALWARE_SCAN_UNAVAILABLE") {

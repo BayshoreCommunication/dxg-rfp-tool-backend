@@ -13,13 +13,13 @@ export const mongoNotificationRepository: NotificationRepository = {
       ...(unreadOnly ? { isRead: false } : {}),
     };
     const [notifications, total, unreadCount] = await Promise.all([
-      Notification.find(filter)
+      Notification.find(filter) // tenant-scoped: filter has tenantFilter()
         .select(NOTIFICATION_SELECT)
         .sort({ createdAt: -1, _id: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),
-      Notification.countDocuments(filter),
+      Notification.countDocuments(filter), // tenant-scoped: filter has tenantFilter()
       Notification.countDocuments({ userId: ownerUserId, isRead: false, ...tenantFilter() }),
     ]);
     return { notifications, total, unreadCount };

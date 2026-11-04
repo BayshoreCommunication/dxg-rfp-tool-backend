@@ -3,22 +3,22 @@ import EmailCampaign from "../../../../../modal/emailModel";
 import Proposal from "../../../../../modal/proposalsModel";
 import type { DashboardReadRepository } from "../../domain/ports/dashboardReadRepository";
 import { tenantObjectId } from "../../../shared/tenancy/tenantContext";
+import { requestActorFor, scopeProposalFilter } from "../../../identity/application/proposalAccess";
 
 export const mongoDashboardReadRepository: DashboardReadRepository = {
   async getOwnedOverview(ownerUserId) {
     const userId = new mongoose.Types.ObjectId(ownerUserId);
     const organizationId = tenantObjectId();
     // The same set the Proposals page calls "All": archived proposals and
-    // saved copies are excluded, so the dashboard total and the list agree.
-    const ownedProposals = {
-      userId,
-      organizationId,
+    // saved copies are excluded, and the same access scope applies, so the
+    // dashboard total and the list agree.
+    const ownedProposals = scopeProposalFilter(requestActorFor(ownerUserId), "view", {
       isArchived: { $ne: true },
       isCopy: { $ne: true },
-    };
+    });
     const [totalProposals, emailRows, proposalViewRows, latestDocuments] =
       await Promise.all([
-        Proposal.countDocuments(ownedProposals),
+        Proposal.countDocuments(ownedProposals), // tenant-scoped: ownedProposals applies the access policy
         EmailCampaign.aggregate<{
           totalEmailSent: number;
           totalEmailClicked: number;
@@ -41,7 +41,7 @@ export const mongoDashboardReadRepository: DashboardReadRepository = {
             },
           },
         ]),
-        Proposal.find(ownedProposals)
+        Proposal.find(ownedProposals) // tenant-scoped: ownedProposals applies the access policy
           .sort({ createdAt: -1 })
           .limit(5)
           .select(

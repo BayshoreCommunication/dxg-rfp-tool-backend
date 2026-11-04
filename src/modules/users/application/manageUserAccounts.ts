@@ -113,6 +113,10 @@ export const createDeleteUser = (repository: UserAccountRepository) =>
   async (actorId: string, actorRole: string | undefined, targetId: string) => {
     if (actorId === targetId) return { kind: "self_delete" } as const;
     if (!isPrivilegedUserRole(actorRole)) return { kind: "forbidden" } as const;
+    // RFPs are never deleted or orphaned with their owner: reassign them first
+    // (organization members are deactivated and offboarded, not deleted).
+    const ownedRfpCount = await repository.countOwnedRfps(targetId);
+    if (ownedRfpCount > 0) return { kind: "owns_rfps", ownedRfpCount } as const;
     return await repository.deleteById(targetId)
       ? { kind: "deleted" } as const
       : { kind: "not_found" } as const;

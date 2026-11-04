@@ -1,5 +1,6 @@
 import { safeLog, telemetryErrorCode } from "../../../../shared/observability/safeTelemetry";
 import Proposal from "../../../../../modal/proposalsModel";
+import { explainProposalMiss, proposalFilterFor } from "../../../identity/application/proposalAccess";
 import VendorResponseQuestionnaireVersion from "../../../../../modal/vendorResponseQuestionnaireVersionModel";
 import type { VendorResponseQuestionnaireV1 } from "../../../../../contracts/generated/vendor-response-questionnaire-v1";
 import {
@@ -62,13 +63,16 @@ const duplicateKey = (error: unknown): boolean =>
 
 export const mongoVendorResponseQuestionnaireRepository: VendorResponseQuestionnaireRepository = {
   async loadProposal(input) {
-    const row = await Proposal.findOne({
-      _id: input.proposalId,
-      organizationId: input.organizationId,
-      ...(input.ownerUserId ? { userId: input.ownerUserId } : {}),
-    })
+    // Planner calls (publish, capability) edit the proposal and go through the access policy. The
+    // vendor portal has no user: its grant already pins the organization and the proposal.
+    const actingUser = input.ownerUserId ? { organizationId: input.organizationId, userId: input.ownerUserId } : null;
+    const filter = actingUser
+      ? await proposalFilterFor(actingUser, "edit", { _id: input.proposalId })
+      : { _id: input.proposalId, organizationId: input.organizationId };
+    const row = await Proposal.findOne(filter) // tenant-scoped: policy scope, or the grant's organization
       .select(proposalSelection)
       .lean<LeanProposal>();
+    if (!row && actingUser) await explainProposalMiss(actingUser, input.proposalId, "edit");
     if (!row?.organizationId || !row.userId) return null;
     return {
       organizationId: String(row.organizationId),
@@ -91,11 +95,7 @@ export const mongoVendorResponseQuestionnaireRepository: VendorResponseQuestionn
 
   async setResponseFormat(input) {
     const result = await Proposal.updateOne(
-      {
-        _id: input.proposalId,
-        organizationId: input.organizationId,
-        userId: input.ownerUserId,
-      },
+      await proposalFilterFor({ organizationId: input.organizationId, userId: input.ownerUserId }, "edit", { _id: input.proposalId }), // tenant-scoped: policy scope
       {
         $set: {
           "proposalSettings.vendorResponseFormat": input.responseFormat,

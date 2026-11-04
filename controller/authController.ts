@@ -18,8 +18,10 @@ import {
   authenticationSessions,
 } from "../src/modules/auth/composition";
 import type { OtpPurpose } from "../src/modules/auth/domain/ports/otpPorts";
+import { twoFactor } from "../src/modules/twoFactor/composition";
+import type { PrimaryMethod } from "../src/modules/twoFactor/domain/secondFactorPolicy";
 
-const applicationUserResponse = (user: {
+export const applicationUserResponse = (user: {
   id: string;
   name: string;
   email: string;
@@ -43,7 +45,7 @@ const applicationUserResponse = (user: {
 const refreshCookieName = () => process.env.NODE_ENV === "production"
   ? "__Host-rfpilot_refresh"
   : "rfpilot_refresh";
-const correlationId = (req: Request) => {
+export const correlationId = (req: Request) => {
   const supplied = req.headers["x-correlation-id"];
   return typeof supplied === "string" && supplied.length <= 128
     ? supplied
@@ -74,7 +76,7 @@ const cookieValue = (req: Request, name: string) => {
   }
   return "";
 };
-const isAuthorizedBff = (req: Request) => {
+export const isAuthorizedBff = (req: Request) => {
   const expected = process.env.BFF_SHARED_SECRET;
   const supplied = req.headers["x-rfpilot-bff-key"];
   if (!expected || typeof supplied !== "string") return false;
@@ -82,7 +84,7 @@ const isAuthorizedBff = (req: Request) => {
   const right = Buffer.from(supplied);
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 };
-const rejectInvalidBffCredential = (req: Request, res: Response) => {
+export const rejectInvalidBffCredential = (req: Request, res: Response) => {
   if (
     req.headers["x-rfpilot-bff-key"] !== undefined &&
     !isAuthorizedBff(req)
@@ -101,7 +103,7 @@ const presentedRefreshToken = (req: Request) =>
   (isAuthorizedBff(req) && typeof req.body?.refreshToken === "string"
     ? req.body.refreshToken
     : "");
-const createSession = async (req: Request, res: Response, user: {
+export const createSession = async (req: Request, res: Response, user: {
   id: string;
   organizationId?: string;
 }) => {
@@ -116,15 +118,42 @@ const createSession = async (req: Request, res: Response, user: {
   setRefreshCookie(res, session.refreshToken, session.refreshExpiresAt);
   return session;
 };
-const bffRefreshResponse = (req: Request, session: {
+export const bffRefreshResponse = (req: Request, session: {
   refreshToken: string;
   refreshExpiresAt: number;
 }) => isAuthorizedBff(req) ? {
   refreshToken: session.refreshToken,
   refreshExpiresAt: session.refreshExpiresAt,
 } : {};
-const bffRequestsAccountOnly = (req: Request) =>
+export const bffRequestsAccountOnly = (req: Request) =>
   isAuthorizedBff(req) && req.body?.createSession === false;
+
+/* ORG-303/304: a correct password (or SSO identity) is only the first step when
+   the member has 2FA or their organization requires it. No session or access
+   token is issued here; the client gets a short-lived challenge token that is
+   only accepted by /api/auth/2fa/challenge or the /api/auth/2fa/enrolment pair.
+   Returns true when it has answered the request. */
+export const respondWithSecondFactorStep = async (
+  req: Request,
+  res: Response,
+  user: { id: string; organizationId?: string },
+  method: PrimaryMethod,
+): Promise<boolean> => {
+  if (!user.organizationId) return false;
+  const next = await twoFactor.assessSignIn({ userId: user.id, organizationId: user.organizationId, method });
+  if (next.step === "none") return false;
+  res.status(200).json({
+    success: true,
+    twoFactorRequired: true,
+    nextStep: next.step === "challenge" ? "two_factor_challenge" : "two_factor_enrolment",
+    message: next.step === "challenge"
+      ? "Enter the code from your authenticator app"
+      : "Your organization requires two-factor authentication. Set it up to continue.",
+    challengeToken: next.challengeToken,
+    challengeExpiresAt: next.challengeExpiresAt,
+  });
+  return true;
+};
 
 /* ─────────────────────────────────────────
    POST /api/auth/send-otp
@@ -320,6 +349,7 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
       return;
     }
 
+    if (await respondWithSecondFactorStep(req, res, result.user, "password")) return;
     const session = await createSession(req, res, result.user);
     res.status(200).json({
       success: true,
@@ -364,7 +394,16 @@ export const signInWithGoogle = async (req: Request, res: Response): Promise<voi
       });
       return;
     }
+    if (result.kind === "sso_required") {
+      res.status(403).json({
+        success: false,
+        code: "SSO_REQUIRED",
+        message: "Your company requires you to sign in with its own sign-in. Use \"Sign in with your company\".",
+      });
+      return;
+    }
 
+    if (await respondWithSecondFactorStep(req, res, result.user, "sso")) return;
     const session = await createSession(req, res, result.user);
     res.status(200).json({
       success: true,

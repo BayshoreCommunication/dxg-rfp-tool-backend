@@ -34,6 +34,17 @@ sit in `scan_failed` if ClamAV is down.
 - Secrets (worker env only where possible): `OPENAI_API_KEY`, `JWT_SECRET`,
   `OTP_PEPPER`, `TELEMETRY_PSEUDONYM_KEY` (required when observability is on),
   `DOCUMENT_STORAGE_*`, `POSTGRES_URL`, `MONGODB_URL`, `REDIS_URL`.
+- `OTP_PEPPER` is required: with `NODE_ENV=production` the API, worker and cron fail at startup
+  without it (no fallback to `JWT_SECRET`). Never change it in place: it keys the hashes of
+  2FA recovery codes and sign-in codes, so a new value voids every member's recovery codes.
+- Two-factor: `TWO_FACTOR_ENCRYPTION_KEY` (32 bytes, `openssl rand -hex 32`) is required in
+  production; without it enrolment and sign-in challenges answer 503 `TWO_FACTOR_NOT_CONFIGURED`.
+  Never change it in place: put the old key in `TWO_FACTOR_ENCRYPTION_PREVIOUS_KEYS` first, or every
+  enrolled member is locked out until an Admin resets their 2FA. `TWO_FACTOR_SSO_POLICY` stays
+  `challenge` until DXG answers Q8.
+- Domain verification: the cron worker verifies domains and re-checks them weekly
+  (`[Cron] Domain verification: ...`), so it needs outbound DNS. `DOMAIN_VERIFICATION_METHODS`
+  stays `dns_txt` until DXG answers Q7.
 - Model pin: `LIVE_AI_MODEL=gpt-5.4-mini-2026-03-17`. Changing it is a release:
   run the gold evaluation (`docs/testing/GOLD_EVALUATION.md`) and record the run.
 
@@ -45,6 +56,73 @@ sit in `scan_failed` if ClamAV is down.
 4. `pm2 reload ecosystem.config.js` (API, worker, dispatcher).
 5. Smoke: `GET /api/v1/ai/pilot/status` (security admin) — verify environment,
    model, kill-switch state; upload → scan → extract on a synthetic fixture.
+6. Check the API's startup log says `Postgres row-level security enforced for role …`. An error
+   `postgres.rls.bypassed` means `POSTGRES_URL` logs in as a superuser or BYPASSRLS role, so the
+   database is not enforcing tenant isolation; point it at the non-owner app role. That role
+   needs `USAGE` on schema `rfpilot`, `SELECT, INSERT, UPDATE, DELETE` on its tables, and `SELECT`
+   on `public.rfpilot_schema_migrations`; without the last grant `/health` answers 503 and the load
+   balancer drains every task.
+
+### Shared platform corpus (once per environment, after migration 064)
+
+DXG's pricing corpus, expert rules and knowledge base live in DXG's organization and every
+customer organization reads them. Nothing is shared until that organization is marked:
+
+1. `npm run platform:mark-organization -- --slug=dxg` (dry run: shows the organization and its
+   corpus counts).
+2. `npm run platform:mark-organization -- --apply --slug=dxg`.
+
+Mark it before any customer leaves DXG's organization (new signups from ORG-106, the ORG-107
+migration); otherwise their investment guidance and knowledge grounding find no corpus. Only one
+organization can be the platform, and the script refuses to move the mark.
+
+### Moving existing customers into their own organizations (ORG-107, once)
+
+Each existing customer moves out of the shared organization into a legacy holding tenant of their
+own, with their MongoDB documents and Postgres rows. DXG staff, DXG's corpus and the audit history
+stay put. Run in a maintenance window:
+
+1. Mark the platform organization (above).
+2. Pause the worker and dispatcher and let the outbox drain.
+3. `npm run verify:customer-organizations -- --snapshot=<file>`: records, per member, the proposal
+   and vendor-response ids they can see (ids only). Keep the file private and delete it afterwards.
+   A customer who sees other customers' proposals here holds an admin role in the shared
+   organization; resolve that before continuing.
+4. `npm run migrate:customer-organizations -- --run-id=<id>` (dry run). Postgres moves run in a
+   transaction that is rolled back, so the per-customer counts are exact and a missing privilege
+   fails here. It needs `POSTGRES_MIGRATION_URL` (the role that owns the tables; no superuser).
+5. `npm run migrate:customer-organizations -- --apply --run-id=<id>`. A failed customer is reported
+   and the rest continue; re-running the same run id skips customers already moved.
+6. `npm run verify:customer-organizations -- --before=<file>`. It exits 1 unless every member sees
+   exactly the same ids, nothing customer-owned is left in the shared organization, and every
+   proposal's owner is an active member. Roll back if it fails and the cause isn't clear.
+7. Resume the worker and dispatcher. The cron worker re-runs the orphan check every day
+   (`[Cron] Orphaned proposals: N`); anything above 0 needs a reassignment.
+
+Rollback: `npm run migrate:customer-organizations -- --rollback-run=<id>` (dry run), then with
+`--apply`. Everything in each holding tenant, including anything created since, moves back and
+the holding tenants are deleted. Customers sign in again either way.
+
+### Placing a legacy customer in an organization (ORG-110)
+
+DXG staff place one legacy customer at a time through the admin API (`/api/admin/legacy-customers`,
+DXG admins only): `GET /` lists customers still in a holding tenant with their proposal counts,
+`GET /target-organizations?q=` lists customer organizations, `POST /:userId/placements` places
+(`{ target: "new", organization: { name, ... } }` makes them Owner of a new organization;
+`{ target: "existing", organizationId, role }` adds them as organization_admin, team_manager or
+planner), and `POST /placements/:runId/rollback` undoes one placement.
+
+Each placement is one journaled run (`legacycustomerplacements`): their MongoDB documents and
+Postgres rows move with ORG-107's rewrite, the holding tenant is set inactive, audit events go to
+the target organization and to the admin's own organization, and the response carries ORG-109's
+checks (`verification.passed`). Rollback moves the customer's records back and reactivates the
+holding tenant; a new organization is deleted only if nobody else has joined it.
+
+The Postgres move needs the table-owner role and briefly takes exclusive locks on tenant tables.
+The API therefore places only when it runs with `POSTGRES_MIGRATION_URL`; with the Postgres
+foundation on and no migration role it answers 503 `PLACEMENT_REQUIRES_MIGRATION_ROLE`. Giving the
+API that role is a trust-boundary decision (record it in DECISIONS.md first). Teams aren't
+available yet (ORG-201), so a placement can't name one.
 
 ## Cost & usage
 

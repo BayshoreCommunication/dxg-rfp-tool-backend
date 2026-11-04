@@ -32,11 +32,15 @@ services:
       timeout: 3s
       retries: 30
 
+  # A single-node replica set: signup creates the organization, user and membership in one
+  # transaction (ORG-106), and Mongo only supports transactions on replica sets. mongod listens
+  # on 57017 inside the container too, so the member address it advertises is the published one.
   mongo:
     image: mongo:7
-    ports: ["127.0.0.1:57017:27017"]
+    command: ["--replSet", "rs0", "--port", "57017", "--bind_ip_all"]
+    ports: ["127.0.0.1:57017:57017"]
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test: ["CMD", "mongosh", "--port", "57017", "--quiet", "--eval", "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:57017' }] }).ok }"]
       interval: 2s
       timeout: 5s
       retries: 30

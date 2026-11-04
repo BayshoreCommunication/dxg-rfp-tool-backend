@@ -10,10 +10,14 @@ import type {
   StructuredResponseSummary,
   VendorResponseReadRepository,
 } from "../../domain/ports/vendorResponseReadRepository";
-import {
-  tenantFilter,
-  tenantObjectId,
-} from "../../../shared/tenancy/tenantContext";
+import { currentTenant, tenantFilter } from "../../../shared/tenancy/tenantContext";
+import { explainVendorRecordMiss, vendorRecordScope } from "../../../identity/application/proposalAccess";
+
+// Vendor responses inherit their proposal's access decision (ORG-102): whoever may see a
+// proposal's responses sees them, whoever owns the response row.
+const responseScope = (ownerUserId: string) =>
+  vendorRecordScope({ organizationId: currentTenant().organizationId, userId: ownerUserId }, "viewResponses");
+const actingUser = (ownerUserId: string) => ({ organizationId: currentTenant().organizationId, userId: ownerUserId });
 
 const VENDOR_RESPONSE_SELECT =
   "_id proposalId proposalOwnerId proposalTitle vendorName submittedBy email message documents isRead createdAt updatedAt submissionId currentVersionId currentVersionNumber versionReason versionReceivedAt manifestChecksum";
@@ -128,7 +132,7 @@ const withCurrentVersionSummary = async <T extends ResponseSummaryRecord>(respon
       structuredSummary: null,
     }));
   }
-  const versions = await VendorSubmissionVersion.find({ _id: { $in: currentIds } })
+  const versions = await VendorSubmissionVersion.find({ _id: { $in: currentIds }, ...tenantFilter() })
     .select("_id responseSchemaVersion questionnaireId questionnaireVersion questionnaireChecksum proposalVersion questionnaireSnapshot structuredResponse calculationSnapshot")
     .lean<SummaryVersion[]>();
   const byId = new Map(versions.map((version) => [String(version._id), version]));
@@ -150,18 +154,15 @@ export const mongoVendorResponseReadRepository: VendorResponseReadRepository = {
     page,
     limit,
   }) {
-    const ownerId = new mongoose.Types.ObjectId(ownerUserId);
-    const baseFilter: Record<string, unknown> = {
-      proposalOwnerId: ownerId,
-      // Mongoose casts find filters but does not cast aggregation pipelines.
-      organizationId: tenantObjectId(),
-    };
+    // Aggregations aren't cast; the scope is built from ObjectIds.
+    const baseFilter: Record<string, unknown> = await responseScope(ownerUserId);
     const escapedSearch = search?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const groupedFilter = escapedSearch
       ? { proposalTitle: { $regex: escapedSearch, $options: "i" } }
       : {};
 
     const [grouped, totals] = await Promise.all([
+      // tenant-scoped: baseFilter is responseScope
       VendorResponse.aggregate<{
         proposals: Array<{
           _id: mongoose.Types.ObjectId;
@@ -198,6 +199,7 @@ export const mongoVendorResponseReadRepository: VendorResponseReadRepository = {
           },
         },
       ]),
+      // tenant-scoped: baseFilter is responseScope
       VendorResponse.aggregate<{ responseCount: number; unreadCount: number }>([
         { $match: baseFilter },
         {
@@ -239,11 +241,9 @@ export const mongoVendorResponseReadRepository: VendorResponseReadRepository = {
     limit,
   }) {
     const ownerId = new mongoose.Types.ObjectId(ownerUserId);
-    const filter: Record<string, unknown> = {
-      proposalOwnerId: ownerId,
-      ...tenantFilter(),
-    };
-    if (unreadOnly) filter.isRead = false;
+    const scope = await responseScope(ownerUserId);
+    const narrowing: Record<string, unknown> = {};
+    if (unreadOnly) narrowing.isRead = false;
 
     if (campaignId) {
       const campaign = await EmailCampaign.findOne({
@@ -260,36 +260,26 @@ export const mongoVendorResponseReadRepository: VendorResponseReadRepository = {
         return {
           responses: [],
           total: 0,
-          unreadCount: await VendorResponse.countDocuments({
-            proposalOwnerId: ownerId,
-            isRead: false,
-            ...tenantFilter(),
-          }),
+          unreadCount: await VendorResponse.countDocuments({ $and: [scope, { isRead: false }] }), // tenant-scoped: responseScope
           filteredUnreadCount: 0,
         };
       }
-      filter.emailTrackingId = { $in: trackingIds };
+      narrowing.emailTrackingId = { $in: trackingIds };
     } else if (proposalId) {
-      filter.proposalId = new mongoose.Types.ObjectId(proposalId);
+      narrowing.proposalId = new mongoose.Types.ObjectId(proposalId);
     }
+    const filter = { $and: [scope, narrowing] };
 
     const [responses, total, unreadCount, filteredUnreadCount] = await Promise.all([
-      VendorResponse.find(filter)
+      VendorResponse.find(filter) // tenant-scoped: responseScope
         .select(VENDOR_RESPONSE_SELECT)
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),
-      VendorResponse.countDocuments(filter),
-      VendorResponse.countDocuments({
-        proposalOwnerId: ownerId,
-        isRead: false,
-        ...tenantFilter(),
-      }),
-      VendorResponse.countDocuments({
-        ...filter,
-        isRead: false,
-      }),
+      VendorResponse.countDocuments(filter), // tenant-scoped: responseScope
+      VendorResponse.countDocuments({ $and: [scope, { isRead: false }] }), // tenant-scoped: responseScope
+      VendorResponse.countDocuments({ $and: [scope, narrowing, { isRead: false }] }), // tenant-scoped: responseScope
     ]);
     return {
       responses: await withCurrentVersionSummary(responses),
@@ -300,38 +290,36 @@ export const mongoVendorResponseReadRepository: VendorResponseReadRepository = {
   },
 
   async markOwnedRead({ responseId, ownerUserId }) {
+    // tenant-scoped: responseScope
     const response = await VendorResponse.findOneAndUpdate(
-      {
-        _id: responseId,
-        proposalOwnerId: new mongoose.Types.ObjectId(ownerUserId),
-        ...tenantFilter(),
-      },
+      { $and: [{ _id: responseId }, await responseScope(ownerUserId)] },
       { isRead: true },
       { new: true },
     )
       .select(VENDOR_RESPONSE_SELECT)
       .lean();
-    if (!response) return null;
+    if (!response) {
+      await explainVendorRecordMiss(actingUser(ownerUserId), VendorResponse, responseId, "viewResponses");
+      return null;
+    }
     return (await withCurrentVersionSummary([response]))[0] ?? null;
   },
 
   async getOwnedSubmissionTimeline({ responseId, ownerUserId }) {
-    const ownerId = new mongoose.Types.ObjectId(ownerUserId);
-    const response = await VendorResponse.findOne({
-      _id: responseId,
-      proposalOwnerId: ownerId,
-      ...tenantFilter(),
-    })
+    const response = await VendorResponse.findOne({ $and: [{ _id: responseId }, await responseScope(ownerUserId)] }) // tenant-scoped: responseScope
       .select("submissionId")
       .lean<TimelineResponse>();
-    if (!response) return null;
+    if (!response) {
+      await explainVendorRecordMiss(actingUser(ownerUserId), VendorResponse, responseId, "viewResponses");
+      return null;
+    }
     if (!response.submissionId)
       return { historyTruncated: false, submission: null, versions: [] };
 
+    // The response above already passed the access check; the submission only has to be its own.
     const submission = await VendorSubmission.findOne({
       _id: response.submissionId,
       legacyVendorResponseId: responseId,
-      proposalOwnerId: ownerId,
       ...tenantFilter(),
     }).lean<TimelineSubmission>();
     if (!submission)

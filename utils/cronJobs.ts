@@ -138,6 +138,56 @@ export const runVendorDraftCleanup = async () => {
   }
 };
 
+// ORG-109: proposals whose owner is no longer an active member of the proposal's organization.
+// The PRD tracks "orphaned RFPs = 0"; a non-zero count needs a reassignment. Counts only, no ids.
+export const runOrphanedProposalCheck = async () => {
+  try {
+    const { findOrphanedProposals } = await import("../src/modules/tenancy/migrationVerification");
+    const result = await findOrphanedProposals({ sampleSize: 0 });
+    if (result.total > 0) {
+      console.warn(`[Cron] Orphaned proposals: ${result.total} across ${result.byOrganization.length} organization(s)`);
+    } else {
+      console.log("[Cron] Orphaned proposals: 0");
+    }
+  } catch {
+    console.error("[Cron] Orphaned proposal check failed");
+  }
+};
+
+// ORG-204: expire invitations, queue the day-six reminder, and send or retry invitation email.
+// Counts only: never addresses or links.
+export const runInvitationSweep = async () => {
+  try {
+    const { sweepInvitations } = await import("../src/modules/invitations/composition");
+    const result = await sweepInvitations();
+    if (result.expired || result.remindersQueued || result.sent || result.failed) {
+      console.log(
+        `[Cron] Invitations: ${result.expired} expired, ${result.remindersQueued} reminder(s) queued, ${result.sent} email(s) sent, ${result.failed} failed`,
+      );
+    }
+  } catch {
+    console.error("[Cron] Invitation sweep failed");
+  }
+};
+
+// ORG-305: verifies pending domains and re-checks verified ones weekly. Each run takes the
+// domains whose next check is due; removing a TXT record un-verifies on the re-check.
+export const runDomainVerificationSweep = async () => {
+  try {
+    const { domainVerification } = await import("../src/modules/domainVerification/composition");
+    const result = await domainVerification.sweep({ limit: 200 });
+    if (result.skipped) {
+      console.log("[Cron] Domain verification: previous sweep still running, skipped");
+      return;
+    }
+    if (result.checked > 0 || result.failed > 0) {
+      console.log(`[Cron] Domain verification: ${result.checked} checked, ${result.verified} verified, ${result.unverified} unverified, ${result.pending} pending, ${result.failed} failed`);
+    }
+  } catch {
+    console.error("[Cron] Domain verification sweep failed");
+  }
+};
+
 export const startCronJobs = () => {
   // Run once immediately on startup
   runExpirationCheck();
@@ -165,5 +215,23 @@ export const startCronJobs = () => {
   // deletion workflow and should execute on the predictable daily schedule.
   setInterval(() => {
     void runVendorDraftCleanup();
+  }, 24 * 60 * 60 * 1000);
+
+  // Every 15 minutes: a failed invitation email is retried within the hour, and the day-six
+  // reminder goes out within 15 minutes of the invitation having a day left.
+  void runInvitationSweep();
+  setInterval(() => {
+    void runInvitationSweep();
+  }, 15 * 60 * 1000);
+
+  void runDomainVerificationSweep();
+  setInterval(() => {
+    void runDomainVerificationSweep();
+  }, 15 * 60 * 1000);
+
+  // Read-only, so it also runs on startup and gives a deploy an immediate reading.
+  void runOrphanedProposalCheck();
+  setInterval(() => {
+    void runOrphanedProposalCheck();
   }, 24 * 60 * 60 * 1000);
 };
