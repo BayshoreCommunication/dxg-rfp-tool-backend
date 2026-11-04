@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import ExcelJS from "exceljs";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import { isMandatoryGap } from "../comparisonOrchestration/domain";
 
 export const REPORT_TYPES = ["executive_html", "executive_pdf", "comparison_xlsx", "evaluator_html", "decision_html", "clarification_html", "audit_json"] as const;
 export type ReportType = typeof REPORT_TYPES[number];
@@ -66,7 +67,7 @@ const recommendation = (workspace: any) => {
 
 const vendorOverview = (workspace: any) => `<section class="section"><h2>Vendor comparison overview</h2><table><thead><tr><th>Vendor</th><th>Mandatory gaps</th><th>Review flags</th><th>Human contribution</th>${workspace.intelligence.permissions.viewCommercial ? "<th>Submitted price</th><th>Normalized price</th>" : ""}</tr></thead><tbody>${workspace.participants.map((participant: any) => {
   const requirements = workspace.intelligence.requirements.flatMap((requirement: any) => requirement.vendors.filter((vendor: any) => vendor.participantId === participant.participantId).map((vendor: any) => ({ requirement, vendor })));
-  const mandatoryGaps = requirements.filter((item: any) => item.requirement.mandatoryStatus === "mandatory" && ["missing", "contradictory"].includes(item.vendor.verdict)).length;
+  const mandatoryGaps = requirements.filter((item: any) => isMandatoryGap({ mandatoryStatus: item.requirement.mandatoryStatus, verdict: item.vendor.verdict })).length;
   const reviews = requirements.filter((item: any) => item.vendor.needsHumanReview).length;
   const evaluation = workspace.intelligence.evaluation.find((item: any) => item.participantId === participant.participantId);
   const commercial = workspace.intelligence.commercial.find((item: any) => item.participantId === participant.participantId);

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 export const COMPARISON_SCHEMA_VERSION = "proposal-intelligence-comparison.v5";
 export const PARTICIPANT_SCHEMA_VERSION = "comparison-participant.v5";
-export const RECOMMENDATION_POLICY_VERSION = "human-rubric-recommendation.v2";
+export const RECOMMENDATION_POLICY_VERSION = "human-rubric-recommendation.v3";
 export const CLOSE_CALL_MARGIN = 2;
 export const HIGH_CONFIDENCE_MARGIN = 5;
 export const HIGH_DISAGREEMENT_SPREAD = 1.5;
@@ -71,6 +71,29 @@ export const evaluatorPanelSignature = (rows: Array<{
   }))
   .sort((left, right) => left.evaluatorExternalUserId.localeCompare(right.evaluatorExternalUserId)));
 
+/**
+ * One definition of a mandatory gap, shared by the ranking, the comparison
+ * overview and the exported report.
+ *
+ * These three previously disagreed: the ranking counted every mandatory verdict
+ * that was not `addressed` (sweeping in partial answers), while the overview and
+ * the report counted only `missing`/`contradictory`. A single comparison could
+ * therefore report "Mandatory gaps 0" and "1 mandatory gap" on one screen.
+ *
+ * A gap means the response does not answer a mandatory requirement at all:
+ * nothing was found (`missing`), the response only mentions the topic without
+ * answering it (`not_assessable`), or it answers in two ways that disagree
+ * (`contradictory`). A partial answer is not a gap — it is a partial, reported
+ * separately by {@link isMandatoryPartial} and already raised as a high risk.
+ */
+const UNANSWERED_VERDICTS = ["missing", "contradictory", "not_assessable"];
+
+export const isMandatoryGap = (requirement: { mandatoryStatus: string; verdict: string }) =>
+  requirement.mandatoryStatus === "mandatory" && UNANSWERED_VERDICTS.includes(requirement.verdict);
+
+export const isMandatoryPartial = (requirement: { mandatoryStatus: string; verdict: string }) =>
+  requirement.mandatoryStatus === "mandatory" && requirement.verdict === "partially_addressed";
+
 export const buildVendorRecommendation = (input: {
   participants: Array<{ participantId: string; vendorLabel: string; score: number; evaluatorCount?: number; maxCriterionSpread?: number }>;
   requirements: Array<{ participantId: string; eligibility: boolean; mandatoryStatus: string; verdict: string; needsHumanReview: boolean }>;
@@ -79,7 +102,8 @@ export const buildVendorRecommendation = (input: {
   const ranking = input.participants.map((participant) => {
     const requirements = input.requirements.filter((item) => item.participantId === participant.participantId);
     const eligibilityFailures = requirements.filter((item) => item.eligibility && item.verdict !== "addressed").length;
-    const mandatoryGaps = requirements.filter((item) => item.mandatoryStatus === "mandatory" && item.verdict !== "addressed").length;
+    const mandatoryGaps = requirements.filter(isMandatoryGap).length;
+    const mandatoryPartials = requirements.filter(isMandatoryPartial).length;
     const unresolvedReviews = requirements.filter((item) => item.needsHumanReview).length;
     const highRisks = input.risks.filter((item) => item.participantId === participant.participantId && item.severity === "high").length;
     return {
@@ -91,6 +115,7 @@ export const buildVendorRecommendation = (input: {
       eligible: eligibilityFailures === 0,
       eligibilityFailures,
       mandatoryGaps,
+      mandatoryPartials,
       unresolvedReviews,
       highRisks,
       rank: null as number | null,
@@ -116,9 +141,9 @@ export const buildVendorRecommendation = (input: {
   const confidenceReasons = uniqueReasons([
     ...(close ? ["close_score_margin"] : []),
     ...(leader.unresolvedReviews > 0 ? ["unresolved_evidence_reviews"] : []),
-    ...(leader.evaluatorCount < 2 ? ["insufficient_independent_evaluators"] : []),
     ...(leader.maxCriterionSpread > HIGH_DISAGREEMENT_SPREAD ? ["high_evaluator_disagreement"] : []),
     ...(leader.mandatoryGaps > 0 ? ["mandatory_gaps"] : []),
+    ...(leader.mandatoryPartials > 0 ? ["mandatory_partials"] : []),
     ...(leader.highRisks > 0 ? ["high_risks"] : []),
   ]);
   const confidence = confidenceReasons.length
