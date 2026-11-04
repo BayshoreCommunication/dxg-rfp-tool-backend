@@ -20,5 +20,7 @@ export interface UserAccountRepository {
   findPrimaryAdmin(configuredEmail: string): Promise<UserAccount | null>;
   emailBelongsToOther(email: string, userId: string): Promise<boolean>;
   update(id: string, patch: UserProfilePatch): Promise<Record<string, unknown>>;
+  // RFPs the user owns in any organization; a user who owns any can't be deleted.
+  countOwnedRfps(id: string): Promise<number>;
   deleteById(id: string): Promise<boolean>;
 }

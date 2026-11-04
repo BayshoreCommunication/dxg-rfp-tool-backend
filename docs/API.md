@@ -70,6 +70,7 @@ Membership management (ORG-206, ORG-207, ORG-307) lives in `routes/organizationM
 
 - `PATCH /members/:userId/role` `{ role, version }`. Becoming a Viewer while owning RFPs is 409 `OWNER_HAS_RFPS` with `ownedRfpCount`, checked again in the same transaction as the write. A demotion by someone else revokes all the member's sessions at once; any other role change revokes the member's other sessions on their next request (see DECISIONS.md).
 - `PUT /members/:userId/teams` `{ teamIds, version }` makes the member's active teams exactly `teamIds` (ORG-201 Teams), keeping manager flags on teams they stay on and leaving archived teams' memberships as history. An archived team or another organization's team is 400 `UNKNOWN_TEAMS` with `unknownTeamIds`.
+- `DELETE /api/users/:id` (legacy, platform admins only; no dashboard screen calls it) hard-deletes an account. It is refused with 409 `OWNER_HAS_RFPS` and `ownedRfpCount` while the user owns any RFP in any organization, so RFPs are never orphaned; organization members are deactivated and their RFPs reassigned instead.
 
 ## Legacy customer placement
 
