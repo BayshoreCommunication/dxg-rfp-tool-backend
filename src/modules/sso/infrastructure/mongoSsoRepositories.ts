@@ -225,3 +225,7 @@ export const mongoSsoRequiredFor = async (email: string): Promise<boolean> => {
    active connection that covers the invited email's domain. */
 export const mongoCompanySsoFor = async (organizationId: string, email: string): Promise<boolean> =>
   Boolean(await SsoConnection.exists({ organizationId, domains: emailDomain(email), status: "active" }));
+
+/* Identifier-first sign-in: does any active connection cover this domain? */
+export const mongoCompanySsoForDomain = async (domain: string): Promise<boolean> =>
+  Boolean(await SsoConnection.exists({ domains: domain, status: "active" }));

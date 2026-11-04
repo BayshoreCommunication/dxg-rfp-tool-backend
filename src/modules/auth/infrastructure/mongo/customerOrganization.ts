@@ -5,8 +5,8 @@ import OrganizationMembership from "../../../../../modal/organizationMembershipM
 import User from "../../../../../modal/userModel";
 
 // Every new customer gets an organization of their own (ORG-106), so signup no longer joins the
-// shared default organization. Signup UI with organization details arrives in ORG-301; until then
-// the name comes from the company the person entered, or from their own name.
+// shared default organization. The name starts as the company the person entered, or their own
+// name; onboarding (ORG-301) then asks the Owner to confirm it with the other details.
 export const organizationNameFor = (input: { name: string; company?: string | null }): string => {
   const company = input.company?.trim();
   if (company) return company.slice(0, 200);
@@ -44,8 +44,8 @@ export const createCustomerWithOrganization = async (fields: CustomerFields) => 
           slug: organizationSlugFor(organizationName),
           kind: "customer",
           status: "active",
-          // A placeholder name ("Pat's organization"); the dashboard asks the Owner for the company.
-          needsName: !fields.company?.trim(),
+          // The Owner confirms the details, picks a plan and may invite the team before the dashboard.
+          onboardingStep: "details",
         }],
         { session },
       );

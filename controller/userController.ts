@@ -209,6 +209,16 @@ export const deleteUser = async (req: AuthRequest, res: Response): Promise<void>
       res.status(403).json({ success: false, message: "You do not have permission to delete this user" });
       return;
     }
+    if (result.kind === "owns_rfps") {
+      const count = result.ownedRfpCount;
+      res.status(409).json({
+        success: false,
+        code: "OWNER_HAS_RFPS",
+        message: `This user still owns ${count} RFP${count === 1 ? "" : "s"}. Reassign them first.`,
+        ownedRfpCount: count,
+      });
+      return;
+    }
     if (result.kind === "not_found") {
       res.status(404).json({ success: false, message: "User not found" });
       return;

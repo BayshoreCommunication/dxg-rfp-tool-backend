@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import { getAuthenticatedUserAccount } from "../src/modules/auth/composition";
-import { dashboardUrl, federatedSignIn, manageSsoConnection } from "../src/modules/sso/composition";
+import { dashboardUrl, discoverSignInMethod, federatedSignIn, manageSsoConnection } from "../src/modules/sso/composition";
 import {
   applicationUserResponse,
   bffRefreshResponse,
@@ -22,6 +22,27 @@ const errorRedirect = (code: string, inviteToken: string | null) =>
   inviteToken
     ? `${dashboardUrl()}/invite/${encodeURIComponent(inviteToken)}?error=${safeCode(code)}`
     : `${dashboardUrl()}/sign-in?error=${safeCode(code)}`;
+
+/* POST /api/auth/sso/discover { email }  (dashboard server only)
+   Answers { method: "company" | "password" } for the sign-in page's email-first step. */
+export const discoverSignIn = async (req: Request, res: Response): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!isAuthorizedBff(req)) {
+    res.status(403).json({ success: false, code: "BFF_AUTHORIZATION_INVALID", message: "BFF authorization is invalid" });
+    return;
+  }
+  try {
+    const result = await discoverSignInMethod(req.body?.email);
+    if (result.kind === "validation") {
+      res.status(400).json({ success: false, code: "VALIDATION_ERROR", message: "Enter a valid email address" });
+      return;
+    }
+    res.status(200).json({ success: true, method: result.method });
+  } catch (error) {
+    console.error("SSO discover error:", error instanceof Error ? error.name : "unknown");
+    res.status(500).json({ success: false, code: "SSO_ERROR", message: "Request failed" });
+  }
+};
 
 /* GET /api/auth/sso/start?kind=microsoft|company&email=&invite=&bind= */
 export const startSso = async (req: Request, res: Response): Promise<void> => {

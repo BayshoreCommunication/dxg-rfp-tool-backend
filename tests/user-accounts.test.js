@@ -97,10 +97,17 @@ test("primary-admin update is restricted to the primary account", async () => {
 
 test("user deletion protects self and requires a privileged actor", async () => {
   let deletes = 0;
-  const remove = createDeleteUser({ async deleteById() { deletes += 1; return true; } });
+  const remove = createDeleteUser({ async countOwnedRfps() { return 0; }, async deleteById() { deletes += 1; return true; } });
   assert.deepEqual(await remove("a", "admin", "a"), { kind: "self_delete" });
   assert.deepEqual(await remove("a", "customer", "b"), { kind: "forbidden" });
   assert.equal(deletes, 0);
   assert.deepEqual(await remove("a", "admin", "b"), { kind: "deleted" });
   assert.equal(deletes, 1);
+});
+
+test("user deletion refuses while the user owns RFPs, so none are orphaned", async () => {
+  let deletes = 0;
+  const remove = createDeleteUser({ async countOwnedRfps() { return 3; }, async deleteById() { deletes += 1; return true; } });
+  assert.deepEqual(await remove("a", "admin", "b"), { kind: "owns_rfps", ownedRfpCount: 3 });
+  assert.equal(deletes, 0);
 });

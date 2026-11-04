@@ -306,7 +306,7 @@ test("Microsoft: unverified tenant email is refused before any account work", as
 
 /* ---------- password gate ---------- */
 
-test("password sign-in routes answer 410 unless PASSWORD_SIGN_IN_ENABLED=true", () => {
+test("password sign-in routes are on unless PASSWORD_SIGN_IN_ENABLED=false", () => {
   const { requirePasswordSignIn } = require("../middleware/passwordSignIn");
   const previous = process.env.PASSWORD_SIGN_IN_ENABLED;
   const run = () => {
@@ -317,14 +317,31 @@ test("password sign-in routes answer 410 unless PASSWORD_SIGN_IN_ENABLED=true", 
   };
   try {
     delete process.env.PASSWORD_SIGN_IN_ENABLED;
+    assert.equal(run().nexted, true);
+    process.env.PASSWORD_SIGN_IN_ENABLED = "true";
+    assert.equal(run().nexted, true);
+    process.env.PASSWORD_SIGN_IN_ENABLED = " False ";
     const off = run();
     assert.equal(off.status, 410);
     assert.equal(off.body.code, "PASSWORD_SIGN_IN_DISABLED");
     assert.equal(off.nexted, false);
-    process.env.PASSWORD_SIGN_IN_ENABLED = "true";
-    assert.equal(run().nexted, true);
   } finally {
     if (previous === undefined) delete process.env.PASSWORD_SIGN_IN_ENABLED;
     else process.env.PASSWORD_SIGN_IN_ENABLED = previous;
   }
+});
+
+/* ---------- email-first sign-in ---------- */
+
+test("discover: company SSO for a covered domain, password otherwise, never for a bad email", async () => {
+  const { createDiscoverSignInMethod } = require("../src/modules/sso/application/discoverSignInMethod");
+  const asked = [];
+  const discover = createDiscoverSignInMethod({
+    companySsoForDomain: async (domain) => { asked.push(domain); return domain === "acme.test"; },
+  });
+  assert.deepEqual(await discover("  Pat@ACME.test "), { kind: "found", method: "company" });
+  assert.deepEqual(await discover("sam@gmail.test"), { kind: "found", method: "password" });
+  assert.deepEqual(await discover("not-an-email"), { kind: "validation" });
+  assert.deepEqual(await discover(undefined), { kind: "validation" });
+  assert.deepEqual(asked, ["acme.test", "gmail.test"]);
 });

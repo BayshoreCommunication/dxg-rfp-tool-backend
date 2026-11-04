@@ -11,7 +11,7 @@ Customers sign in with **Google**, **Microsoft** or **their company's OpenID Con
 | `SSO_CALLBACK_URL` | The redirect URI registered with every IdP. Defaults to `${BACKEND_URL}/api/auth/sso/callback`. |
 | `FRONTEND_URL` | Where the callback sends the browser (`/sso/complete`, `/sign-in`). |
 | `REDIS_URL` | Holds the 10-minute sign-in state and 60-second handoffs across workers. Without it they live in process memory (single process only). |
-| `PASSWORD_SIGN_IN_ENABLED` | Leave unset/false. `true` brings back the legacy password routes for local demos and tests. |
+| `PASSWORD_SIGN_IN_ENABLED` | Leave unset: customers can also sign up with email, password and an emailed code. `false` turns the password routes off (410) for an SSO-only deployment. |
 
 ## Microsoft (one-time, by DXG)
 

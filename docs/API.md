@@ -70,6 +70,7 @@ Membership management (ORG-206, ORG-207, ORG-307) lives in `routes/organizationM
 
 - `PATCH /members/:userId/role` `{ role, version }`. Becoming a Viewer while owning RFPs is 409 `OWNER_HAS_RFPS` with `ownedRfpCount`, checked again in the same transaction as the write. A demotion by someone else revokes all the member's sessions at once; any other role change revokes the member's other sessions on their next request (see DECISIONS.md).
 - `PUT /members/:userId/teams` `{ teamIds, version }` makes the member's active teams exactly `teamIds` (ORG-201 Teams), keeping manager flags on teams they stay on and leaving archived teams' memberships as history. An archived team or another organization's team is 400 `UNKNOWN_TEAMS` with `unknownTeamIds`.
+- `DELETE /api/users/:id` (legacy, platform admins only; no dashboard screen calls it) hard-deletes an account. It is refused with 409 `OWNER_HAS_RFPS` and `ownedRfpCount` while the user owns any RFP in any organization, so RFPs are never orphaned; organization members are deactivated and their RFPs reassigned instead.
 
 ## Legacy customer placement
 
@@ -105,12 +106,18 @@ Routes under `/api/organization/domains` (`organization:manage`); rules in `src/
 
 Routes under `/api/organization/profile`; rules in `src/modules/organizationProfile/`.
 
-- `GET /api/organization/profile` (any member) answers `{ name, needsName, canEditName }`. `needsName` is true for an organization created at a Google or Microsoft sign-up without a company, which is named "<Name>'s organization" until the Owner names it; the dashboard asks for the company name right after sign-up when `needsName && canEditName`.
-- `PUT /api/organization/profile` `{ name }` (`organization:manage`) renames the organization and clears `needsName`. The name is trimmed with inner whitespace collapsed, 1–200 characters; otherwise 400 `VALIDATION_ERROR`. Audited as `organization.settings.updated` (`organization_named` or `organization_renamed`).
+- `GET /api/organization/profile` (any member) answers `{ name, type, industry, country, timeZone, eventsPerYear, plan, onboardingStep, canManage }`.
+- Onboarding (ORG-301): every organization created at sign-up (password, Google, Microsoft or company SSO) starts at `onboardingStep: "details"` and walks `details → plan → team → done`; organizations from before onboarding are `"done"`. The dashboard sends an Owner or Admin (`canManage`) to the onboarding wizard until the step is `"done"`.
+- `PUT /api/organization/profile` `{ name, type?, industry?, country?, timeZone?, eventsPerYear? }` (`organization:manage`) saves the details and moves `"details"` on to `"plan"`. The name is trimmed with inner whitespace collapsed, 1–200 characters; `type` is one of `corporate|association|agency|venue|government|other`; `industry` up to 120 characters; `country` an ISO 3166-1 alpha-2 code; `timeZone` an IANA zone; `eventsPerYear` a whole number 0–100,000. A field left out is unchanged; `""` or `null` clears it. Otherwise 400 `VALIDATION_ERROR` with `field`. Audited as `organization.settings.updated` (`organization_onboarding_details` or `organization_details_updated`).
+- `POST /api/organization/onboarding/plan` `{ plan: "free_trial" }` (`organization:manage`) records the plan and moves on to `"team"`; allowed at the plan or team step, otherwise 409 `ONBOARDING_STEP_CONFLICT` with the current `onboardingStep`.
+- `POST /api/organization/onboarding/complete` (`organization:manage`) finishes onboarding from the team step (inviting is optional); repeating it once done is a no-op; earlier steps answer 409 `ONBOARDING_STEP_CONFLICT`.
+- Every profile and onboarding write answers the whole profile, as GET does, and is rate-limited (30 per 15 minutes).
 
 ## Sign-in: Google, Microsoft and company SSO
 
-Customers sign in with Google, Microsoft or their organization's own OpenID Connect provider; there is no customer email/password. The password, signup-OTP and reset routes (and password invitation accept) answer 410 `PASSWORD_SIGN_IN_DISABLED` unless `PASSWORD_SIGN_IN_ENABLED=true`. Setup for operators and customer IT: [SSO_SETUP.md](SSO_SETUP.md). Rules in `src/modules/sso/`.
+Customers sign up with email and password (confirmed by an emailed 6-digit code), or sign in with Google, Microsoft or their organization's own OpenID Connect provider. Setting `PASSWORD_SIGN_IN_ENABLED=false` turns the password, signup-OTP and reset routes (and password invitation accept) off; they then answer 410 `PASSWORD_SIGN_IN_DISABLED`. Setup for operators and customer IT: [SSO_SETUP.md](SSO_SETUP.md).
+
+`POST /api/auth/sso/discover` `{ email }` (dashboard server only: BFF key required, else 403) answers `{ method: "company" | "password" }` for the sign-in page's email-first step: `company` when an active SSO connection covers the email's domain. It never names the organization. Limited to 30 per 15 minutes per visitor; the dashboard passes the visitor's IP in `x-rfpilot-client-ip`, which is trusted only alongside a valid BFF key. A bad email is 400 `VALIDATION_ERROR`. Rules in `src/modules/sso/`.
 
 - `GET /api/auth/sso/start?kind=microsoft|company&email=&invite=&bind=`: `bind` is the lowercase hex SHA-256 of the dashboard's `rfp_sso_bind` cookie; `email` is required for `company`. Redirects (302) to the IdP, or to `${FRONTEND_URL}/sign-in?error=CODE` (`/invite/<token>?error=CODE` when `invite` was given).
 - `GET /api/auth/sso/callback`: the redirect URI registered with every IdP. Success redirects to `${FRONTEND_URL}/sso/complete?handoff=…` (single use, 60 s).
