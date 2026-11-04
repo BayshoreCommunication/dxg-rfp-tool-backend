@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import crypto from "node:crypto";
 import { AuthRequest } from "../middleware/auth";
+import { isAwaitingPlacement, ORGANIZATION_SETUP_REQUIRED } from "../src/modules/auth/infrastructure/mongo/organizationSetup";
 import {
   authenticateGoogleIdentity,
   authenticateWithCredentials,
@@ -140,6 +141,16 @@ export const respondWithSecondFactorStep = async (
   method: PrimaryMethod,
 ): Promise<boolean> => {
   if (!user.organizationId) return false;
+  // Checked before 2FA so an account waiting for DXG never gets a challenge it can't use.
+  if (await isAwaitingPlacement(user.organizationId)) {
+    res.status(403).json({
+      success: false,
+      code: ORGANIZATION_SETUP_REQUIRED.code,
+      errorCode: ORGANIZATION_SETUP_REQUIRED.code,
+      message: ORGANIZATION_SETUP_REQUIRED.message,
+    });
+    return true;
+  }
   const next = await twoFactor.assessSignIn({ userId: user.id, organizationId: user.organizationId, method });
   if (next.step === "none") return false;
   res.status(200).json({

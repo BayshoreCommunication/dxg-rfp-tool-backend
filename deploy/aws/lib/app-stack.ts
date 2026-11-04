@@ -530,6 +530,10 @@ export class AppStack extends cdk.Stack {
       secrets: {
         POSTGRES_URL: secret('POSTGRES_URL'),
         POSTGRES_MIGRATION_URL: secret('POSTGRES_MIGRATION_URL'),
+        /* For one-off runs of scripts/placeLegacyCustomer.js (ORG-110), which moves an account's
+           MongoDB documents and Postgres rows together and so needs both stores. The migrator
+           itself never reads it. */
+        MONGODB_URL: secret('MONGODB_URL'),
         /* Not used by the migrator today, but safeTelemetry throws on import
            when observability is enabled in production without it. This task
            shares sharedEnvironment, so one future import anywhere in the
