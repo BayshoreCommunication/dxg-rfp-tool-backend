@@ -205,6 +205,11 @@ export class AppStack extends cdk.Stack {
         'AI_SAFETY_IDENTIFIER_SECRET',
       ),
       GOOGLE_CLIENT_ID: secret('GOOGLE_CLIENT_ID'),
+      // Seal TOTP seeds and company-SSO client secrets. The keys must exist in
+      // the app secret before this deploys (compose-app-secrets.sh generates
+      // them), or the tasks can't start.
+      TWO_FACTOR_ENCRYPTION_KEY: secret('TWO_FACTOR_ENCRYPTION_KEY'),
+      SSO_SECRET_KEY: secret('SSO_SECRET_KEY'),
       SMTP_HOST: secret('SMTP_HOST'),
       SMTP_PORT: secret('SMTP_PORT'),
       SMTP_MAIL: secret('SMTP_MAIL'),
