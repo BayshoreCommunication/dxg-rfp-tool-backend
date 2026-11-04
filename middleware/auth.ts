@@ -11,6 +11,7 @@ import type { RfpActor } from "../src/modules/identity/domain/rfpAccessPolicy";
 import { ActorLookups, resolveRfpActor } from "../src/modules/identity/application/resolveRfpActor";
 import { mongoActorLookups } from "../src/modules/identity/application/mongoActorLookups";
 import { authenticationSessions, membershipSessions } from "../src/modules/auth/composition";
+import { ORGANIZATION_SETUP_REQUIRED } from "../src/modules/auth/infrastructure/mongo/organizationSetup";
 
 // Extend Express Request to include user
 export interface AuthRequest extends Request {
@@ -20,7 +21,7 @@ export interface AuthRequest extends Request {
 }
 
 type AuthenticateDependencies = {
-  revokeInactiveMembership(input: { userId: string; organizationId: string; correlationId: string }): Promise<number>;
+  revokeInactiveMembership(input: { userId: string; organizationId: string; correlationId: string; reason?: string }): Promise<number>;
   // ORG-307: the member's role was changed by someone else; keep this session, end the others.
   revokeOtherSessionsAfterRoleChange(input: { userId: string; organizationId: string; sessionId: string; correlationId: string }): Promise<number>;
   actorLookups: ActorLookups;
@@ -62,7 +63,7 @@ export const createAuthenticate = (
       const now = new Date();
       const [principal, organization, membership, activeSession] = await Promise.all([
         findSessionPrincipal(decoded.userId, decoded.organizationId),
-        Organization.findOne({ _id: decoded.organizationId, status: "active" }).select("_id").lean(),
+        Organization.findOne({ _id: decoded.organizationId, status: "active" }).select("_id kind").lean(),
         // Any status: a deactivated or removed member is told so and signed out below.
         OrganizationMembership.findOne({
           organizationId: decoded.organizationId,
@@ -90,6 +91,19 @@ export const createAuthenticate = (
           code: "MEMBERSHIP_INACTIVE",
           message: "Your organization membership is no longer active. Please contact your organization's admin.",
         });
+        return;
+      }
+      // A legacy account still waiting for DXG to place it (ORG-110) can't use a session, including
+      // one issued before this rule: end them all so the dashboard signs the person out and shows
+      // why at the next sign-in.
+      if (organization?.kind === "legacy_holding") {
+        await dependencies.revokeInactiveMembership({
+          userId: decoded.userId,
+          organizationId: decoded.organizationId,
+          correlationId: (req as AuthRequest & { correlationId?: string }).correlationId ?? randomUUID(),
+          reason: "organization_setup_required",
+        });
+        res.status(401).json({ success: false, code: ORGANIZATION_SETUP_REQUIRED.code, message: ORGANIZATION_SETUP_REQUIRED.message });
         return;
       }
       if (!principal || !activeSession) {

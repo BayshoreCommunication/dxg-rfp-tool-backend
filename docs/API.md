@@ -78,6 +78,8 @@ ORG-110, DXG admins only, at `/api/admin/legacy-customers` (`routes/adminLegacyC
 
 - `POST /:userId/placements` `{ target: "new", organization }` or `{ target: "existing", organizationId, role, teamId? }`. `teamId` must be an active team of that organization (400 `UNKNOWN_TEAM`). A second placement of the same user while one runs is 409 `PLACEMENT_IN_PROGRESS`. A failure leaves nothing moved (409 `PLACEMENT_FAILED`); a run whose ORG-109 checks fail is rolled back at once and answers 409 `PLACEMENT_VERIFICATION_FAILED` with `details.verification`.
 - `POST /placements/:runId/rollback` moves back exactly the records the run moved (journaled ids); RFPs given to the user afterwards stay and are counted in `leftInTarget`. One rollback runs at a time (409 `ROLLBACK_IN_PROGRESS`, `ALREADY_ROLLED_BACK`); 409 `ROLLBACK_CONFLICT` when Postgres rows created since still depend on the user's rows.
+- Until placed, the account can't use RFPilot: every sign-in method answers 403 `ORGANIZATION_SETUP_REQUIRED` (after the password or identity check, before 2FA), and any request on an existing session answers 401 `ORGANIZATION_SETUP_REQUIRED` and revokes all of that account's sessions.
+- The API refuses placement with 503 `PLACEMENT_REQUIRES_MIGRATION_ROLE` when it has no `POSTGRES_MIGRATION_URL`, which is the case in production. There, run `node dist/scripts/placeLegacyCustomer.js` (`--list`; `--email --admin-email --new-org` or `--org-slug --role`; `--rollback=<runId>`; dry run unless `--apply`) as a one-off task on the migrate task definition, which holds both MongoDB and the migration role.
 
 ## Proposal sharing
 

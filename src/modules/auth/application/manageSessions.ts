@@ -266,11 +266,13 @@ export const createSessionManager = (dependencies: Dependencies) => {
 
   // The access path calls this on every request from a member who is no longer active, so it
   // stays idempotent: only the request that actually revokes sessions writes the audit event.
-  const revokeInactiveMembership = async (input: { userId: string; organizationId: string; correlationId: string }) => {
+  // Also used for an account waiting for DXG to place it (reason organization_setup_required).
+  const revokeInactiveMembership = async (input: { userId: string; organizationId: string; correlationId: string; reason?: string }) => {
+    const reason = input.reason ?? "membership_inactive";
     const revoked = await dependencies.sessions.revokeAll({
       userId: input.userId,
       organizationId: input.organizationId,
-      reason: "membership_inactive",
+      reason,
       now: now(),
     });
     if (revoked > 0) {
@@ -281,7 +283,7 @@ export const createSessionManager = (dependencies: Dependencies) => {
         targetType: "user",
         targetId: input.userId,
         decision: "revoked",
-        reason: "membership_inactive",
+        reason,
         correlationId: input.correlationId,
         metadata: { revokedCount: revoked },
       });
