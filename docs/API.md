@@ -114,7 +114,9 @@ Routes under `/api/organization/profile`; rules in `src/modules/organizationProf
 
 ## Sign-in: Google, Microsoft and company SSO
 
-Customers sign up with email and password (confirmed by an emailed 6-digit code), or sign in with Google, Microsoft or their organization's own OpenID Connect provider. Setting `PASSWORD_SIGN_IN_ENABLED=false` turns the password, signup-OTP and reset routes (and password invitation accept) off; they then answer 410 `PASSWORD_SIGN_IN_DISABLED`. Setup for operators and customer IT: [SSO_SETUP.md](SSO_SETUP.md). Rules in `src/modules/sso/`.
+Customers sign up with email and password (confirmed by an emailed 6-digit code), or sign in with Google, Microsoft or their organization's own OpenID Connect provider. Setting `PASSWORD_SIGN_IN_ENABLED=false` turns the password, signup-OTP and reset routes (and password invitation accept) off; they then answer 410 `PASSWORD_SIGN_IN_DISABLED`. Setup for operators and customer IT: [SSO_SETUP.md](SSO_SETUP.md).
+
+`POST /api/auth/sso/discover` `{ email }` (dashboard server only: BFF key required, else 403) answers `{ method: "company" | "password" }` for the sign-in page's email-first step: `company` when an active SSO connection covers the email's domain. It never names the organization. Limited to 30 per 15 minutes per visitor; the dashboard passes the visitor's IP in `x-rfpilot-client-ip`, which is trusted only alongside a valid BFF key. A bad email is 400 `VALIDATION_ERROR`. Rules in `src/modules/sso/`.
 
 - `GET /api/auth/sso/start?kind=microsoft|company&email=&invite=&bind=`: `bind` is the lowercase hex SHA-256 of the dashboard's `rfp_sso_bind` cookie; `email` is required for `company`. Redirects (302) to the IdP, or to `${FRONTEND_URL}/sign-in?error=CODE` (`/invite/<token>?error=CODE` when `invite` was given).
 - `GET /api/auth/sso/callback`: the redirect URI registered with every IdP. Success redirects to `${FRONTEND_URL}/sso/complete?handoff=…` (single use, 60 s).

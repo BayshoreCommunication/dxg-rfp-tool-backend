@@ -5,6 +5,7 @@ import { createSecretBox, parseEncryptionKey, type SecretBox } from "../../share
 import { mongoSecurityAuditWriter } from "../auth/infrastructure/audit/mongoSecurityAuditWriter";
 import { authenticationSessions } from "../auth/composition";
 import { invitations } from "../invitations/composition";
+import { createDiscoverSignInMethod } from "./application/discoverSignInMethod";
 import { createFederatedSignIn } from "./application/federatedSignIn";
 import { createManageSsoConnection } from "./application/manageSsoConnection";
 import { authorizationUrl, discover, exchangeCode, verifyIdToken } from "./infrastructure/oidcClient";
@@ -12,6 +13,7 @@ import { ssoStateStore } from "./infrastructure/ssoStateStore";
 import {
   createMongoConnectionLookup,
   createMongoFederatedAccounts,
+  mongoCompanySsoForDomain,
   mongoSsoConnectionRepository,
   mongoSsoOrganizations,
   mongoSsoRequiredFor,
@@ -116,6 +118,8 @@ export const federatedSignIn = createFederatedSignIn({
     metadata: event.metadata,
   }),
 });
+
+export const discoverSignInMethod = createDiscoverSignInMethod({ companySsoForDomain: mongoCompanySsoForDomain });
 
 export const manageSsoConnection = createManageSsoConnection({
   connections: mongoSsoConnectionRepository,

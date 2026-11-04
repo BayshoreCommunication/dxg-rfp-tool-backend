@@ -330,3 +330,18 @@ test("password sign-in routes are on unless PASSWORD_SIGN_IN_ENABLED=false", () 
     else process.env.PASSWORD_SIGN_IN_ENABLED = previous;
   }
 });
+
+/* ---------- email-first sign-in ---------- */
+
+test("discover: company SSO for a covered domain, password otherwise, never for a bad email", async () => {
+  const { createDiscoverSignInMethod } = require("../src/modules/sso/application/discoverSignInMethod");
+  const asked = [];
+  const discover = createDiscoverSignInMethod({
+    companySsoForDomain: async (domain) => { asked.push(domain); return domain === "acme.test"; },
+  });
+  assert.deepEqual(await discover("  Pat@ACME.test "), { kind: "found", method: "company" });
+  assert.deepEqual(await discover("sam@gmail.test"), { kind: "found", method: "password" });
+  assert.deepEqual(await discover("not-an-email"), { kind: "validation" });
+  assert.deepEqual(await discover(undefined), { kind: "validation" });
+  assert.deepEqual(asked, ["acme.test", "gmail.test"]);
+});
