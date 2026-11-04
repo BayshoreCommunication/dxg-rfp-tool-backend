@@ -306,7 +306,7 @@ test("Microsoft: unverified tenant email is refused before any account work", as
 
 /* ---------- password gate ---------- */
 
-test("password sign-in routes answer 410 unless PASSWORD_SIGN_IN_ENABLED=true", () => {
+test("password sign-in routes are on unless PASSWORD_SIGN_IN_ENABLED=false", () => {
   const { requirePasswordSignIn } = require("../middleware/passwordSignIn");
   const previous = process.env.PASSWORD_SIGN_IN_ENABLED;
   const run = () => {
@@ -317,12 +317,14 @@ test("password sign-in routes answer 410 unless PASSWORD_SIGN_IN_ENABLED=true", 
   };
   try {
     delete process.env.PASSWORD_SIGN_IN_ENABLED;
+    assert.equal(run().nexted, true);
+    process.env.PASSWORD_SIGN_IN_ENABLED = "true";
+    assert.equal(run().nexted, true);
+    process.env.PASSWORD_SIGN_IN_ENABLED = " False ";
     const off = run();
     assert.equal(off.status, 410);
     assert.equal(off.body.code, "PASSWORD_SIGN_IN_DISABLED");
     assert.equal(off.nexted, false);
-    process.env.PASSWORD_SIGN_IN_ENABLED = "true";
-    assert.equal(run().nexted, true);
   } finally {
     if (previous === undefined) delete process.env.PASSWORD_SIGN_IN_ENABLED;
     else process.env.PASSWORD_SIGN_IN_ENABLED = previous;

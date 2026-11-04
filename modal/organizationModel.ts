@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema } from "mongoose";
+import { ONBOARDING_STEPS, type OnboardingStep } from "../src/modules/organizationProfile/domain/organizationDetails";
 
 export const ORGANIZATION_TYPES = ["corporate", "association", "agency", "venue", "government", "other"] as const;
 export type OrganizationType = (typeof ORGANIZATION_TYPES)[number];
@@ -43,8 +44,8 @@ export interface IOrganization extends Document {
   requireTwoFactor: boolean;
   requireSso: boolean;
   allowManagerInvites: boolean;
-  /** Created at a Google or Microsoft sign-up with no company given; the Owner is asked to name it. */
-  needsName: boolean;
+  /** Where the Owner is in onboarding (details → plan → team → done). Older organizations are "done". */
+  onboardingStep: OnboardingStep;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -90,7 +91,7 @@ const organizationSchema = new Schema<IOrganization>(
     // Members whose email is on the SSO connection's domains must use it (the Owner is exempt).
     requireSso: { type: Boolean, default: false },
     allowManagerInvites: { type: Boolean, default: false },
-    needsName: { type: Boolean, default: false },
+    onboardingStep: { type: String, enum: ONBOARDING_STEPS, default: "done", required: true },
   },
   { timestamps: true },
 );
