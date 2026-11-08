@@ -304,6 +304,45 @@ test("Microsoft: unverified tenant email is refused before any account work", as
   assert.equal(h.state.owners.length + h.state.links.length, 0);
 });
 
+/* ---------- ORG-306: verified-domain match ---------- */
+
+test("Microsoft: a new person on another organization's verified domain gets no organization of their own", async () => {
+  const asked = [];
+  const h = harness({ async domainOrganizationFor(email) { asked.push(email); return email.endsWith("@fabrikam.example") ? { name: "Fabrikam" } : null; } });
+  h.state.claims = { iss: microsoftIssuerFor(TENANT), sub: "s", tid: TENANT, oid: "o1", email: "pat@fabrikam.example", xms_edov: true };
+  const result = await roundTrip(h, { kind: "microsoft" });
+  assert.equal(result.kind, "error");
+  assert.equal(result.code, "ORGANIZATION_DOMAIN_MATCH");
+  assert.equal(h.state.owners.length, 0, "no organization is created");
+  assert.deepEqual(asked, ["pat@fabrikam.example"]);
+
+  // Another domain still creates an Owner as before.
+  const other = harness({ async domainOrganizationFor() { return null; } });
+  other.state.claims = { ...h.state.claims, email: "pat@contoso.example" };
+  const created = await roundTrip(other, { kind: "microsoft" });
+  assert.equal(created.kind, "handoff", JSON.stringify(created));
+  assert.equal(other.state.owners.length, 1);
+});
+
+test("Microsoft: an existing account on a matched domain still signs in", async () => {
+  const h = harness({ async domainOrganizationFor() { throw new Error("must not be asked for existing accounts"); } });
+  h.state.claims = { iss: microsoftIssuerFor(TENANT), sub: "s", tid: TENANT, oid: "o1", email: "pat@fabrikam.example", xms_edov: true };
+  h.state.users.push({ userId: "u-existing", email: "pat@fabrikam.example", organizationId: "org-fab", identities: [], isBlocked: false });
+  const result = await roundTrip(h, { kind: "microsoft" });
+  const { outcome } = await h.signIn.exchange({ handoff: result.handoff, bind: BIND });
+  assert.equal(outcome.userId, "u-existing");
+  assert.equal(outcome.isNewUser, false);
+});
+
+test("company SSO first sign-in still joins the connection's organization (no domain-match stop)", async () => {
+  const h = harness({ async domainOrganizationFor() { return { name: "Acme" }; } });
+  const result = await roundTrip(h);
+  const { outcome } = await h.signIn.exchange({ handoff: result.handoff, bind: BIND });
+  assert.equal(outcome.organizationId, "org1");
+  assert.equal(outcome.role, "planner");
+  assert.deepEqual(h.state.joined.map((j) => j.email), ["new@acme.example"]);
+});
+
 /* ---------- password gate ---------- */
 
 test("password sign-in routes are on unless PASSWORD_SIGN_IN_ENABLED=false", () => {
