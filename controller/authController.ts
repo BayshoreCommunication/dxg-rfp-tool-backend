@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import crypto from "node:crypto";
 import { AuthRequest } from "../middleware/auth";
 import { isAwaitingPlacement, ORGANIZATION_SETUP_REQUIRED } from "../src/modules/auth/infrastructure/mongo/organizationSetup";
+import { verifiedDomainOrganization } from "../src/modules/accessRequests/accessRequests";
 import {
   authenticateGoogleIdentity,
   authenticateWithCredentials,
@@ -104,6 +105,15 @@ const presentedRefreshToken = (req: Request) =>
   (isAuthorizedBff(req) && typeof req.body?.refreshToken === "string"
     ? req.body.refreshToken
     : "");
+// ORG-306: answered only to someone who proved the address (signup code or Google), so the name
+// of the organization that verified the domain may be shown.
+const domainMatchResponse = (organizationName: string) => ({
+  success: false,
+  code: "ORGANIZATION_DOMAIN_MATCH",
+  errorCode: "ORGANIZATION_DOMAIN_MATCH",
+  message: `${organizationName} already uses RFPilot with your email domain. Request access, or choose to create a separate organization.`,
+  organizationName,
+});
 export const createSession = async (req: Request, res: Response, user: {
   id: string;
   organizationId?: string;
@@ -236,7 +246,14 @@ export const verifySignupOtp = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    res.status(200).json({ success: true, message: "Email verified successfully" });
+    // ORG-306: the code proved this address, so naming the organization that verified its domain
+    // reveals nothing to a stranger. The dashboard then offers "Request access".
+    const match = await verifiedDomainOrganization(email);
+    res.status(200).json({
+      success: true,
+      message: "Email verified successfully",
+      organizationMatch: match ? { name: match.name } : null,
+    });
   } catch (error) {
     console.error("Verify signup OTP error:", error);
     res.status(500).json({
@@ -254,6 +271,14 @@ export const verifySignupOtp = async (req: Request, res: Response): Promise<void
 export const signUp = async (req: Request, res: Response): Promise<void> => {
   try {
     if (rejectInvalidBffCredential(req, res)) return;
+    // ORG-306: on a verified domain, creating a separate organization is an explicit choice.
+    if (req.body?.separateOrganization !== true) {
+      const match = await verifiedDomainOrganization(req.body?.email);
+      if (match) {
+        res.status(409).json(domainMatchResponse(match.name));
+        return;
+      }
+    }
     const result = await registerCustomerAccount(req.body ?? {});
     if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Name, email, and password are required" });
@@ -389,7 +414,7 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
 export const signInWithGoogle = async (req: Request, res: Response): Promise<void> => {
   try {
     if (rejectInvalidBffCredential(req, res)) return;
-    const result = await authenticateGoogleIdentity(req.body?.idToken);
+    const result = await authenticateGoogleIdentity(req.body?.idToken, { separateOrganization: req.body?.separateOrganization === true });
     if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Google ID token is required" });
       return;
@@ -411,6 +436,11 @@ export const signInWithGoogle = async (req: Request, res: Response): Promise<voi
         code: "SSO_REQUIRED",
         message: "Your company requires you to sign in with its own sign-in. Use \"Sign in with your company\".",
       });
+      return;
+    }
+
+    if (result.kind === "domain_match") {
+      res.status(409).json(domainMatchResponse(result.organizationName));
       return;
     }
 

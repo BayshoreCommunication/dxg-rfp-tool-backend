@@ -40,7 +40,8 @@ type CreateNotificationInput = {
     | "proposal_expiring_soon"
     | "proposal_expired"
     | "vendor_response"
-    | "support_ticket";
+    | "support_ticket"
+    | "access_request";
   title: string;
   message: string;
   metadata?: Record<string, unknown>;

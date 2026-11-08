@@ -1,3 +1,4 @@
+import { verifiedDomainOrganization } from "../accessRequests/accessRequests";
 import crypto from "node:crypto";
 import { createRemoteJWKSet } from "jose";
 import { bcryptPasswordHasher } from "../../shared/security/bcryptPasswordHasher";
@@ -71,6 +72,7 @@ const oidc = { discover, authorizationUrl, exchangeCode, verifyIdToken };
 const randomPasswordHash = async () => bcryptPasswordHasher.hash(crypto.randomBytes(32).toString("base64url"));
 
 export const federatedSignIn = createFederatedSignIn({
+  domainOrganizationFor: verifiedDomainOrganization,
   store: ssoStateStore(),
   oidc,
   microsoft: microsoftConfig,
