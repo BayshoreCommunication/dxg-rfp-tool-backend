@@ -36,7 +36,7 @@ Production incident reported
    Mongo → Atlas status + NAT EIP allowlist (13.58.171.171)
    Postgres → RDS console + connections alarm
    Redis → ElastiCache console (queue work self-heals from the outbox)
-   SES → sandbox limits (only verified recipients receive mail!)
+   SES → account dashboard + suppression list
    OpenAI → status page / usage limits (AI features degrade, API stays up)
         ↓
 8. Caused by the last deploy and not trivially fixable?

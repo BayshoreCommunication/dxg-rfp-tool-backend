@@ -1,7 +1,8 @@
 # RFPilot backend on AWS
 
 CDK (TypeScript) infrastructure for the RFPilot backend: ECS Fargate services
-for the API, durable worker, outbox dispatcher, and ClamAV; ALB + WAF; RDS
+for the API, durable worker, outbox dispatcher, AI gateway, and ClamAV; ALB
+(optional WAF, currently off); RDS
 PostgreSQL 16 (pgvector); ElastiCache Redis (TLS + AUTH, cluster mode
 disabled); private SSE-KMS S3 buckets; CloudFront for app assets; Secrets
 Manager; CloudWatch alarms; GitHub OIDC deploy roles. Region: `us-east-2`.
@@ -15,9 +16,9 @@ DigitalOcean (legacy)` workflow).
 | Stack | Contents | Deploy cadence |
 |---|---|---|
 | `Rfpilot-Cicd` | ECR, GitHub OIDC provider + per-env deploy roles | Rarely, by an operator |
-| `Rfpilot-<env>-Network` | VPC, subnets, NAT, endpoints, security groups | Rarely, by an operator |
+| `Rfpilot-<env>-Network` | VPC, subnets, NAT, S3 gateway endpoint, security groups | Rarely, by an operator |
 | `Rfpilot-<env>-Data` | KMS, S3 buckets, RDS, Redis, secrets, assets CDN | Rarely, by an operator; termination-protected in production |
-| `Rfpilot-<env>-App` | ECS services, ALB, WAF, migration task definition | Every release, by CI |
+| `Rfpilot-<env>-App` | ECS services, ALB, optional WAF (off), migration task definition | Every release, by CI |
 | `Rfpilot-<env>-Observability` | Alarms + SNS alert topic | With App |
 
 `<env>` is `production` (deployed from the `production` branch) — the only
@@ -134,7 +135,7 @@ both the source secret and the composed URL keys.
 
 ## Backups and restore
 
-- **RDS**: automated backups (30d in production) + manual
+- **RDS**: automated backups (7 days in production) + manual
   pre-migration snapshots. Restore creates a new instance: restore, then
   update `POSTGRES_URL`/`POSTGRES_MIGRATION_URL` in the app secret and force
   new deployments.
@@ -145,6 +146,8 @@ both the source secret and the composed URL keys.
 
 ## Cost levers
 
-Biggest knobs, in order: RDS Multi-AZ (production), NAT gateway count,
-Fargate task sizes, Redis replica count, Atlas tier — all in
+Production runs ~$190/month for RFPilot (Oct 2026). Biggest knobs, in
+order: Fargate task sizes, NAT gateway count, RDS Multi-AZ (currently off,
+pre-launch), Redis replica count (currently 0), Container Insights
+(currently off), Atlas tier — all in
 [`lib/config.ts`](lib/config.ts) except Atlas.

@@ -23,7 +23,7 @@
 
 1. **Quality gates** (`npm run ci`): `contracts:check` → `eslint` →
    `tsc --noEmit` → `migration:check` → `npm test` (Node test runner,
-   621 tests, `--runInBand`) → `npm run build`. Plus infra:
+   `--runInBand`) → `npm run build`. Plus infra:
    `tsc --noEmit` and `cdk synth --strict -c nag=true` in `deploy/aws`
    (cdk-nag findings fail the build unless explicitly suppressed with a
    rationale in `bin/rfpilot.ts`).

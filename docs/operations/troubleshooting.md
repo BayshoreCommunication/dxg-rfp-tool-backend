@@ -109,11 +109,11 @@ api task** — there is no nginx or other reverse proxy.
 
 ## Email not sending
 
-- API logs show `[SMTP] Email sent: <id@dxg-agency.com>` on success.
-- ⚠️ **SES is in sandbox**: delivery only works to verified identities
-  (SES console → Identities). Real-user OTP delivery is blocked until
-  production access is granted (pending the real-domain purchase — see
-  `deploy/aws/STATE.md`). This is a known limitation, not a regression.
+- API logs show `[SMTP] Email sent: <id@...>` on success. Sender is
+  `noreply@av-rfpilot.com`.
+- SES has production access (since 2026-08-09), so any address can receive
+  mail. If one user doesn't get mail, check SES → Suppression list for their
+  address, then the account dashboard for bounce/complaint rates.
 - Auth failures: SES SMTP uses IAM-derived credentials
   (`SMTP_USER`=access-key-id, `SMTP_PASSWORD`=derived) from IAM user
   `rfpilot-$ENV-ses-smtp` — the username is *not* the mail address.
