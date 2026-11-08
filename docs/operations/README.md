@@ -1,7 +1,7 @@
 # Backend Operations Documentation
 
 > Developer operations portal for the RFPilot backend on AWS. Last verified
-> against the live infrastructure: 2026-08-03. Everything documented here was
+> against the live infrastructure: 2026-11-08. Everything documented here was
 > reverse-engineered from the actual deployed system — resource names, log
 > groups, and commands are real.
 
@@ -33,7 +33,7 @@ to [Troubleshooting](troubleshooting.md) or [Incident Response](incident-respons
 The backend is a Node.js 20 / Express monolith compiled to one Docker image
 with multiple entrypoints (API, durable worker, outbox dispatcher, AI
 gateway). It runs on **ECS Fargate** in **us-east-2** (AWS account
-`295229565954`) behind an **ALB** with a **WAF**, in a single
+`295229565954`) behind an **ALB** (no WAF — `wafEnabled: false`), in a single
 environment — `production` — with its own VPC, RDS PostgreSQL 16,
 ElastiCache Redis, S3 buckets, CloudFront asset CDN, and Secrets Manager
 secret. MongoDB is external (Atlas, database `dxg_rfp_tool_prod`). Everything
@@ -41,6 +41,19 @@ is **CDK TypeScript** (`deploy/aws/lib/`), and deployment is **GitHub Actions
 via OIDC**: pushing the `production` branch deploys production, and `main`
 runs CI only. A separate `staging` environment existed until 2026-08-18.
 Public entry point: `https://api.dxg-agency.com`.
+
+## Current production posture (2026-11-08)
+
+Production runs a deliberately reduced **pre-launch** posture
+(`PRE_LAUNCH_REDUCED_REDUNDANCY = true` in `deploy/aws/lib/config.ts`):
+RDS `db.t4g.micro` **single-AZ** with 7-day backups, Redis `cache.t4g.micro`
+with **no replica**, Fargate api/worker/clamav at 0.5 vCPU, Container
+Insights off, no interface VPC endpoints, WAF off. Set the flag back to
+`false` (and snapshot RDS first) before real customer load — see
+[Environments](environments.md#pre-launch-posture).
+
+Not yet in place: CloudTrail, GuardDuty, MFA on the IAM users `aidev` and
+`akib`. The old DigitalOcean droplet (`68.183.227.9`) is still running.
 
 ## Browsing these docs as a website
 

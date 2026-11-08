@@ -40,7 +40,7 @@ promoting `main`.
    existing migration.
 3. Big/risky change? Take a manual snapshot first:
    `aws rds create-db-snapshot --db-instance-identifier <id> --db-snapshot-identifier pre-<sha>`
-   (automated backups exist regardless: 30d in production).
+   (automated backups exist regardless: 7 days in production).
 4. Zero-downtime notes: the API is stop-then-start anyway (~30–60s window
    per deploy), so you get a brief natural quiesce — but the worker and
    dispatcher keep running on old code against the new schema during the
