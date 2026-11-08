@@ -34,10 +34,10 @@ const notifier: Notifier = {
       sendTransactionalEmail({
         to: recipient.email,
         subject: `${input.name} asked to join ${input.organizationName} on RFPilot`,
-        text: `${who} signed up with your verified email domain and asked to join ${input.organizationName}. Approve or deny the request in Users: ${reviewUrl}`,
+        text: `${who} signed up with an email address on your company's domain and asked to join ${input.organizationName}. Approve or deny the request in Users: ${reviewUrl}`,
         html: shell(
           "New access request",
-          `<p><strong>${escapeHtml(input.name)}</strong> (${escapeHtml(input.email)}) signed up with your verified email domain and asked to join <strong>${escapeHtml(input.organizationName)}</strong>.</p>
+          `<p><strong>${escapeHtml(input.name)}</strong> (${escapeHtml(input.email)}) signed up with an email address on your company's domain and asked to join <strong>${escapeHtml(input.organizationName)}</strong>.</p>
            <p><a href="${escapeHtml(reviewUrl)}" style="display:inline-block;background:#0f1b57;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;">Review the request</a></p>`,
         ),
       })));

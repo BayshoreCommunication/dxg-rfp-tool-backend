@@ -34,7 +34,7 @@ import { ensureIdentityProjection } from "../dataFoundation/composition";
 import { REFRESH_TOKEN_EXPIRY_MS } from "../../../config/jwt";
 import crypto from 'node:crypto';
 import { mongoSsoRequiredFor } from "../sso/infrastructure/mongoSsoRepositories";
-import { verifiedDomainOrganization } from "../accessRequests/accessRequests";
+import { organizationForEmailDomain } from "../accessRequests/accessRequests";
 
 export const requestAuthenticationOtp = createRequestOtp({
   users: mongoAuthUserLookup,
@@ -111,7 +111,7 @@ export const authenticateGoogleIdentity = createAuthenticateGoogleIdentity({
   passwords: bcryptPasswordHasher,
   tokens: jwtAccessTokenIssuer,
   ssoRequiredFor: mongoSsoRequiredFor,
-  domainOrganizationFor: verifiedDomainOrganization,
+  domainOrganizationFor: organizationForEmailDomain,
 });
 
 export const authenticationSessions = createSessionManager({
