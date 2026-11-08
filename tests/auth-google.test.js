@@ -95,3 +95,36 @@ test("new verified Google identity creates one hashed fallback and issues token"
     ["token", { userId: "u2", email: identity.email, role: "customer" }],
   ]);
 });
+
+test("a new Google account on a verified organization domain is offered Request access first (ORG-306)", async () => {
+  let created = 0;
+  const deps = {
+    verifier: { async verify() { return identity; } },
+    accounts: {
+      async findAndLinkExisting() { return null; },
+      async createGoogleAccount() { created += 1; return { id: "u2", name: "New", email: identity.email, role: "customer" }; },
+    },
+    secrets: { generate() { return "secret"; } },
+    passwords: { async hash() { return "hash"; } },
+    tokens: { issue() { return "token"; } },
+    domainOrganizationFor: async (email) => (email === identity.email ? { name: "Example Org" } : null),
+  };
+  const authenticate = createAuthenticateGoogleIdentity(deps);
+  assert.deepEqual(await authenticate("signed-token"), { kind: "domain_match", organizationName: "Example Org" });
+  assert.equal(created, 0, "nothing is created before the person chooses");
+
+  const separate = await authenticate("signed-token", { separateOrganization: true });
+  assert.equal(separate.kind, "authenticated");
+  assert.equal(created, 1);
+});
+
+test("an existing Google account signs in even on a matched domain (ORG-306)", async () => {
+  const user = { id: "u1", name: "User", email: identity.email, role: "customer" };
+  const authenticate = createAuthenticateGoogleIdentity({
+    verifier: { async verify() { return identity; } },
+    accounts: { async findAndLinkExisting() { return { user, isBlocked: false }; } },
+    secrets: {}, passwords: {}, tokens: { issue() { return "token"; } },
+    domainOrganizationFor: async () => { throw new Error("must not be asked for existing accounts"); },
+  });
+  assert.equal((await authenticate("signed-token")).kind, "authenticated");
+});

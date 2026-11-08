@@ -50,6 +50,7 @@ export type SsoErrorCode =
   | "USER_BLOCKED"
   | "SSO_INVITE_ORG_MISMATCH"
   | "SSO_HANDOFF_INVALID"
+  | "ORGANIZATION_DOMAIN_MATCH"
   | string; // invitation refusal codes pass through unchanged
 
 export type ActiveConnection = {
@@ -116,6 +117,8 @@ export type FederatedSignInDependencies = {
     acceptWithPerson(token: string, person: VerifiedPerson, method: "sso" | "company_sso", correlationId: string): Promise<InvitationOutcome>;
   };
   audit(event: { organizationId: string; userId: string; action: string; reason: string; correlationId: string; metadata?: Record<string, unknown> }): Promise<void>;
+  /** ORG-306: the organization that verified the email's domain, if any. */
+  domainOrganizationFor?(email: string): Promise<{ name: string } | null>;
 };
 
 type PendingAuthorization = {
@@ -247,6 +250,10 @@ export const createFederatedSignIn = (deps: FederatedSignInDependencies) => {
       });
       return { userId: joined.userId, organizationId: connection.organizationId, method, isNewUser: true, role: "planner" };
     }
+    // ORG-306: a new Microsoft account on another organization's verified domain doesn't get an
+    // organization of its own here; email sign-up lets the person request access or choose to
+    // create a separate organization.
+    if (await deps.domainOrganizationFor?.(person.email)) return { error: "ORGANIZATION_DOMAIN_MATCH" };
     const created = await deps.accounts.createOwner(person);
     return { ...created, method, isNewUser: true };
   };

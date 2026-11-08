@@ -194,13 +194,16 @@ test('re-running an applied run skips customers already moved', async () => {
   assert.equal(report.customers, 0, 'no customers left in the shared organization to consider');
 });
 
-test('a migrated customer signs in and sees exactly their previous proposals', async () => {
+test('a migrated customer keeps exactly their previous proposals and waits for DXG to place them', async () => {
   const holding = await Organization.findOne({ slug: `legacy-${ids.a}` }).lean();
+  // tenant-scoped: the holding tenant's proposals
+  const kept = (await Proposal.find({ organizationId: holding!._id }).select('_id').lean()).map((p) => String(p._id)).sort();
+  assert.deepEqual(kept, ids.aProposals.map(String).sort());
+  // Until DXG places them, a session in the holding tenant is refused (and ended).
   const session = await beginAuthenticatedSession({ userId: String(ids.a), organizationId: String(holding!._id), correlationId: randomMongoId() });
   const res = await fetch(`${baseUrl}/api/proposals?limit=50`, { headers: { authorization: `Bearer ${session.accessToken}` } });
-  assert.equal(res.status, 200);
-  const listed = ((await res.json()) as { data: Array<{ _id: string }> }).data.map((p) => String(p._id)).sort();
-  assert.deepEqual(listed, ids.aProposals.map(String).sort());
+  assert.equal(res.status, 401);
+  assert.equal(((await res.json()) as { code?: string }).code, 'ORGANIZATION_SETUP_REQUIRED');
 });
 
 test('rollback restores the shared organization exactly', async () => {

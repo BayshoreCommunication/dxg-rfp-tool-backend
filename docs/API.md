@@ -78,6 +78,8 @@ ORG-110, DXG admins only, at `/api/admin/legacy-customers` (`routes/adminLegacyC
 
 - `POST /:userId/placements` `{ target: "new", organization }` or `{ target: "existing", organizationId, role, teamId? }`. `teamId` must be an active team of that organization (400 `UNKNOWN_TEAM`). A second placement of the same user while one runs is 409 `PLACEMENT_IN_PROGRESS`. A failure leaves nothing moved (409 `PLACEMENT_FAILED`); a run whose ORG-109 checks fail is rolled back at once and answers 409 `PLACEMENT_VERIFICATION_FAILED` with `details.verification`.
 - `POST /placements/:runId/rollback` moves back exactly the records the run moved (journaled ids); RFPs given to the user afterwards stay and are counted in `leftInTarget`. One rollback runs at a time (409 `ROLLBACK_IN_PROGRESS`, `ALREADY_ROLLED_BACK`); 409 `ROLLBACK_CONFLICT` when Postgres rows created since still depend on the user's rows.
+- Until placed, the account can't use RFPilot: every sign-in method answers 403 `ORGANIZATION_SETUP_REQUIRED` (after the password or identity check, before 2FA), and any request on an existing session answers 401 `ORGANIZATION_SETUP_REQUIRED` and revokes all of that account's sessions.
+- The API refuses placement with 503 `PLACEMENT_REQUIRES_MIGRATION_ROLE` when it has no `POSTGRES_MIGRATION_URL`, which is the case in production. There, run `node dist/scripts/placeLegacyCustomer.js` (`--list`; `--email --admin-email --new-org` or `--org-slug --role`; `--rollback=<runId>`; dry run unless `--apply`) as a one-off task on the migrate task definition, which holds both MongoDB and the migration role.
 
 ## Proposal sharing
 
@@ -101,6 +103,21 @@ Routes under `/api/organization/domains` (`organization:manage`); rules in `src/
 
 - `POST /api/organization/domains` `{ domain }` answers 201 with the TXT record to publish, also for a domain another organization already holds verified: the response never says a domain is taken. Such a domain stays `pending` and its checks report `lastCheckOutcome: "not_verified"`, because only one organization can hold a domain verified. Refusals: 400 `DOMAIN_INVALID`, 422 `DOMAIN_NOT_VERIFIABLE` (public mail providers), 409 `DOMAIN_LIMIT_REACHED`, 409 `DOMAIN_ALREADY_ADDED`.
 - The cron worker checks due domains every 15 minutes, five at a time, leasing each record so concurrent tasks don't check it twice. A check that errors is retried after an hour (`dns_error:<code>` or `check_failed`).
+
+## Domain-match access requests (ORG-306)
+
+Someone signing up with an email on a domain an organization has **verified** (ORG-305) is offered "Request access" instead of silently getting a separate organization. Claimed-but-unverified domains and public mail providers never match, and a match never reveals more than the organization's name, which only someone who passed the emailed code sees. Rules in `src/modules/accessRequests/`.
+
+- `POST /api/auth/verify-otp` (signup) also answers `organizationMatch: { name } | null`.
+- `POST /api/auth/register`, `POST /api/auth/google`: a NEW account on a matched domain answers 409 `ORGANIZATION_DOMAIN_MATCH` with `organizationName`, unless the body has `separateOrganization: true` (the person chose to create their own organization). Existing accounts sign in as before. A first Microsoft or company-SSO sign-in that would create an organization on a matched domain redirects with `error=ORGANIZATION_DOMAIN_MATCH`; the person can request access through email signup.
+- `POST /api/auth/access-requests` `{ email, name }` (public; 5 per 15 minutes per email and IP). The email must hold a verified signup code (403 `EMAIL_NOT_VERIFIED`), which the request uses up. Answers 201 `{ status: "pending" | "invited", organizationName }`; `invited` when the organization auto-approves its domain (the invitation is sent at once, in the Owner's name). 409 `NO_ORGANIZATION_MATCH`, 409 `ACCOUNT_EXISTS`, 400 `INVALID_NAME`. Repeating a pending request is a no-op. Owners and Admins get a bell notification (`type: "access_request"`) and an email.
+- Routes under `/api/v1/organization/access-requests` (`organization:manage`, own organization only):
+  - `GET ?status=pending|approved|denied|all` (default `pending`) → `{ data: [{ id, email, name, status, autoApproved, decidedAt, createdAt }] }`.
+  - `POST /:id/approve` `{ role?, teamId? }` (default Planner) sends an ordinary invitation; no account exists until it is accepted. Invitation refusals pass through with their codes.
+  - `POST /:id/deny` emails the requester, who can still create their own organization.
+  - Deciding twice: 409 `ACCESS_REQUEST_NOT_PENDING`; another organization's request: 404 `ACCESS_REQUEST_NOT_FOUND`.
+  - `GET|PUT /settings` `{ autoApproveDomain }` → `{ autoApproveDomain, verifiedDomains }`; audited as `organization.settings.updated`.
+- Audit actions: `organization.access_request.created`, `.auto_approved`, `.approved`, `.denied`.
 
 ## Organization profile
 
