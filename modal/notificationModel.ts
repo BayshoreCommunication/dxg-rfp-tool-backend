@@ -5,7 +5,8 @@ export type NotificationType =
   | "proposal_expiring_soon"
   | "proposal_expired"
   | "vendor_response"
-  | "support_ticket";
+  | "support_ticket"
+  | "access_request";
 
 export interface INotification extends Document {
   organizationId?: mongoose.Types.ObjectId;
@@ -44,6 +45,7 @@ const notificationSchema = new Schema<INotification>(
         "proposal_expired",
         "vendor_response",
         "support_ticket",
+        "access_request",
       ],
       required: true,
     },

@@ -104,6 +104,21 @@ Routes under `/api/organization/domains` (`organization:manage`); rules in `src/
 - `POST /api/organization/domains` `{ domain }` answers 201 with the TXT record to publish, also for a domain another organization already holds verified: the response never says a domain is taken. Such a domain stays `pending` and its checks report `lastCheckOutcome: "not_verified"`, because only one organization can hold a domain verified. Refusals: 400 `DOMAIN_INVALID`, 422 `DOMAIN_NOT_VERIFIABLE` (public mail providers), 409 `DOMAIN_LIMIT_REACHED`, 409 `DOMAIN_ALREADY_ADDED`.
 - The cron worker checks due domains every 15 minutes, five at a time, leasing each record so concurrent tasks don't check it twice. A check that errors is retried after an hour (`dns_error:<code>` or `check_failed`).
 
+## Domain-match access requests (ORG-306)
+
+Someone signing up with an email on a domain an organization has **verified** (ORG-305) is offered "Request access" instead of silently getting a separate organization. Claimed-but-unverified domains and public mail providers never match, and a match never reveals more than the organization's name, which only someone who passed the emailed code sees. Rules in `src/modules/accessRequests/`.
+
+- `POST /api/auth/verify-otp` (signup) also answers `organizationMatch: { name } | null`.
+- `POST /api/auth/register`, `POST /api/auth/google`: a NEW account on a matched domain answers 409 `ORGANIZATION_DOMAIN_MATCH` with `organizationName`, unless the body has `separateOrganization: true` (the person chose to create their own organization). Existing accounts sign in as before. A first Microsoft or company-SSO sign-in that would create an organization on a matched domain redirects with `error=ORGANIZATION_DOMAIN_MATCH`; the person can request access through email signup.
+- `POST /api/auth/access-requests` `{ email, name }` (public; 5 per 15 minutes per email and IP). The email must hold a verified signup code (403 `EMAIL_NOT_VERIFIED`), which the request uses up. Answers 201 `{ status: "pending" | "invited", organizationName }`; `invited` when the organization auto-approves its domain (the invitation is sent at once, in the Owner's name). 409 `NO_ORGANIZATION_MATCH`, 409 `ACCOUNT_EXISTS`, 400 `INVALID_NAME`. Repeating a pending request is a no-op. Owners and Admins get a bell notification (`type: "access_request"`) and an email.
+- Routes under `/api/v1/organization/access-requests` (`organization:manage`, own organization only):
+  - `GET ?status=pending|approved|denied|all` (default `pending`) → `{ data: [{ id, email, name, status, autoApproved, decidedAt, createdAt }] }`.
+  - `POST /:id/approve` `{ role?, teamId? }` (default Planner) sends an ordinary invitation; no account exists until it is accepted. Invitation refusals pass through with their codes.
+  - `POST /:id/deny` emails the requester, who can still create their own organization.
+  - Deciding twice: 409 `ACCESS_REQUEST_NOT_PENDING`; another organization's request: 404 `ACCESS_REQUEST_NOT_FOUND`.
+  - `GET|PUT /settings` `{ autoApproveDomain }` → `{ autoApproveDomain, verifiedDomains }`; audited as `organization.settings.updated`.
+- Audit actions: `organization.access_request.created`, `.auto_approved`, `.approved`, `.denied`.
+
 ## Organization profile
 
 Routes under `/api/organization/profile`; rules in `src/modules/organizationProfile/`.
