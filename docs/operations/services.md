@@ -123,3 +123,4 @@ the exit code**):
 | `backfillPostgresProposalReferences.js --organization-id=<id>` | Mirror org/users/proposals into the Postgres AI foundation |
 | `migrateAssetUrls.js --from=<url> --to=<url>` | Rewrite stored absolute asset URLs |
 | `migratePostgres.js up\|rollback` | Schema migrations (also fine on the migrate task def) |
+| `purgeTestAccounts.js --domain=<domain>` / `--emails=<a>,<b>` | List accounts on a domain / remove test sign-ups (accounts, and organizations whose every member is removed) so they can sign up fresh. Refuses organizations with RFPs or whose Owner leaves others behind. Leaves audit events and Postgres rows |
