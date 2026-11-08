@@ -7,7 +7,7 @@ import { mongoOtpRepository } from "../src/modules/auth/infrastructure/mongo/mon
 import type { InvitingActor } from "../src/modules/invitations/domain/invitationRules";
 
 /* ORG-306. POST /api/auth/access-requests is public: the email must have passed the signup code
-   check, which also proves the person controls an address on the verified domain. The rest is
+   check, which also proves the person controls an address on the matched domain. The rest is
    for Owners and Admins (organization:manage), always in the caller's own organization. */
 
 const fail = (res: Response, status: number, code: string, message: string, extra: Record<string, unknown> = {}) =>
@@ -100,6 +100,9 @@ export const createAccessRequestController = (
     try {
       const outcome = await service.setAutoApprove(actorOf(req), req.body?.autoApproveDomain, correlationId(req));
       if (outcome.kind === "validation") return fail(res, 400, "VALIDATION_ERROR", "autoApproveDomain must be true or false");
+      if (outcome.kind === "no_verified_domain") {
+        return fail(res, 409, "NO_VERIFIED_DOMAIN", "Verify a domain in Security before turning on auto-approve.");
+      }
       return res.status(200).json({ success: true, data: outcome.settings });
     } catch (error) {
       return handleError(res, "settings")(error);

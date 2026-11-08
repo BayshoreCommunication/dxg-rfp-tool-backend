@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import crypto from "node:crypto";
 import { AuthRequest } from "../middleware/auth";
 import { isAwaitingPlacement, ORGANIZATION_SETUP_REQUIRED } from "../src/modules/auth/infrastructure/mongo/organizationSetup";
-import { verifiedDomainOrganization } from "../src/modules/accessRequests/accessRequests";
+import { organizationForEmailDomain } from "../src/modules/accessRequests/accessRequests";
 import {
   authenticateGoogleIdentity,
   authenticateWithCredentials,
@@ -246,9 +246,9 @@ export const verifySignupOtp = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    // ORG-306: the code proved this address, so naming the organization that verified its domain
-    // reveals nothing to a stranger. The dashboard then offers "Request access".
-    const match = await verifiedDomainOrganization(email);
+    // ORG-306: the code proved this address, so naming the organization already using its company
+    // domain reveals nothing to a stranger. The dashboard then offers "Request access".
+    const match = await organizationForEmailDomain(email);
     res.status(200).json({
       success: true,
       message: "Email verified successfully",
@@ -271,9 +271,9 @@ export const verifySignupOtp = async (req: Request, res: Response): Promise<void
 export const signUp = async (req: Request, res: Response): Promise<void> => {
   try {
     if (rejectInvalidBffCredential(req, res)) return;
-    // ORG-306: on a verified domain, creating a separate organization is an explicit choice.
+    // ORG-306: on a company domain already in use, creating a separate organization is an explicit choice.
     if (req.body?.separateOrganization !== true) {
-      const match = await verifiedDomainOrganization(req.body?.email);
+      const match = await organizationForEmailDomain(req.body?.email);
       if (match) {
         res.status(409).json(domainMatchResponse(match.name));
         return;
