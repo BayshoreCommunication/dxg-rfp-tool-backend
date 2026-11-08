@@ -9,9 +9,13 @@ import type { InvitingActor } from "../invitations/domain/invitationRules";
 
 /* ORG-306: domain-match access requests.
 
-   At signup, an email whose domain an organization has VERIFIED (ORG-305) is matched to that
-   organization; public mail providers never match, and an unverified claim never reveals an
-   organization. The person may request access or create a separate organization.
+   At signup, an email on a company domain is matched to the organization already using that
+   domain: first one that VERIFIED it by DNS (ORG-305), otherwise the oldest organization with an
+   active member who proved an email address on it (signup code, Google, Microsoft or an accepted
+   invitation). That second rule closes the gap before anyone verifies the domain, which is when
+   colleagues most often sign up. Public mail providers never match, and a domain merely added
+   (not verified) in Settings proves nothing. The person may request access or create a separate
+   organization. Auto-approve only ever applies to a DNS-verified domain.
 
    Approving a request, by an Owner or Admin or automatically when the organization turned on
    auto-approve, sends an ordinary invitation (ORG-203). Joining then goes through the accept
@@ -20,7 +24,8 @@ import type { InvitingActor } from "../invitations/domain/invitationRules";
 
 export { ACCESS_REQUEST_STATUSES };
 
-export type DomainOrganization = { id: string; name: string; autoApproveDomain: boolean };
+export type DomainMatchBasis = "verified_domain" | "member_email";
+export type DomainOrganization = { id: string; name: string; autoApproveDomain: boolean; basis: DomainMatchBasis };
 
 const ADMIN_ROLES = ["owner", "organization_admin"];
 const NAME_MAX = 200;
@@ -28,18 +33,42 @@ const objectIdPattern = /^[a-f0-9]{24}$/i;
 
 export const emailDomainOf = (email: string): string => email.slice(email.lastIndexOf("@") + 1).toLowerCase();
 
-/* The organization that verified this email's domain, if any. */
-export const verifiedDomainOrganization = async (rawEmail: unknown): Promise<DomainOrganization | null> => {
+const RESERVED_EXAMPLE_DOMAINS = new Set(["example.com", "example.net", "example.org"]);
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/* The organization already using this email's company domain, if any (see the header). */
+export const organizationForEmailDomain = async (rawEmail: unknown): Promise<DomainOrganization | null> => {
   if (typeof rawEmail !== "string") return null;
   const email = rawEmail.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
   const domain = emailDomainOf(email);
   if (isPublicMailDomain(domain)) return null;
-  const organization = await Organization.findOne({ verifiedDomains: domain, kind: "customer", status: "active" })
+
+  const verified = await Organization.findOne({ verifiedDomains: domain, kind: "customer", status: "active" })
     .select("_id name autoApproveDomain")
     .lean<{ _id: mongoose.Types.ObjectId; name: string; autoApproveDomain?: boolean } | null>();
+  if (verified) {
+    return { id: String(verified._id), name: verified.name, autoApproveDomain: verified.autoApproveDomain === true, basis: "verified_domain" };
+  }
+
+  // Reserved example domains (RFC 2606) are shared placeholders, never one company.
+  if (RESERVED_EXAMPLE_DOMAINS.has(domain)) return null;
+  // Every account's email was proven when it was created, so an active member on the domain is
+  // evidence the organization belongs to that company. Suffix match: small collection for now;
+  // index an emailDomain field if this grows.
+  const users = await User.find({ email: new RegExp(`@${escapeRegex(domain)}$`, "i") })
+    .select("_id").limit(500).lean<{ _id: mongoose.Types.ObjectId }[]>();
+  if (users.length === 0) return null;
+  const memberships = await OrganizationMembership.find({ userId: { $in: users.map((u) => u._id) }, status: "active" })
+    .select("organizationId").lean<{ organizationId: mongoose.Types.ObjectId }[]>();
+  if (memberships.length === 0) return null;
+  const organization = await Organization.findOne({
+    _id: { $in: [...new Set(memberships.map((m) => String(m.organizationId)))] },
+    kind: "customer",
+    status: "active",
+  }).sort({ createdAt: 1 }).select("_id name").lean<{ _id: mongoose.Types.ObjectId; name: string } | null>();
   if (!organization) return null;
-  return { id: String(organization._id), name: organization.name, autoApproveDomain: organization.autoApproveDomain === true };
+  return { id: String(organization._id), name: organization.name, autoApproveDomain: false, basis: "member_email" };
 };
 
 export type AccessRequestView = {
@@ -123,7 +152,7 @@ export const createAccessRequestService = (deps: {
     const email = typeof input.email === "string" ? input.email.trim().toLowerCase() : "";
     const name = typeof input.name === "string" ? input.name.trim().replace(/\s+/g, " ") : "";
     if (!name || name.length > NAME_MAX) return { kind: "validation", code: "INVALID_NAME", message: "Enter your name (up to 200 characters)." };
-    const organization = await verifiedDomainOrganization(email);
+    const organization = await organizationForEmailDomain(email);
     if (!organization) return { kind: "no_match" };
     if (await User.exists({ email })) return { kind: "account_exists" };
 
@@ -239,6 +268,8 @@ export const createAccessRequestService = (deps: {
 
   const setAutoApprove = async (actor: InvitingActor, value: unknown, correlationId: string) => {
     if (typeof value !== "boolean") return { kind: "validation" as const };
+    // Auto-approve trusts the domain itself, so it needs DNS proof (ORG-305).
+    if (value && (await settings(actor.organizationId)).verifiedDomains.length === 0) return { kind: "no_verified_domain" as const };
     await Organization.updateOne({ _id: actor.organizationId }, { $set: { autoApproveDomain: value } });
     await deps.audit({
       organizationId: actor.organizationId, actorUserId: actor.userId, action: "organization.settings.updated",

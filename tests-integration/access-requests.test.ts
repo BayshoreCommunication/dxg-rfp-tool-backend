@@ -25,7 +25,9 @@ let server: http.Server;
 let baseUrl: string;
 let org: Fixture;
 let other: Fixture;
+let proven: Fixture;
 const tag = randomMongoId().slice(0, 8);
+const memberDomain = `mem${tag}.example.org`;
 const domain = `acc${tag}.example.org`;
 const unverified = `unv${tag}.example.org`;
 const emails: string[] = [];
@@ -57,6 +59,9 @@ before(async () => {
   await Promise.all([AccessRequest.init(), Invitation.init(), Otp.init()]);
   org = await seedOrganization('Bayshore Test');
   other = await seedOrganization('Unverified Claim Org');
+  proven = await seedOrganization('Email Proven Org');
+  // No verified domain; one active member proved an address on memberDomain.
+  await User.updateOne({ _id: proven.members.planner.userId }, { $set: { email: `planner-${tag}@${memberDomain}` } });
   await Organization.updateOne({ _id: org.organizationId }, { $set: { verifiedDomains: [domain] } });
   server = http.createServer(app).listen(0);
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -64,13 +69,14 @@ before(async () => {
 
 beforeEach(async () => {
   await Organization.updateOne({ _id: org.organizationId }, { $set: { autoApproveDomain: false } });
+  await Organization.updateOne({ _id: proven.organizationId }, { $set: { autoApproveDomain: false, verifiedDomains: [] } });
 });
 
 after(async () => {
   server?.closeAllConnections();
   server?.close();
   if (mongoose.connection.readyState === 1) {
-    const ids = [org.organizationId, other.organizationId];
+    const ids = [org.organizationId, other.organizationId, proven.organizationId];
     await Promise.all([
       AccessRequest.deleteMany({ organizationId: { $in: ids } }),
       Invitation.deleteMany({ organizationId: { $in: ids } }),
@@ -221,4 +227,56 @@ test('a domain without a verified organization can\'t be used to file a request'
   const res = await call('POST', '/api/auth/access-requests', { email, name: 'No Match' });
   assert.equal(res.status, 409);
   assert.equal(res.body.code, 'NO_ORGANIZATION_MATCH');
+});
+
+// Before anyone verifies the domain by DNS, a colleague of an existing member is still asked first.
+test('an organization with a member on the domain matches before the domain is verified', async () => {
+  const email = address('colleague', memberDomain);
+  await Otp.create({ email, type: 'signup', codeHash: hmacOtpCodeHasher.hash('551199'), verified: false, attempts: 0, maxAttempts: 5, expiresAt: new Date(Date.now() + 600_000) });
+  const verified = await call('POST', '/api/auth/verify-otp', { email, otp: '551199' });
+  assert.deepEqual(verified.body.organizationMatch, { name: 'Email Proven Org' });
+
+  const blocked = await call('POST', '/api/auth/register', { name: 'Colleague', email, password: 'long-enough-pass' });
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.body.organizationName, 'Email Proven Org');
+
+  // Auto-approve never applies without DNS proof, even if the flag were set.
+  await Organization.updateOne({ _id: proven.organizationId }, { $set: { autoApproveDomain: true } });
+  const requested = await call('POST', '/api/auth/access-requests', { email, name: 'Colleague' });
+  assert.equal(requested.status, 201, JSON.stringify(requested.body));
+  assert.equal(requested.body.status, 'pending');
+  assert.equal(await Invitation.exists({ organizationId: proven.organizationId, email }), null);
+  const listed = await call('GET', '/api/v1/organization/access-requests', undefined, proven.members.owner.accessToken);
+  assert.ok(listed.body.data.some((r: { email: string }) => r.email === email));
+});
+
+test('a DNS-verified organization wins over one that only has members on the domain', async () => {
+  const email = address('dnswins', memberDomain);
+  await Organization.updateOne({ _id: org.organizationId }, { $set: { verifiedDomains: [domain, memberDomain] } });
+  try {
+    await verifiedSignupEmail(email);
+    const blocked = await call('POST', '/api/auth/register', { name: 'Dns Wins', email, password: 'long-enough-pass' });
+    assert.equal(blocked.body.organizationName, 'Bayshore Test');
+  } finally {
+    await Organization.updateOne({ _id: org.organizationId }, { $set: { verifiedDomains: [domain] } });
+  }
+});
+
+test('auto-approve can only be turned on with a verified domain', async () => {
+  const refused = await call('PUT', '/api/v1/organization/access-requests/settings', { autoApproveDomain: true }, proven.members.owner.accessToken);
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.code, 'NO_VERIFIED_DOMAIN');
+  const off = await call('PUT', '/api/v1/organization/access-requests/settings', { autoApproveDomain: false }, proven.members.owner.accessToken);
+  assert.equal(off.status, 200);
+});
+
+test('members on public or reserved example domains never make a match', async () => {
+  // Every fixture member is on example.com; that must not turn example.com into a company.
+  for (const at of ['example.com', 'gmail.com']) {
+    const email = address('nobody', at);
+    await verifiedSignupEmail(email);
+    const res = await call('POST', '/api/auth/access-requests', { email, name: 'Nobody' });
+    assert.equal(res.status, 409, `${at}: ${JSON.stringify(res.body)}`);
+    assert.equal(res.body.code, 'NO_ORGANIZATION_MATCH', at);
+  }
 });
