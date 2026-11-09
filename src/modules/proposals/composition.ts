@@ -29,6 +29,7 @@ import { mongoProposalTeamAssignment } from "./infrastructure/mongo/mongoProposa
 import { proposalNotificationAdapter } from "./infrastructure/notifications/proposalNotificationAdapter";
 import { spacesProposalFileStorage } from "./infrastructure/storage/spacesProposalFileStorage";
 import { postgresProposalReferenceSynchronizer } from "./infrastructure/references/postgresProposalReferenceSynchronizer";
+import { proposalLifecycleRecorderAdapter } from "./infrastructure/lifecycle/proposalLifecycleRecorderAdapter";
 
 export const getOwnedProposal = createGetOwnedProposal({
   proposals: mongoProposalReadRepository,
@@ -45,6 +46,7 @@ const mutationDependencies = {
   settings: mongoProposalSettingsRepository,
   references: postgresProposalReferenceSynchronizer,
   teams: mongoProposalTeamAssignment,
+  lifecycle: proposalLifecycleRecorderAdapter,
 };
 
 export const updateOwnedProposalStatus =
@@ -52,9 +54,9 @@ export const updateOwnedProposalStatus =
 export const updateOwnedProposalMeta =
   createUpdateOwnedProposalMeta(mutationDependencies);
 export const archiveOwnedProposal =
-  createArchiveOwnedProposal(mongoProposalWriteRepository);
+  createArchiveOwnedProposal(mongoProposalWriteRepository, proposalLifecycleRecorderAdapter);
 export const restoreOwnedProposal =
-  createRestoreOwnedProposal(mongoProposalWriteRepository);
+  createRestoreOwnedProposal(mongoProposalWriteRepository, proposalLifecycleRecorderAdapter);
 // The purge is imported lazily, as the archive sweep does, so the S3 and
 // Postgres clients are not pulled in merely by composing this module.
 export const permanentlyDeleteOwnedProposal = createPermanentlyDeleteOwnedProposal(

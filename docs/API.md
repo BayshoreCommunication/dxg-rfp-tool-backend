@@ -1,6 +1,6 @@
 # API Guide
 
-> Purpose: API discovery and contract ownership. Last updated: 2026-09-14. Owner: backend engineering.
+> Purpose: API discovery and contract ownership. Last updated: 2026-11-09. Owner: backend engineering.
 
 ## Contract rules
 
@@ -63,6 +63,15 @@ Team administration (ORG-201) lives in `routes/teamsRoute.ts`; rules in `src/mod
 - `POST /api/v1/teams` `{ name }`, `GET|PATCH /api/v1/teams/:teamId` `{ name }`, `POST /api/v1/teams/:teamId/archive` — Owner/Admin only. Active names are unique per organization, ignoring case (409 `TEAM_NAME_TAKEN`). Archived teams can't be changed (409 `TEAM_ARCHIVED`).
 - `POST /api/v1/teams/:teamId/members` `{ userId, isManager? }`, `PATCH /api/v1/teams/:teamId/members/:userId` `{ isManager }`, `DELETE /api/v1/teams/:teamId/members/:userId` — Owner/Admin only. Members must be active in the organization; a manager must hold the `team_manager` role (422 `TEAM_MANAGER_ROLE_REQUIRED`).
 - Proposal team (ORG-202): `POST /api/proposals` and copy put a new proposal on its creator's team when they're on exactly one active team (a client-sent `teamId` is ignored). `PUT /api/proposals/:id` with `teamId` (an active team in the organization, or `null`) changes it for anyone allowed to edit; anything else is 422 `TEAM_NOT_ASSIGNABLE`. Resending the current team's id is accepted even after that team is archived.
+
+## RFP lifecycle (ORG-403)
+
+Every RFP has a derived stage, stored on the proposal as `lifecycle` and recomputed after each write: `draft` → `sent` → `receiving_responses` → `under_review` → `awarded`, or `archived`. Archived outranks everything, an unpublished proposal is a draft, then awarded, then under review (a vendor comparison was opened), then receiving responses (at least one vendor response), else sent. Rules in `src/modules/proposalLifecycle/`. Clients can't write `lifecycle`: create, update and copy strip it.
+
+- `POST /api/proposals/:id/award` — "Mark as awarded". Needs `proposal:publish` and edit access to the RFP (403 / 404 otherwise). Only a sent, unarchived RFP qualifies (409 `PROPOSAL_NOT_AWARDABLE`). Returns `{ stage, awardedAt, awardSource, awardedByUserId, changedAt }`. Repeating it keeps the first award time. A planner's award replaces one set by a comparison, and a comparison never overrides a planner's.
+- `DELETE /api/proposals/:id/award` — withdraws the award, whichever source set it. Same permissions and response.
+- `GET /api/proposals/:id/status-history` — `proposal:read` and view access. Returns the same fields plus `transitions`, oldest first: `{ fromStage, toStage, fromStatus, toStatus, actorType: user|vendor|system, actorUserId, reason, at }`, capped at 500.
+- Recording a comparison decision (`POST /api/v1/proposals/:proposalId/intelligence/comparisons/:runId/decisions`) also moves the stage: `selection` awards the RFP (source `comparison`), and a later `shortlist` or `no_award` withdraws that award. Creating a comparison starts the review.
 
 ## Organization members
 

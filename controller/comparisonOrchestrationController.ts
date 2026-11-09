@@ -4,6 +4,7 @@ import type { AuthRequest } from "../middleware/auth";
 import { comparisonOrchestrationRepository } from "../src/modules/comparisonOrchestration/postgresComparisonOrchestrationRepository";
 import { ComparisonOrchestrationError } from "../src/modules/comparisonOrchestration/domain";
 import { durableJobDispatcher } from "../src/modules/durableJobs/composition";
+import { proposalLifecycle } from "../src/modules/proposalLifecycle/composition";
 
 const mongoId = (value: unknown, code: string) => { const id = String(value ?? ""); if (!/^[0-9a-f]{24}$/i.test(id)) throw new ComparisonOrchestrationError(code, "Comparison input was not found.", 404); return id; };
 const uuid = (value: unknown, code = "COMPARISON_NOT_FOUND") => { const id = String(value ?? ""); if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new ComparisonOrchestrationError(code, "Comparison resource was not found.", 404); return id; };
@@ -19,8 +20,11 @@ export const createComparison = async (req: AuthRequest, res: Response) => { try
   const priceVisibility = ["reviewers", "committee", "hidden"].find((value) => value === body.priceVisibility) as "reviewers" | "committee" | "hidden" | undefined;
   if (!priceVisibility || raw.some((item) => !item || typeof item !== "object")) throw new ComparisonOrchestrationError("COMPARISON_INPUT_INVALID", "Comparison setup is invalid.");
   const participants = raw.map((item) => { const value = item as Record<string, unknown>; return { submissionMongoId: mongoId(value.submissionId, "SUBMISSION_VERSION_NOT_FOUND"), versionMongoId: mongoId(value.versionId, "SUBMISSION_VERSION_NOT_FOUND") }; });
-  const result = await comparisonOrchestrationRepository.create({ ...context(req), requirementSetId: uuid(body.requirementSetId, "REQUIREMENT_SET_NOT_APPROVED"), matrixVersionId: uuid(body.evaluationMatrixVersionId, "EVALUATION_MATRIX_NOT_CONFIRMED"), participants, priceVisibility, idempotencyKey: idempotencyKey(req) });
+  const scope = context(req);
+  const result = await comparisonOrchestrationRepository.create({ ...scope, requirementSetId: uuid(body.requirementSetId, "REQUIREMENT_SET_NOT_APPROVED"), matrixVersionId: uuid(body.evaluationMatrixVersionId, "EVALUATION_MATRIX_NOT_CONFIRMED"), participants, priceVisibility, idempotencyKey: idempotencyKey(req) });
   void durableJobDispatcher.dispatch().catch(() => undefined);
+  // ORG-403: opening a comparison puts the RFP under review (DECISIONS 2026-11-09).
+  await proposalLifecycle.markReviewStarted({ organizationId: scope.organizationMongoId, proposalId: scope.proposalMongoId, actor: { type: "user", userId: scope.actorUserMongoId } });
   res.status(result.created ? 202 : 200).json({ data: { ...result, statusUrl: `/api/v1/proposals/${req.params.proposalId}/intelligence/comparisons/${result.runId}/status`, resultUrl: `/api/v1/proposals/${req.params.proposalId}/intelligence/comparisons/${result.runId}` } });
 } catch (error) { handle(res, error); } };
 
@@ -43,7 +47,12 @@ export const recordComparisonDecision = async (req: AuthRequest, res: Response) 
   const decisionType = ["shortlist", "selection", "no_award"].find((value) => value === body.decisionType) as "shortlist" | "selection" | "no_award" | undefined;
   const selected = Array.isArray(body.selectedParticipantIds) ? body.selectedParticipantIds.map((value) => uuid(value, "DECISION_PARTICIPANTS_INVALID")) : [];
   if (!decisionType || typeof body.rationale !== "string" || typeof body.acknowledgeStale !== "boolean") throw new ComparisonOrchestrationError("DECISION_INPUT_INVALID", "Decision type, rationale, and freshness acknowledgement are required.");
-  const result = await comparisonOrchestrationRepository.recordDecision({ ...context(req), runId: uuid(req.params.runId), decisionType, selectedParticipantIds: selected, rationale: body.rationale, acknowledgeStale: body.acknowledgeStale, idempotencyKey: idempotencyKey(req) });
+  const scope = context(req);
+  const result = await comparisonOrchestrationRepository.recordDecision({ ...scope, runId: uuid(req.params.runId), decisionType, selectedParticipantIds: selected, rationale: body.rationale, acknowledgeStale: body.acknowledgeStale, idempotencyKey: idempotencyKey(req) });
+  // ORG-403: a final selection awards the RFP; a later shortlist or no-award withdraws that award.
+  if (result.created) {
+    await proposalLifecycle.applyComparisonDecision({ organizationId: scope.organizationMongoId, proposalId: scope.proposalMongoId, actor: { type: "user", userId: scope.actorUserMongoId }, decisionType, decisionId: result.decisionId });
+  }
   res.status(result.created ? 201 : 200).json({ data: result });
 } catch (error) { handle(res, error); } };
 

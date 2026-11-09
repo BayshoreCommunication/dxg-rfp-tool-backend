@@ -13,6 +13,8 @@ import Admin from "../modal/adminModel";
 import Organization from "../modal/organizationModel";
 import OrganizationMembership from "../modal/organizationMembershipModel";
 import Proposal from "../modal/proposalsModel";
+import { createProposalLifecycle } from "../src/modules/proposalLifecycle/application";
+import { mongoProposalLifecycleRepository } from "../src/modules/proposalLifecycle/mongoProposalLifecycleRepository";
 import Team from "../modal/teamModel";
 import TeamMembership from "../modal/teamMembershipModel";
 import User from "../modal/userModel";
@@ -158,12 +160,22 @@ const seedCustomers = async () => {
     { organizationId: northwind, teamId: team._id, userId: ids.get("nw-planner"), isManager: false },
   ]);
 
-  await Proposal.create([
+  const proposals = await Proposal.create([
     proposal({ organizationId: northwind, userId: ids.get("nw-planner")!, teamId: team._id as mongoose.Types.ObjectId, eventName: "Spring Sales Kickoff", startDate: "2027-03-15", attendees: "450", eventFormat: "In-Person" }),
     proposal({ organizationId: northwind, userId: ids.get("nw-planner")!, eventName: "Partner Webinar Series", startDate: "2027-02-02", attendees: "1200", eventFormat: "Virtual" }),
     proposal({ organizationId: northwind, userId: ids.get("nw-owner")!, teamId: team._id as mongoose.Types.ObjectId, eventName: "Annual Leadership Summit", startDate: "2027-05-20", attendees: "300", eventFormat: "Hybrid", published: true }),
     proposal({ organizationId: ids.get("contoso-live")!, userId: ids.get("ct-planner")!, eventName: "Contoso Product Launch", startDate: "2027-04-08", attendees: "800", eventFormat: "In-Person" }),
   ]);
+  // Seeded rows skip the API's write paths, so their lifecycle stage is derived here (ORG-403).
+  const lifecycle = createProposalLifecycle({ repository: mongoProposalLifecycleRepository });
+  for (const created of proposals) {
+    await lifecycle.sync({
+      organizationId: String(created.organizationId),
+      proposalId: String(created._id),
+      actor: { type: "system" },
+      reason: "created",
+    });
+  }
 
 };
 
