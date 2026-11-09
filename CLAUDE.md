@@ -22,6 +22,7 @@ npm run dev:worker       # durable job worker (reloads; plain worker scripts do 
 npm run dev:dispatcher   # outbox -> Redis dispatcher
 npm test                 # node:test over tests/*.test.js (NOT Jest)
 npm run integration:up && npm run test:integration && npm run integration:down
+npm run stack:up && npm run stack:dev   # whole app on local Docker with seeded test accounts (deploy/local/README.md)
 npm run ci               # contracts:check -> lint -> type-check -> migration:check -> test -> build
 npm run contracts:generate  # after editing contracts/; commit the regenerated output
 ```

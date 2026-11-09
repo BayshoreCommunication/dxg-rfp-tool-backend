@@ -18,6 +18,13 @@ npm run dev
 
 Use the `dev:` worker variants locally so implementation changes reload. Production uses the plain PM2 scripts.
 
+## Local stack (Docker, seeded)
+
+`npm run stack:up` then `npm run stack:dev` runs the whole product (API, worker, dispatcher,
+dashboard, admin) against local MongoDB, PostgreSQL, Redis and Mailpit, with a test account
+for every role in two organizations. It ignores `.env` / `.env.local`. Ports, accounts and
+limits are in [`deploy/local/README.md`](../deploy/local/README.md).
+
 ## Configuration
 
 Start from the repository's single `.env.example`. AI is deny-by-default. Set `AI_ENVIRONMENT` and only the feature flags needed for the task. `.env.local` is an optional local override loaded after `.env`; do not create feature-specific environment files. Never commit runtime `.env` files, provider keys, real proposal content, or the DXG pricing workbook. See the backend `README.md` for base configuration and [runbooks/PRODUCTION.md](runbooks/PRODUCTION.md) for production keys.
