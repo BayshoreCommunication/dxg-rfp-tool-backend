@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-09-09 · **Branch:** proposal-intelligence delivery branches · **Status:** audit roadmap M1–M6 complete, governed proposal creation and Platform Assistant shipped, and Proposal Intelligence Task 2 submission versioning implemented for review.
+**Last updated:** 2026-11-08 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged, with M4, M5 and the launch gate not started. See "Organization accounts" below.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -30,7 +30,7 @@ of publication.
 |---|---|---|
 | `dxg-rfp-tool-backend` | REST API, workers, all AI | Express, TypeScript, MongoDB + PostgreSQL(+pgvector) + Redis, S3 |
 | `dxg-rfp-tool-dashboard` | Planner app | Next.js 16 App Router, NextAuth v5, Tailwind |
-| `dxg-rfp-tool-admin` | Back office (knowledge, pricing, users) | Next.js 16 |
+| `dxg-rfp-tool-admin` | Back office (clients, users, proposals read-only, support desk, AI operations; knowledge and pricing screens removed 2026-10-25) | Next.js 16 |
 
 ---
 
@@ -68,7 +68,8 @@ mirrors: `NEXT_PUBLIC_CONVERSATIONS_ENABLED`,
 `NEXT_PUBLIC_PROPOSAL_WORKFLOW_ENABLED`, `NEXT_PUBLIC_VENDOR_ANALYSIS_ENABLED`,
 `NEXT_PUBLIC_CONVERSATION_EXTRACTION_ENABLED`,
 `NEXT_PUBLIC_ROOM_RECOMMENDATIONS_ENABLED`,
-`NEXT_PUBLIC_AI_ASSISTANT_ENABLED`; admin: `NEXT_PUBLIC_PRICING_ENABLED`.
+`NEXT_PUBLIC_AI_ASSISTANT_ENABLED`. Admin no longer has a pricing flag; its
+pricing and knowledge screens were removed on 2026-10-25.
 
 **`.env.local` overrides `.env`** (`config/env.ts` loads it second with
 `override: true`). Reading only `.env` will tell you live AI is off when it is
@@ -87,7 +88,7 @@ Model is pinned to the dated snapshot `gpt-5.4-mini-2026-03-17`.
 ## 3. What was built (milestones M1–M6)
 
 Delivered against an independent audit of the original codebase. Each milestone
-is committed on `ai-agent`.
+was committed on `ai-agent`, which has since been merged into `main`.
 
 - **M1 — Unblock & de-risk.** The whole governed AI surface was hard-gated to
   `NODE_ENV==="test"` and returned 503 in production, while the *ungoverned*
@@ -362,7 +363,7 @@ candidate still requires an explicit Product Owner decision. Production
 internal/cohort rollout also remains blocked until an organization-scoped
 entitlement or deployment allowlist exists.
 
-### In-app helpdesk / support inbox (2026-10-18, local, unreleased)
+### In-app helpdesk / support inbox (2026-10-18; on `main`, production email alerts on since 2026-10-26)
 
 Client request from the 2026-10-15 review: a support channel inside the
 product, handled by DXG from the admin app. The AI Assistant is untouched.
@@ -398,6 +399,40 @@ metrics also on the admin dashboard. Dashboard: sidebar **Support** with
 unread badge, `/support` list + new-request form, `/support/[ticketId]`
 thread with reply and "This is solved"; `support_ticket` notifications link to
 the ticket; Help page lists Support.
+
+Follow-ups shipped 2026-10-19 → 10-27: ticket assignment with a collision
+guard, response targets and auto-close, automatic acknowledgement, a 3-day
+reopen window after resolve, one "DXG support" display name, triage activity
+kept internal to agents, and real-time admin alerts for new tickets.
+
+### Organization accounts (2026-11-01 → 2026-11-08)
+
+Spec, PRD and 46-ticket breakdown: `docs/specs/ORGANIZATION_ACCOUNTS_*.md`;
+DXG's decisions on the blocking questions: `docs/specs/dxg-open-questions.html`.
+Decisions taken during delivery are in `DECISIONS.md` (ORG-110, 203/204,
+303, 304, 305 and the "unplaced accounts can't sign in" rule). Work shipped
+directly on `main` without the `ORG_ACCOUNTS_ENABLED` flag the original
+4-week plan proposed.
+
+| Milestone | Tickets | State |
+|---|---|---|
+| M1 Tenancy foundation | ORG-101 … 110 | Merged. Scoped access policy, repository sweep with a CI guard, RLS alignment, signup creates an organization, legacy holding tenants + verification and nightly orphan check, cross-tenant isolation suite, legacy-customer placement with journaled rollback. |
+| M2 People | ORG-201 … 210 | Merged. Teams, RFP team assignment, invitations (capped, team-aware, Google accept) and emails, accept-invite page, membership APIs, offboarding reassignment, RFP sharing, Users/Teams settings and the RFP access panel (share, team, reassign owner). |
+| M3 Entry paths and auth | ORG-301 … 307 | Merged. Sign-up with organization onboarding, Google + Microsoft + company OIDC SSO (email-first discovery, Require SSO), TOTP 2FA and org-mandatory 2FA with admin reset, DNS TXT domain verification, domain-match access requests (2026-11-08), session hardening on membership changes. |
+| M4 Experience | ORG-401 … 407 | Not started: scoped dashboard queries, role dashboards, status history, support access grants (backend, customer UI, admin workspace), org audit log view. |
+| M5 Plans and shared resources | ORG-601 … 607 | Not started, except that DXG's pricing corpus, expert rules and knowledge are now shared with every organization (2026-11-01). Plan entitlements, templates and the org vendor list remain. |
+| Launch gate | ORG-501 … 505 | Not started: prod-snapshot migration rehearsal, cutover/rollback runbook, external pen test, docs, launch metrics. |
+
+Operational notes:
+
+- Production now requires `OTP_PEPPER`, `TWO_FACTOR_ENCRYPTION_KEY` and
+  `SSO_SECRET_KEY` (see `.env.example` and `docs/SSO_SETUP.md`); the API fails
+  at startup without the pepper. The AWS deploy passes the 2FA and SSO keys to
+  the API and cron tasks.
+- Accounts not yet placed in an organization cannot sign in by any method and
+  see `ORGANIZATION_SETUP_REQUIRED`; place them with the ORG-110 script.
+- A user who still owns RFPs cannot be deleted; reassign first.
+- `scripts/purgeTestAccounts` removes test sign-ups (2026-11-08).
 
 ### Onboarding funnel report (2026-09-13)
 
@@ -540,7 +575,10 @@ Fixtures shaped by hand will not catch that — shape them the way the form save
 3. Real-asset acceptance run with the SOW test RFP and vendor responses,
    reviewed by the founder — the contractual acceptance test.
 4. Add the two questionnaire fields; promote the report envelope to columns.
-5. Merge `ai-agent` to the default branch and stand up staging per the runbook.
+5. ~~Merge `ai-agent` to the default branch~~ (done). Stand up staging per the runbook.
+6. Organization accounts: start M4 (support access grants are the gating item
+   for admin-side proposal access), then the launch gate (ORG-501 rehearsal on a
+   prod snapshot, ORG-503 pen test) before inviting external organizations.
 
 ---
 
