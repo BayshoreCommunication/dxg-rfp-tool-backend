@@ -19,12 +19,18 @@ AUTH_SECRET_VALUE="local-stack-auth-secret-32-characters-minimum-xx"
 PIDS=""
 STOPPING=0
 
+kill_tree() {
+  for child in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$child"; done
+  kill -TERM "$1" 2>/dev/null || true
+}
+
 stop_services() {
   [ "$STOPPING" -eq 1 ] && return
   STOPPING=1
   trap - INT TERM EXIT
   printf '\nStopping the local stack apps (Docker services keep running; npm run stack:down stops them)...\n'
-  for pid in $PIDS; do pkill -TERM -P "$pid" 2>/dev/null || true; kill -TERM "$pid" 2>/dev/null || true; done
+  # npm -> nodemon -> ts-node is three levels deep, so signal the whole tree, children first.
+  for pid in $PIDS; do kill_tree "$pid"; done
   for pid in $PIDS; do wait "$pid" 2>/dev/null || true; done
 }
 
