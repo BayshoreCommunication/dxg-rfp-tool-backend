@@ -46,6 +46,8 @@ AI features need all three processes running. A partial restart gives misleading
 
 `/ticket ORG-xxx` (implement a ticket end to end), `/contract-change` (schema + both generated
 copies), `/migration <name>` (numbered SQL with RLS, proven on the integration DB). See `.claude/skills/`.
+`/rfp-review` runs the reviewer agents in `.claude/agents/` (`tenant-isolation-reviewer`,
+`ai-safety-reviewer`, plus the dashboard and admin reviewers) in parallel on the current change.
 
 ## Rules
 

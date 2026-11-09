@@ -53,6 +53,8 @@ change. Then implement. Rules that are easy to miss here:
 - If it changes a screen, run `/verify-ui` in the dashboard.
 - Each AC needs evidence: a test name, a command result, or a screenshot path.
 
+- Run `/rfp-review`. Fix every critical and high finding and re-run the reviewer that raised it.
+
 ## 5. Record
 
 - `docs/PROJECT_STATE.md`: update the milestone row in "Organization accounts" and the header
