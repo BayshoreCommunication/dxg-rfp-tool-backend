@@ -47,3 +47,6 @@ uploads/portfolio/logos/*
 uploads/portfolio/favicons/*
 !uploads/portfolio/favicons/.gitkeep
 site/
+
+# Claude Code personal overrides
+.claude/settings.local.json
