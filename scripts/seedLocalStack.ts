@@ -119,11 +119,19 @@ const main = async () => {
   await grantAppRole(migrationUrl);
   await mongoose.connect(mongoUrl, { dbName: process.env.MONGODB_DB_NAME, serverSelectionTimeoutMS: 5_000 });
 
-  if (await Organization.exists({ slug: ORGANIZATIONS[0].slug })) {
+  const customersSeeded = Boolean(await Organization.exists({ slug: ORGANIZATIONS[0].slug }));
+  const existingAdmin = await Admin.findOne({ email: "superadmin@example.com" }).select("_id organizationId").lean();
+  const adminSeeded = Boolean(existingAdmin && await OrganizationMembership.exists({ userId: existingAdmin._id, organizationId: existingAdmin.organizationId, status: "active" }));
+  if (customersSeeded && adminSeeded) {
     process.stdout.write("Local stack already seeded (run `npm run stack:reset` to start over).\n");
     return;
   }
+  if (!customersSeeded) await seedCustomers();
+  if (!adminSeeded) await seedAdmin();
+  printAccounts();
+};
 
+const seedCustomers = async () => {
   const ids = new Map<string, mongoose.Types.ObjectId>();
   for (const seed of ORGANIZATIONS) {
     const organization = await Organization.create({ name: seed.name, slug: seed.slug, kind: "customer", onboardingStep: "done" });
@@ -157,10 +165,27 @@ const main = async () => {
     proposal({ organizationId: ids.get("contoso-live")!, userId: ids.get("ct-planner")!, eventName: "Contoso Product Launch", startDate: "2027-04-08", attendees: "800", eventFormat: "In-Person" }),
   ]);
 
-  // Back-office (admin app) accounts live in their own collection and organization.
-  const platform = await Organization.create({ name: "RFPilot Back Office (local)", slug: "rfpilot-back-office", kind: "customer", onboardingStep: "done" });
-  await Admin.create({ organizationId: platform._id, name: "Sam Superadmin", email: "superadmin@example.com", password: LOCAL_PASSWORD, role: "super_admin" });
+};
 
+// Back-office (admin app) accounts live in their own collection and organization.
+const seedAdmin = async () => {
+  const platform = await Organization.findOneAndUpdate(
+    { slug: "rfpilot-back-office" },
+    { $setOnInsert: { name: "RFPilot Back Office (local)", slug: "rfpilot-back-office", kind: "customer", onboardingStep: "done" } },
+    { upsert: true, new: true, runValidators: true },
+  );
+  const admin = await Admin.findOne({ email: "superadmin@example.com" })
+    ?? await Admin.create({ organizationId: platform._id, name: "Sam Superadmin", email: "superadmin@example.com", password: LOCAL_PASSWORD, role: "super_admin" });
+  // Staff sign-in needs an active membership too. The model refuses to grant legacy DXG roles
+  // (super_admin) through validation, so write it the way scripts/migrateAdminAccounts.ts does.
+  const now = new Date();
+  await OrganizationMembership.collection.insertOne({
+    userId: admin._id, organizationId: admin.organizationId, roles: ["super_admin"], status: "active", version: 1,
+    activatedAt: now, invitedAt: null, suspendedAt: null, removedAt: null, createdAt: now, updatedAt: now, __v: 0,
+  });
+};
+
+const printAccounts = () => {
   process.stdout.write(`Seeded the local stack. Password for every account: ${LOCAL_PASSWORD}
 
   Dashboard (http://localhost:3100)
