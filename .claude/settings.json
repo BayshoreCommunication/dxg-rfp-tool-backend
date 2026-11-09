@@ -29,7 +29,12 @@
       "Bash(npm run migration:check*)",
       "Bash(npm run integration:*)",
       "Bash(npm run test:integration*)",
-      "Bash(INTEGRATION=1 node --test *)"
+      "Bash(INTEGRATION=1 node --test *)",
+      "Bash(npm run stack:up*)",
+      "Bash(npm run stack:down*)",
+      "Bash(npm run stack:migrate*)",
+      "Bash(npm run stack:seed*)",
+      "Bash(npm run stack:dev*)"
     ],
     "deny": [
       "Read(./.env)",
@@ -60,7 +65,8 @@
       "Bash(npm run backfill:*)",
       "Bash(npm run platform:*)",
       "Bash(npm run retention:*)",
-      "Bash(npm run release:*)"
+      "Bash(npm run release:*)",
+      "Bash(npm run stack:reset*)"
     ]
   },
   "hooks": {

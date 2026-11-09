@@ -10,6 +10,8 @@ export default tseslint.config(
       "src/**/*.ts",
       "contracts/**/*.ts",
       "config/postgres.ts",
+      "config/env.ts",
+      "scripts/seedLocalStack.ts",
       "controller/platformAssistantController.ts",
       "controller/historicalInsightsController.ts",
       "controller/requirementRegistryController.ts",
