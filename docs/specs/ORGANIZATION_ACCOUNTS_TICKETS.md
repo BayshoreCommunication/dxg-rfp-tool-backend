@@ -13,7 +13,7 @@
 | M2 People | ORG-201 … ORG-210 | 2S 7M 1L | 29–47 / 38 | ✅ Closed (10/10) | Merged |
 | M3 Entry paths and auth | ORG-301 … ORG-307 | 2S 5M | 17–29 / 23 | ✅ Closed (7/7) | Merged 2026-11-08 |
 | M4 Experience | ORG-401 … ORG-407 | 2S 4M 1L | 20–32 / 26 | ⏳ Open (2/7 closed: ORG-401, ORG-403) | Thu 12 Nov 2026, 16:00 BDT |
-| M5 Plans and shared resources | ORG-601 … ORG-607 | 1S 6M | 19–32 / 25.5 | ⏳ Open (0/7) | Thu 12 Nov 2026, 16:00 BDT |
+| M5 Plans and shared resources | ORG-601 … ORG-607 | 1S 6M | 19–32 / 25.5 | ⏳ Open (1/7) | Thu 12 Nov 2026, 16:00 BDT |
 | Launch gate | ORG-501 … ORG-505 | 4S 1M | 7–13 / 10 | ⏳ Open (0/5) | Thu 12 Nov 2026, 16:00 BDT (ORG-503: see Timeline) |
 | **Total** | **46** | 15S 27M 4L | **120–197 / ~158.5** (≈24–39 eng-weeks, midpoint ~32) | **29 closed, 17 open** | **Thu 12 Nov 2026, 16:00 BDT** |
 
@@ -34,7 +34,7 @@ Lanes are split to keep dependencies inside a lane and to keep agents out of eac
 | **Agent 1** | M4 trust: history, support grants, audit | ~~ORG-403~~ ✅ → 404 → 405 → 407 → 406 | BE, DB, AD | 13.5 left |
 | **Agent 2** | M4 dashboards, then templates UI | ~~ORG-401~~ ✅ → 402 → 605 | BE, DB | 11 left |
 | **Agent 3** | M5 plans and templates backend, metrics | ORG-601 → 603 → 602 → 604 → 505 | BE, DB, AD | 15 |
-| **Agent 4** | M5 vendor list, then launch gate | ORG-606 → 607 → 501 → 502 → 504 | BE, DB | 15 |
+| **Agent 4** | M5 vendor list, then launch gate | ~~ORG-606~~ ✅ → 607 → 501 → 502 → 504 | BE, DB | 15 |
 | Human | Reviews and merges, external access | ORG-503 coordination, prod snapshot access for ORG-501 | — | — |
 
 Cross-lane dependencies: ORG-605 (Agent 2) waits on ORG-604 (Agent 3, merged Thu 00:00). Everything else depends only on its own lane or on merged work.
@@ -264,7 +264,7 @@ Thu 10:00–14:00 QA: `npm run ci` in all three repos on `main`, the backend int
 **ORG-605 · Templates UI** · DB · M · DXG decision Q4 · blocked by: ORG-604 · ⏳ **Open** (Agent 2 · merge Thu 10:00 BDT)
 - "Save as template" on a proposal (personal, or organization for Owner and Admin). Template picker at the start of proposal creation, beside the two existing layouts. Template management list under org settings.
 
-**ORG-606 · Organization vendor list backend** · BE · M · DXG decision Q4 · blocked by: ORG-104 · ⏳ **Open** (Agent 4 · merge Tue 13:00 BDT)
+**ORG-606 · Organization vendor list backend** · BE · M · DXG decision Q4 · blocked by: ORG-104 · ✅ **Closed** (merged Tue 10 Nov, PR #121)
 - `OrganizationVendor` (org, company, category, contacts [name, email], addedBy, archived). CRUD by Owner, Admin and Team Manager. Read by every non-viewer member. Search by company and category. Audit events for edits.
 - AC: isolation suite covers the vendor list. Vendors never see it through the submission link.
 
