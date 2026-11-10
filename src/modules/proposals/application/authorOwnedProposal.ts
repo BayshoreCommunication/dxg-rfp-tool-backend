@@ -2,6 +2,7 @@ import type { ProposalSettingsRepository } from "../domain/ports/proposalSetting
 import type { ProposalWriteRepository } from "../domain/ports/proposalWriteRepository";
 import type { ProposalReferenceSynchronizer } from "../domain/ports/proposalReferenceSynchronizer";
 import type { ProposalTeamAssignment } from "../domain/ports/proposalTeamAssignment";
+import type { ProposalLifecycleRecorder } from "../domain/ports/proposalLifecycleRecorder";
 import { withLiveSettings } from "./proposalPresentation";
 import { activeProposalWorkflowContent } from "../domain/workflowSections";
 
@@ -10,6 +11,7 @@ type AuthorDependencies = {
   settings: ProposalSettingsRepository;
   references?: ProposalReferenceSynchronizer;
   teams?: ProposalTeamAssignment;
+  lifecycle?: ProposalLifecycleRecorder;
 };
 
 export class ProposalTeamNotAssignableError extends Error {
@@ -47,8 +49,12 @@ const removeSystemFields = (input: Record<string, unknown>) => {
   delete proposal.updatedAt;
   delete proposal.userId;
   delete proposal.proposalSetting;
+  // Derived by the lifecycle module (ORG-403); a client can't set its own stage or award.
+  delete proposal.lifecycle;
   return proposal;
 };
+
+const recordIdOf = (proposal: object) => String((proposal as { _id?: unknown })._id ?? "");
 
 const settingsForResponse = (
   dependencies: AuthorDependencies,
@@ -78,6 +84,7 @@ export const createCreateOwnedProposal = (dependencies: AuthorDependencies) =>
       proposal: proposalData,
     });
     await dependencies.references?.synchronize({ proposal, ownerUserId: input.ownerUserId, eventType: "proposal.reference.updated" });
+    await dependencies.lifecycle?.recordChange({ proposalId: recordIdOf(proposal), actorUserId: input.ownerUserId, reason: "created" });
     const settings = await settingsForResponse(dependencies, input.ownerUserId);
     return withLiveSettings(proposal, settings);
   };
@@ -113,6 +120,7 @@ export const createUpdateOwnedProposal = (dependencies: AuthorDependencies) =>
     });
     if (!proposal) return { kind: "not_found" as const };
     await dependencies.references?.synchronize({ proposal, ownerUserId: input.ownerUserId, eventType: "proposal.reference.updated" });
+    await dependencies.lifecycle?.recordChange({ proposalId: input.proposalId, actorUserId: input.ownerUserId, reason: "updated" });
     const settings = await settingsForResponse(dependencies, input.ownerUserId);
     return {
       kind: "updated" as const,
@@ -184,6 +192,7 @@ export const createCopyOwnedProposal = (dependencies: AuthorDependencies) =>
       proposal: copyData,
     });
     await dependencies.references?.synchronize({ proposal, ownerUserId: input.ownerUserId, eventType: "proposal.reference.updated" });
+    await dependencies.lifecycle?.recordChange({ proposalId: recordIdOf(proposal), actorUserId: input.ownerUserId, reason: "copied" });
     const settings = await settingsForResponse(dependencies, input.ownerUserId);
     return {
       kind: "copied" as const,

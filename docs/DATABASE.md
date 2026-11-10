@@ -1,6 +1,6 @@
 # Database and Storage
 
-> Purpose: data ownership, consistency, and migration rules. Last updated: 2026-08-12. Owner: backend engineering.
+> Purpose: data ownership, consistency, and migration rules. Last updated: 2026-11-09. Owner: backend engineering.
 
 ## Ownership
 
@@ -36,6 +36,13 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 - `Team` (organization, name, archived) and `TeamMembership` (team, user, `isManager`, unique per team and user). Active team names are unique per organization, ignoring case. Archiving keeps memberships; the authenticate middleware reads managed teams from active teams only, so an archived team's managers lose its scope on their next request.
 - `Proposal.teamId` (optional, indexed with `organizationId`) is the team whose managers reach the proposal.
 - `RfpShare` (organization, proposal, user, `permission` view|edit, `grantedBy`; unique per proposal and user). Revoking deletes the row (the audit event keeps the record); a deactivated member's rows are kept and ignored, because actor lookups run for active members only.
+
+## RFP lifecycle
+
+- `Proposal.lifecycle` (ORG-403) holds the derived stage plus the facts it comes from: `revision` (the compare-and-set token), `stage`, `status` as of the last transition, `changedAt`, the award (`awardedAt`, `awardedByUserId`, `awardSource` manual|comparison, `awardDecisionId`), `reviewStartedAt`, `vendorsInvited` (distinct recipients of `vendor:submit` grants) and `vendorsResponded` (VendorResponse rows). Indexed as `{ organizationId, lifecycle.stage, updatedAt }`.
+- `ProposalStatusTransition` is append-only (the model throws on every update path). Each row has the organization, proposal, from/to stage and status, actor type and user, reason and time. Rows outlive a deleted proposal and go only with their organization.
+- The lifecycle write and its transition commit in one Mongo transaction, guarded by the proposal's status, draft and archive flags and `lifecycle.revision`.
+- `npm run backfill:proposal-lifecycle` is dry-run by default. `--apply` recomputes counts, fills a missing review start or comparison award from Postgres `comparison_runs`/`comparison_decisions` under the organization's RLS context, and appends a `backfill` transition only where the stage or status changed.
 
 ## Pricing data
 

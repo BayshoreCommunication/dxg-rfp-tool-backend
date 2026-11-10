@@ -11,7 +11,7 @@ import {
   createGetVendorSubmissionReceipt,
   createSubmitVendorResponse,
 } from "./application/submitVendorResponse";
-import { mongoVendorSubmissionRepository } from "./infrastructure/mongo/mongoVendorSubmissionRepository";
+import { mongoVendorSubmissionRepository as baseVendorSubmissionRepository } from "./infrastructure/mongo/mongoVendorSubmissionRepository";
 import {
   spacesVendorDocumentStorage,
   spacesVendorDocumentUrlSigner,
@@ -24,7 +24,10 @@ import {
   createDeleteOwnedVendorResponse,
   createDeleteSelectedOwnedVendorResponses,
 } from "./application/deleteVendorResponses";
-import { mongoVendorResponseDeleteRepository } from "./infrastructure/mongo/mongoVendorResponseDeleteRepository";
+import { mongoVendorResponseDeleteRepository as baseVendorResponseDeleteRepository } from "./infrastructure/mongo/mongoVendorResponseDeleteRepository";
+import { withDeletionLifecycle, withSubmissionLifecycle } from "./infrastructure/lifecycle/vendorResponseLifecycle";
+import { proposalLifecycle } from "../proposalLifecycle/composition";
+import { currentTenantOrNull } from "../shared/tenancy/tenantContext";
 import type { VendorResponseDeletionTarget } from "./domain/ports/vendorResponseDeleteRepository";
 import { createVendorResponseQuestionnaireService } from "./application/vendorResponseWorkspace";
 import { mongoVendorResponseQuestionnaireRepository } from "./infrastructure/mongo/mongoVendorResponseQuestionnaireRepository";
@@ -42,6 +45,18 @@ import {
 const questionnaireService = createVendorResponseQuestionnaireService(
   mongoVendorResponseQuestionnaireRepository,
 );
+
+// ORG-403: response writes and deletes keep the RFP's lifecycle stage current.
+const mongoVendorSubmissionRepository = withSubmissionLifecycle(
+  baseVendorSubmissionRepository,
+  proposalLifecycle,
+  () => currentTenantOrNull()?.userId ?? null,
+);
+const mongoVendorResponseDeleteRepository = withDeletionLifecycle(
+  baseVendorResponseDeleteRepository,
+  proposalLifecycle,
+);
+
 export const publishVendorResponseQuestionnaire = questionnaireService.publish;
 export const configureVendorResponseCapability = questionnaireService.configure;
 

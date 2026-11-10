@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema } from "mongoose";
+import { AWARD_SOURCES, LIFECYCLE_STAGES, type ProposalLifecycleState } from "../src/modules/proposalLifecycle/domain";
 
 export interface IProposal extends Document {
   organizationId?: mongoose.Types.ObjectId;
@@ -16,6 +17,9 @@ export interface IProposal extends Document {
   viewsCount: number;
   version: number;
   candidateApplicationIds: string[];
+  // ORG-403: derived dashboard stage and its inputs. Written only by the proposal lifecycle
+  // module (src/modules/proposalLifecycle); clients can never set it.
+  lifecycle?: ProposalLifecycleState;
   proposalSettings?: Record<string, unknown>;
   event: {
     eventName: string;
@@ -123,6 +127,26 @@ const proposalSchema = new Schema<IProposal>(
     version: { type: Number, default: 1, min: 1 },
     candidateApplicationIds: { type: [String], default: [], select: false },
 
+    lifecycle: {
+      type: new Schema(
+        {
+          revision: { type: Number, min: 0, default: 0 },
+          stage: { type: String, enum: [...LIFECYCLE_STAGES, null], default: null },
+          status: { type: String, default: null },
+          changedAt: { type: Date, default: null },
+          awardedAt: { type: Date, default: null },
+          awardedByUserId: { type: Schema.Types.ObjectId, ref: "User", default: null },
+          awardSource: { type: String, enum: [...AWARD_SOURCES, null], default: null },
+          awardDecisionId: { type: String, default: null },
+          reviewStartedAt: { type: Date, default: null },
+          vendorsInvited: { type: Number, min: 0, default: 0 },
+          vendorsResponded: { type: Number, min: 0, default: 0 },
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
+
     proposalSettings: { type: Schema.Types.Mixed, default: {} },
 
     event: {
@@ -204,6 +228,8 @@ proposalSchema.index({ userId: 1, createdAt: -1 });
 proposalSchema.index({ organizationId: 1, userId: 1, createdAt: -1 });
 proposalSchema.index({ organizationId: 1, teamId: 1 });
 proposalSchema.index({ status: 1 });
+// ORG-401 dashboards filter and count by stage within the organization.
+proposalSchema.index({ organizationId: 1, "lifecycle.stage": 1, updatedAt: -1 });
 proposalSchema.index({ "contact.contactEmail": 1 });
 proposalSchema.index({ "event.eventName": 1 });
 
