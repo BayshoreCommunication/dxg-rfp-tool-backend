@@ -41,6 +41,11 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 
 - `OrganizationVendor` (organization, `company`, `category`, `contacts` [`name`, `email`], `addedBy`, `archived`, `archivedAt`), ORG-606. Active company names are unique per organization, ignoring case (partial unique index with a case-insensitive collation); an archived name can be reused. Read and written only by `src/modules/organizationVendors`, always with `organizationId` in the filter (the tenant-scope guard covers the model). Legacy holding tenants have no vendor list: their members can't sign in.
 
+## Support access grants
+
+- `SupportAccessGrant` (ORG-404; MongoDB): organization, `proposalId` (null for the whole organization), `grantedBy`, optional `reason`, `expiresAt` (the model refuses more than 30 days from creation), `revokedAt`, `revokedBy`. Rows are never deleted. Indexed `{ organizationId, createdAt }` and `{ revokedAt, expiresAt }`. No Postgres table.
+- Support activity is not a separate collection: it is the `SecurityAuditEvent` rows with action `support_access.used` in the customer's organization, joined to a grant by `metadata.grantId`.
+
 ## RFP lifecycle
 
 - `Proposal.lifecycle` (ORG-403) holds the derived stage plus the facts it comes from: `revision` (the compare-and-set token), `stage`, `status` as of the last transition, `changedAt`, the award (`awardedAt`, `awardedByUserId`, `awardSource` manual|comparison, `awardDecisionId`), `reviewStartedAt`, `vendorsInvited` (distinct recipients of `vendor:submit` grants) and `vendorsResponded` (VendorResponse rows). Indexed as `{ organizationId, lifecycle.stage, updatedAt }`.

@@ -122,6 +122,28 @@ Sharing (ORG-208) lives in `routes/rfpSharesRoute.ts`; rules in `src/modules/rfp
 - `PUT /api/v1/proposals/:proposalId/shares/:userId` `{ permission: "view" | "edit" }` grants or changes a share; `DELETE` revokes it. The member must be active in the same organization (404 `MEMBER_NOT_FOUND`, 409 `MEMBER_INACTIVE`); Viewers get view only (422 `VIEWER_VIEW_ONLY`). Grants and revocations write `proposal.share_granted` / `proposal.share_revoked` audit events.
 - A share reaches list, detail and vendor-response reads through `rfpListScope` and `canAccessRfp`; an edit share also allows edits.
 
+## Support access grants (ORG-404)
+
+Routes in `routes/supportAccessRoute.ts`; rules in `src/modules/supportAccess/`. RFPilot Support (DXG staff signed in to the admin app with an `admins` account) reads a customer organization's RFP data only under an active grant from that organization. A grant is to RFPilot Support as a whole, not to a named agent.
+
+Organization side (Owner and Admin only; anyone else gets 403 `SUPPORT_GRANT_FORBIDDEN`):
+
+- `POST /api/v1/organization/support-grants` `{ proposalId?, expiresInDays? | expiresAt?, reason? }` creates a grant for one RFP (`proposalId`) or, without it, the whole organization. Expiry defaults to 7 days and is refused past 30 (400 `INVALID_GRANT_EXPIRY`). An RFP outside the organization is 404 `PROPOSAL_NOT_FOUND`.
+- `GET /api/v1/organization/support-grants?page=` lists active and past grants, newest first: `{ id, scope: "organization" | "rfp", rfp, reason, status: "active" | "expired" | "revoked", grantedBy, createdAt, expiresAt, revokedAt, revokedBy, activity: { useCount, lastUsedAt } }`.
+- `GET /api/v1/organization/support-grants/:grantId` adds `events`: what Support did under the grant (`{ at, agent: { id, label: "RFPilot Support" }, operation, rfp }`, newest 200). Staff are never shown by name.
+- `POST /api/v1/organization/support-grants/:grantId/revoke` ends a grant at once (409 `SUPPORT_GRANT_EXPIRED` if it already expired; revoking twice is a no-op). Another organization's grant is 404 `SUPPORT_GRANT_NOT_FOUND`.
+
+RFPilot Support side (staff role and an `admins` account; otherwise 403 `SUPPORT_ACCESS_FORBIDDEN`):
+
+- `GET /api/v1/admin/support-access/grants` is "granted to me": every organization's active grants with `organization`, `scope`, `rfp`, `expiresAt` and `secondsRemaining`.
+- `GET /api/v1/admin/support-access/organizations/:organizationId/rfps?page=&search=` lists the RFPs the active grants cover (all of them under an organization grant, otherwise only the granted RFPs).
+- `GET /api/v1/admin/support-access/organizations/:organizationId/rfps/:proposalId` returns the RFP, its owner and the `grant` it was read under (for the admin app's banner). `…/vendor-responses` lists that RFP's vendor responses (summary fields, no document links).
+- `GET /api/v1/admin/support/tickets/:ticketId/rfps` lists the requester's RFPs in the ticket's organization. Reading the ticket itself (`/api/v1/admin/support/tickets/:ticketId`) needs no grant; this does.
+- No active grant in the organization: 403 `SUPPORT_GRANT_REQUIRED`, whether the organization exists or not. An RFP the active grants don't cover, or one that isn't in that organization: 404 `PROPOSAL_NOT_FOUND`. Grants are checked on every request, so expiry and revocation apply to the next call.
+- Every successful read writes a `support_access.used` audit event in the customer's organization (agent, `metadata.grantId`, target, `metadata.operation`: `rfp.list`, `rfp.read`, `vendor_responses.list`, `ticket.rfp.list`) before anything is returned; a refused one writes `support_access.denied`. Creating and revoking write `support_access.granted` / `support_access.revoked`.
+
+The older `/api/admin/proposals` and `/api/all-clients` routes are unchanged: they read only the signed-in admin's own organization.
+
 ## Two-factor authentication (ORG-303, ORG-304)
 
 Routes in `routes/twoFactorRoute.ts` (`/api/auth/2fa`) and `routes/organizationSecurityRoute.ts`; rules in `src/modules/twoFactor/`.
