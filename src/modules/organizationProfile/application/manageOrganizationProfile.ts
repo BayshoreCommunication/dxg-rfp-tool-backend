@@ -87,8 +87,10 @@ export const createOrganizationProfile = (dependencies: {
     // A plan assigned by RFPilot staff (ORG-603) isn't on the self-service list. The Owner's
     // onboarding choice must not replace it, so the step moves on and the stored plan stays.
     const staffAssigned = !ORGANIZATION_PLANS.includes(current.plan);
+    // The plan is written only when the choice differs from what is stored. Re-writing the same
+    // value could undo a staff change that lands between this read and the write, with no event.
     const changes = {
-      ...(staffAssigned ? {} : { plan: input.plan as OrganizationPlan }),
+      ...(staffAssigned || input.plan === current.plan ? {} : { plan: input.plan as OrganizationPlan }),
       onboardingStep: "team" as const,
     };
     await directory.update(input.organizationId, changes);

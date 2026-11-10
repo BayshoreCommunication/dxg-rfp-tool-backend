@@ -87,7 +87,8 @@ after(async () => {
   if (mongoose.connection.readyState === 1) {
     const orgIds = [dxg.org, holding, oid(acme.organizationId), oid(other.organizationId)];
     const db = mongoose.connection.db!;
-    for (const name of ["proposalstatustransitions", "notifications"]) {
+    // Raw collection: the audit model itself is append-only.
+    for (const name of ["proposalstatustransitions", "notifications", "securityauditevents", "proposals"]) {
       await db.collection(name).deleteMany({ organizationId: { $in: orgIds } });
     }
     await OrganizationMembership.collection.deleteMany({ organizationId: dxg.org });

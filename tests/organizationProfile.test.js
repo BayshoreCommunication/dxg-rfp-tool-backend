@@ -115,6 +115,15 @@ test("ORG-603: choosing a plan at onboarding never replaces a plan assigned by R
   assert.equal(result.profile.plan, "full_access");
   assert.deepEqual({ plan: store.get("org1").plan, onboardingStep: store.get("org1").onboardingStep }, { plan: "full_access", onboardingStep: "team" });
   assert.deepEqual(audits[0].metadata, { setting: "plan", plan: "full_access", kept: true });
+  // Choosing the plan already stored writes only the step, so it can't undo a staff change that
+  // lands between the read and the write.
+  const writes = [];
+  const racing = createOrganizationProfile({
+    directory: { find: async () => ({ ...blankProfile, onboardingStep: "plan" }), update: async (_id, changes) => { writes.push(changes); } },
+    audit: { append: async () => {} },
+  });
+  await racing.choosePlan({ ...actor, plan: "free_trial" });
+  assert.deepEqual(writes, [{ onboardingStep: "team" }]);
   // And an Owner still can't pick it for themselves.
   assert.deepEqual(await setup({ onboardingStep: "plan" }).service.choosePlan({ ...actor, plan: "full_access" }), { kind: "validation" });
 });
