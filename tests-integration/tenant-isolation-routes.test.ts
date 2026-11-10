@@ -98,6 +98,7 @@ const PARAM_SOURCES: Record<string, { pg?: string; mongo?: string; field?: strin
   members: { mongo: 'organizationmemberships', field: 'userId' },
   shares: { mongo: 'organizationmemberships', field: 'userId' },
   invitations: { mongo: 'invitations' },
+  'vendor-list': { mongo: 'organizationvendors' },
 };
 // Parameters that name a kind rather than a record.
 const LITERAL_PARAMS: Record<string, string> = { sectionKey: 'event_overview', reportType: 'executive' };
@@ -319,6 +320,7 @@ const seedForeignOrganization = async () => {
     ['POST', '/api/v1/teams', { name: `${MARKER} team` }],
     ['POST', '/api/v1/organization/invitations', { email: `invitee-${MARKER.toLowerCase()}@example.test`, role: 'planner' }],
     ['POST', '/api/organization/domains', { domain: `${MARKER.toLowerCase()}.example.com` }],
+    ['POST', '/api/v1/vendor-list', { company: `${MARKER} Audio`, category: `${MARKER} audio`, contacts: [{ name: `${MARKER} contact`, email: `contact-${MARKER.toLowerCase()}@example.test` }] }],
   ];
   const skipped: string[] = [];
   for (const [method, path, body] of steps) {
