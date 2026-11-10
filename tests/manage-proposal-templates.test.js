@@ -55,7 +55,7 @@ const RFP = {
   hybridVirtual: { livestream: "YES" },
   contentCreative: { brandGuideUrl: "https://brand.example", brandGuideFiles: ["s3://secret/brand.pdf"] },
   videoRecordingStep: { retired: true },
-  venue: { riggingRequired: "YES", inHouseAvCompanyName: "House AV", venueAvContactName: "Sam Venue", venueAvContactEmail: "sam@venue.example", venueAvContactPhone: "555 0100", venueDocs: ["s3://secret/venue.pdf"] },
+  venue: { riggingRequired: "YES", inHouseAvRequired: "YES", inHouseAvCompanyName: "House AV", venueAvContactName: "Sam Venue", venueAvContactEmail: "sam@venue.example", venueAvContactPhone: "555 0100", venueDocs: ["s3://secret/venue.pdf"] },
   uploads: { supportDocuments: ["s3://secret/doc.pdf"], coVendors: { photographer: { companyName: "Snap Co", contactEmail: "snap@vendor.example" } }, ndaRequired: "YES" },
   budget: { estimatedAvBudget: "$100k-$250k", evaluationMatrix: { price: 40, experience: 60 }, proposalSubmissionDueDate: "2026-02-01", decisionDate: "2026-02-15", vendorPresentationOpportunity: "YES" },
   contact: { contactFirstName: "Pat", contactLastName: "Planner", contactEmail: "pat@customer.example", contactPhone: "555 0199" },
@@ -388,7 +388,7 @@ test("a snapshot keeps content sections and drops vendors, responses, dates, fil
   assert.deepEqual(content.event, { eventName: "Annual Sales Kickoff", attendees: "800", eventFormat: "Hybrid", eventObjectives: "Launch the new line", statementOfWork: "Full production" });
   assert.deepEqual(content.venueSchedule, { venueName: "Grand Hall", timeZone: "America/Chicago" });
   assert.deepEqual(content.roomByRoom, [{ roomFunction: "General session", wirelessMicsQty: "6", functions: [{ name: "Keynote" }] }]);
-  assert.deepEqual(content.venue, { riggingRequired: "YES" });
+  assert.deepEqual(content.venue, { riggingRequired: "YES", inHouseAvRequired: "YES" });
   assert.deepEqual(content.contentCreative, { brandGuideUrl: "https://brand.example" });
   assert.deepEqual(content.budget, { estimatedAvBudget: "$100k-$250k", evaluationMatrix: { price: 40, experience: 60 }, vendorPresentationOpportunity: "YES" });
   const text = JSON.stringify(content);
@@ -404,7 +404,7 @@ test("the snapshot rules: date, time, contact, file and co-vendor keys are exclu
   for (const key of ["startDate", "endDate", "scheduleDate", "loadInDateTime", "showEndDateTime", "dateOfEvent", "decisionDate", "vendorSelectionDate", "strikeTime", "loadInTime", "editionYear", "rfpTimeline", "venueAvContactEmail", "contactPhone", "contactName", "brandGuideFiles", "avQuoteFile", "venueDocs", "supportDocuments", "coVendors", "coVendor", "inHouseAvCompanyName", "$where", "a.b"]) {
     assert.equal(isExcludedTemplateKey(key), true, key);
   }
-  for (const key of ["eventName", "timeZone", "roomFunction", "unionLabor", "candidates", "updates", "turnaround", "brandGuideUrl", "estimatedAvBudget", "vendorPresentationOpportunity"]) {
+  for (const key of ["inHouseAvRequired", "eventName", "timeZone", "roomFunction", "unionLabor", "candidates", "updates", "turnaround", "brandGuideUrl", "estimatedAvBudget", "vendorPresentationOpportunity"]) {
     assert.equal(isExcludedTemplateKey(key), false, key);
   }
   const nested = templateContentOf({ event: { eventName: "E", a: { b: [{ c: { startDate: "2026-01-01", keep: 1, when: new Date(), id: new (class ObjectId {})(), run: () => 1, n: Number.NaN } }] } }, budget: null, venue: "text", extra: { x: 1 } });
