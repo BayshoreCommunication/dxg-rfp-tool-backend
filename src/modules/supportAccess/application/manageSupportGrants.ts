@@ -86,7 +86,7 @@ export const createSupportGrantManagement = (dependencies: Dependencies) => {
     async list(actor: GrantManager, query: { page?: unknown }) {
       assertManager(actor);
       const parsed = Number.parseInt(String(query.page ?? "1"), 10);
-      const page = Number.isNaN(parsed) || parsed < 1 ? 1 : parsed;
+      const page = Number.isNaN(parsed) || parsed < 1 ? 1 : Math.min(parsed, 10_000);
       const result = await grants.listForOrganization(organizationOf(actor), { skip: (page - 1) * PER_PAGE, limit: PER_PAGE });
       return {
         grants: await present(actor, result.grants),
@@ -109,17 +109,23 @@ export const createSupportGrantManagement = (dependencies: Dependencies) => {
       const expiresAt = resolveGrantExpiry(input, now);
       const reason = parseGrantReason(input.reason);
       const grant = await grants.create({ organizationId, proposalId, grantedBy: String(actor.rfpActor.userId), reason, expiresAt });
-      await audit.append({
-        organizationId,
-        actorUserId: String(actor.rfpActor.userId),
-        action: SUPPORT_AUDIT.granted,
-        targetType: proposalId ? "proposal" : "organization",
-        targetId: proposalId ?? organizationId,
-        decision: "created",
-        reason: SUPPORT_AUDIT.granted,
-        correlationId: actor.correlationId,
-        metadata: { grantId: grant.id, scope: proposalId ? "rfp" : "organization", expiresAt: expiresAt.toISOString() },
-      });
+      try {
+        await audit.append({
+          organizationId,
+          actorUserId: String(actor.rfpActor.userId),
+          action: SUPPORT_AUDIT.granted,
+          targetType: proposalId ? "proposal" : "organization",
+          targetId: proposalId ?? organizationId,
+          decision: "created",
+          reason: SUPPORT_AUDIT.granted,
+          correlationId: actor.correlationId,
+          metadata: { grantId: grant.id, scope: proposalId ? "rfp" : "organization", expiresAt: expiresAt.toISOString() },
+        });
+      } catch (error) {
+        // No grant without its audit event: close it again so a retry can't leave two open.
+        await grants.revoke({ organizationId, grantId: grant.id, revokedBy: String(actor.rfpActor.userId), now }).catch(() => undefined);
+        throw error;
+      }
       return (await present(actor, [grant]))[0];
     },
 

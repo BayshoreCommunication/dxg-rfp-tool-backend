@@ -30,7 +30,7 @@ const rfpNotFound = () => new SupportAccessError("PROPOSAL_NOT_FOUND", "RFP not 
 
 const pageOf = (value: unknown) => {
   const parsed = Number.parseInt(String(value ?? "1"), 10);
-  return Number.isNaN(parsed) || parsed < 1 ? 1 : parsed;
+  return Number.isNaN(parsed) || parsed < 1 ? 1 : Math.min(parsed, 10_000);
 };
 
 // What the admin app shows in its banner: the permission the agent is working under.
@@ -129,7 +129,9 @@ export const createSupportAccess = (dependencies: Dependencies) => {
     if (organizationWide) {
       await used(agent, organizationWide, options.operation, { type: "organization", id: organizationId }, options.extra);
     } else {
-      for (const grant of scoped) {
+      // Only the grants whose RFP was actually returned count as used.
+      const returned = new Set(result.rfps.map((rfp) => rfp.id));
+      for (const grant of scoped.filter((item) => returned.has(item.proposalId as string))) {
         await used(agent, grant, options.operation, { type: "proposal", id: grant.proposalId as string }, options.extra);
       }
     }
@@ -149,16 +151,12 @@ export const createSupportAccess = (dependencies: Dependencies) => {
       const active = await grants.activeEverywhere(now);
       const organizationIds = [...new Set(active.map((grant) => grant.organizationId))];
       const names = await directory.organizationNames(organizationIds);
-      const titles = new Map<string, string>();
-      for (const organizationId of organizationIds) {
-        const ids = active.flatMap((grant) => (grant.organizationId === organizationId && grant.proposalId ? [grant.proposalId] : []));
-        if (ids.length) for (const [id, title] of await directory.rfpTitles(organizationId, ids)) titles.set(id, title);
-      }
       return {
         grants: active.map((grant) => ({
           ...grantBanner(grant, now),
           organization: { id: grant.organizationId, name: names.get(grant.organizationId) ?? null },
-          rfp: grant.proposalId ? { id: grant.proposalId, title: titles.get(grant.proposalId) ?? null } : null,
+          // The id only: an RFP's title is customer data and comes from the audited routes below.
+          rfp: grant.proposalId ? { id: grant.proposalId } : null,
           reason: grant.reason,
           createdAt: grant.createdAt,
         })),

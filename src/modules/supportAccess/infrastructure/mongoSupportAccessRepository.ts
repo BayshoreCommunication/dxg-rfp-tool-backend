@@ -22,7 +22,8 @@ const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]
 const iso = (value: unknown): string | null => (value instanceof Date ? value.toISOString() : value ? String(value) : null);
 const text = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value.trim() : null);
 
-export const isValidSupportAccessId = (value: string) => typeof value === "string" && /^[0-9a-f]{24}$/i.test(value);
+// Lower-case only: stored ids are compared as strings, so one spelling per id.
+export const isValidSupportAccessId = (value: string) => typeof value === "string" && /^[0-9a-f]{24}$/.test(value);
 
 const grantRecord = (doc: Record<string, unknown>): SupportGrantRecord => ({
   id: String(doc._id),

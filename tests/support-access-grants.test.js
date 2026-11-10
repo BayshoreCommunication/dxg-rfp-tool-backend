@@ -376,8 +376,9 @@ test("\"granted to me\" lists active grants across organizations with scope and 
   const expiring = await management.create(member(ADMIN), { expiresInDays: 1 });
   advance(DAY);
   const { grants } = await access.listGranted(agent());
-  assert.deepEqual(grants.map((g) => [g.organization.name, g.scope, g.rfp?.title ?? null, g.secondsRemaining]).sort(), [
-    ["Acme Events", "rfp", "Spring summit", 24 * 60 * 60],
+  assert.ok(!JSON.stringify(grants).includes("Spring summit"), "no RFP content in an unaudited list");
+  assert.deepEqual(grants.map((g) => [g.organization.name, g.scope, g.rfp?.id ?? null, g.secondsRemaining]).sort(), [
+    ["Acme Events", "rfp", RFP_ONE, 24 * 60 * 60],
     ["Other Co", "organization", null, 9 * 24 * 60 * 60],
   ]);
   assert.ok(!grants.some((g) => g.id === expiring.id));
@@ -430,4 +431,25 @@ test("the controller builds the actor from the stored account and maps errors to
   const anonymous = new MockResponse();
   await controller.listGrants({ params: {}, query: {}, body: {} }, anonymous);
   assert.equal(anonymous.statusCode, 401);
+});
+
+test("a grant whose audit event can't be written is closed again", async () => {
+  const { management, access, rows, state } = setup();
+  state.failAudit = true;
+  await assert.rejects(management.create(member(OWNER), {}), /audit store down/);
+  state.failAudit = false;
+  assert.equal(rows.length, 1);
+  assert.ok(rows[0].revokedAt, "the unaudited grant is revoked");
+  await rejects(access.getRfp(agent(), ORG, RFP_ONE), "SUPPORT_GRANT_REQUIRED", 403);
+});
+
+test("a list under RFP grants logs a use only for the grants whose RFP was returned", async () => {
+  const { management, access, audit } = setup();
+  const two = await management.create(member(OWNER), { proposalId: RFP_TWO });
+  audit.length = 0;
+  // The ticket's requester owns RFP_ONE, which isn't granted: nothing is returned, nothing is logged as used.
+  assert.deepEqual((await access.listTicketRfps(agent(), TICKET, {})).rfps, []);
+  assert.equal(uses(audit).length, 0);
+  assert.deepEqual((await access.listRfps(agent(), ORG, {})).rfps.map((r) => r.id), [RFP_TWO]);
+  assert.deepEqual(uses(audit).map((e) => [e.metadata.grantId, e.targetId]), [[two.id, RFP_TWO]]);
 });

@@ -36,6 +36,8 @@ const securityAuditEventSchema = new Schema<ISecurityAuditEvent>(
 securityAuditEventSchema.index({ organizationId: 1, createdAt: -1 });
 securityAuditEventSchema.index({ actorUserId: 1, createdAt: -1 });
 securityAuditEventSchema.index({ correlationId: 1 });
+// Per-action reads inside one organization (support activity under a grant, the audit view).
+securityAuditEventSchema.index({ organizationId: 1, action: 1, createdAt: -1 });
 
 for (const operation of ["updateOne", "updateMany", "findOneAndUpdate", "replaceOne", "deleteOne", "deleteMany"] as const) {
   securityAuditEventSchema.pre(operation, function appendOnly() {
