@@ -181,6 +181,7 @@ test("search matches company or category, the category filter is exact, and arch
   assert.equal((await service.list(owner, { limit: "100000" })).limit, 200);
   assert.equal((await service.list(owner, { limit: "abc", offset: "-4" })).limit, 50);
   await rejects(service.list(owner, { status: "deleted" }), "INVALID_VENDOR_STATUS", 400);
+  await rejects(service.list(owner, { status: ["archived", "all"] }), "INVALID_VENDOR_STATUS", 400);
 });
 
 test("input is validated: company, category and contacts", async () => {
@@ -192,6 +193,7 @@ test("input is validated: company, category and contacts", async () => {
   await rejects(service.create(owner, { company: "Ok", category: "x".repeat(81) }), "INVALID_VENDOR_CATEGORY", 400);
   await rejects(service.create(owner, { company: "Ok", category: 7 }), "INVALID_VENDOR_CATEGORY", 400);
   await rejects(service.create(owner, { company: "Ok", contacts: "dana@acme.example" }), "INVALID_VENDOR_CONTACTS", 400);
+  await rejects(service.create(owner, { company: "Ok", contacts: null }), "INVALID_VENDOR_CONTACTS", 400);
   await rejects(service.create(owner, { company: "Ok", contacts: [{ name: "No email" }] }), "INVALID_VENDOR_CONTACT_EMAIL", 400);
   await rejects(service.create(owner, { company: "Ok", contacts: [{ email: "not-an-email" }] }), "INVALID_VENDOR_CONTACT_EMAIL", 400);
   await rejects(service.create(owner, { company: "Ok", contacts: [{ name: "x".repeat(121), email: "a@b.example" }] }), "INVALID_VENDOR_CONTACTS", 400);
@@ -214,6 +216,26 @@ test("active company names are unique per organization, ignoring case; an archiv
   await rejects(service.update(owner, first.id, { category: "Video" }), "VENDOR_ARCHIVED", 409);
   await service.create(owner, { company: "Acme Audio" });
   await rejects(service.restore(owner, first.id), "VENDOR_COMPANY_TAKEN", 409);
+});
+
+test("an edit or archive that loses a race with an archive answers with the stored state", async () => {
+  const { service, vendors } = setup();
+  const owner = actor("owner");
+  const created = await service.create(owner, ACME);
+  // The vendor is archived between the service's read and its write.
+  const findById = vendors.findById.bind(vendors);
+  let raced = false;
+  vendors.findById = async (organizationId, vendorId) => {
+    const found = await findById(organizationId, vendorId);
+    if (!raced) { raced = true; await vendors.setArchived({ organizationId, vendorId, archived: true, at: new Date() }); }
+    return found;
+  };
+  await rejects(service.update(owner, created.id, { category: "Video" }), "VENDOR_ARCHIVED", 409);
+  assert.equal(vendors.rows[0].category, "Audio");
+  raced = false;
+  await service.restore(owner, created.id);
+  raced = false;
+  assert.equal((await service.archive(owner, created.id)).archived, true);
 });
 
 test("every edit is audited once, with no contact details in the trail", async () => {

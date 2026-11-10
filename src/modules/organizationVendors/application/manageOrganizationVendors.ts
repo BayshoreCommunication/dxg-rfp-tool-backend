@@ -32,6 +32,7 @@ const STATUSES: readonly VendorListStatus[] = ["active", "archived", "all"];
 
 const invalid = (code: string, message: string) => new OrganizationVendorError(code, message, 400);
 const notFound = () => new OrganizationVendorError("VENDOR_NOT_FOUND", "Vendor not found.", 404);
+const vendorArchived = () => new OrganizationVendorError("VENDOR_ARCHIVED", "Restore this vendor before editing it.", 409);
 const companyTaken = () => new OrganizationVendorError("VENDOR_COMPANY_TAKEN", "A vendor with this company name is already on the list.", 409);
 
 const text = (value: unknown) => (typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "");
@@ -56,7 +57,7 @@ const categoryOf = (value: unknown): string => {
 };
 
 const contactsOf = (value: unknown): VendorContact[] => {
-  if (value === undefined || value === null) return [];
+  if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > MAX_CONTACTS) {
     throw invalid("INVALID_VENDOR_CONTACTS", `Contacts must be a list of at most ${MAX_CONTACTS} people.`);
   }
@@ -88,8 +89,9 @@ const wholeNumber = (value: unknown, fallback: number, min: number, max: number)
 };
 
 const queryOf = (input: Record<string, unknown>): VendorListQuery => {
-  const status = typeof input.status === "string" ? input.status : "active";
-  if (!STATUSES.includes(status as VendorListStatus)) {
+  // A repeated or nested `status` parameter is refused, not read as the default.
+  const status = input.status === undefined ? "active" : input.status;
+  if (typeof status !== "string" || !STATUSES.includes(status as VendorListStatus)) {
     throw invalid("INVALID_VENDOR_STATUS", "Status must be active, archived or all.");
   }
   return {
@@ -179,7 +181,7 @@ export const createOrganizationVendorList = (dependencies: Dependencies) => {
     async update(actor: VendorListActor, vendorId: string, input: Record<string, unknown>): Promise<OrganizationVendorRecord> {
       requireEditor(actor);
       const previous = await load(actor, vendorId);
-      if (previous.archived) throw new OrganizationVendorError("VENDOR_ARCHIVED", "Restore this vendor before editing it.", 409);
+      if (previous.archived) throw vendorArchived();
       const changes: VendorChanges = {};
       if (input.company !== undefined) {
         const company = companyOf(input.company);
@@ -197,7 +199,11 @@ export const createOrganizationVendorList = (dependencies: Dependencies) => {
       if (changed.length === 0) return previous;
       const updated = await vendors.update({ organizationId: actor.organizationId, vendorId, changes });
       if (updated === "duplicate") throw companyTaken();
-      if (!updated) throw notFound();
+      if (!updated) {
+        // Archived by someone else since it was loaded (the write only matches active vendors).
+        await load(actor, vendorId);
+        throw vendorArchived();
+      }
       await record(actor, "organization_vendor.updated", vendorId, "allowed", {
         changed,
         company: updated.company,
@@ -212,8 +218,9 @@ export const createOrganizationVendorList = (dependencies: Dependencies) => {
       requireEditor(actor);
       const previous = await load(actor, vendorId);
       const archived = await vendors.setArchived({ organizationId: actor.organizationId, vendorId, archived: true, at: now() });
-      // Already archived: nothing changed, so nothing is recorded.
-      if (!archived || archived === "duplicate") return previous;
+      // Already archived, possibly by a concurrent request: nothing changed, so nothing is
+      // recorded, and the answer is the stored state.
+      if (!archived || archived === "duplicate") return previous.archived ? previous : load(actor, vendorId);
       await record(actor, "organization_vendor.archived", vendorId, "revoked", { company: archived.company });
       return archived;
     },

@@ -443,7 +443,7 @@ test('the API is healthy when it logs in as the app role', async () => {
 });
 
 test('organization B has data the sweep can aim at', () => {
-  for (const required of ['proposals', 'vendor-responses']) assert.ok(foreignByParam.get(required), `no foreign ${required} id`);
+  for (const required of ['proposals', 'vendor-responses', 'vendor-list']) assert.ok(foreignByParam.get(required), `no foreign ${required} id`);
   const covered = Object.keys(PARAM_SOURCES).filter((segment) => foreignByParam.has(segment));
   console.log(`# ${foreignIds.size} foreign ids; real foreign ids for: ${covered.join(', ')}`);
 });

@@ -70,11 +70,11 @@ Team administration (ORG-201) lives in `routes/teamsRoute.ts`; rules in `src/mod
 
 A vendor is `{ id, company, category, contacts: [{ name, email }], addedBy, archived, archivedAt, createdAt, updatedAt }`.
 
-- `GET /api/v1/vendor-list?search=&category=&status=active|archived|all&limit=&offset=` returns `{ items, total, limit, offset }`, sorted by company. `search` matches part of the company or the category, ignoring case; `category` is an exact match, ignoring case. `status` defaults to `active`; `limit` defaults to 50 (max 200).
+- `GET /api/v1/vendor-list?search=&category=&status=active|archived|all&limit=&offset=` returns `{ items, total, limit, offset }`, sorted by company. `search` matches part of the company or the category, ignoring case; `category` is an exact match, ignoring case. `status` defaults to `active`; `limit` defaults to 50 (max 200). Any other `status` is 400 `INVALID_VENDOR_STATUS`.
 - `GET /api/v1/vendor-list/categories` returns the distinct categories of active vendors, as `string[]`.
-- `GET /api/v1/vendor-list/:vendorId` returns one vendor, archived or not.
+- `GET /api/v1/vendor-list/:vendorId` returns one vendor, archived or not. A malformed id is 404, like a missing one.
 - `POST /api/v1/vendor-list` `{ company, category?, contacts? }` adds a vendor (201). `company` is 1 to 200 characters, `category` free text up to 80, `contacts` up to 50 `{ name?, email }` with a valid email, each email once per vendor (400 `INVALID_VENDOR_COMPANY`, `INVALID_VENDOR_CATEGORY`, `INVALID_VENDOR_CONTACTS`, `INVALID_VENDOR_CONTACT_EMAIL`, `DUPLICATE_VENDOR_CONTACT_EMAIL`). Emails are stored in lower case. Active company names are unique per organization, ignoring case (409 `VENDOR_COMPANY_TAKEN`).
-- `PATCH /api/v1/vendor-list/:vendorId` changes only the fields sent; `contacts` replaces the whole list. An archived vendor can't be edited (409 `VENDOR_ARCHIVED`).
+- `PATCH /api/v1/vendor-list/:vendorId` changes only the fields sent; `contacts` replaces the whole list (`[]` removes every contact; `null` is 400), and `category: ""` clears the category. Two people editing the same vendor at once: the last write wins. An archived vendor can't be edited (409 `VENDOR_ARCHIVED`).
 - `POST /api/v1/vendor-list/:vendorId/archive` and `/restore` take a vendor off the default list and put it back. Both are idempotent. Restoring is 409 `VENDOR_COMPANY_TAKEN` when an active vendor has taken the name. There is no hard delete.
 - Each add, edit, archive and restore writes a `SecurityAuditEvent` with `targetType: "organization_vendor"` (`organization_vendor.created`, `.updated`, `.archived`, `.restored`). The metadata records which fields changed and the contact count, never contact names or emails.
 

@@ -213,6 +213,7 @@ test('a vendor holding a submission link never sees the vendor list', async () =
   const rfp = await send({}, 'GET', `/api/proposals/${proposalId}?${grantQuery}`);
   assert.equal(rfp.status, 200, rfp.text);
   const workspace = await send({}, 'GET', `/api/vendor-responses/workspace?${grantQuery}`);
+  assert.equal(workspace.status, 200, workspace.text);
   // ...and nothing it returns carries the list, although this vendor is on it.
   for (const answer of [rfp, workspace]) assert.doesNotMatch(answer.text, new RegExp(`${MARKER}|Bright Lights|Editor owner AV`, 'i'));
 
