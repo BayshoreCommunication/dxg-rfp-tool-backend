@@ -17,6 +17,7 @@ import ProposalStatusTransition from '../modal/proposalStatusTransitionModel';
 import ProposalTemplate from '../modal/proposalTemplateModel';
 import PublicAccessGrant from '../modal/publicAccessGrantModel';
 import RefreshSession from '../modal/refreshSessionModel';
+import RfpShare from '../modal/rfpShareModel';
 import SecurityAuditEvent from '../modal/securityAuditEventModel';
 import Team from '../modal/teamModel';
 import TeamMembership from '../modal/teamMembershipModel';
@@ -113,6 +114,10 @@ before(async () => {
   assert.equal(created.status, 201, created.text);
   sourceId = String(created.body.data._id);
   assert.equal((await call('owner', 'PATCH', `/api/proposals/${sourceId}/status`, { status: 'submitted' })).status, 200);
+  // The Team Manager and the Planner can view the owner's RFP through a share; the colleague can't.
+  for (const who of ['manager', 'planner']) {
+    await RfpShare.create({ organizationId: orgA, proposalId: sourceId, userId: userIds[who], permission: 'view', grantedBy: userIds.owner });
+  }
   // A vendor is invited, so the RFP has vendor state of its own.
   const issued = await call('owner', 'POST', '/api/public-access', { resourceId: sourceId, purpose: 'vendor:submit', recipient: 'invited@vendor.example' });
   assert.equal(issued.status, 201, issued.text);
@@ -127,6 +132,7 @@ after(async () => {
       Proposal.deleteMany({ organizationId: { $in: orgIds } }),
       ProposalStatusTransition.collection.deleteMany({ organizationId: { $in: orgIds } }),
       PublicAccessGrant.deleteMany({ organizationId: { $in: orgIds } }),
+      RfpShare.deleteMany({ organizationId: { $in: orgIds } }),
       Team.deleteMany({ organizationId: { $in: orgIds } }),
       TeamMembership.deleteMany({ organizationId: { $in: orgIds } }),
       OrganizationMembership.deleteMany({ organizationId: { $in: orgIds } }),
@@ -279,7 +285,7 @@ test('an RFP created from a template is owned by its creator, lands on their tea
     ['Spring Summit', '800', undefined, undefined, undefined, undefined],
   );
   assert.deepEqual(rfp.roomByRoom, [{ roomFunction: 'General session', wirelessMicsQty: '6' }]);
-  assert.deepEqual([rfp.uploads, rfp.contact?.contactEmail, rfp.lifecycle?.vendorsInvited ?? 0], [{}, undefined, 0]);
+  assert.deepEqual([rfp.uploads ?? {}, rfp.contact?.contactEmail, rfp.lifecycle?.vendorsInvited ?? 0], [{}, undefined, 0]);
   assert.equal(await PublicAccessGrant.countDocuments({ organizationId: orgA, resourceId: String(rfp._id) }), 0);
   // The creator opens and edits it like any RFP of their own; the Team Manager role is not needed.
   assert.equal((await call('planner', 'GET', `/api/proposals/${rfp._id}`)).status, 200);
