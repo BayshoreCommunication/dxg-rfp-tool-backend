@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-11-09 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged, with M4 in progress (ORG-403 and ORG-401 built) and M5 and the launch gate not started. See "Organization accounts" below.
+**Last updated:** 2026-11-10 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged, with M4 in progress (ORG-403 and ORG-401 merged) and M4, M5 and the launch gate due Thu 12 Nov 2026, 16:00 BDT. See "Organization accounts" below.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -414,14 +414,21 @@ Decisions taken during delivery are in `DECISIONS.md` (ORG-110, 203/204,
 directly on `main` without the `ORG_ACCOUNTS_ENABLED` flag the original
 4-week plan proposed.
 
+**Commitment (2026-11-09):** every remaining milestone finishes by Thursday
+12 Nov 2026, 16:00 BDT, with four Claude agents working in parallel lanes. 29 of 46
+tickets are closed (ORG-403 and ORG-401 merged 2026-11-10); the 17 open ones carry
+lanes and merge windows in the ticket breakdown, whose "Timeline" section has the
+plan, the rules for parallel agents and the risks. ORG-503 closes on an internal
+security review plus a booked external pen test.
+
 | Milestone | Tickets | State |
 |---|---|---|
-| M1 Tenancy foundation | ORG-101 … 110 | Merged. Scoped access policy, repository sweep with a CI guard, RLS alignment, signup creates an organization, legacy holding tenants + verification and nightly orphan check, cross-tenant isolation suite, legacy-customer placement with journaled rollback. |
-| M2 People | ORG-201 … 210 | Merged. Teams, RFP team assignment, invitations (capped, team-aware, Google accept) and emails, accept-invite page, membership APIs, offboarding reassignment, RFP sharing, Users/Teams settings and the RFP access panel (share, team, reassign owner). |
-| M3 Entry paths and auth | ORG-301 … 307 | Merged. Sign-up with organization onboarding, Google + Microsoft + company OIDC SSO (email-first discovery, Require SSO), TOTP 2FA and org-mandatory 2FA with admin reset, DNS TXT domain verification, domain-match access requests (2026-11-08), session hardening on membership changes. |
-| M4 Experience | ORG-401 … 407 | In progress. ORG-403 (status history) built on a branch: derived, stored lifecycle stage (draft, sent, receiving responses, under review, awarded, archived), append-only transitions, "Mark as awarded" plus comparison-selection awards (DECISIONS 2026-11-09), status-history endpoint, backfill. ORG-401 (scoped dashboard list + summary with stage, owner, team, event-date and venue-city filters; summary property-tested against the list; p95 ≤ 136 ms on 5k RFPs) built on a branch stacked on ORG-403. Not started: role dashboards (ORG-402, next), support access grants (backend, customer UI, admin workspace), org audit log view. |
-| M5 Plans and shared resources | ORG-601 … 607 | Not started, except that DXG's pricing corpus, expert rules and knowledge are now shared with every organization (2026-11-01). Plan entitlements, templates and the org vendor list remain. |
-| Launch gate | ORG-501 … 505 | Not started: prod-snapshot migration rehearsal, cutover/rollback runbook, external pen test, docs, launch metrics. |
+| M1 Tenancy foundation | ORG-101 … 110 | Closed (merged). Scoped access policy, repository sweep with a CI guard, RLS alignment, signup creates an organization, legacy holding tenants + verification and nightly orphan check, cross-tenant isolation suite, legacy-customer placement with journaled rollback. |
+| M2 People | ORG-201 … 210 | Closed (merged). Teams, RFP team assignment, invitations (capped, team-aware, Google accept) and emails, accept-invite page, membership APIs, offboarding reassignment, RFP sharing, Users/Teams settings and the RFP access panel (share, team, reassign owner). |
+| M3 Entry paths and auth | ORG-301 … 307 | Closed (merged). Sign-up with organization onboarding, Google + Microsoft + company OIDC SSO (email-first discovery, Require SSO), TOTP 2FA and org-mandatory 2FA with admin reset, DNS TXT domain verification, domain-match access requests (2026-11-08), session hardening on membership changes. |
+| M4 Experience | ORG-401 … 407 | Open, due Thu 12 Nov 2026 16:00 BDT; 2 of 7 closed. ORG-403 (status history) merged: derived, stored lifecycle stage (draft, sent, receiving responses, under review, awarded, archived), append-only transitions, "Mark as awarded" plus comparison-selection awards (DECISIONS 2026-11-09), status-history endpoint, backfill (merged 2026-11-10, PR #117). ORG-401 (scoped dashboard list + summary with stage, owner, team, event-date and venue-city filters; summary property-tested against the list; p95 ≤ 136 ms on 5k RFPs) merged 2026-11-10 (PR #119). Open: role dashboards (ORG-402, next), support access grants (backend, customer UI, admin workspace), org audit log view. |
+| M5 Plans and shared resources | ORG-601 … 607 | Open, due Thu 12 Nov 2026 16:00 BDT. Not started, except that DXG's pricing corpus, expert rules and knowledge are now shared with every organization (2026-11-01). Plan entitlements, templates and the org vendor list remain. |
+| Launch gate | ORG-501 … 505 | Open, due Thu 12 Nov 2026 16:00 BDT: prod-snapshot migration rehearsal, cutover/rollback runbook, external pen test, docs, launch metrics. |
 
 Operational notes:
 
