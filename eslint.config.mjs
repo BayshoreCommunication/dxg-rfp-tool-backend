@@ -28,6 +28,8 @@ export default tseslint.config(
       "routes/supportDeskRoute.ts",
       "controller/supportAccessController.ts",
       "routes/supportAccessRoute.ts",
+      "controller/adminOrganizationPlansController.ts",
+      "routes/adminOrganizationPlansRoute.ts",
       "controller/invitationController.ts",
       "routes/invitationRoute.ts",
       "controller/organizationVendorsController.ts",

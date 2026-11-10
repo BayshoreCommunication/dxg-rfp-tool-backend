@@ -199,6 +199,17 @@ Rules in `src/modules/entitlements/`. Pricing is by RFPs created; the plan table
 - Open on every plan: the vendor submission routes (workspace, drafts, finalize, receipt, revisions), questionnaire publish and rollout, recording a response on a vendor's behalf, deleting a response by id, and public-access grants. Submissions received while locked are stored and readable once the plan changes. The planner's notification for a response received while locked says only that a vendor responded (`metadata: { planLocked: true, feature: "vendorResponses" }`).
 - `tests/plan-entitlements.test.js` lists every route of these routers with the feature it requires; a new route fails that test until it is classified.
 
+### Plan management for RFPilot staff (ORG-603)
+
+Mounted at `/api/v1/admin/organization-plans`. RFPilot staff only: the caller needs a staff membership role (`dxg_admin` or `super_admin`) **and** an `admins` account with role `admin` or `super_admin`. Every customer role gets 403, and a `users` account holding a staff role gets 403 `PLAN_MANAGEMENT_FORBIDDEN`. These are the only routes that can set `full_access`.
+
+- `GET /` `?search=&page=` lists customer organizations by name, 20 per page (`search` matches name, slug or an organization id). Answers `{ data: { organizations: [{ id, name, slug, status, createdAt, plan, proposals: { created, limit, remaining, canCreate }, features }], plans: [{ id, proposalLimit, features }], pagination, filters } }`. `plans` is the plan table, so the admin app doesn't hard-code limits. Legacy holding tenants are exempt from plans and aren't listed.
+- `GET /:organizationId` answers `{ data: { organization, plans, history } }`; `history` is the last 20 plan changes, newest first: `{ at, fromPlan, toPlan, note, changedBy: { id, name } | null }`.
+- `PUT /:organizationId` `{ plan: "free_trial" | "full_access", note?: string (≤ 500) }` sets the plan and answers the same shape as GET plus `changed`. Raising and lowering are both allowed and apply on the customer's next request. Setting the plan the organization already has answers `changed: false` and writes nothing. Rate-limited to 120 writes per 15 minutes per staff account.
+- Each change writes one `organization.plan_changed` audit event in the organization whose plan changed, in the same MongoDB transaction as the plan: actor (the staff account), `metadata.fromPlan`, `metadata.toPlan`, `metadata.proposalsCreated`, `metadata.actorOrganizationId` and the optional `metadata.note`.
+- Errors: 400 `INVALID_PLAN` or `INVALID_PLAN_NOTE`; 404 `ORGANIZATION_NOT_FOUND` for a missing organization, a malformed id or a legacy holding tenant (identical bodies); 409 `PLAN_CHANGE_CONFLICT` when someone else changed the plan between the read and the write.
+- A downgrade keeps the organization's RFPs, stored vendor responses and `proposalsCreated`; it locks the features and refuses new RFPs once the count is at the limit. AI jobs queued before a downgrade still finish (DECISIONS, ORG-603).
+
 ## Sign-in: Google, Microsoft and company SSO
 
 Customers sign up with email and password (confirmed by an emailed 6-digit code), or sign in with Google, Microsoft or their organization's own OpenID Connect provider. Setting `PASSWORD_SIGN_IN_ENABLED=false` turns the password, signup-OTP and reset routes (and password invitation accept) off; they then answer 410 `PASSWORD_SIGN_IN_DISABLED`. Setup for operators and customer IT: [SSO_SETUP.md](SSO_SETUP.md).
