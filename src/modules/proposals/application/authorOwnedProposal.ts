@@ -211,7 +211,6 @@ export const createCreateProposalFromTemplate = (dependencies: AuthorDependencie
   async (input: {
     ownerUserId: string;
     content: Record<string, unknown>;
-    presentationLayout: "template-one" | "template-two" | null;
     overrides: { eventName?: string };
     fallbackEventName: string;
   }) => {
@@ -235,7 +234,6 @@ export const createCreateProposalFromTemplate = (dependencies: AuthorDependencie
       viewsCount: 0,
       teamId: await defaultTeamId(dependencies, input.ownerUserId),
     };
-    if (input.presentationLayout) proposalData.templateId = input.presentationLayout;
     const proposal = await dependencies.proposals.createOwned({
       ownerUserId: input.ownerUserId,
       proposal: proposalData,

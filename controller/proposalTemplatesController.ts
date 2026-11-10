@@ -4,7 +4,7 @@ import type { AuthRequest } from "../middleware/auth";
 import { ProposalTemplateError, type TemplateActor } from "../src/modules/proposalTemplates/domain";
 import type { ProposalTemplates } from "../src/modules/proposalTemplates/application/manageProposalTemplates";
 import { proposalTemplates } from "../src/modules/proposalTemplates/composition";
-import { respondIfProposalAccessDenied } from "../src/modules/identity/application/proposalAccess";
+import { isProposalAccessDenied } from "../src/modules/identity/application/proposalAccess";
 import { respondIfPlanError } from "../src/modules/entitlements/http/planGate";
 
 // The actor is always the signed-in member's own organization; no id in the path or body can widen it.
@@ -33,8 +33,12 @@ const fail = (res: Response, error: unknown): void => {
     res.status(error.status).json({ success: false, code: error.code, message: error.message });
     return;
   }
-  // The source RFP is in the organization but the member can't see it (403).
-  if (respondIfProposalAccessDenied(res, error)) return;
+  // The source RFP is in the organization but the member can't see it (403). Same code as the
+  // RFP routes, worded for the reader.
+  if (isProposalAccessDenied(error)) {
+    res.status(403).json({ success: false, code: error.code, message: "You don't have access to this RFP." });
+    return;
+  }
   // An RFP started from a template needs a plan slot like any other (ORG-601).
   if (respondIfPlanError(res, error)) return;
   const messages = validationMessages(error);

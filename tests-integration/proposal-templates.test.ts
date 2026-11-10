@@ -106,7 +106,7 @@ before(async () => {
     venueSchedule: { venueName: 'Grand Hall', loadInDate: '2026-03-01', loadInTime: '08:00' },
     roomByRoom: [{ roomFunction: 'General session', loadInDateTime: '2026-03-01T08:00', wirelessMicsQty: '6' }],
     production: { unionLabor: 'Yes' },
-    venue: { riggingRequired: 'YES', venueAvContactEmail: 'sam@venue.example' },
+    venue: { riggingRequired: 'YES', inHouseAvCompanyName: 'House AV', venueAvContactEmail: 'sam@venue.example' },
     uploads: { supportDocuments: ['https://files.example/secret.pdf'], coVendors: { photographer: { companyName: 'Snap Co', contactEmail: 'snap@vendor.example' } } },
     budget: { estimatedAvBudget: '$100k-$250k', proposalSubmissionDueDate: '2026-02-01' },
     contact: { contactFirstName: 'Pat', contactLastName: 'Planner', contactEmail: 'pat@customer.example', contactPhone: '+1 555 0199' },
@@ -165,7 +165,7 @@ test('saving an RFP as a template keeps content and layout, and leaves vendors, 
   const row = (await stored(template.id))!;
   assert.equal(String(row.organizationId), String(orgA));
   const everything = JSON.stringify(row);
-  assert.doesNotMatch(everything, /2026-0[1-3]|08:00|Responses due|files\.example|vendor\.example|venue\.example|customer\.example|Snap Co|555 0199|"lifecycle"|"contact"|"uploads"|"proposalSettings"|vendorsInvited|"status"/);
+  assert.doesNotMatch(everything, /2026-0[1-3]|08:00|Responses due|files\.example|vendor\.example|venue\.example|customer\.example|Snap Co|House AV|555 0199|"lifecycle"|"contact"|"uploads"|"proposalSettings"|vendorsInvited|"status"/);
   assert.doesNotMatch(everything, new RegExp(sourceId));
   // The source RFP is untouched.
   const source = (await Proposal.findOne({ _id: sourceId, organizationId: orgA }).lean())!;
@@ -263,7 +263,7 @@ test('a personal template is visible only to its owner: others in the organizati
 test('an RFP the member cannot see cannot be saved as a template', async () => {
   // The colleague is a Planner with no share on the owner's RFP: in the organization, out of reach.
   const refused = await call('colleague', 'POST', BASE, { proposalId: sourceId, title: 'Borrowed' });
-  assert.deepEqual([refused.status, refused.body.code], [403, 'PROPOSAL_ACCESS_DENIED']);
+  assert.deepEqual([refused.status, refused.body.code, refused.body.message], [403, 'PROPOSAL_ACCESS_DENIED', "You don't have access to this RFP."]);
   const missing = await call('colleague', 'POST', BASE, { proposalId: randomMongoId(), title: 'Borrowed' });
   assert.deepEqual([missing.status, missing.body.code], [404, 'TEMPLATE_SOURCE_NOT_FOUND']);
   assert.equal(await ProposalTemplate.countDocuments({ organizationId: orgA, ownerUserId: userIds.colleague }), 0);
@@ -275,7 +275,11 @@ test('an RFP created from a template is owned by its creator, lands on their tea
     eventName: 'Spring Summit', userId: userIds.owner, teamId: randomMongoId(), organizationId: String(orgB), status: 'submitted', isDraft: false,
   });
   assert.equal(created.status, 201, created.text);
-  const rfp = (await Proposal.findOne({ _id: created.body.data._id, organizationId: orgA }).lean())!;
+  // The layout is handed back beside the RFP; the RFP record itself has no layout field.
+  assert.equal(created.body.data.presentationLayout, 'template-one');
+  assert.equal(String(created.body.data.proposal.userId), userIds.planner);
+  const rfp = (await Proposal.findOne({ _id: created.body.data.proposal._id, organizationId: orgA }).lean())!;
+  assert.equal('templateId' in rfp, false);
   assert.equal(String(rfp.userId), userIds.planner);
   assert.equal(String(rfp.teamId), teamId);
   assert.equal(String(rfp.organizationId), String(orgA));
@@ -293,7 +297,7 @@ test('an RFP created from a template is owned by its creator, lands on their tea
   // A member on no team gets an RFP with no team; without a name the template's event name is used.
   const untitled = await call('admin', 'POST', `${BASE}/${template.id}/proposals`);
   assert.equal(untitled.status, 201, untitled.text);
-  const second = (await Proposal.findOne({ _id: untitled.body.data._id, organizationId: orgA }).lean())!;
+  const second = (await Proposal.findOne({ _id: untitled.body.data.proposal._id, organizationId: orgA }).lean())!;
   assert.deepEqual([String(second.userId), second.teamId, second.event.eventName], [userIds.admin, null, `${MARKER} Kickoff`]);
   // Each one took a plan slot.
   assert.equal((await Organization.findById(orgA).select('proposalsCreated').lean())!.proposalsCreated, 3);

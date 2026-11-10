@@ -317,8 +317,14 @@ export const createProposalTemplates = (dependencies: Dependencies) => {
 
     /* Start a new RFP from a template. The RFP is an ordinary draft owned by the member who
        creates it; the proposals module's create path gives it a plan slot (PlanLimitReachedError
-       at the limit, ORG-601) and the creator's team (ORG-202). */
-    async createProposal(actor: TemplateActor, templateId: string, input: Record<string, unknown> = {}): Promise<object> {
+       at the limit, ORG-601) and the creator's team (ORG-202). The RFP record has no field for
+       the presentation layout (the client keeps it while the RFP is written), so the template's
+       layout is returned beside the RFP for the client to apply. */
+    async createProposal(
+      actor: TemplateActor,
+      templateId: string,
+      input: Record<string, unknown> = {},
+    ): Promise<{ proposal: object; presentationLayout: PresentationLayout | null }> {
       requireUser(actor);
       const template = await load(actor, templateId);
       if (template.archived) throw archivedError("This template is archived and can't be used.");
@@ -332,14 +338,14 @@ export const createProposalTemplates = (dependencies: Dependencies) => {
       if (eventName.length > MAX_EVENT_NAME_LENGTH) {
         throw invalid("INVALID_TEMPLATE_EVENT_NAME", `Event name must be at most ${MAX_EVENT_NAME_LENGTH} characters.`);
       }
-      return dependencies.proposals.createFromTemplate({
+      const proposal = await dependencies.proposals.createFromTemplate({
         ownerUserId: actor.userId,
         // Scrubbed again, so rules added after the template was saved still apply.
         content: templateContentOf(template.content),
-        presentationLayout: template.presentationLayout,
         overrides: eventName ? { eventName } : {},
         fallbackEventName: template.title,
       });
+      return { proposal, presentationLayout: template.presentationLayout };
     },
   };
 };

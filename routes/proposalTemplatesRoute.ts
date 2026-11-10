@@ -18,6 +18,7 @@ router.post("/proposal-templates/:templateId/publish", ...manage, controller.pub
 router.post("/proposal-templates/:templateId/unpublish", ...manage, controller.unpublish);
 router.post("/proposal-templates/:templateId/archive", ...use, controller.archive);
 router.post("/proposal-templates/:templateId/restore", ...use, controller.restore);
-router.post("/proposal-templates/:templateId/proposals", ...use, controller.createProposal);
+// Starting an RFP is also an RFP write, like POST /api/proposals.
+router.post("/proposal-templates/:templateId/proposals", ...use, authorizeAction("proposal:write"), controller.createProposal);
 
 export default router;

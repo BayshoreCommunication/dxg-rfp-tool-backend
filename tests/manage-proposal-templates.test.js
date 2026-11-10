@@ -179,6 +179,7 @@ test("the template routes carry the policy: publish and unpublish need template:
   for (const line of lines) {
     assert.match(line, /\/(publish|unpublish)"/.test(line) ? /\.\.\.manage,/ : /\.\.\.use,/, line);
   }
+  assert.match(route, /"\/proposal-templates\/:templateId\/proposals", \.\.\.use, authorizeAction\("proposal:write"\), controller\.createProposal/);
   assert.match(route, /const use = \[authenticate, authorizeAction\("template:use"\)\];/);
   assert.match(route, /const manage = \[authenticate, authorizeAction\("template:publish"\)\];/);
   assert.doesNotMatch(route, /requirePublicGrant|optionalAuth/);
@@ -387,11 +388,11 @@ test("a snapshot keeps content sections and drops vendors, responses, dates, fil
   assert.deepEqual(content.event, { eventName: "Annual Sales Kickoff", attendees: "800", eventFormat: "Hybrid", eventObjectives: "Launch the new line", statementOfWork: "Full production" });
   assert.deepEqual(content.venueSchedule, { venueName: "Grand Hall", timeZone: "America/Chicago" });
   assert.deepEqual(content.roomByRoom, [{ roomFunction: "General session", wirelessMicsQty: "6", functions: [{ name: "Keynote" }] }]);
-  assert.deepEqual(content.venue, { riggingRequired: "YES", inHouseAvCompanyName: "House AV" });
+  assert.deepEqual(content.venue, { riggingRequired: "YES" });
   assert.deepEqual(content.contentCreative, { brandGuideUrl: "https://brand.example" });
   assert.deepEqual(content.budget, { estimatedAvBudget: "$100k-$250k", evaluationMatrix: { price: 40, experience: 60 }, vendorPresentationOpportunity: "YES" });
   const text = JSON.stringify(content);
-  assert.doesNotMatch(text, /2026-0|08:00|22:00|Responses due|s3:\/\/|vendor\.example|venue\.example|customer\.example|Snap Co|Sam Venue|555 01|cand-1|vendors_invited|vendorResponseFormat|retired/);
+  assert.doesNotMatch(text, /2026-0|08:00|22:00|Responses due|s3:\/\/|vendor\.example|venue\.example|customer\.example|Snap Co|House AV|Sam Venue|555 01|cand-1|vendors_invited|vendorResponseFormat|retired/);
   for (const dropped of ["contact", "uploads", "lifecycle", "proposalSettings", "status", "userId", "teamId", "organizationId", "_id", "candidateApplicationIds", "videoRecordingStep", "viewsCount", "isFavorite", "createdAt"]) {
     assert.equal(dropped in content, false, dropped);
   }
@@ -400,7 +401,7 @@ test("a snapshot keeps content sections and drops vendors, responses, dates, fil
 });
 
 test("the snapshot rules: date, time, contact, file and co-vendor keys are excluded at any depth", () => {
-  for (const key of ["startDate", "endDate", "scheduleDate", "loadInDateTime", "showEndDateTime", "dateOfEvent", "decisionDate", "vendorSelectionDate", "strikeTime", "loadInTime", "editionYear", "rfpTimeline", "venueAvContactEmail", "contactPhone", "contactName", "brandGuideFiles", "avQuoteFile", "venueDocs", "supportDocuments", "coVendors", "coVendor", "$where", "a.b"]) {
+  for (const key of ["startDate", "endDate", "scheduleDate", "loadInDateTime", "showEndDateTime", "dateOfEvent", "decisionDate", "vendorSelectionDate", "strikeTime", "loadInTime", "editionYear", "rfpTimeline", "venueAvContactEmail", "contactPhone", "contactName", "brandGuideFiles", "avQuoteFile", "venueDocs", "supportDocuments", "coVendors", "coVendor", "inHouseAvCompanyName", "$where", "a.b"]) {
     assert.equal(isExcludedTemplateKey(key), true, key);
   }
   for (const key of ["eventName", "timeZone", "roomFunction", "unionLabor", "candidates", "updates", "turnaround", "brandGuideUrl", "estimatedAvBudget", "vendorPresentationOpportunity"]) {
@@ -474,11 +475,11 @@ test("starting an RFP hands the proposals module the scrubbed snapshot, the layo
   templates.rows[0].content.uploads = { coVendors: { photographer: { companyName: "Snap Co" } } };
 
   const result = await service.createProposal(actor("planner"), template.id, { eventName: "  Spring   Gala ", userId: USERS.owner, teamId: "x", organizationId: OTHER_ORG, status: "submitted" });
-  assert.deepEqual(result, { _id: "new-rfp", userId: USERS.planner });
+  // The layout comes back beside the RFP: the RFP record has no field for it.
+  assert.deepEqual(result, { proposal: { _id: "new-rfp", userId: USERS.planner }, presentationLayout: "template-one" });
   assert.deepEqual(created, [{
     ownerUserId: USERS.planner,
     content: templateContentOf(RFP),
-    presentationLayout: "template-one",
     overrides: { eventName: "Spring Gala" },
     fallbackEventName: "owner template",
   }]);
@@ -515,7 +516,7 @@ test("an RFP created from a template is owned by its creator, lands on their tea
     userId: USERS.owner, teamId: "someone-elses-team", organizationId: OTHER_ORG, _id: "x", lifecycle: { stage: "awarded" },
     proposalSetting: {}, videoRecordingStep: { retired: true }, createdAt: "2020-01-01",
   };
-  await create({ ownerUserId: USERS.planner, content, presentationLayout: "template-two", overrides: {}, fallbackEventName: "Fallback" });
+  await create({ ownerUserId: USERS.planner, content, overrides: {}, fallbackEventName: "Fallback" });
 
   assert.equal(inserted.length, 1);
   assert.equal(inserted[0].ownerUserId, USERS.planner);
@@ -523,8 +524,8 @@ test("an RFP created from a template is owned by its creator, lands on their tea
   assert.deepEqual(teamAsked, [USERS.planner]);
   assert.equal(proposal.teamId, "team-of-creator");
   assert.deepEqual(
-    [proposal.status, proposal.isDraft, proposal.isCopy, proposal.isArchived, proposal.isFavorite, proposal.isAccepted, proposal.viewsCount, proposal.templateId],
-    ["unsubmitted", true, false, false, false, false, 0, "template-two"],
+    [proposal.status, proposal.isDraft, proposal.isCopy, proposal.isArchived, proposal.isFavorite, proposal.isAccepted, proposal.viewsCount],
+    ["unsubmitted", true, false, false, false, false, 0],
   );
   for (const refused of ["userId", "organizationId", "_id", "lifecycle", "proposalSetting", "videoRecordingStep", "createdAt"]) assert.equal(refused in proposal, false, refused);
   assert.equal(proposal.event.eventName, "Annual Sales Kickoff");
@@ -535,7 +536,7 @@ test("an RFP created from a template is owned by its creator, lands on their tea
 
 test("the event name comes from the override, then the template, then the template's title", async () => {
   const { create, inserted } = authorSetup();
-  const base = { ownerUserId: USERS.planner, presentationLayout: null, fallbackEventName: "Template title" };
+  const base = { ownerUserId: USERS.planner, fallbackEventName: "Template title" };
   await create({ ...base, content: { event: { eventName: "From template", attendees: "5" } }, overrides: { eventName: "Override" } });
   await create({ ...base, content: { event: { eventName: "From template" } }, overrides: {} });
   await create({ ...base, content: { event: { eventName: "  " } }, overrides: {} });
@@ -549,7 +550,7 @@ test("the event name comes from the override, then the template, then the templa
 test("a plan refusal from the create path reaches the caller and records nothing", async () => {
   const { create, lifecycle, synchronized } = authorSetup({ createOwned: async () => { throw new PlanLimitReachedError("free_trial", 2, 2); } });
   await assert.rejects(
-    create({ ownerUserId: USERS.planner, content: { event: { eventName: "E" } }, presentationLayout: null, overrides: {}, fallbackEventName: "T" }),
+    create({ ownerUserId: USERS.planner, content: { event: { eventName: "E" } }, overrides: {}, fallbackEventName: "T" }),
     (error) => error instanceof PlanLimitReachedError && error.code === "PLAN_LIMIT_REACHED",
   );
   assert.deepEqual([lifecycle.length, synchronized.length], [0, 0]);
@@ -575,4 +576,33 @@ test("template copy says RFP, never proposal", () => {
     assert.ok(messages.length > 0, file);
     for (const message of messages) assert.doesNotMatch(message, /proposal/i, `${file}: ${message}`);
   }
+});
+
+test("a change that loses a race answers with the stored state and records nothing", async () => {
+  const { service, templates, audit } = setup();
+  const template = await save(service, "owner", { scope: "organization" });
+  await service.unpublish(actor("owner"), template.id);
+  const before = audit.length;
+  const real = { publish: templates.publish, unpublish: templates.unpublish, setArchived: templates.setArchived, rename: templates.rename };
+  // Each write applies the other request's change first, then reports that it matched nothing.
+  templates.publish = async (input) => { await real.publish(input); return null; };
+  assert.equal((await service.publish(actor("organization_admin"), template.id)).published, true);
+  templates.unpublish = async (input) => { await real.unpublish(input); return null; };
+  assert.equal((await service.unpublish(actor("organization_admin"), template.id)).published, false);
+  templates.rename = async (input) => { await real.setArchived({ ...input, archived: true, at: new Date() }); return null; };
+  await rejects(service.update(actor("organization_admin"), template.id, { title: "Late" }), "TEMPLATE_ARCHIVED", 409);
+  await real.setArchived({ organizationId: ORG, templateId: template.id, archived: false, at: new Date() });
+  templates.publish = async (input) => { await real.setArchived({ ...input, archived: true, at: new Date() }); return null; };
+  await rejects(service.publish(actor("organization_admin"), template.id), "TEMPLATE_ARCHIVED", 409);
+  templates.setArchived = async (input) => { await real.setArchived(input); return null; };
+  assert.equal((await service.restore(actor("organization_admin"), template.id)).archived, false);
+  assert.equal((await service.archive(actor("organization_admin"), template.id)).archived, true);
+  assert.equal(audit.length, before);
+});
+
+test("the source RFP refusal on a template route is worded for RFPs", () => {
+  const controller = fs.readFileSync(path.join(__dirname, "../controller/proposalTemplatesController.ts"), "utf8");
+  assert.match(controller, /isProposalAccessDenied\(error\)/);
+  assert.match(controller, /message: "You don't have access to this RFP\."/);
+  assert.doesNotMatch(controller, /respondIfProposalAccessDenied/);
 });

@@ -75,7 +75,6 @@ export interface TemplateProposalCreator {
   createFromTemplate(input: {
     ownerUserId: string;
     content: TemplateContent;
-    presentationLayout: PresentationLayout | null;
     overrides: { eventName?: string };
     fallbackEventName: string;
   }): Promise<object>;

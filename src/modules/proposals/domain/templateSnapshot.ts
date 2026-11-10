@@ -32,8 +32,9 @@ const EXCLUDED_KEYS: readonly RegExp[] = [
   /contact(Name|Email|Phone)/i,
   // Uploaded documents: brandGuideFiles, venueDocs, supportDocuments, ...
   /(Files?|Docs|Documents)$/,
-  // Other vendors working the event.
+  // Other vendors working the event, the venue's in-house AV company included.
   /^coVendors?$/i,
+  /^inHouseAv/,
 ];
 
 export const isExcludedTemplateKey = (key: string): boolean =>
