@@ -21,7 +21,7 @@ async function main() {
   assert.equal(process.env.VENDOR_UPLOAD_SCAN_REQUIRED, "true");
   const base = "http://127.0.0.1:8000";
   await mongoose.connect(process.env.MONGODB_URL);
-  const organization = await Organization.findOneAndUpdate({ slug: "product-updates-qa" }, { $setOnInsert: { name: "Product Updates QA", status: "active" } }, { upsert: true, new: true });
+  const organization = await Organization.findOneAndUpdate({ slug: "product-updates-qa" }, { $setOnInsert: { name: "Product Updates QA", status: "active" }, $set: { plan: "full_access" } }, { upsert: true, new: true });
   const email = "product-updates-qa@example.test";
   const password = "Local-product-updates-QA-2026!";
   const user = await User.findOne({ email }) || await User.create({ organizationId: organization._id, name: "Product Updates QA", email, password, role: "customer" });

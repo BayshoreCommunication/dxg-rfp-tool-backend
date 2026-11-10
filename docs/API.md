@@ -185,6 +185,20 @@ Routes under `/api/organization/profile`; rules in `src/modules/organizationProf
 - `POST /api/organization/onboarding/complete` (`organization:manage`) finishes onboarding from the team step (inviting is optional); repeating it once done is a no-op; earlier steps answer 409 `ONBOARDING_STEP_CONFLICT`.
 - Every profile and onboarding write answers the whole profile, as GET does, and is rate-limited (30 per 15 minutes).
 
+## Plans and entitlements (ORG-601)
+
+Rules in `src/modules/entitlements/`. Pricing is by RFPs created; the plan table (`domain/plans.ts`) is the only definition of a plan's limit and features. The server enforces it; the dashboard only reads it.
+
+- Plans: `free_trial` (2 RFPs created per organization, vendor responses and RFP intelligence locked) and `full_access` (no limit, both features; assigned by DXG staff until paid plans exist). `PLAN_FREE_TRIAL_PROPOSAL_LIMIT` overrides the free-trial limit. An absent or unknown plan value is treated as `free_trial`. Legacy holding tenants are exempt.
+- `GET /api/organization/entitlements` (any member) answers `{ data: { plan, exempt, proposals: { created, limit, remaining, canCreate }, features: { vendorResponses, proposalIntelligence } } }` for the caller's organization; `limit` and `remaining` are `null` when there is no limit.
+- Creating an RFP (`POST /api/proposals`, `POST /api/proposals/:id/copy`) takes one slot in the same MongoDB transaction that inserts it. `Organization.proposalsCreated` counts every RFP created through the API since ORG-601 and never goes down, so archiving or deleting one doesn't free a slot. With no slot left the answer is 403 `{ success: false, code: "PLAN_LIMIT_REACHED", message, plan, limit, created }`.
+- Locked features answer 403 `{ success: false, code: "PLAN_FEATURE_LOCKED", message, title, status, plan, feature }` before the handler runs, whatever ids the request carries:
+  - `vendorResponses`: `GET /api/vendor-responses`, `/proposals`, `/:id`, `/:id/submission-detail`, `/:id/submission-export` and `PATCH /:id/read`.
+  - `proposalIntelligence`: every route under `/api/v1/proposals/:proposalId/intelligence/` (requirement sets, evidence extraction, vendor intelligence, evaluation, comparisons, clarifications, reports, retention and legal holds). No request can queue an intelligence job for a locked organization.
+  - Both: `/api/v1/vendor-responses/:responseId/analysis-*` (jobs, runs, export).
+- Open on every plan: the vendor submission routes (workspace, drafts, finalize, receipt, revisions), questionnaire publish and rollout, recording a response on a vendor's behalf, deleting a response by id, and public-access grants. Submissions received while locked are stored and readable once the plan changes. The planner's notification for a response received while locked says only that a vendor responded (`metadata: { planLocked: true, feature: "vendorResponses" }`).
+- `tests/plan-entitlements.test.js` lists every route of these routers with the feature it requires; a new route fails that test until it is classified.
+
 ## Sign-in: Google, Microsoft and company SSO
 
 Customers sign up with email and password (confirmed by an emailed 6-digit code), or sign in with Google, Microsoft or their organization's own OpenID Connect provider. Setting `PASSWORD_SIGN_IN_ENABLED=false` turns the password, signup-OTP and reset routes (and password invitation accept) off; they then answer 410 `PASSWORD_SIGN_IN_DISABLED`. Setup for operators and customer IT: [SSO_SETUP.md](SSO_SETUP.md).

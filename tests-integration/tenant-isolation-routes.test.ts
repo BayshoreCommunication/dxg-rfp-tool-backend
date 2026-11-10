@@ -406,8 +406,11 @@ before(async () => {
   server = http.createServer(app).listen(0);
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
-  orgA = (await Organization.create({ name: 'Isolation A', slug: `intg-iso-a-${randomMongoId().slice(0, 10)}`, status: 'active' }))._id as mongoose.Types.ObjectId;
-  orgB = (await Organization.create({ name: `${MARKER} Org`, slug: `intg-iso-b-${randomMongoId().slice(0, 10)}`, status: 'active' }))._id as mongoose.Types.ObjectId;
+  // Both organizations are on full_access so every handler is reached: on the free trial the plan
+  // gate (ORG-601) would answer vendor-response and intelligence routes before any query ran.
+  // plan-entitlements.test.ts covers the gate itself against foreign ids.
+  orgA = (await Organization.create({ name: 'Isolation A', slug: `intg-iso-a-${randomMongoId().slice(0, 10)}`, status: 'active', plan: 'full_access' }))._id as mongoose.Types.ObjectId;
+  orgB = (await Organization.create({ name: `${MARKER} Org`, slug: `intg-iso-b-${randomMongoId().slice(0, 10)}`, status: 'active', plan: 'full_access' }))._id as mongoose.Types.ObjectId;
   for (const role of ROLES) actorsA.push(await member(orgA, role, [role]));
 
   // The first read of some resources creates the caller's defaults (settings); read twice.

@@ -8,8 +8,10 @@ export type OrganizationType = (typeof ORGANIZATION_TYPES)[number];
 export const ORGANIZATION_KINDS = ["customer", "legacy_holding"] as const;
 export type OrganizationKind = (typeof ORGANIZATION_KINDS)[number];
 
-// Pricing is by proposals created. Paid plans join this list once DXG defines them.
-export const ORGANIZATION_PLANS = ["free_trial"] as const;
+// Pricing is by proposals created. What each plan allows is defined in
+// src/modules/entitlements/domain/plans.ts; full_access is assigned by DXG staff until paid
+// plans exist, and paid plans join this list once DXG defines them.
+export const ORGANIZATION_PLANS = ["free_trial", "full_access"] as const;
 export type OrganizationPlan = (typeof ORGANIZATION_PLANS)[number];
 
 export const BILLING_STATUSES = ["none", "active", "past_due", "canceled"] as const;
