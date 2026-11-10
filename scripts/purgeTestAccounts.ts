@@ -15,6 +15,7 @@ import RfpShare from "../modal/rfpShareModel";
 import Settings from "../modal/settingsModel";
 import SsoConnection from "../modal/ssoConnectionModel";
 import Team from "../modal/teamModel";
+import OrganizationVendor from "../modal/organizationVendorModel";
 import TeamMembership from "../modal/teamMembershipModel";
 import TwoFactorChallenge from "../modal/twoFactorChallengeModel";
 import User from "../modal/userModel";
@@ -98,6 +99,7 @@ const plan = async (): Promise<Plan & { users: string[]; withoutAccount: string[
     ["organizationDomains", OrganizationDomain, byOrg],
     ["ssoConnections", SsoConnection, byOrg],
     ["teams", Team, byOrg],
+    ["organizationVendors", OrganizationVendor, byOrg],
     ["invitationEmailQuotas", InvitationEmailQuota, byOrg],
     ["invitations", Invitation, { $or: [byOrg, { email: { $in: userEmails } }] }],
     ["accessRequests", AccessRequest, { $or: [byOrg, { email: { $in: userEmails } }] }],

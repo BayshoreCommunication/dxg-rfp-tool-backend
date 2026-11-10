@@ -64,6 +64,20 @@ Team administration (ORG-201) lives in `routes/teamsRoute.ts`; rules in `src/mod
 - `POST /api/v1/teams/:teamId/members` `{ userId, isManager? }`, `PATCH /api/v1/teams/:teamId/members/:userId` `{ isManager }`, `DELETE /api/v1/teams/:teamId/members/:userId` — Owner/Admin only. Members must be active in the organization; a manager must hold the `team_manager` role (422 `TEAM_MANAGER_ROLE_REQUIRED`).
 - Proposal team (ORG-202): `POST /api/proposals` and copy put a new proposal on its creator's team when they're on exactly one active team (a client-sent `teamId` is ignored). `PUT /api/proposals/:id` with `teamId` (an active team in the organization, or `null`) changes it for anyone allowed to edit; anything else is 422 `TEAM_NOT_ASSIGNABLE`. Resending the current team's id is accepted even after that team is archived.
 
+## Organization vendor list (ORG-606)
+
+`routes/organizationVendorsRoute.ts`, rules in `src/modules/organizationVendors/application/manageOrganizationVendors.ts`. One shared list of vendor companies and contacts per organization (DXG decision Q4), for picking recipients when sending an RFP. Every route needs a signed-in member and acts on the caller's own organization only; another organization's vendor is 404 `VENDOR_NOT_FOUND`. No route accepts a public access grant, so a vendor's submission link never reaches the list. Roles (`authorizationPolicy.ts`): `vendor-list:write` for Owner, Admin and Team Manager; `vendor-list:read` for those plus Planner; a Viewer gets 403 on every route.
+
+A vendor is `{ id, company, category, contacts: [{ name, email }], addedBy, archived, archivedAt, createdAt, updatedAt }`.
+
+- `GET /api/v1/vendor-list?search=&category=&status=active|archived|all&limit=&offset=` returns `{ items, total, limit, offset }`, sorted by company. `search` matches part of the company or the category, ignoring case; `category` is an exact match, ignoring case. `status` defaults to `active`; `limit` defaults to 50 (max 200). Any other `status` is 400 `INVALID_VENDOR_STATUS`.
+- `GET /api/v1/vendor-list/categories` returns the distinct categories of active vendors, as `string[]`.
+- `GET /api/v1/vendor-list/:vendorId` returns one vendor, archived or not. A malformed id is 404, like a missing one.
+- `POST /api/v1/vendor-list` `{ company, category?, contacts? }` adds a vendor (201). `company` is 1 to 200 characters, `category` free text up to 80, `contacts` up to 50 `{ name?, email }` with a valid email, each email once per vendor (400 `INVALID_VENDOR_COMPANY`, `INVALID_VENDOR_CATEGORY`, `INVALID_VENDOR_CONTACTS`, `INVALID_VENDOR_CONTACT_EMAIL`, `DUPLICATE_VENDOR_CONTACT_EMAIL`). Emails are stored in lower case. Active company names are unique per organization, ignoring case (409 `VENDOR_COMPANY_TAKEN`).
+- `PATCH /api/v1/vendor-list/:vendorId` changes only the fields sent; `contacts` replaces the whole list (`[]` removes every contact; `null` is 400), and `category: ""` clears the category. Two people editing the same vendor at once: the last write wins. An archived vendor can't be edited (409 `VENDOR_ARCHIVED`).
+- `POST /api/v1/vendor-list/:vendorId/archive` and `/restore` take a vendor off the default list and put it back. Both are idempotent. Restoring is 409 `VENDOR_COMPANY_TAKEN` when an active vendor has taken the name. There is no hard delete.
+- Each add, edit, archive and restore writes a `SecurityAuditEvent` with `targetType: "organization_vendor"` (`organization_vendor.created`, `.updated`, `.archived`, `.restored`). The metadata records which fields changed and the contact count, never contact names or emails.
+
 ## Dashboard RFP queries (ORG-401)
 
 `routes/rfpDashboardRoute.ts`, rules in `src/modules/rfpDashboard/`. Both endpoints need `proposal:read` and return only what `rfpListScope` lets the member see: everything in the organization for Owners and Admins, their managed teams' RFPs for Team Managers, their own for Planners, plus anything shared with them. Filters only narrow that set. Saved copies are never listed.

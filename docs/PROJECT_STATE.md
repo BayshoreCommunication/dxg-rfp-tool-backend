@@ -433,6 +433,7 @@ Operational notes:
   see `ORGANIZATION_SETUP_REQUIRED`; place them with the ORG-110 script.
 - A user who still owns RFPs cannot be deleted; reassign first.
 - `scripts/purgeTestAccounts` removes test sign-ups (2026-11-08).
+- M5, ORG-606 (2026-11-10): the organization vendor list backend is built: `OrganizationVendor` in Mongo and `/api/v1/vendor-list` (list, search, categories, add, edit, archive, restore) with audit events; Owner, Admin and Team Manager edit, Planners read, Viewers have no access; covered by the cross-tenant isolation suite. The settings page and the picker when sending an RFP are ORG-607.
 
 ### Onboarding funnel report (2026-09-13)
 
