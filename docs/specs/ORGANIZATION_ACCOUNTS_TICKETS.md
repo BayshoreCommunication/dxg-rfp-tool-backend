@@ -12,8 +12,8 @@
 | M1 Tenancy foundation | ORG-101 … ORG-110 | 4S 4M 2L | 28–44 / 36 | ✅ Closed (10/10) | Merged |
 | M2 People | ORG-201 … ORG-210 | 2S 7M 1L | 29–47 / 38 | ✅ Closed (10/10) | Merged |
 | M3 Entry paths and auth | ORG-301 … ORG-307 | 2S 5M | 17–29 / 23 | ✅ Closed (7/7) | Merged 2026-11-08 |
-| M4 Experience | ORG-401 … ORG-407 | 2S 4M 1L | 20–32 / 26 | ⏳ Open (2/7 closed: ORG-401, ORG-403) | Thu 12 Nov 2026, 16:00 BDT |
-| M5 Plans and shared resources | ORG-601 … ORG-607 | 1S 6M | 19–32 / 25.5 | ⏳ Open (1/7) | Thu 12 Nov 2026, 16:00 BDT |
+| M4 Experience | ORG-401 … ORG-407 | 2S 4M 1L | 20–32 / 26 | ⏳ Open (3/7 closed: ORG-401, ORG-403, ORG-404) | Thu 12 Nov 2026, 16:00 BDT |
+| M5 Plans and shared resources | ORG-601 … ORG-607 | 1S 6M | 19–32 / 25.5 | ⏳ Open (2/7 closed: ORG-601, ORG-606) | Thu 12 Nov 2026, 16:00 BDT |
 | Launch gate | ORG-501 … ORG-505 | 4S 1M | 7–13 / 10 | ⏳ Open (0/5) | Thu 12 Nov 2026, 16:00 BDT (ORG-503: see Timeline) |
 | **Total** | **46** | 15S 27M 4L | **120–197 / ~158.5** (≈24–39 eng-weeks, midpoint ~32) | **29 closed, 17 open** | **Thu 12 Nov 2026, 16:00 BDT** |
 
@@ -31,9 +31,9 @@ Lanes are split to keep dependencies inside a lane and to keep agents out of eac
 
 | Lane | Focus | Tickets in order | Repos | Midpoint days |
 |---|---|---|---|---|
-| **Agent 1** | M4 trust: history, support grants, audit | ~~ORG-403~~ ✅ → 404 → 405 → 407 → 406 | BE, DB, AD | 13.5 left |
+| **Agent 1** | M4 trust: history, support grants, audit | ~~ORG-403~~ ✅ → ~~404~~ ✅ → 405 → 407 → 406 | BE, DB, AD | 13.5 left |
 | **Agent 2** | M4 dashboards, then templates UI | ~~ORG-401~~ ✅ → 402 → 605 | BE, DB | 11 left |
-| **Agent 3** | M5 plans and templates backend, metrics | ORG-601 → 603 → 602 → 604 → 505 | BE, DB, AD | 15 |
+| **Agent 3** | M5 plans and templates backend, metrics | ~~ORG-601~~ ✅ → 603 → 602 → 604 → 505 | BE, DB, AD | 15 |
 | **Agent 4** | M5 vendor list, then launch gate | ~~ORG-606~~ ✅ → 607 → 501 → 502 → 504 | BE, DB | 15 |
 | Human | Reviews and merges, external access | ORG-503 coordination, prod snapshot access for ORG-501 | — | — |
 
@@ -223,7 +223,7 @@ Thu 10:00–14:00 QA: `npm run ci` in all three repos on `main`, the backend int
 - Backfill existing RFPs with one synthetic "current status as of migration" entry.
 - AC: every write path that changes status records a transition (test enumerates them).
 
-**ORG-404 · Support access grants backend** · BE · M · P0-9 · ⏳ **Open** (Agent 1 · merge Wed 13:00 BDT)
+**ORG-404 · Support access grants backend** · BE · M · P0-9 · ✅ **Closed** (merged Tue 10 Nov, PR #123)
 - `SupportAccessGrant` (org, optional rfp, grantedBy, expiresAt default 7d and max 30d, revokedAt). Owner/Admin create and revoke.
 - Admin-app routes that read customer RFP data require an active matching grant for the signed-in `admins` account. Every use writes an audit event (agent, grant, object).
 - AC: an expired or revoked grant is refused immediately. Reading ticket content in `supportDesk` still works without a grant, but reading the RFP behind a ticket requires one.
@@ -241,7 +241,7 @@ Thu 10:00–14:00 QA: `npm run ci` in all three repos on `main`, the backend int
 
 ## M5: Plans and shared resources
 
-**ORG-601 · Plan entitlements and the free-trial limit** · BE · M · DXG decision Q2 · blocked by: ORG-101, ORG-104 · ⏳ **Open** (Agent 3 · merge Tue 13:00 BDT)
+**ORG-601 · Plan entitlements and the free-trial limit** · BE · M · DXG decision Q2 · blocked by: ORG-101, ORG-104 · ✅ **Closed** (merged Tue 10 Nov, PR #122)
 - Entitlements module: `canCreateProposal(org)` and `hasFeature(org, 'vendorResponses' | 'proposalIntelligence')`. Plan table in code and config. `free_trial` = 2 proposals created per org, both features locked.
 - `Organization.proposalsCreated` increments in the same transaction as every proposal creation path (new, duplicate, from template) and never decrements.
 - Enforced on the server: proposal create returns a distinct `PLAN_LIMIT_REACHED` error. Vendor-response reads, compare and export and every proposal intelligence action (evaluation, comparison, requirements, evidence extraction, vendor intelligence) return `PLAN_FEATURE_LOCKED`. Intelligence AI jobs aren't queued for locked orgs. Vendor submissions are still accepted and stored.
