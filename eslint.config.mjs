@@ -20,6 +20,8 @@ export default tseslint.config(
       "controller/evaluationEngineController.ts",
       "controller/comparisonOrchestrationController.ts",
       "controller/proposalLifecycleController.ts",
+      "controller/rfpDashboardController.ts",
+      "routes/rfpDashboardRoute.ts",
       "controller/proposalIntelligenceOperationsController.ts",
       "controller/vendorResponseController.ts",
       "controller/supportDeskController.ts",

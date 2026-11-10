@@ -64,6 +64,16 @@ Team administration (ORG-201) lives in `routes/teamsRoute.ts`; rules in `src/mod
 - `POST /api/v1/teams/:teamId/members` `{ userId, isManager? }`, `PATCH /api/v1/teams/:teamId/members/:userId` `{ isManager }`, `DELETE /api/v1/teams/:teamId/members/:userId` — Owner/Admin only. Members must be active in the organization; a manager must hold the `team_manager` role (422 `TEAM_MANAGER_ROLE_REQUIRED`).
 - Proposal team (ORG-202): `POST /api/proposals` and copy put a new proposal on its creator's team when they're on exactly one active team (a client-sent `teamId` is ignored). `PUT /api/proposals/:id` with `teamId` (an active team in the organization, or `null`) changes it for anyone allowed to edit; anything else is 422 `TEAM_NOT_ASSIGNABLE`. Resending the current team's id is accepted even after that team is archived.
 
+## Dashboard RFP queries (ORG-401)
+
+`routes/rfpDashboardRoute.ts`, rules in `src/modules/rfpDashboard/`. Both endpoints need `proposal:read` and return only what `rfpListScope` lets the member see: everything in the organization for Owners and Admins, their managed teams' RFPs for Team Managers, their own for Planners, plus anything shared with them. Filters only narrow that set. Saved copies are never listed.
+
+- Filters (both endpoints): `stage` (comma-separated lifecycle stages; default is every stage except `archived`), `owner` (user id), `team` (team id), `eventFrom` / `eventTo` (inclusive, `YYYY-MM-DD`, against the event start date; RFPs without a start date drop out), `venueCity` (whole name, case-insensitive), `search` (event name contains). An invalid value is 400 `DASHBOARD_FILTER_INVALID`, never silently ignored.
+- `GET /api/v1/rfps` — adds `page`, `limit` (max 100, default 25), `sortBy` (`updatedAt` default, `createdAt`, `eventStartDate`, `eventName`) and `sortOrder`. Items: `{ id, eventName, stage, status, isDraft, ownerUserId, ownerName, teamId, teamName, eventStartDate, eventEndDate, venueCity, vendorsInvited, vendorsResponded, reviewStartedAt, awardedAt, createdAt, updatedAt }` with `pagination { total, page, limit, totalPages }`.
+- `GET /api/v1/rfps/summary` — over exactly the list's set: `{ total, activeRfps (sent + receiving_responses + under_review), responsesReceived (sum of vendorsResponded), awardedThisQuarter, byStage, quarter { label, start, end, timeZone } }`. "This quarter" is the calendar quarter in the organization's `timeZone` (UTC when unset). The integration suite checks, over randomized filters, that the summary equals aggregating every list page.
+- An RFP the lifecycle backfill hasn't reached yet is listed with the stage its flags give (archived, draft, otherwise sent).
+- Measured on 5,000 RFPs in one organization (integration suite, local Docker): p95 16–136 ms against the 300 ms budget.
+
 ## RFP lifecycle (ORG-403)
 
 Every RFP has a derived stage, stored on the proposal as `lifecycle` and recomputed after each write: `draft` → `sent` → `receiving_responses` → `under_review` → `awarded`, or `archived`. Archived outranks everything, an unpublished proposal is a draft, then awarded, then under review (a vendor comparison was opened), then receiving responses (at least one vendor response), else sent. Rules in `src/modules/proposalLifecycle/`. Clients can't write `lifecycle`: create, update and copy strip it.
