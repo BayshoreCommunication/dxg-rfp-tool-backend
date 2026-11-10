@@ -18,7 +18,7 @@ const WRITERS = {
   },
   "src/modules/proposals/infrastructure/mongo/mongoProposalWriteRepository.ts": {
     writes: 6,
-    how: "hooked in the application layer: create, copy, update, status, meta, archive and restore call ProposalLifecycleRecorder after the write; view counts and permanent delete can't move the stage",
+    how: "hooked in the application layer: create, copy, create from a template (ORG-604), update, status, meta, archive and restore call ProposalLifecycleRecorder after the write; view counts and permanent delete can't move the stage",
   },
   "utils/cronJobs.ts": {
     writes: 2,
@@ -104,6 +104,16 @@ test("hooked writers still call the lifecycle", () => {
   const author = read("src/modules/proposals/application/authorOwnedProposal.ts");
   for (const reason of ["created", "updated", "copied"]) assert.match(author, new RegExp(`reason: "${reason}"`));
   assert.match(author, /delete proposal\.lifecycle/);
+  // Every insert (new, copy, from a template) goes through createOwned and then records the change.
+  const inserts = [...author.matchAll(/dependencies\.proposals\.createOwned\(/g)].length;
+  const recorded = [...author.matchAll(/recordChange\(\{ proposalId: recordIdOf\(proposal\), actorUserId: input\.ownerUserId, reason: "(created|copied)" \}\)/g)].length;
+  assert.equal(inserts, 3);
+  assert.equal(recorded, inserts);
+  // ORG-604: templates never insert an RFP themselves; they call the proposals module.
+  for (const file of ["application/manageProposalTemplates.ts", "infrastructure/mongoProposalTemplateRepository.ts", "composition.ts"]) {
+    assert.doesNotMatch(read(`src/modules/proposalTemplates/${file}`), /modal\/proposalsModel/);
+  }
+  assert.match(read("src/modules/proposalTemplates/composition.ts"), /createProposalFromTemplate\(input\)/);
   const mutate = read("src/modules/proposals/application/mutateOwnedProposal.ts");
   for (const reason of ["status_changed", "metadata_changed", "archived", "restored"]) assert.match(mutate, new RegExp(`reason: "${reason}"`));
   assert.match(read("src/modules/proposals/composition.ts"), /lifecycle: proposalLifecycleRecorderAdapter/);

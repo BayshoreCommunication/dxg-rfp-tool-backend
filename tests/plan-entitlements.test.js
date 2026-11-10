@@ -238,3 +238,29 @@ test("the gate runs after authentication and authorization on every gated route"
     }
   }
 });
+
+// ORG-604: templates are not a plan feature, so no template route carries a feature gate. Starting
+// an RFP from a template is limited by the RFP slot instead (createOwned), and its controller
+// answers the refusal with respondIfPlanError.
+test("every template route is classified: open, with the RFP limit on create-from-template", () => {
+  const classified = Object.fromEntries(routesOf("../routes/proposalTemplatesRoute").map(([route, features]) => [route, features]));
+  assert.deepEqual(classified, {
+    "GET /proposal-templates": "open",
+    "POST /proposal-templates": "open",
+    "GET /proposal-templates/:templateId": "open",
+    "PATCH /proposal-templates/:templateId": "open",
+    "POST /proposal-templates/:templateId/publish": "open",
+    "POST /proposal-templates/:templateId/unpublish": "open",
+    "POST /proposal-templates/:templateId/archive": "open",
+    "POST /proposal-templates/:templateId/restore": "open",
+    "POST /proposal-templates/:templateId/proposals": "open",
+  });
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const read = (file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");
+  assert.match(read("controller/proposalTemplatesController.ts"), /respondIfPlanError\(res, error\)/);
+  // The RFP is inserted by the proposals module's createOwned, which takes the plan slot.
+  const author = read("src/modules/proposals/application/authorOwnedProposal.ts");
+  const fromTemplate = author.slice(author.indexOf("export const createCreateProposalFromTemplate"));
+  assert.match(fromTemplate, /dependencies\.proposals\.createOwned\(/);
+});

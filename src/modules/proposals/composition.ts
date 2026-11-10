@@ -12,6 +12,7 @@ import {
 import {
   createCopyOwnedProposal,
   createCreateOwnedProposal,
+  createCreateProposalFromTemplate,
   createUpdateOwnedProposal,
 } from "./application/authorOwnedProposal";
 import {
@@ -70,6 +71,10 @@ export const permanentlyDeleteOwnedProposal = createPermanentlyDeleteOwnedPropos
 export const createOwnedProposal = createCreateOwnedProposal(mutationDependencies);
 export const updateOwnedProposal = createUpdateOwnedProposal(mutationDependencies);
 export const copyOwnedProposal = createCopyOwnedProposal(mutationDependencies);
+export const createProposalFromTemplate = createCreateProposalFromTemplate(mutationDependencies);
+// The RFP a template is saved from: the same view-scoped read a copy uses (ORG-604).
+export const findProposalTemplateSource = (input: { proposalId: string; ownerUserId: string }) =>
+  mongoProposalWriteRepository.findOwnedCopySourceById(input);
 
 export const getProposalByLegacyPublicId = createGetProposalByLegacyPublicId({
   publicAccess: mongoPublicProposalAccessRepository,

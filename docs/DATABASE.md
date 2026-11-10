@@ -41,6 +41,10 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 
 - `OrganizationVendor` (organization, `company`, `category`, `contacts` [`name`, `email`], `addedBy`, `archived`, `archivedAt`), ORG-606. Active company names are unique per organization, ignoring case (partial unique index with a case-insensitive collation); an archived name can be reused. Read and written only by `src/modules/organizationVendors`, always with `organizationId` in the filter (the tenant-scope guard covers the model). Legacy holding tenants have no vendor list: their members can't sign in.
 
+## RFP templates
+
+- `ProposalTemplate` (organization, `ownerUserId`, `scope` personal|organization, `title`, `description`, `content`, `presentationLayout`, `publishedAt`, `publishedBy`, `archived`, `archivedAt`), ORG-604. `content` is a snapshot of an RFP's content sections built by `src/modules/proposals/domain/templateSnapshot.ts` (no vendors, responses, dates, files, contacts or system fields); it is customer content and is never copied across organizations. Read and written only by `src/modules/proposalTemplates`, always with `organizationId` in the filter (the tenant-scope guard covers the model); the list query also carries the visibility rule (own personal templates, published organization templates, and for Owners and Admins every organization template). An RFP started from a template is inserted by the proposals module's `createOwned`, never by this module.
+
 ## Support access grants
 
 - `SupportAccessGrant` (ORG-404; MongoDB): organization, `proposalId` (null for the whole organization), `grantedBy`, optional `reason`, `expiresAt` (the model refuses more than 30 days from creation), `revokedAt`, `revokedBy`. Rows are never deleted. Indexed `{ organizationId, createdAt }` and `{ revokedAt, expiresAt }`. No Postgres table.
