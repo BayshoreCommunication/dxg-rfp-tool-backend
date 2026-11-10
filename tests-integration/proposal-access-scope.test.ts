@@ -60,8 +60,8 @@ const listedIds = async (who: string) => ((await call(who, 'GET', '/api/proposal
 before(async () => {
   await connectMongo();
   assert.equal(mongoose.connection.name, TEST_MONGODB_DB_NAME);
-  const orgA = (await Organization.create({ name: 'Scope A', slug: `intg-scope-${randomMongoId().slice(0, 10)}` }))._id;
-  const orgB = (await Organization.create({ name: 'Scope B', slug: `intg-scope-${randomMongoId().slice(0, 10)}` }))._id;
+  const orgA = (await Organization.create({ plan: 'full_access', name: 'Scope A', slug: `intg-scope-${randomMongoId().slice(0, 10)}` }))._id;
+  const orgB = (await Organization.create({ plan: 'full_access', name: 'Scope B', slug: `intg-scope-${randomMongoId().slice(0, 10)}` }))._id;
   orgIds.push(orgA, orgB);
   await member(orgA, 'admin', ['organization_admin']);
   const plannerOne = await member(orgA, 'plannerOne', ['planner']);

@@ -52,6 +52,7 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 - `ProposalStatusTransition` is append-only (the model throws on every update path). Each row has the organization, proposal, from/to stage and status, actor type and user, reason and time. Rows outlive a deleted proposal and go only with their organization.
 - The lifecycle write and its transition commit in one Mongo transaction, guarded by the proposal's status, draft and archive flags and `lifecycle.revision`.
 - `npm run backfill:proposal-lifecycle` is dry-run by default. `--apply` recomputes counts, fills a missing review start or comparison award from Postgres `comparison_runs`/`comparison_decisions` under the organization's RLS context, and appends a `backfill` transition only where the stage or status changed.
+- `Organization.plan` (`free_trial` | `full_access`, default `free_trial`) and `Organization.proposalsCreated` (ORG-601). The counter is incremented by one conditional update inside the transaction that inserts a proposal (`claimProposalSlot`), and nothing decrements it. Organizations that existed before ORG-601 start from the stored value, which is 0 unless set: their earlier proposals are not counted.
 
 ## Pricing data
 

@@ -101,9 +101,9 @@ before(async () => {
   await connectMongo();
   assert.equal(mongoose.connection.name, TEST_MONGODB_DB_NAME);
   const now = new Date();
-  orgA = (await Organization.create({ name: 'Dashboard A', slug: `intg-dash-${randomMongoId().slice(0, 10)}`, timeZone: 'America/Chicago' }))._id as mongoose.Types.ObjectId;
-  orgB = (await Organization.create({ name: 'Dashboard B', slug: `intg-dash-${randomMongoId().slice(0, 10)}` }))._id as mongoose.Types.ObjectId;
-  orgBig = (await Organization.create({ name: 'Dashboard Big', slug: `intg-dash-${randomMongoId().slice(0, 10)}` }))._id as mongoose.Types.ObjectId;
+  orgA = (await Organization.create({ plan: 'full_access', name: 'Dashboard A', slug: `intg-dash-${randomMongoId().slice(0, 10)}`, timeZone: 'America/Chicago' }))._id as mongoose.Types.ObjectId;
+  orgB = (await Organization.create({ plan: 'full_access', name: 'Dashboard B', slug: `intg-dash-${randomMongoId().slice(0, 10)}` }))._id as mongoose.Types.ObjectId;
+  orgBig = (await Organization.create({ plan: 'full_access', name: 'Dashboard Big', slug: `intg-dash-${randomMongoId().slice(0, 10)}` }))._id as mongoose.Types.ObjectId;
   orgIds.push(orgA, orgB, orgBig);
 
   await member(orgA, 'admin', ['organization_admin']);

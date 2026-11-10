@@ -62,8 +62,8 @@ const createDraft = async (who = 'planner') => {
 before(async () => {
   await connectMongo();
   assert.equal(mongoose.connection.name, TEST_MONGODB_DB_NAME);
-  const orgA = (await Organization.create({ name: 'Lifecycle A', slug: `intg-lifecycle-${randomMongoId().slice(0, 10)}` }))._id;
-  const orgB = (await Organization.create({ name: 'Lifecycle B', slug: `intg-lifecycle-${randomMongoId().slice(0, 10)}` }))._id;
+  const orgA = (await Organization.create({ plan: 'full_access', name: 'Lifecycle A', slug: `intg-lifecycle-${randomMongoId().slice(0, 10)}` }))._id;
+  const orgB = (await Organization.create({ plan: 'full_access', name: 'Lifecycle B', slug: `intg-lifecycle-${randomMongoId().slice(0, 10)}` }))._id;
   orgIds.push(orgA, orgB);
   await member(orgA, 'planner', ['planner']);
   await member(orgA, 'otherPlanner', ['planner']);

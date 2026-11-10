@@ -5,7 +5,8 @@
 export const ORGANIZATION_TYPES = ["corporate", "association", "agency", "venue", "government", "other"] as const;
 export type OrganizationType = (typeof ORGANIZATION_TYPES)[number];
 
-// Paid plans join this list once DXG defines them.
+// The plans an Owner may pick for themselves at onboarding, which is not every plan: full_access
+// is assigned by DXG staff only (ORG-601/603). Paid plans join this list once DXG defines them.
 export const ORGANIZATION_PLANS = ["free_trial"] as const;
 export type OrganizationPlan = (typeof ORGANIZATION_PLANS)[number];
 

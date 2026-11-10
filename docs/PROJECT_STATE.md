@@ -425,6 +425,12 @@ directly on `main` without the `ORG_ACCOUNTS_ENABLED` flag the original
 
 Operational notes:
 
+- Plan entitlements (ORG-601, built on a branch): every organization is on
+  `free_trial` (2 RFPs created, vendor responses and RFP intelligence locked)
+  unless its `plan` is `full_access`. Until ORG-603 ships the admin screen, a
+  plan is changed in MongoDB by hand. Before this reaches production, set
+  DXG's own organization and any customer DXG wants unlocked to `full_access`,
+  or they lose vendor responses and RFP intelligence on deploy.
 - Production now requires `OTP_PEPPER`, `TWO_FACTOR_ENCRYPTION_KEY` and
   `SSO_SECRET_KEY` (see `.env.example` and `docs/SSO_SETUP.md`); the API fails
   at startup without the pepper. The AWS deploy passes the 2FA and SSO keys to
