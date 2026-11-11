@@ -23,6 +23,7 @@ import { PROPOSAL_STATUSES } from "../src/modules/proposals/application/mutateOw
 import { ProposalTeamNotAssignableError } from "../src/modules/proposals/application/authorOwnedProposal";
 import { respondIfProposalAccessDenied } from "../src/modules/identity/application/proposalAccess";
 import { respondIfPlanError } from "../src/modules/entitlements/http/planGate";
+import { recordFirstRfpOpened } from "../src/modules/launchMetrics/firstRfpOpened";
 
 const isValidProposalId = (id?: string) =>
   typeof id === "string" && mongoose.isValidObjectId(id);
@@ -105,6 +106,9 @@ export const getProposalById = async (
       });
       return;
     }
+
+    // ORG-505: first RFP opened, for the launch metric. Never delays or fails the read.
+    void recordFirstRfpOpened({ organizationId: req.user?.organizationId, userId, accountType: req.user?.accountType });
 
     res.status(200).json({
       success: true,

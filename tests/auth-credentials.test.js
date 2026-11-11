@@ -161,3 +161,63 @@ test("authenticated-user lookup delegates only the authenticated identifier", as
   assert.equal(await get("u1"), null);
   assert.equal(id, "u1");
 });
+
+// ORG-407 (PRD P0-10): a failed sign-in on a known account is audited in that account's organization.
+const auditedLogin = (overrides = {}, verify = false) => {
+  const audits = [];
+  const login = createAuthenticateCredentials({
+    accounts: { async findCredentials() { return credentialUser({ user: { id: "u1", name: "User", email: "user@example.com", role: "customer", organizationId: "o1" }, ...overrides }); } },
+    passwords: { async verify() { return verify; } },
+    tokens: { issue() { return { token: "t" }; } },
+    audit: { async append(event) { audits.push(event); } },
+  });
+  return { audits, login };
+};
+
+test("a wrong password writes auth.login.failed for the account's organization, without the email or password", async () => {
+  const { audits, login } = auditedLogin();
+  assert.deepEqual(await login({ email: "user@example.com", password: "hunter2-wrong" }, "customer", { correlationId: "corr-1" }), { kind: "wrong_password" });
+  assert.deepEqual(audits, [{
+    organizationId: "o1", actorUserId: "u1", action: "auth.login.failed", targetType: "user", targetId: "u1",
+    decision: "denied", reason: "wrong_password", correlationId: "corr-1", metadata: { method: "password" },
+  }]);
+  assert.equal(JSON.stringify(audits).includes("hunter2-wrong"), false);
+  assert.equal(JSON.stringify(audits).includes("user@example.com"), false);
+});
+
+test("a blocked account's sign-in attempt writes auth.login.failed", async () => {
+  const { audits, login } = auditedLogin({ isBlocked: true }, true);
+  assert.deepEqual(await login({ email: "user@example.com", password: "right" }, "customer"), { kind: "blocked" });
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0].action, "auth.login.failed");
+  assert.equal(audits[0].reason, "account_blocked");
+  assert.ok(audits[0].correlationId);
+});
+
+test("unknown emails, successful sign-ins and accounts without an organization write no failure event", async () => {
+  const audits = [];
+  const audit = { async append(event) { audits.push(event); } };
+  const unknown = createAuthenticateCredentials({ accounts: { async findCredentials() { return null; } }, passwords: { async verify() { return false; } }, tokens: { issue() {} }, audit });
+  assert.deepEqual(await unknown({ email: "nobody@example.com", password: "x" }, "customer"), { kind: "not_found" });
+  const success = auditedLogin({}, true);
+  assert.equal((await success.login({ email: "user@example.com", password: "right" }, "customer")).kind, "authenticated");
+  const orgless = createAuthenticateCredentials({ accounts: { async findCredentials() { return credentialUser(); } }, passwords: { async verify() { return false; } }, tokens: { issue() {} }, audit });
+  assert.deepEqual(await orgless({ email: "user@example.com", password: "x" }, "customer"), { kind: "wrong_password" });
+  assert.deepEqual([...audits, ...success.audits], []);
+});
+
+test("a failed audit write never changes the sign-in answer", async () => {
+  const login = createAuthenticateCredentials({
+    accounts: { async findCredentials() { return credentialUser({ user: { id: "u1", name: "User", email: "user@example.com", role: "customer", organizationId: "o1" } }); } },
+    passwords: { async verify() { return false; } },
+    tokens: { issue() {} },
+    audit: { async append() { throw new Error("mongo down"); } },
+  });
+  const original = console.error;
+  console.error = () => {};
+  try {
+    assert.deepEqual(await login({ email: "user@example.com", password: "x" }, "customer"), { kind: "wrong_password" });
+  } finally {
+    console.error = original;
+  }
+});

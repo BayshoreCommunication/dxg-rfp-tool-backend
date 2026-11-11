@@ -60,8 +60,10 @@ import accessRequestRoutes from "./routes/accessRequestRoute";
 import teamsRoutes from "./routes/teamsRoute";
 import organizationVendorsRoutes from "./routes/organizationVendorsRoute";
 import proposalTemplatesRoutes from "./routes/proposalTemplatesRoute";
+import auditLogRoutes from "./routes/auditLogRoute";
 import rfpDashboardRoutes from "./routes/rfpDashboardRoute";
 import rfpSharesRoutes from "./routes/rfpSharesRoute";
+import launchMetricsRoutes from "./routes/launchMetricsRoute";
 import { startCronJobs } from "./utils/cronJobs";
 import { supportDeskSweeper } from "./src/modules/supportDesk/composition";
 import { startSupportDeskSweeper } from "./src/modules/supportDesk/infrastructure/scheduler/supportDeskSchedule";
@@ -248,8 +250,10 @@ app.use("/api", accessRequestRoutes);
 app.use("/api/v1", teamsRoutes);
 app.use("/api/v1", organizationVendorsRoutes);
 app.use("/api/v1", proposalTemplatesRoutes);
+app.use("/api/v1", auditLogRoutes);
 app.use("/api/v1", rfpDashboardRoutes);
 app.use("/api/v1", rfpSharesRoutes);
+app.use("/api/v1", launchMetricsRoutes);
 
 // Email campaign routes
 app.use("/api/emails", emailRoutes);

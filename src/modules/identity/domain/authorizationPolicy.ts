@@ -9,6 +9,8 @@ export const ORGANIZATION_ACTIONS = [
   // ORG-604: RFP templates. "use" covers personal templates and starting an RFP from a template;
   // "publish" covers managing organization templates (publish, unpublish, archive).
   "template:use", "template:publish",
+  // ORG-407: reading the organization's audit log (Owner and Admin only).
+  "audit:read",
 ] as const;
 export type OrganizationAction = (typeof ORGANIZATION_ACTIONS)[number];
 
@@ -18,11 +20,11 @@ export type OrganizationAction = (typeof ORGANIZATION_ACTIONS)[number];
 // Templates (Q4, F6): every role that can create RFPs uses them, Owner and Admin manage the
 // organization's, Viewers and knowledge roles get neither.
 const roleActions: Record<string, readonly OrganizationAction[]> = {
-  owner: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "knowledge:write", "knowledge:approve", "vendor-response:read", "vendor-response:write", "organization:manage", "vendor-list:read", "vendor-list:write", "template:use", "template:publish"],
+  owner: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "knowledge:write", "knowledge:approve", "vendor-response:read", "vendor-response:write", "organization:manage", "vendor-list:read", "vendor-list:write", "template:use", "template:publish", "audit:read"],
   team_manager: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read", "vendor-response:write", "vendor-list:read", "vendor-list:write", "template:use"],
   viewer: ["proposal:read", "vendor-response:read"],
   planner: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read", "vendor-response:write", "vendor-list:read", "template:use"],
-  organization_admin: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "knowledge:write", "knowledge:approve", "vendor-response:read", "vendor-response:write", "organization:manage", "vendor-list:read", "vendor-list:write", "template:use", "template:publish"],
+  organization_admin: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "knowledge:write", "knowledge:approve", "vendor-response:read", "vendor-response:write", "organization:manage", "vendor-list:read", "vendor-list:write", "template:use", "template:publish", "audit:read"],
   dxg_producer: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read", "vendor-response:write", "vendor-list:read", "template:use"],
   knowledge_editor: ["proposal:read", "knowledge:read", "knowledge:write"],
   knowledge_approver: ["proposal:read", "knowledge:read", "knowledge:write", "knowledge:approve"],

@@ -33,6 +33,7 @@ RFPilot is an event-AV RFP platform. The dashboard serves planners, the admin ap
 | API discovery and contracts | [API.md](API.md) |
 | Recurring failures and recovery | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
 | Production operations | [runbooks/PRODUCTION.md](runbooks/PRODUCTION.md) |
+| Tenancy migration rehearsal (ORG-501): results and how to repeat it | [runbooks/ORG_TENANCY_REHEARSAL.md](runbooks/ORG_TENANCY_REHEARSAL.md) |
 | **AWS deployment, monitoring, incidents (ops portal)** | [operations/README.md](operations/README.md) |
 | Documentation audit and migration map | [DOCUMENTATION_AUDIT.md](DOCUMENTATION_AUDIT.md) |
 

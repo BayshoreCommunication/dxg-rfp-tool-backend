@@ -329,6 +329,12 @@ test("regenerating recovery codes voids the old ones", async () => {
   const { secret, recoveryCodes } = await enrol(ctx);
   const result = await ctx.service.regenerateRecoveryCodes({ userId: "u1", organizationId: "o1", code: totpAt(secret, ctx.now()), correlationId: "c" });
   assert.equal(result.kind, "regenerated");
+  // ORG-407 (PRD P0-10, 2FA changes): the regeneration is audited, without the codes.
+  const regenerated = ctx.audits.filter((a) => a.action === "auth.two_factor.recovery_codes_regenerated");
+  assert.equal(regenerated.length, 1);
+  assert.equal(regenerated[0].actorUserId, "u1");
+  assert.equal(regenerated[0].organizationId, "o1");
+  assert.equal(result.recoveryCodes.some((code) => JSON.stringify(regenerated[0]).includes(code)), false);
   const c = await ctx.service.assessSignIn({ userId: "u1", organizationId: "o1", method: "password" });
   assert.equal((await ctx.service.completeChallenge({ challengeToken: c.challengeToken, recoveryCode: recoveryCodes[1], correlationId: "c" })).kind, "invalid_code");
   assert.equal((await ctx.service.completeChallenge({ challengeToken: c.challengeToken, recoveryCode: result.recoveryCodes[1], correlationId: "c" })).kind, "verified");

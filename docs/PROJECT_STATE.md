@@ -426,9 +426,9 @@ security review plus a booked external pen test.
 | M1 Tenancy foundation | ORG-101 … 110 | Closed (merged). Scoped access policy, repository sweep with a CI guard, RLS alignment, signup creates an organization, legacy holding tenants + verification and nightly orphan check, cross-tenant isolation suite, legacy-customer placement with journaled rollback. |
 | M2 People | ORG-201 … 210 | Closed (merged). Teams, RFP team assignment, invitations (capped, team-aware, Google accept) and emails, accept-invite page, membership APIs, offboarding reassignment, RFP sharing, Users/Teams settings and the RFP access panel (share, team, reassign owner). |
 | M3 Entry paths and auth | ORG-301 … 307 | Closed (merged). Sign-up with organization onboarding, Google + Microsoft + company OIDC SSO (email-first discovery, Require SSO), TOTP 2FA and org-mandatory 2FA with admin reset, DNS TXT domain verification, domain-match access requests (2026-11-08), session hardening on membership changes. |
-| M4 Experience | ORG-401 … 407 | Open, due Thu 12 Nov 2026 16:00 BDT; 4 of 7 closed. ORG-403 (status history) merged: derived, stored lifecycle stage (draft, sent, receiving responses, under review, awarded, archived), append-only transitions, "Mark as awarded" plus comparison-selection awards (DECISIONS 2026-11-09), status-history endpoint, backfill (merged 2026-11-10, PR #117). ORG-401 (scoped dashboard list + summary with stage, owner, team, event-date and venue-city filters; summary property-tested against the list; p95 ≤ 136 ms on 5k RFPs) merged 2026-11-10 (PR #119). ORG-404 (support access grants backend) merged 2026-11-10 (PR #123): Owner/Admin grant, list and revoke RFPilot Support access per RFP or organization (7-day default, 30-day cap); grant-gated admin routes for RFPs, vendor responses and the RFPs behind a helpdesk ticket; every read audited in the customer's organization (DECISIONS 2026-11-10). Known gap, not part of ORG-404: the helpdesk inbox still shows agents only their own organization's tickets. ORG-402 (role dashboards UI for Planner, Team Manager, Admin/Owner and Viewer) merged 2026-11-10 (dashboard PR #73). Open: support grants customer UI (ORG-405) and admin workspace (ORG-406), org audit log view (ORG-407). |
+| M4 Experience | ORG-401 … 407 | Open, due Thu 12 Nov 2026 16:00 BDT; 4 of 7 closed. ORG-403 (status history) merged: derived, stored lifecycle stage (draft, sent, receiving responses, under review, awarded, archived), append-only transitions, "Mark as awarded" plus comparison-selection awards (DECISIONS 2026-11-09), status-history endpoint, backfill (merged 2026-11-10, PR #117). ORG-401 (scoped dashboard list + summary with stage, owner, team, event-date and venue-city filters; summary property-tested against the list; p95 ≤ 136 ms on 5k RFPs) merged 2026-11-10 (PR #119). ORG-404 (support access grants backend) merged 2026-11-10 (PR #123): Owner/Admin grant, list and revoke RFPilot Support access per RFP or organization (7-day default, 30-day cap); grant-gated admin routes for RFPs, vendor responses and the RFPs behind a helpdesk ticket; every read audited in the customer's organization (DECISIONS 2026-11-10). Known gap, not part of ORG-404: the helpdesk inbox still shows agents only their own organization's tickets. ORG-402 (role dashboards UI for Planner, Team Manager, Admin/Owner and Viewer) merged 2026-11-10 (dashboard PR #73). Open: support grants customer UI (ORG-405) and admin workspace (ORG-406), org audit log view (ORG-407). ORG-407 is built on a branch, not merged: Owner/Admin read API over `SecurityAuditEvent` with user, action, category and date filters and CSV export, an allowlisted action catalog, failed sign-ins now audited (`auth.login.failed`), and the `/settings/audit` view in the dashboard (DECISIONS 2026-11-11). |
 | M5 Plans and shared resources | ORG-601 … 607 | Open, due Thu 12 Nov 2026 16:00 BDT. 2 of 7 closed: ORG-606 (organization vendor list backend, PR #121) and ORG-601 (plan entitlements and the free-trial limit, PR #122) merged 2026-11-10. Also, DXG's pricing corpus, expert rules and knowledge are now shared with every organization (2026-11-01). Open: plan management in the admin app (ORG-603), locked states (ORG-602), templates (ORG-604, ORG-605), vendor list UI (ORG-607). |
-| Launch gate | ORG-501 … 505 | Open, due Thu 12 Nov 2026 16:00 BDT: prod-snapshot migration rehearsal, cutover/rollback runbook, external pen test, docs, launch metrics. |
+| Launch gate | ORG-501 … 505 | Open, due Thu 12 Nov 2026 16:00 BDT. ORG-501 rehearsed locally on a seeded fixture (2026-11-11); the production-snapshot rehearsal is pending on cutover day (see "Tenancy migration rehearsal"). ORG-505 (launch metrics) built on a branch: the five PRD success metrics as counts and rates for DXG staff at `GET /api/v1/admin/launch-metrics` and `npm run report:launch-metrics`, plus a first-RFP-opened stamp on the membership; no admin-app screen yet. Not started: cutover/rollback runbook, external pen test, docs. |
 
 Operational notes:
 
@@ -451,6 +451,25 @@ Operational notes:
 - `scripts/purgeTestAccounts` removes test sign-ups (2026-11-08).
 - M5, ORG-606 (2026-11-10): the organization vendor list backend is built: `OrganizationVendor` in Mongo and `/api/v1/vendor-list` (list, search, categories, add, edit, archive, restore) with audit events; Owner, Admin and Team Manager edit, Planners read, Viewers have no access; covered by the cross-tenant isolation suite. The settings page and the picker when sending an RFP are ORG-607.
 - M5, ORG-604 (2026-11-10): the RFP templates backend is built: `ProposalTemplate` in Mongo and `/api/v1/proposal-templates` (list, open, save from an RFP, rename, publish, unpublish, archive, restore, start an RFP) with audit events; personal templates are private to their owner, Owners and Admins manage organization templates, Viewers have no access; starting an RFP from a template counts toward the plan limit and lands on the creator's team; covered by the cross-tenant isolation suite. The picker and the management list are ORG-605.
+
+### Tenancy migration rehearsal (ORG-501, 2026-11-11)
+
+Rehearsed **locally only**, on a generated legacy-shaped fixture in an isolated Docker stack
+(`deploy/rehearsal`, `npm run rehearsal:*`), by the owner's decision of 2026-11-10 because no
+production or staging copy was available. Results, timings, findings and the step list are in
+`docs/runbooks/ORG_TENANCY_REHEARSAL.md`.
+
+- Rehearsed: dry run → apply → verify → rollback → verify → apply again → verify → idempotent
+  re-run, at two fixture sizes, as the table-owner role production uses.
+- **Pending: the rehearsal on a restored production snapshot, on cutover day before the real
+  run.** Production data, production scale, pausing the worker and dispatcher and draining the
+  outbox have not been rehearsed.
+- Two defects found and fixed with tests: the verifier's Postgres leftover check passed without
+  reading a row when run as the production migration role, and rollback left a previously
+  suspended membership active.
+- Open for ORG-502 and the owner: the migration alters every tenant table once per customer
+  (dry run included), so it cannot share the database with a serving API, and a suspended
+  customer becomes an active Planner in their holding tenant.
 
 ### Onboarding funnel report (2026-09-13)
 

@@ -50,6 +50,15 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 - `SupportAccessGrant` (ORG-404; MongoDB): organization, `proposalId` (null for the whole organization), `grantedBy`, optional `reason`, `expiresAt` (the model refuses more than 30 days from creation), `revokedAt`, `revokedBy`. Rows are never deleted. Indexed `{ organizationId, createdAt }` and `{ revokedAt, expiresAt }`. No Postgres table.
 - Support activity is not a separate collection: it is the `SecurityAuditEvent` rows with action `support_access.used` in the customer's organization, joined to a grant by `metadata.grantId`.
 
+## Launch metrics
+
+- ORG-505 adds no collection or table. `OrganizationMembership.firstRfpOpenedAt` (null until the member first opens an RFP in that organization, then never changed; like `lastSignedInAt` it doesn't bump `version`) is the only new field. `SecurityAuditEvent` gains the index `{ action, createdAt }` for counting one action across organizations.
+- The report (`src/modules/launchMetrics/mongoLaunchMetricsSource.ts`) reads `Invitation`, `OrganizationMembership`, `Organization`, `SecurityAuditEvent` and `SupportAccessGrant` across all organizations and projects dates and counts only.
+
+## Organization audit log
+
+- No new collection (ORG-407). The audit view reads `SecurityAuditEvent` for one organization, newest first, paged by `(createdAt, _id)`. The index `{ organizationId, createdAt }` is extended to `{ organizationId: 1, createdAt: -1, _id: -1 }` so that order comes from the index; Mongoose builds the new index on start-up, and the old two-field index (now a redundant prefix) can be dropped from deployed databases by hand. Rows stay append-only; the view never writes. `auth.login.failed` is a new action on the same collection.
+
 ## RFP lifecycle
 
 - `Proposal.lifecycle` (ORG-403) holds the derived stage plus the facts it comes from: `revision` (the compare-and-set token), `stage`, `status` as of the last transition, `changedAt`, the award (`awardedAt`, `awardedByUserId`, `awardSource` manual|comparison, `awardDecisionId`), `reviewStartedAt`, `vendorsInvited` (distinct recipients of `vendor:submit` grants) and `vendorsResponded` (VendorResponse rows). Indexed as `{ organizationId, lifecycle.stage, updatedAt }`.

@@ -32,6 +32,8 @@ export interface IOrganizationMembership extends Document {
   removedAt?: Date | null;
   // Set at each sign-in (ORG-206 member list). Not part of the optimistic version.
   lastSignedInAt?: Date | null;
+  // ORG-505: the first time this member opened an RFP here (launch metric). Set once.
+  firstRfpOpenedAt?: Date | null;
   // ORG-307: set when someone else changed this member's role. The member's next request claims
   // it, keeps that session and revokes their other sessions.
   sessionRevocationPending?: boolean;
@@ -59,6 +61,7 @@ const organizationMembershipSchema = new Schema<IOrganizationMembership>(
     suspendedAt: { type: Date, default: null },
     removedAt: { type: Date, default: null },
     lastSignedInAt: { type: Date, default: null },
+    firstRfpOpenedAt: { type: Date, default: null },
     sessionRevocationPending: { type: Boolean, default: false },
     sessionRevocationClaim: { type: new Schema({ sessionId: String, at: Date }, { _id: false }), default: null },
     migrationRunId: { type: String, trim: true, default: null },

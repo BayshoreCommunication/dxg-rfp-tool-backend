@@ -51,6 +51,8 @@ export const createMongoInvitationAcceptance = (placeInTeam: TeamPlacement = pla
               activatedAt: input.now,
               suspendedAt: null,
               removedAt: null,
+              // ORG-505: a returning member's first RFP opened is measured from this acceptance.
+              firstRfpOpenedAt: null,
             },
             // A returning member's old tokens carry the old version and go stale.
             $inc: { version: 1 },
