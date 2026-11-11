@@ -1,6 +1,7 @@
 # AWS deployment — current state and handoff
 
-> Status as of 2026-09-01. Owner: Travis (Bayshore). This file is the
+> Status as of 2026-11-08 (live facts table re-verified that day; history
+> below is kept as written). Owner: Travis (Bayshore). This file is the
 > single place to read before continuing AWS work in a new session.
 > Operating docs: [README.md](README.md) (bootstrap/deploy/rollback runbook).
 > No secrets in this file — all secret values live in AWS Secrets Manager.
@@ -16,14 +17,39 @@ from AWS on 2026-08-18 (see "Staging removal" below).
 | Region | `us-east-2` |
 | Production API | `https://api.dxg-agency.com` (HTTPS, 80→443 redirect; CNAME in Namecheap → ALB `Rfpilo-Alb16-pj5OOUBQqRrt-519967115.us-east-2.elb.amazonaws.com`) |
 | TLS cert | ACM wildcard `*.dxg-agency.com` + apex, us-east-2, `.../f6976da6-0174-40b4-86bc-9525267a8b08` (DNS-validated; validation CNAME lives in Namecheap — do not delete it, ACM renews through it) |
-| Health | `GET /health` → 200 OK; Mongo connected, Postgres migrated to `059`, Redis queue ready, observability enabled (verified 2026-09-01) |
+| Health | `GET /health` → 200 OK; Mongo connected, Postgres migrated to `065`, Redis queue ready, observability enabled (verified 2026-11-08) |
 | ECS cluster | `rfpilot-production` — services `api`(1), `worker`(1), `dispatcher`(1), `cron`(0, scaled to zero pre-launch), `clamav`(1), `ai-gateway`(1) |
 | Assets CDN | `d1hn23mh1h53mx.cloudfront.net` |
 | NAT egress IP | `13.58.171.171` (allowlisted in Atlas Network Access) |
 | MongoDB | Atlas, database `dxg_rfp_tool_prod` |
 | ECR | `295229565954.dkr.ecr.us-east-2.amazonaws.com/rfpilot-backend`, immutable `sha-<commit>` tags (shared, in `Rfpilot-Cicd`) |
 | Secrets | `rfpilot/production/app`, `rfpilot/production/redis-auth` |
-| Deployed image | `sha-7246b6bb` (2026-09-01) |
+| Deployed image | `sha-54c53a49` (2026-11-08, run 42464309950; task defs api:78, worker:77, dispatcher:77, aigateway:75, clamav:2) |
+| Sizing | RDS `db.t4g.micro` single-AZ, 7-day backups · Redis `cache.t4g.micro`, no replica · api/worker/clamav 0.5 vCPU · `PRE_LAUNCH_REDUCED_REDUNDANCY = true` |
+| Alerting | 18 alarms, all OK on 2026-11-08 · SNS `rfpilot-production-alerts` → dxgrfptool@gmail.com (confirmed) · Budget `rfpilot-monthly` $100 (real spend ~$215/mo incl. Lightsail, so it fires monthly) |
+| SES | Production access since 2026-08-09, 50k/day; sender `noreply@av-rfpilot.com` |
+| Off on purpose | WAF, Container Insights, interface VPC endpoints |
+
+## Open items (2026-11-08)
+
+- **Launch blocker:** set `PRE_LAUNCH_REDUCED_REDUNDANCY` back to `false`
+  and deploy Data. Snapshot RDS first.
+- No CloudTrail trail, GuardDuty, Config or Security Hub.
+- IAM users `aidev` (AdministratorAccess, console + access key) and `akib`
+  (EC2 full access, console) have **no MFA**.
+- WAF off; ~1,200 scanner requests/day reach the API as 404s.
+- DigitalOcean droplet `68.183.227.9` still running; never decommissioned.
+- Prod RDS postgresql log group has no retention; leftover staging log
+  groups still exist.
+- Cost-allocation tags inactive, so RFPilot and the Lightsail presentation
+  platform can't be split in Cost Explorer.
+- IAM role `rfpilot-staging-github-deploy` still exists (remove with
+  `npx cdk deploy Rfpilot-Cicd --exclusively`).
+
+**Deploys since the 2026-09-01 entry below** (all green, ~20 min each):
+2026-11-04 run 41813249552 (SSO, password sign-up, onboarding, Users and
+Teams), 2026-11-08 run 42456189678 (ORG-306 domain-match access requests),
+2026-11-08 run 42464309950 (merge main → production, image `sha-54c53a49`).
 
 **CI/CD**: push to `production` → `.github/workflows/deploy-aws.yml` runs quality
 gates → image build → Trivy scan → ECR push → one-off Postgres migration task

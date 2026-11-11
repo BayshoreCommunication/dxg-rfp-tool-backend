@@ -12,6 +12,7 @@ import {
 import {
   createCopyOwnedProposal,
   createCreateOwnedProposal,
+  createCreateProposalFromTemplate,
   createUpdateOwnedProposal,
 } from "./application/authorOwnedProposal";
 import {
@@ -29,6 +30,7 @@ import { mongoProposalTeamAssignment } from "./infrastructure/mongo/mongoProposa
 import { proposalNotificationAdapter } from "./infrastructure/notifications/proposalNotificationAdapter";
 import { spacesProposalFileStorage } from "./infrastructure/storage/spacesProposalFileStorage";
 import { postgresProposalReferenceSynchronizer } from "./infrastructure/references/postgresProposalReferenceSynchronizer";
+import { proposalLifecycleRecorderAdapter } from "./infrastructure/lifecycle/proposalLifecycleRecorderAdapter";
 
 export const getOwnedProposal = createGetOwnedProposal({
   proposals: mongoProposalReadRepository,
@@ -45,6 +47,7 @@ const mutationDependencies = {
   settings: mongoProposalSettingsRepository,
   references: postgresProposalReferenceSynchronizer,
   teams: mongoProposalTeamAssignment,
+  lifecycle: proposalLifecycleRecorderAdapter,
 };
 
 export const updateOwnedProposalStatus =
@@ -52,9 +55,9 @@ export const updateOwnedProposalStatus =
 export const updateOwnedProposalMeta =
   createUpdateOwnedProposalMeta(mutationDependencies);
 export const archiveOwnedProposal =
-  createArchiveOwnedProposal(mongoProposalWriteRepository);
+  createArchiveOwnedProposal(mongoProposalWriteRepository, proposalLifecycleRecorderAdapter);
 export const restoreOwnedProposal =
-  createRestoreOwnedProposal(mongoProposalWriteRepository);
+  createRestoreOwnedProposal(mongoProposalWriteRepository, proposalLifecycleRecorderAdapter);
 // The purge is imported lazily, as the archive sweep does, so the S3 and
 // Postgres clients are not pulled in merely by composing this module.
 export const permanentlyDeleteOwnedProposal = createPermanentlyDeleteOwnedProposal(
@@ -68,6 +71,10 @@ export const permanentlyDeleteOwnedProposal = createPermanentlyDeleteOwnedPropos
 export const createOwnedProposal = createCreateOwnedProposal(mutationDependencies);
 export const updateOwnedProposal = createUpdateOwnedProposal(mutationDependencies);
 export const copyOwnedProposal = createCopyOwnedProposal(mutationDependencies);
+export const createProposalFromTemplate = createCreateProposalFromTemplate(mutationDependencies);
+// The RFP a template is saved from: the same view-scoped read a copy uses (ORG-604).
+export const findProposalTemplateSource = (input: { proposalId: string; ownerUserId: string }) =>
+  mongoProposalWriteRepository.findOwnedCopySourceById(input);
 
 export const getProposalByLegacyPublicId = createGetProposalByLegacyPublicId({
   publicAccess: mongoPublicProposalAccessRepository,

@@ -12,7 +12,7 @@ api
  ├── Purpose: HTTP API, Socket-based notifications, cron jobs
  ├── Command: node dist/server.js
  ├── Port: 8000 (only the ALB can reach it)
- ├── Size: 1 vCPU/2GB
+ ├── Size: 0.5 vCPU/2GB
  ├── Count: exactly 1 — DO NOT SCALE (unlocked crons, process-local fan-out)
  ├── Deploys: stop-then-start (~30–60s downtime per deploy)
  ├── Env of note: CRON_ENABLED=true (only here), keepAliveTimeout 65s
@@ -28,7 +28,7 @@ worker
 │            candidate_application, proposal_draft_generate,
 │            vendor_response_analyze, conversation_chat
  ├── Command: node dist/scripts/startDurableWorker.js
- ├── Size: 1 vCPU/2GB · autoscales 1→4 at 70% CPU
+ ├── Size: 0.5 vCPU/2GB · autoscales 1→4 at 70% CPU
  ├── Shutdown: SIGTERM drains active jobs (120s stop timeout, 90s job leases)
  ├── Health: no port — watch RunningTaskCount alarm + job heartbeats
  │           (SELECT max(heartbeat_at) FROM rfpilot.job_attempts WHERE status='running')
@@ -46,7 +46,8 @@ ai-gateway
  ├── Purpose: platform assistant's job worker
  ├── Command: node dist/scripts/startAiGatewayWorker.js
  ├── Exists only when: the env's AI release sets AI_GATEWAY_ENABLED
- │   (currently both envs). Uses the dispatcher's SG and sizing.
+ │   (production does). Uses the dispatcher's SG and sizing (0.25 vCPU/0.5GB).
+ │   No tasks-low alarm covers it — check it in the ECS console.
  └── Logs: /rfpilot/<env>/aigateway   ← note: no hyphen in the log group
 
 clamav
@@ -55,9 +56,14 @@ clamav
  ├── Image: clamav/clamav:1.4 (public), NOT the app image
  ├── Port: 3310, reachable only from api and worker via ECS Service Connect
  │         (CLAMAV_HOST=clamav, CLAMAV_PORT=3310)
- ├── Size: 1 vCPU/3GB (signature DB is RAM-hungry) · first boot downloads
+ ├── Size: 0.5 vCPU/3GB (signature DB is RAM-hungry) · first boot downloads
  │         ~300MB signatures — health check allows 5 minutes
  └── Logs: /rfpilot/<env>/clamav
+
+cron
+ ├── Purpose: scheduled jobs as their own service
+ ├── Count: 0 before launch (crons currently run inside api)
+ └── Logs: /rfpilot/<env>/cron (empty while at 0)
 
 migrate (not a service — a task definition)
  ├── Purpose: Postgres schema migrations, run once per deploy by CI
@@ -75,7 +81,7 @@ ENV=production   # the only environment
 
 # Service status at a glance
 aws ecs describe-services --cluster rfpilot-$ENV \
-  --services api worker dispatcher clamav ai-gateway \
+  --services api worker dispatcher clamav ai-gateway cron \
   --query 'services[].{name:serviceName,desired:desiredCount,running:runningCount,rollout:deployments[0].rolloutState}'
 
 # Recent service events (scheduler decisions, health-check kills)

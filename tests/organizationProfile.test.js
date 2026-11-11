@@ -108,6 +108,26 @@ test("steps cannot be skipped", async () => {
   assert.equal(audits.length, 0);
 });
 
+test("ORG-603: choosing a plan at onboarding never replaces a plan assigned by RFPilot staff", async () => {
+  const { service, store, audits } = setup({ onboardingStep: "plan", plan: "full_access" });
+  const result = await service.choosePlan({ ...actor, plan: "free_trial" });
+  assert.equal(result.kind, "updated");
+  assert.equal(result.profile.plan, "full_access");
+  assert.deepEqual({ plan: store.get("org1").plan, onboardingStep: store.get("org1").onboardingStep }, { plan: "full_access", onboardingStep: "team" });
+  assert.deepEqual(audits[0].metadata, { setting: "plan", plan: "full_access", kept: true });
+  // Choosing the plan already stored writes only the step, so it can't undo a staff change that
+  // lands between the read and the write.
+  const writes = [];
+  const racing = createOrganizationProfile({
+    directory: { find: async () => ({ ...blankProfile, onboardingStep: "plan" }), update: async (_id, changes) => { writes.push(changes); } },
+    audit: { append: async () => {} },
+  });
+  await racing.choosePlan({ ...actor, plan: "free_trial" });
+  assert.deepEqual(writes, [{ onboardingStep: "team" }]);
+  // And an Owner still can't pick it for themselves.
+  assert.deepEqual(await setup({ onboardingStep: "plan" }).service.choosePlan({ ...actor, plan: "full_access" }), { kind: "validation" });
+});
+
 test("the plan can be changed from the team step but not after onboarding", async () => {
   const team = setup({ onboardingStep: "team" });
   assert.equal((await team.service.choosePlan({ ...actor, plan: "free_trial" })).kind, "updated");

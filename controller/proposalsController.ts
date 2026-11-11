@@ -22,6 +22,8 @@ import { ProposalFileAccessError } from "../src/modules/proposals/application/pr
 import { PROPOSAL_STATUSES } from "../src/modules/proposals/application/mutateOwnedProposal";
 import { ProposalTeamNotAssignableError } from "../src/modules/proposals/application/authorOwnedProposal";
 import { respondIfProposalAccessDenied } from "../src/modules/identity/application/proposalAccess";
+import { respondIfPlanError } from "../src/modules/entitlements/http/planGate";
+import { recordFirstRfpOpened } from "../src/modules/launchMetrics/firstRfpOpened";
 
 const isValidProposalId = (id?: string) =>
   typeof id === "string" && mongoose.isValidObjectId(id);
@@ -104,6 +106,9 @@ export const getProposalById = async (
       });
       return;
     }
+
+    // ORG-505: first RFP opened, for the launch metric. Never delays or fails the read.
+    void recordFirstRfpOpened({ organizationId: req.user?.organizationId, userId, accountType: req.user?.accountType });
 
     res.status(200).json({
       success: true,
@@ -211,6 +216,8 @@ export const createProposal = async (
     });
   } catch (error: any) {
     if (respondIfProposalAccessDenied(res, error)) return;
+    // The organization's plan has no RFP slot left (ORG-601).
+    if (respondIfPlanError(res, error)) return;
     console.error("Create proposal error:", error);
 
     if (error.name === "ValidationError") {
@@ -622,6 +629,8 @@ export const copyProposal = async (
     });
   } catch (error: any) {
     if (respondIfProposalAccessDenied(res, error)) return;
+    // A copy is a new RFP and needs a slot like any other (ORG-601).
+    if (respondIfPlanError(res, error)) return;
     console.error("Copy proposal error:", error);
     if (error.name === "ValidationError") {
       const messages = Object.values(error.errors).map((e: any) => e.message);

@@ -60,8 +60,8 @@ before(async () => {
   await connectMongo();
   assert.equal(mongoose.connection.name, TEST_MONGODB_DB_NAME);
   await Promise.all([Team.init(), TeamMembership.init(), RfpShare.init()]);
-  orgA = (await Organization.create({ name: 'Teams A', slug: `intg-teams-${randomMongoId().slice(0, 10)}` }))._id;
-  orgB = (await Organization.create({ name: 'Teams B', slug: `intg-teams-${randomMongoId().slice(0, 10)}` }))._id;
+  orgA = (await Organization.create({ plan: 'full_access', name: 'Teams A', slug: `intg-teams-${randomMongoId().slice(0, 10)}` }))._id;
+  orgB = (await Organization.create({ plan: 'full_access', name: 'Teams B', slug: `intg-teams-${randomMongoId().slice(0, 10)}` }))._id;
   orgIds.push(orgA, orgB);
   await member(orgA, 'owner', ['owner']);
   await member(orgA, 'admin', ['organization_admin']);

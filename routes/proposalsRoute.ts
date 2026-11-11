@@ -17,6 +17,7 @@ import {
   updateProposalStatus,
   uploadProposalFiles,
 } from "../controller/proposalsController";
+import { clearProposalAward, getProposalStatusHistory, markProposalAwarded } from "../controller/proposalLifecycleController";
 import { authenticate, createAuthenticate, authorizeAction, type AuthRequest } from "../middleware/auth";
 import { generateProposalUploadTicket, verifyProposalUploadTicket } from "../config/jwt";
 import { uploadProposalDocs } from "../middleware/upload";
@@ -93,6 +94,9 @@ router.patch("/:id/views", validateProposalId, optionalAuth, rateLimitPublicProp
 router.post("/:id/copy", authenticate, authorizeAction("proposal:write"), validateProposalId, copyProposal);
 router.put("/:id", authenticate, authorizeAction("proposal:write"), validateProposalId, updateProposal);
 router.patch("/:id/status", authenticate, authorizeAction("proposal:publish"), validateProposalId, updateProposalStatus);
+router.post("/:id/award", authenticate, authorizeAction("proposal:publish"), validateProposalId, markProposalAwarded);
+router.delete("/:id/award", authenticate, authorizeAction("proposal:publish"), validateProposalId, clearProposalAward);
+router.get("/:id/status-history", authenticate, authorizeAction("proposal:read"), validateProposalId, getProposalStatusHistory);
 router.patch("/:id/meta", authenticate, authorizeAction("proposal:write"), validateProposalId, updateProposalMeta);
 router.patch("/:id/restore", authenticate, authorizeAction("proposal:write"), validateProposalId, restoreProposal);
 router.delete("/:id/permanent", authenticate, authorizeAction("proposal:write"), validateProposalId, permanentlyDeleteProposal);

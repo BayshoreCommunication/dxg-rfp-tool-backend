@@ -3,7 +3,7 @@
 > Production is the **only** environment. A separate staging environment ran
 > in the same AWS account until 2026-08-18, when it was removed; see
 > [`deploy/aws/STATE.md`](https://github.com/BayshoreCommunication/dxg-rfp-tool-backend/blob/main/deploy/aws/STATE.md)
-> for what was deleted and how to recreate one. Verified 2026-08-18.
+> for what was deleted and how to recreate one. Verified 2026-11-08.
 
 ## Facts
 
@@ -13,11 +13,13 @@
 | Deployed from branch | `production` (fast-forward promotion from `main`) |
 | AWS account / region | 295229565954 / us-east-2 |
 | VPC | 10.41.0.0/16 |
-| ECS cluster | `rfpilot-production` — `api`, `worker`, `dispatcher`, `cron`, `clamav`, `ai-gateway` |
-| API task size | 1 vCPU / 2 GB |
+| ECS cluster | `rfpilot-production` — `api`, `worker`, `dispatcher`, `clamav`, `ai-gateway` (1 each), `cron` (0) |
+| Task sizes | api 0.5 vCPU/2 GB · worker 0.5/2 GB · clamav 0.5/3 GB · dispatcher and ai-gateway 0.25/0.5 GB |
 | Worker autoscale max | 4 |
-| RDS | t4g.medium, **Multi-AZ**, 50 GB, 30d backups, **deletion-protected**, stack termination-protected |
-| Redis | cache.t4g.small, **1 replica** |
+| RDS | `db.t4g.micro`, PostgreSQL 16.13, **single-AZ (pre-launch)**, 50 GB, 7-day backups, **deletion-protected**, stack termination-protected |
+| Redis | `cache.t4g.micro`, **no replica (pre-launch)** |
+| WAF / Container Insights / interface VPC endpoints | all **off** |
+| Postgres migration (2026-11-08) | `065` |
 | MongoDB | Atlas, db `dxg_rfp_tool_prod` |
 | NAT egress IP (Atlas allowlist) | 13.58.171.171 |
 | Asset CDN | d1hn23mh1h53mx.cloudfront.net |
@@ -33,6 +35,26 @@ The AI flag set (live OpenAI replies, mock/deterministic providers for
 extraction and knowledge embeddings, retention purge off) lives in `config.ts`
 under `aiEnvironment` — **changing it is a governed release, not a config
 tweak**; see `docs/runbooks/PRODUCTION.md`.
+
+## Pre-launch posture
+
+On 2026-08-18 production was cut down to save money before launch. RDS
+went Multi-AZ → single-AZ, the Redis replica was removed, Fargate CPU was
+halved, Container Insights was turned off and the interface VPC endpoints
+were deleted. The redundancy part is behind one flag,
+`PRE_LAUNCH_REDUCED_REDUNDANCY` in `deploy/aws/lib/config.ts`.
+
+**Before real customer load:** set it to `false` and deploy the Data stack.
+**Take a manual RDS snapshot first.** CloudFormation marks the Multi-AZ
+change as "Replacement: Conditional". It is in-place for PostgreSQL, but the
+instance is `RETAIN`, so an unexpected replacement would point production
+at a new, empty database.
+
+With Container Insights off, the `*-tasks-low` alarms use a fallback: CPU
+below 0 with missing data counted as breaching. That only detects **zero**
+running tasks, not "fewer than desired". Fine while every service runs 1
+task, but turn Container Insights back on before relying on more than one
+worker.
 
 ## No staging safety net
 

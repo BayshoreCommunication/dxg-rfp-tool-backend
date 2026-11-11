@@ -71,7 +71,8 @@ const seedMongo = async () => {
   // Raw inserts: legacy memberships still carry DXG roles, which today's validator refuses.
   await OrganizationMembership.collection.insertMany([
     { organizationId: ids.shared, userId: ids.a, roles: ['planner', 'organization_admin', 'dxg_producer'], status: 'active', version: 3 },
-    { organizationId: ids.shared, userId: ids.b, roles: ['planner'], status: 'active', version: 1 },
+    // Suspended before the migration: rollback has to put the status back too (ORG-501).
+    { organizationId: ids.shared, userId: ids.b, roles: ['planner'], status: 'suspended', version: 1 },
     { organizationId: ids.shared, userId: ids.staff, roles: ['dxg_admin'], status: 'active', version: 1 },
   ]);
   for (const [i, id] of ids.aProposals.entries()) await Proposal.create({ _id: id, organizationId: ids.shared, userId: ids.a, event: { eventName: `Ana event ${i}` } });
@@ -222,6 +223,9 @@ test('rollback restores the shared organization exactly', async () => {
   const membership = await OrganizationMembership.collection.findOne({ organizationId: ids.shared, userId: ids.a });
   assert.deepEqual(membership?.roles, ['planner', 'organization_admin', 'dxg_producer'], 'roles restored');
   assert.ok(Number(membership?.version) > 3, 'version moves past every token issued before or during the run');
+  assert.equal(membership?.status, 'active');
+  const suspended = await OrganizationMembership.collection.findOne({ organizationId: ids.shared, userId: ids.b });
+  assert.equal(suspended?.status, 'suspended', 'a membership the move activated goes back suspended');
   assert.equal(await Organization.countDocuments({ slug: { $in: [`legacy-${ids.a}`, `legacy-${ids.b}`] } }), 0);
   assert.equal((await postgresPool().query("SELECT count(*) FROM rfpilot.organizations WHERE name IN ('Ace Events','Ben')")).rows[0].count, '0');
 });

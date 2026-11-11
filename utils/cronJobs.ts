@@ -1,6 +1,7 @@
 import { createNotification } from "./notificationService";
 import Proposal from "../modal/proposalsModel";
 import Settings from "../modal/settingsModel";
+import { proposalLifecycle } from "../src/modules/proposalLifecycle/composition";
 
 const parseExpiryDays = (expirySetting?: string): number | null => {
   if (!expirySetting || typeof expirySetting !== "string") return null;
@@ -59,7 +60,16 @@ export const runExpirationCheck = async () => {
         proposal.isActive = false;
         proposal.isOpen = false;
         proposal.status = "rejected";
+        // save() writes only the modified paths, so it can't clobber a concurrent lifecycle write.
         await proposal.save();
+        if (proposal.organizationId) {
+          await proposalLifecycle.record({
+            organizationId: String(proposal.organizationId),
+            proposalId: String(proposal._id),
+            actor: { type: "system" },
+            reason: "expired",
+          });
+        }
         if (userIdText) {
           await createNotification({
             userId: userIdText,

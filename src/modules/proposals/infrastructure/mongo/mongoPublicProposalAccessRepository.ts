@@ -31,6 +31,7 @@ const PUBLIC_REDACTED_FIELDS = [
   "isArchived",
   "archivedAt",
   "isCopy",
+  "lifecycle", // ORG-403: award state, competing-vendor counts and the planner's user id
 ] as const;
 
 const PRIVATE_UPLOAD_FIELDS = [

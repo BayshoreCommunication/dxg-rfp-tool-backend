@@ -339,7 +339,7 @@ export const signUp = async (req: Request, res: Response): Promise<void> => {
 export const signInWithCredentials = async (req: Request, res: Response): Promise<void> => {
   try {
     if (rejectInvalidBffCredential(req, res)) return;
-    const result = await authenticateWithCredentials(req.body ?? {}, "customer");
+    const result = await authenticateWithCredentials(req.body ?? {}, "customer", { correlationId: correlationId(req) });
     if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Email and password are required" });
       return;
@@ -535,7 +535,7 @@ export const signUpAdmin = async (req: Request, res: Response): Promise<void> =>
 export const signInAdmin = async (req: Request, res: Response): Promise<void> => {
   try {
     if (rejectInvalidBffCredential(req, res)) return;
-    const result = await authenticateAdminCredentials(req.body ?? {}, "admin");
+    const result = await authenticateAdminCredentials(req.body ?? {}, "admin", { correlationId: correlationId(req) });
     if (result.kind === "validation") {
       res.status(400).json({ success: false, message: "Email and password are required" });
       return;

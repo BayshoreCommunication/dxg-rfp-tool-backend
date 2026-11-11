@@ -11,7 +11,7 @@ flowchart LR
     PR --> MAIN[Merge ai-agent → main<br/>CI only, no deploy]
     MAIN --> PROMOTE[git checkout production<br/>git merge --ff-only main<br/>git push]
     PROMOTE --> CI1[GitHub Actions<br/>Deploy to AWS]
-    CI1 --> QG[Quality gates<br/>contracts, lint, types,<br/>migration check, 621 tests, build,<br/>cdk synth --strict + cdk-nag]
+    CI1 --> QG[Quality gates<br/>contracts, lint, types,<br/>migration check, tests, build,<br/>cdk synth --strict + cdk-nag]
     QG --> IMG[Docker build<br/>+ Trivy scan]
     IMG --> ECR[Push immutable<br/>sha-&lt;commit&gt; to ECR]
     ECR --> MIG[One-off migrate task<br/>NEW image, services still old]
@@ -28,7 +28,10 @@ flowchart LR
 | `main` | Integration branch: CI only, deploys nothing |
 | `production` | **Is** production: pushing deploys production. Only ever fast-forwarded from `main` |
 
-Promotion command (this is the deploy):
+Promotion — this is the deploy. If your local checkout has other work in
+it, merge on GitHub instead (a PR from `main` into `production`, or
+`gh api repos/BayshoreCommunication/dxg-rfp-tool-backend/merges -f base=production -f head=main`).
+A full run takes about 20 minutes. Locally:
 
 ```bash
 git fetch origin && git checkout production && git merge --ff-only origin/main && git push origin production && git checkout main

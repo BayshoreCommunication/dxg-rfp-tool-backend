@@ -101,12 +101,15 @@ export const findCustomerLeftovers = async (input: { organizationId: string; poo
     const client = await input.pool.connect();
     try {
       await client.query("BEGIN READ ONLY");
-      // Read every organization's rows, as the migration does; the transaction is read only.
+      // Row-level security is forced on rfpilot.organizations too, so the role production runs
+      // this as (the table owner, no superuser) sees no organization until it names one. Without
+      // this the lookup found nothing and the whole Postgres check passed without looking (ORG-501).
+      await client.query("SELECT set_config('app.organization_mongo_id',$1,true)", [input.organizationId]);
       const pg = (await client.query<{ id: string }>(
         "SELECT id FROM rfpilot.organizations WHERE external_mongo_id = $1", [input.organizationId],
       )).rows[0]?.id;
       if (pg) {
-        await client.query("SELECT set_config('app.organization_id',$1,true), set_config('app.organization_mongo_id',$2,true)", [pg, input.organizationId]);
+        await client.query("SELECT set_config('app.organization_id',$1,true)", [pg]);
         const staffMongoIds = staffIds.map(String);
         const tables = (await client.query<{ name: string }>(
           `SELECT c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace

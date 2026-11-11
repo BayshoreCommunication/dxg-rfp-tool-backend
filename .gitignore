@@ -47,3 +47,9 @@ uploads/portfolio/logos/*
 uploads/portfolio/favicons/*
 !uploads/portfolio/favicons/.gitkeep
 site/
+
+# Claude Code personal overrides
+.claude/settings.local.json
+
+# Private copies of the local stack env (for example with AI flags on)
+deploy/local/*.private.env

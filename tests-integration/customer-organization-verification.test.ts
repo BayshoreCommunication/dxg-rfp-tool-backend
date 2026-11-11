@@ -1,11 +1,12 @@
 // ORG-109: the verification proves an ORG-107 migration kept everyone's access, and catches what
 // would break it: lost visibility, customer records left in the shared organization, orphans.
-import { TEST_MONGODB_DB_NAME } from './env';
-import { connectMongo, disconnectMongo, ensureMigrated, ensureServices, randomMongoId } from './setup';
+import { TEST_APP_ROLE_URL, TEST_MONGODB_DB_NAME } from './env';
+import { connectMongo, disconnectMongo, ensureAppRole, ensureMigrated, ensureServices, randomMongoId } from './setup';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { after, before, test } from 'node:test';
 import mongoose from 'mongoose';
+import { Pool } from 'pg';
 import Organization from '../modal/organizationModel';
 import OrganizationMembership from '../modal/organizationMembershipModel';
 import Proposal from '../modal/proposalsModel';
@@ -64,6 +65,23 @@ test('before the migration the shared organization is full of customer records',
   const leftovers = await findCustomerLeftovers({ organizationId: String(ids.shared), pool: postgresPool() });
   assert.deepEqual(leftovers.mongo, { users: 2, organizationmemberships: 2, proposals: 3, vendorresponses: 1 });
   assert.deepEqual(leftovers.postgres, { users: 1, proposal_references: 1 });
+});
+
+// ORG-501: production runs the verifier as the table owner, which is no superuser, so forced
+// row-level security hides rfpilot.organizations until the session names an organization. The
+// check used to look the organization up first, find nothing, and pass without reading a row.
+// The app role stands in for the owner here: both are bound by the same policies.
+test('the Postgres check sees customer rows as a role bound by row-level security', async () => {
+  await ensureAppRole();
+  const bound = new Pool({ connectionString: TEST_APP_ROLE_URL, max: 1 });
+  try {
+    assert.equal((await bound.query('SELECT count(*) FROM rfpilot.organizations WHERE external_mongo_id=$1', [String(ids.shared)])).rows[0].count, '0',
+      'row-level security hides the organization from a session that has not named it');
+    const leftovers = await findCustomerLeftovers({ organizationId: String(ids.shared), pool: bound });
+    assert.deepEqual(leftovers.postgres, { users: 1, proposal_references: 1 });
+  } finally {
+    await bound.end();
+  }
 });
 
 test('after a clean migration all three checks pass', async () => {

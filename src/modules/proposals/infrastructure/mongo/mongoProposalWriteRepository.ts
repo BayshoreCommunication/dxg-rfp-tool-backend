@@ -1,6 +1,8 @@
+import mongoose from "mongoose";
 import Proposal from "../../../../../modal/proposalsModel";
 import type { ProposalWriteRepository } from "../../domain/ports/proposalWriteRepository";
 import { tenantFilter } from "../../../shared/tenancy/tenantContext";
+import { claimProposalSlot } from "../../../entitlements/infrastructure/mongoOrganizationEntitlements";
 import type { RfpAction } from "../../../identity/domain/rfpAccessPolicy";
 import {
   assertProposalMissIsNotFound,
@@ -19,10 +21,25 @@ const explainMiss = (actorUserId: string, proposalId: string, action: RfpAction)
 const DETAIL_PROPOSAL_SELECT = "-__v";
 
 export const mongoProposalWriteRepository: ProposalWriteRepository = {
+  // The only place a proposal row is inserted (new, copy and from a template, ORG-604). The plan's
+  // slot is taken and the row inserted in one transaction (ORG-601): a create at the limit throws
+  // PlanLimitReachedError, a failed insert doesn't use a slot, and Organization.proposalsCreated
+  // counts every proposal ever created.
   async createOwned({ ownerUserId, proposal }) {
-    const created = new Proposal({ ...proposal, userId: ownerUserId, ...tenantFilter() });
-    await created.save();
-    return created.toObject();
+    const tenant = tenantFilter();
+    const session = await mongoose.startSession();
+    try {
+      const created = await session.withTransaction(async () => {
+        await claimProposalSlot(tenant.organizationId, session);
+        // A fresh document per attempt: the driver re-runs this callback on a write conflict.
+        const document = new Proposal({ ...proposal, userId: ownerUserId, ...tenant });
+        await document.save({ session });
+        return document;
+      });
+      return created.toObject();
+    } finally {
+      await session.endSession();
+    }
   },
 
   async findOwnedCopySourceById({ proposalId, ownerUserId }) {

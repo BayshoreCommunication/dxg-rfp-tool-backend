@@ -17,7 +17,7 @@ export const STAFF_ROLES = new Set(["admin", "super_admin", "superadmin"]);
 
 type JournalEntry = {
   runId: string; userId: string; fromOrganizationId: string; holdingOrganizationId: string;
-  state: "started" | "done" | "failed" | "rolled_back"; previousRoles?: string[] | null; previousVersion?: number | null;
+  state: "started" | "done" | "failed" | "rolled_back"; previousRoles?: string[] | null; previousVersion?: number | null; previousStatus?: string | null;
   error?: string; mongo?: MongoMoveCounts; postgres?: MoveCounts; createdAt: Date; updatedAt: Date;
 };
 export type CustomerResult = {
@@ -57,7 +57,7 @@ export const ensurePostgresOrganization = async (client: PoolClient, mongoId: st
 export const moveCustomer = async (input: {
   userId: string; fromOrganizationId: string; toOrganizationId: string; toOrganizationName: string;
   runId: string; apply: boolean; pool: Pool | null;
-  onMongoCommit?: (session: mongoose.ClientSession, moved: { mongo: MongoMoveCounts; previousRoles: string[] | null; previousVersion: number | null }) => Promise<void>;
+  onMongoCommit?: (session: mongoose.ClientSession, moved: { mongo: MongoMoveCounts; previousRoles: string[] | null; previousVersion: number | null; previousStatus: string | null }) => Promise<void>;
 }): Promise<{ mongo: MongoMoveCounts; postgres: MoveCounts | "skipped" }> => {
   const postgres = input.pool
     ? await inPostgres(input.pool, input.apply, async (client, schema) => {
@@ -130,7 +130,7 @@ export const migrateCustomerOrganizations = async (input: {
         runId: input.runId, apply: input.apply, pool: input.pool,
         onMongoCommit: (session, membership) => journal().updateOne(
           { runId: input.runId, userId },
-          { $set: { state: "done", previousRoles: membership.previousRoles, previousVersion: membership.previousVersion, mongo: membership.mongo, updatedAt: new Date() } },
+          { $set: { state: "done", previousRoles: membership.previousRoles, previousVersion: membership.previousVersion, previousStatus: membership.previousStatus, mongo: membership.mongo, updatedAt: new Date() } },
           { session },
         ).then(() => undefined),
       });
@@ -182,7 +182,7 @@ export const rollbackCustomerOrganizations = async (input: { runId: string; appl
           await session.withTransaction(async () => {
             mongo = await moveAllDocuments({ fromOrganizationId: entry.holdingOrganizationId, toOrganizationId: entry.fromOrganizationId, session });
             if (entry.state === "done") {
-              await restoreMembership({ ...entry, previousRoles: entry.previousRoles ?? null, previousVersion: entry.previousVersion ?? null, session });
+              await restoreMembership({ ...entry, previousRoles: entry.previousRoles ?? null, previousVersion: entry.previousVersion ?? null, previousStatus: entry.previousStatus ?? null, session });
             }
             await Organization.collection.deleteOne({ _id: new mongoose.Types.ObjectId(entry.holdingOrganizationId), kind: "legacy_holding" }, { session });
             await journal().updateOne({ runId: entry.runId, userId: entry.userId }, { $set: { state: "rolled_back", updatedAt: new Date() } }, { session });

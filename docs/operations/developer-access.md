@@ -60,7 +60,7 @@ debugging; ask for it first.
 
 - Vercel account (dashboard hosting): owned by Travis.
 - Test/service inboxes: `dxgrfptool@gmail.com` (+`+admin`, `+prodadmin`
-  variants) — SES-verified sandbox recipients.
+  variants) — also the alarm-email recipient.
 
 ## Access checklist for a new backend developer
 

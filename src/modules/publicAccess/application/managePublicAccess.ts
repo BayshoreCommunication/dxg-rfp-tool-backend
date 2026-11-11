@@ -22,7 +22,11 @@ export interface PublicAccessRepository {
   revoke(id: string, organizationId: string, reason: string): Promise<boolean>;
 }
 
-export const createPublicAccessManager = (repository: PublicAccessRepository) => ({
+// Told after a vendor response link is issued, so the RFP's invited-vendor count stays current
+// (ORG-403). It must not throw: the link exists either way.
+export type VendorInvitedListener = (input: { organizationId: string; proposalId: string; createdByUserId: string }) => Promise<void>;
+
+export const createPublicAccessManager = (repository: PublicAccessRepository, onVendorInvited?: VendorInvitedListener) => ({
   async issue(input: { organizationId: string; resourceId: string; purpose: PublicGrantPurpose; createdByUserId: string; expiresInHours?: number; maxUses?: number; recipient?: string }) {
     if (!await repository.resourceOwned(input.resourceId, input.organizationId, input.createdByUserId)) {
       throw new Error("Proposal not found for this organization");
@@ -36,6 +40,9 @@ export const createPublicAccessManager = (repository: PublicAccessRepository) =>
     const expiresAt = new Date(Date.now() + hours * 60 * 60 * 1000);
     const recipientHash = recipient ? hashRecipient(recipient) : null;
     const record = await repository.create({ ...input, tokenHash: hashPublicGrant(token), recipientHash, expiresAt, useCount: 0, maxUses: input.maxUses ?? null });
+    if (input.purpose === "vendor:submit") {
+      await onVendorInvited?.({ organizationId: input.organizationId, proposalId: input.resourceId, createdByUserId: input.createdByUserId });
+    }
     return { id: record.id, token, expiresAt, purpose: input.purpose, resourceId: input.resourceId };
   },
   validateAndConsume(input: {

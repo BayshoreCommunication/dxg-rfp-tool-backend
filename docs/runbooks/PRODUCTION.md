@@ -98,6 +98,8 @@ stay put. Run in a maintenance window:
    proposal's owner is an active member. Roll back if it fails and the cause isn't clear.
 7. Resume the worker and dispatcher. The cron worker re-runs the orphan check every day
    (`[Cron] Orphaned proposals: N`); anything above 0 needs a reassignment.
+   `npm run report:launch-metrics` prints that count with the other launch metrics (invite
+   acceptance, time to first RFP opened, organizations with 2+ users, support reads under a grant).
 
 Rollback: `npm run migrate:customer-organizations -- --rollback-run=<id>` (dry run), then with
 `--apply`. Everything in each holding tenant, including anything created since, moves back and

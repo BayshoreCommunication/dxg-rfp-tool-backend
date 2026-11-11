@@ -1,7 +1,7 @@
 # Production Architecture
 
-> Verified against the deployed stacks 2026-08-03. Both environments share
-> this shape; names below use production, the only environment. A staging
+> Verified against the deployed stacks 2026-11-08. Names below use
+> production, the only environment. A staging
 > environment existed until 2026-08-18 and differed only in sizing and
 > hostnames — see [Environments](environments.md).
 
@@ -16,8 +16,7 @@ flowchart TD
 
     U -->|HTTPS api.dxg-agency.com| DNS[Namecheap DNS<br/>CNAME to ALB]
     V -->|HTTPS| DNS
-    DNS --> WAF[AWS WAF<br/>AWSManagedCommonRuleSet]
-    WAF --> ALB[ALB - HTTPS :443, :80 redirects<br/>ACM wildcard *.dxg-agency.com]
+    DNS --> ALB[ALB - HTTPS :443, :80 redirects<br/>ACM wildcard *.dxg-agency.com]
 
     subgraph VPC["VPC 10.41.0.0/16 (us-east-2a/b)"]
         ALB -->|:8000| API[ECS Fargate: api<br/>Express - 1 task, crons on]
@@ -28,16 +27,16 @@ flowchart TD
         MIG[One-off migrate task<br/>runs per deploy]
     end
 
-    API & WORKER & DISP & AIGW & MIG -->|:5432 TLS| RDS[(RDS PostgreSQL 16 + pgvector<br/>Multi-AZ in production)]
+    API & WORKER & DISP & AIGW & MIG -->|:5432 TLS| RDS[(RDS PostgreSQL 16 + pgvector<br/>t4g.micro, single-AZ pre-launch)]
     API & WORKER & DISP & AIGW -->|:6379 TLS+AUTH| REDIS[(ElastiCache Redis<br/>transport-only, no snapshots)]
     API & WORKER -->|NAT egress 13.58.171.171| ATLAS[(MongoDB Atlas<br/>db: dxg_rfp_tool_prod)]
     API & WORKER --> S3[(S3: assets + documents buckets<br/>SSE-KMS, Block Public Access)]
     S3 --> CDN[CloudFront d1hn23mh1h53mx.cloudfront.net<br/>public asset URLs]
-    API -->|SMTP :587| SES[Amazon SES<br/>noreply@dxg-agency.com]
+    API -->|SMTP :587| SES[Amazon SES<br/>noreply@av-rfpilot.com]
     API & WORKER & AIGW -->|HTTPS| OPENAI[OpenAI API<br/>gpt-5.4-mini-2026-03-17]
 
     subgraph Observability
-        CW[CloudWatch Logs /rfpilot/production/*<br/>Container Insights + alarms]
+        CW[CloudWatch Logs /rfpilot/production/*<br/>18 alarms]
         SNS[SNS rfpilot-production-alerts]
     end
     API & WORKER & DISP & AIGW & CLAM --> CW
@@ -49,8 +48,8 @@ flowchart TD
 1. A client resolves `api.dxg-agency.com` (Namecheap CNAME → the ALB's DNS
    name). TLS terminates at the ALB using the ACM wildcard certificate for
    `*.dxg-agency.com`; port 80 issues a permanent 301 to HTTPS.
-2. AWS WAF (`AWSManagedCommonRuleSet`, REGIONAL scope on the ALB) filters the
-   request.
+2. There is **no WAF** in front of the ALB today (`wafEnabled: false`), so
+   scanner traffic reaches the API and gets 404s.
 3. The ALB forwards to the single `api` task on port 8000 (health check:
    `GET /health`, healthy = HTTP 200, 15s interval). ALB idle timeout is
    **180s** — deliberately long because the assistant's SSE stream can be
@@ -75,7 +74,8 @@ flowchart TD
   `vendor_response_analyze`. Live-AI job types call OpenAI.
 - The **ai-gateway** service runs the platform assistant's job worker
   (`dist/scripts/startAiGatewayWorker.js`). It only exists in environments
-  whose AI release enables `AI_GATEWAY_ENABLED` (currently both).
+  whose AI release enables `AI_GATEWAY_ENABLED` (production does).
+- A separate `cron` service exists but is scaled to **0** before launch.
 - **Cron jobs run inside the API task only** (`CRON_ENABLED=true` is set
   solely on `api`) — this is why the API must stay at exactly 1 task; the
   crons are not distributed-lock protected.
@@ -90,8 +90,9 @@ Defined in [`deploy/aws/lib/network-stack.ts`](https://github.com/BayshoreCommun
   tasks), `isolated` /24 (RDS, Redis).
 - 1 NAT gateway per environment. Egress IPs (allowlisted in Atlas):
   production `13.58.171.171`.
-- VPC endpoints keep S3, ECR (api + docker), CloudWatch Logs, and Secrets
-  Manager traffic off the NAT.
+- Only the free S3 gateway endpoint exists. The ECR, CloudWatch Logs and
+  Secrets Manager interface endpoints were removed on 2026-08-18 to save
+  ~$58/month; that traffic now goes through the NAT.
 - VPC Flow Logs capture **rejected** traffic to CloudWatch.
 - Security groups — the entire ingress matrix:
   - internet → ALB `:80`/`:443` only
@@ -105,7 +106,10 @@ Defined in [`deploy/aws/lib/network-stack.ts`](https://github.com/BayshoreCommun
 rendered **inline in the Network stack's template** at synth time. If you add
 HTTPS (a cert context) and only deploy the App stack, port 443 stays closed.
 After changing listeners, redeploy `Rfpilot-<env>-Network` with the same
-contexts. This bit production on 2026-08-03.
+contexts. This bit production on 2026-08-03 and again on 2026-08-10. Since
+the 2026-08-10 fix the 80/443 rules are declared statically in
+`network-stack.ts`, but still pass the CI context flags and `--exclusively`
+on any manual deploy.
 
 ## Trust boundaries
 

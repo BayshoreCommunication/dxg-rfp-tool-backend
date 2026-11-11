@@ -193,16 +193,20 @@ export const createSessionManager = (dependencies: Dependencies) => {
       reason: input.reason ?? "user_logout",
       now: now(),
     });
-    await dependencies.audit.append({
-      organizationId: input.organizationId,
-      actorUserId: input.userId,
-      action: "auth.session.revoked",
-      targetType: "refresh_session",
-      targetId: input.sessionId,
-      decision: "revoked",
-      reason: input.reason ?? "user_logout",
-      correlationId: input.correlationId,
-    });
+    // Only a session that was actually revoked is audited (as revokePresented does). The id
+    // comes from the request, so an unknown or foreign one must not be recorded as "revoked".
+    if (revoked > 0) {
+      await dependencies.audit.append({
+        organizationId: input.organizationId,
+        actorUserId: input.userId,
+        action: "auth.session.revoked",
+        targetType: "refresh_session",
+        targetId: input.sessionId,
+        decision: "revoked",
+        reason: input.reason ?? "user_logout",
+        correlationId: input.correlationId,
+      });
+    }
     return revoked;
   };
 

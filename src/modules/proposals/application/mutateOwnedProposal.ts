@@ -1,5 +1,6 @@
 import type { ProposalSettingsRepository } from "../domain/ports/proposalSettingsRepository";
 import type { ProposalWriteRepository } from "../domain/ports/proposalWriteRepository";
+import type { ProposalLifecycleRecorder } from "../domain/ports/proposalLifecycleRecorder";
 import { withLiveSettings } from "./proposalPresentation";
 
 export const PROPOSAL_STATUSES = [
@@ -15,6 +16,7 @@ export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 type MutationDependencies = {
   proposals: ProposalWriteRepository;
   settings: ProposalSettingsRepository;
+  lifecycle?: ProposalLifecycleRecorder;
 };
 
 export const createUpdateOwnedProposalStatus = (
@@ -44,6 +46,7 @@ export const createUpdateOwnedProposalStatus = (
     },
   });
   if (!proposal) return { kind: "not_found" as const };
+  await dependencies.lifecycle?.recordChange({ proposalId: input.proposalId, actorUserId: input.ownerUserId, reason: "status_changed" });
   const settings = await dependencies.settings.findByUserId(input.ownerUserId, {
     createIfMissing: true,
   });
@@ -107,6 +110,7 @@ export const createUpdateOwnedProposalMeta = (
     runValidators: true,
   });
   if (!proposal) return { kind: "not_found" as const };
+  await dependencies.lifecycle?.recordChange({ proposalId: input.proposalId, actorUserId: input.ownerUserId, reason: "metadata_changed" });
   const settings = await dependencies.settings.findByUserId(input.ownerUserId, {
     createIfMissing: true,
   });
@@ -116,19 +120,19 @@ export const createUpdateOwnedProposalMeta = (
   };
 };
 
-export const createArchiveOwnedProposal = (proposals: ProposalWriteRepository) =>
-  async (input: { proposalId: string; ownerUserId: string }) => ({
-    kind: (await proposals.archiveOwnedById({ ...input, archivedAt: new Date() }))
-      ? ("archived" as const)
-      : ("not_found" as const),
-  });
+export const createArchiveOwnedProposal = (proposals: ProposalWriteRepository, lifecycle?: ProposalLifecycleRecorder) =>
+  async (input: { proposalId: string; ownerUserId: string }) => {
+    if (!(await proposals.archiveOwnedById({ ...input, archivedAt: new Date() }))) return { kind: "not_found" as const };
+    await lifecycle?.recordChange({ proposalId: input.proposalId, actorUserId: input.ownerUserId, reason: "archived" });
+    return { kind: "archived" as const };
+  };
 
-export const createRestoreOwnedProposal = (proposals: ProposalWriteRepository) =>
-  async (input: { proposalId: string; ownerUserId: string }) => ({
-    kind: (await proposals.restoreOwnedById(input))
-      ? ("restored" as const)
-      : ("not_found" as const),
-  });
+export const createRestoreOwnedProposal = (proposals: ProposalWriteRepository, lifecycle?: ProposalLifecycleRecorder) =>
+  async (input: { proposalId: string; ownerUserId: string }) => {
+    if (!(await proposals.restoreOwnedById(input))) return { kind: "not_found" as const };
+    await lifecycle?.recordChange({ proposalId: input.proposalId, actorUserId: input.ownerUserId, reason: "restored" });
+    return { kind: "restored" as const };
+  };
 
 /** Removes an archived proposal's private storage objects and Postgres rows. */
 export type PurgeProposalArtifacts = (
