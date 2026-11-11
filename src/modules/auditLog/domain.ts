@@ -77,6 +77,8 @@ export const AUDIT_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   "support_access.denied": { category: "support_access", label: "Support access refused", staffActor: true },
 
   "organization.settings.updated": { category: "settings", label: "Organization settings changed" },
+  // ORG-603: RFPilot staff change an organization's plan in the admin app.
+  "organization.plan_changed": { category: "settings", label: "Plan changed by RFPilot Support", staffActor: true },
   "organization.domain.added": { category: "settings", label: "Domain added" },
   "organization.domain.verified": { category: "settings", label: "Domain verified" },
   "organization.domain.unverified": { category: "settings", label: "Domain no longer verified" },
@@ -104,6 +106,7 @@ const DETAIL_KEYS = new Set([
   "setting", "from", "to", "value", "scope", "operation", "domain", "expiresAt", "method",
   "reauthentication", "recoveryCodesRemaining", "revokedSessions", "signedOutMembers", "placedInTeam",
   "teamId", "grantId", "ticketId", "proposalId", "contactCount", "secretChanged",
+  "fromPlan", "toPlan",
 ]);
 const MACHINE_CODE = /^[a-z0-9][a-z0-9_.:-]{0,63}$/i;
 

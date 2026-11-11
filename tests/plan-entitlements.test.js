@@ -226,6 +226,15 @@ test("every planner vendor-response route is classified, and reads and export ar
   });
 });
 
+// ORG-407: the audit log is part of every plan, the free trial included.
+test("every audit log route is classified as open on every plan", () => {
+  assert.deepEqual(Object.fromEntries(routesOf("../routes/auditLogRoute").map(([route, features]) => [route, features])), {
+    "GET /organization/audit-events": "open",
+    "GET /organization/audit-events/filters": "open",
+    "GET /organization/audit-events/export": "open",
+  });
+});
+
 test("the gate runs after authentication and authorization on every gated route", () => {
   for (const name of [...INTELLIGENCE_ROUTERS, "vendorAnalysis", "vendorResponse"]) {
     for (const [route, features, definition] of routesOf(`../routes/${name}Route`)) {

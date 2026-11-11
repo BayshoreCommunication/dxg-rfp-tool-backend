@@ -110,7 +110,8 @@ test("every action in PRD P0-10 is in the audit view's catalog and still has its
 test("token rotation and staff-side bookkeeping are not part of the customer's view", () => {
   for (const hidden of ["auth.refresh.rotated", "admin.organization.legacy_customer.placed", "job.create"]) assert.equal(AUDIT_CATALOG[hidden], undefined);
   assert.deepEqual([...STAFF_ACTIONS].sort(), [
-    "organization.legacy_customer.placed", "organization.legacy_customer.placement_rolled_back", "support_access.denied", "support_access.used",
+    "organization.legacy_customer.placed", "organization.legacy_customer.placement_rolled_back", "organization.plan_changed",
+    "support_access.denied", "support_access.used",
   ]);
 });
 
@@ -199,6 +200,22 @@ test("support activity is attributed to RFPilot Support and the staff id is neve
   assert.deepEqual((await log.list(actor("owner"), { actor: STAFF })).events, []);
   assert.deepEqual((await log.list(actor("owner"), { actor: OWNER })).events.map((e) => e.action), ["support_access.granted"]);
   assert.deepEqual((await log.list(actor("owner"), { actor: "support", action: "support_access.granted" })).events, []);
+});
+
+test("a plan change by RFPilot staff (ORG-603) shows the plans, not the staff member or their note", async () => {
+  const changed = event({
+    action: "organization.plan_changed", actorUserId: STAFF, targetType: "organization", targetId: ORG, decision: "allowed", reason: "staff_plan_change",
+    metadata: { fromPlan: "free_trial", toPlan: "full_access", proposalsCreated: 2, actorAccountType: "admin", actorOrganizationId: OTHER_ORG, note: "Agreed with Jane on the phone" },
+  });
+  const events = fakeEvents([changed]);
+  const log = createAuditLog({ events });
+  const [shown] = (await log.list(actor("owner"), { actor: "support" })).events;
+  assert.deepEqual(shown.actor, { kind: "support", id: STAFF, name: "RFPilot Support" });
+  assert.deepEqual(shown.details, { fromPlan: "free_trial", toPlan: "full_access" });
+  assert.equal(shown.category, "settings");
+  assert.equal(JSON.stringify(shown).includes("Jane"), false);
+  assert.equal(JSON.stringify(shown).includes(OTHER_ORG), false);
+  assert.equal(events.nameLookups.includes(STAFF), false);
 });
 
 // ── Filters and paging ──────────────────────────────────────────────────────────────────────
