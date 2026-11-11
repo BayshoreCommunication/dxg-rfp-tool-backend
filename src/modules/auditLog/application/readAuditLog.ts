@@ -6,6 +6,7 @@ import {
   MEMBER_ACTIONS,
   STAFF_ACTIONS,
   SUPPORT_ACTOR_LABEL,
+  catalogEntry,
   VISIBLE_ACTIONS,
   auditCsv,
   visibleDetails,
@@ -32,9 +33,12 @@ const text = (value: unknown): string => {
 };
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+// A full ISO instant with its zone, so a filter never depends on the server's own time zone.
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
 const parseDate = (value: unknown, name: "from" | "to"): Date | undefined => {
   const raw = text(value);
   if (!raw) return undefined;
+  if (!DATE_ONLY.test(raw) && !ISO_INSTANT.test(raw)) throw invalid(`"${name}" must be a date (YYYY-MM-DD) or an ISO timestamp with a time zone.`);
   const date = new Date(DATE_ONLY.test(raw) ? `${raw}T00:00:00.000Z` : raw);
   if (Number.isNaN(date.getTime())) throw invalid(`"${name}" must be a date.`);
   // A bare end date means the whole of that day (UTC); the filter's upper bound is exclusive.
@@ -68,7 +72,7 @@ export const createAuditLog = (deps: { events: AuditEventReader }) => {
     const action = text(query.action);
     const category = text(query.category);
     if (action) {
-      if (!AUDIT_CATALOG[action]) throw invalid("That action isn't part of the audit log.");
+      if (!catalogEntry(action)) throw invalid("That action isn't part of the audit log.");
       actions = [action];
     }
     if (category) {
@@ -98,14 +102,14 @@ export const createAuditLog = (deps: { events: AuditEventReader }) => {
         : null;
     const ids = new Set<string>();
     for (const event of events) {
-      if (event.actorUserId && !AUDIT_CATALOG[event.action]?.staffActor) ids.add(event.actorUserId);
+      if (event.actorUserId && !catalogEntry(event.action)?.staffActor) ids.add(event.actorUserId);
       const target = memberTargets(event);
       if (target) ids.add(target);
     }
     const names = await deps.events.memberNames(organizationId, [...ids]);
     const actorOf = (event: StoredAuditEvent): AuditEventActor => {
       // Staff are shown as RFPilot Support with a stable reference, never by name (ORG-404).
-      if (AUDIT_CATALOG[event.action]?.staffActor) return { kind: "support", id: event.actorUserId, name: SUPPORT_ACTOR_LABEL };
+      if (catalogEntry(event.action)?.staffActor) return { kind: "support", id: event.actorUserId, name: SUPPORT_ACTOR_LABEL };
       if (!event.actorUserId) return { kind: "system", id: null, name: "System" };
       const member = names.get(event.actorUserId);
       return member
@@ -135,7 +139,7 @@ export const createAuditLog = (deps: { events: AuditEventReader }) => {
     if (filter.actions.length === 0) return { stored: [] as StoredAuditEvent[], more: false };
     const rows = await deps.events.list(organizationId, filter, limit + 1);
     // Belt and braces: a reader bug can't surface an uncatalogued action.
-    const stored = rows.filter((row) => AUDIT_CATALOG[row.action]).slice(0, limit);
+    const stored = rows.filter((row) => catalogEntry(row.action)).slice(0, limit);
     return { stored, more: rows.length > limit };
   };
 

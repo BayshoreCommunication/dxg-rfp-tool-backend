@@ -57,7 +57,7 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 
 ## Organization audit log
 
-- No new collection or index (ORG-407). The audit view reads `SecurityAuditEvent` by `{ organizationId, action, createdAt }` (added in ORG-404) and `{ organizationId, createdAt }`, newest first, paged by `(createdAt, _id)`. Rows stay append-only; the view never writes. `auth.login.failed` is a new action on the same collection.
+- No new collection (ORG-407). The audit view reads `SecurityAuditEvent` for one organization, newest first, paged by `(createdAt, _id)`. The index `{ organizationId, createdAt }` is extended to `{ organizationId: 1, createdAt: -1, _id: -1 }` so that order comes from the index; Mongoose builds the new index on start-up, and the old two-field index (now a redundant prefix) can be dropped from deployed databases by hand. Rows stay append-only; the view never writes. `auth.login.failed` is a new action on the same collection.
 
 ## RFP lifecycle
 

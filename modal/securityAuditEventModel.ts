@@ -33,7 +33,9 @@ const securityAuditEventSchema = new Schema<ISecurityAuditEvent>(
   },
 );
 
-securityAuditEventSchema.index({ organizationId: 1, createdAt: -1 });
+// The organization's log, newest first. `_id` breaks ties between events in the same millisecond,
+// so the audit view (ORG-407) pages straight off the index instead of sorting in memory.
+securityAuditEventSchema.index({ organizationId: 1, createdAt: -1, _id: -1 });
 securityAuditEventSchema.index({ actorUserId: 1, createdAt: -1 });
 securityAuditEventSchema.index({ correlationId: 1 });
 // Per-action reads inside one organization (support activity under a grant, the audit view).

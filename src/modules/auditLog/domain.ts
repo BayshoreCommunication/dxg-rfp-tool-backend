@@ -95,6 +95,10 @@ export const AUDIT_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   "organization_vendor.restored": { category: "vendor_list", label: "Vendor restored" },
 };
 
+// Own entries only: "constructor" or "__proto__" as an action name is not in the catalog.
+export const catalogEntry = (action: string): CatalogEntry | undefined =>
+  Object.prototype.hasOwnProperty.call(AUDIT_CATALOG, action) ? AUDIT_CATALOG[action] : undefined;
+
 export const VISIBLE_ACTIONS: readonly string[] = Object.keys(AUDIT_CATALOG);
 export const STAFF_ACTIONS: readonly string[] = VISIBLE_ACTIONS.filter((action) => AUDIT_CATALOG[action].staffActor);
 export const MEMBER_ACTIONS: readonly string[] = VISIBLE_ACTIONS.filter((action) => !AUDIT_CATALOG[action].staffActor);
@@ -105,7 +109,7 @@ const DETAIL_KEYS = new Set([
   "role", "previousRole", "newOwnerPreviousRole", "previousOwnerNewRole", "previousStatus",
   "setting", "from", "to", "value", "scope", "operation", "domain", "expiresAt", "method",
   "reauthentication", "recoveryCodesRemaining", "revokedSessions", "signedOutMembers", "placedInTeam",
-  "teamId", "grantId", "ticketId", "proposalId", "contactCount", "secretChanged",
+  "teamId", "grantId", "ticketId", "proposalId", "contactCount",
   "fromPlan", "toPlan",
 ]);
 const MACHINE_CODE = /^[a-z0-9][a-z0-9_.:-]{0,63}$/i;

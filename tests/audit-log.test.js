@@ -273,7 +273,8 @@ test("bad filters are refused with 400 and the page size is capped", async () =>
   const events = fakeEvents([event()]);
   const log = createAuditLog({ events });
   for (const query of [
-    { action: "auth.refresh.rotated" }, { action: "nope" }, { category: "nope" }, { actor: "not-an-id" }, { actor: { $ne: null } },
+    { action: "auth.refresh.rotated" }, { action: "nope" }, { action: "constructor" }, { action: "__proto__" }, { action: "toString" },
+    { from: "1" }, { from: "2026-11-01T00:00:00" }, { to: "2026" }, { category: "nope" }, { actor: "not-an-id" }, { actor: { $ne: null } },
     { from: "yesterday" }, { to: "13/13/2026" }, { from: "2026-11-05", to: "2026-11-01T00:00:00Z" }, { cursor: "!!!" }, { cursor: Buffer.from("1:xyz").toString("base64url") },
     { limit: "0" }, { limit: "abc" },
   ]) {
@@ -288,7 +289,7 @@ test("bad filters are refused with 400 and the page size is capped", async () =>
 test("details are an allowlist of scalars and never carry contact details or secrets", () => {
   assert.deepEqual(visibleDetails({
     role: "planner", previousRole: "viewer", signedOutMembers: 3, placedInTeam: false,
-    email: "someone@example.test", domain: "x@y.test", token: "t", passwordHash: "h", version: 9, domains: ["a.test"], from: { nested: true }, to: "", runId: "r1",
+    email: "someone@example.test", domain: "x@y.test", token: "t", secretChanged: true, passwordHash: "h", version: 9, domains: ["a.test"], from: { nested: true }, to: "", runId: "r1",
     targetOrganizationId: OTHER_ORG, holdingOrganizationId: OTHER_ORG, agentAccountType: "admin", value: "x".repeat(201),
   }), { role: "planner", previousRole: "viewer", signedOutMembers: 3, placedInTeam: false });
   for (const metadata of [null, undefined, "text", ["a"], 4]) assert.deepEqual(visibleDetails(metadata), {});
