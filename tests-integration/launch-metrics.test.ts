@@ -25,6 +25,7 @@ import { closeSecurityRateLimitRedis } from "../middleware/securityRateLimit";
 import { closeSupportRedis } from "../src/modules/supportDesk/infrastructure/redis/supportRedis";
 import { launchMetricsReport, type LaunchMetricsReport } from "../src/modules/launchMetrics/domain";
 import { mongoLaunchMetricsSource } from "../src/modules/launchMetrics/mongoLaunchMetricsSource";
+import { createMongoInvitationAcceptance } from "../src/modules/invitations/infrastructure/mongoInvitationAcceptance";
 import { cleanupOrganizations, createProposals, ROLES, seedOrganization, SLUG_PREFIX, type Fixture } from "./memberFixtures";
 
 const tag = randomMongoId().slice(0, 10);
@@ -288,4 +289,30 @@ test("a member opening an RFP is stamped once, and it reaches the metric", async
   assert.equal(after.opened - before.opened, 1);
   assert.equal(after.notYetOpened - before.notYetOpened, 0);
   assert.equal(after.openedWithin5Minutes - before.openedWithin5Minutes, 1);
+});
+
+test("a removed member who is invited back is timed from the new acceptance", async () => {
+  const organizationId = oid(acme.organizationId);
+  const longAgo = new Date(Date.now() - 200 * DAY);
+  const returning = await addMember(organizationId, "planner", { status: "removed", removedAt: new Date(Date.now() - DAY), firstRfpOpenedAt: longAgo });
+  const email = (await User.findById(returning).select("email").lean())!.email;
+  const tokenHash = `metrics-${randomMongoId()}`;
+  const { insertedId } = await invite(organizationId, { email, tokenHash });
+
+  const now = new Date();
+  const joined = await createMongoInvitationAcceptance().joinExistingAccount({ invitationId: String(insertedId), tokenHash, userId: String(returning), now });
+  assert.deepEqual(joined, { kind: "joined", userId: String(returning), placedInTeam: false });
+  const membership = () => OrganizationMembership.findOne({ organizationId, userId: returning }).lean();
+  const rejoined = await membership();
+  assert.equal(rejoined!.status, "active");
+  assert.equal(rejoined!.firstRfpOpenedAt, null);
+
+  const [rfp] = await createProposals(acme.organizationId, String(returning), 1);
+  assert.equal((await call(await sessionFor(returning, organizationId), `/api/proposals/${rfp}`)).status, 200);
+  let stamped = await membership();
+  for (let attempt = 0; attempt < 40 && !stamped?.firstRfpOpenedAt; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    stamped = await membership();
+  }
+  assert.ok(stamped!.firstRfpOpenedAt!.getTime() >= now.getTime() - 1000, "the first open after rejoining is recorded");
 });
