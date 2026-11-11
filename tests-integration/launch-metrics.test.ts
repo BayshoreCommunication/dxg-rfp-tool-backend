@@ -141,7 +141,7 @@ test("no customer session reaches the launch metrics, and a refusal carries no n
 
 test("staff on an admins account read counts and rates only, and the read is audited in the staff organization", async () => {
   const report = await metrics();
-  assert.deepEqual(Object.keys(report).sort(), ["generatedAt", "inviteAcceptance", "orphanedRfps", "organizationsWithTwoOrMoreActiveUsers", "supportAccessUnderGrant", "timeToFirstRfpOpened", "window"]);
+  assert.deepEqual(Object.keys(report).sort(), ["generatedAt", "inviteAcceptance", "organizationsWithTwoOrMoreActiveUsers", "orphanedRfps", "supportAccessUnderGrant", "timeToFirstRfpOpened", "window"]);
   assert.equal(report.window.days, 30);
   const text = JSON.stringify(report);
   for (const secret of ["Acme", "Other Co", "@example.com", acme.organizationId, other.organizationId, acme.members.owner.userId, acmeRfp]) {
@@ -255,13 +255,13 @@ test("orphaned RFPs are counted by the same check the nightly job runs", async (
 
 test("a member opening an RFP is stamped once, and it reaches the metric", async () => {
   const organizationId = oid(acme.organizationId);
+  const before = (await metrics()).timeToFirstRfpOpened;
   const invitee = await addMember(organizationId, "planner");
   const acceptedAt = new Date(Date.now() - 90_000);
   await invite(organizationId, { createdAt: new Date(Date.now() - DAY), status: "accepted", acceptedAt, acceptedBy: invitee });
   const [rfp] = await createProposals(acme.organizationId, String(invitee), 1);
   const token = await sessionFor(invitee, organizationId);
   const membership = () => OrganizationMembership.findOne({ organizationId, userId: invitee }).lean();
-  const before = (await metrics()).timeToFirstRfpOpened;
 
   // An RFP in another organization reads as missing and is not an "open".
   const [foreignRfp] = await createProposals(other.organizationId, other.members.planner.userId, 1);
