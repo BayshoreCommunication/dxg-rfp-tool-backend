@@ -317,6 +317,6 @@ The fixture builder is not used for this and cannot be: it refuses anything but 
 rehearsal stack.
 
 `rehearsal:run` starts the migration and verifier through `npm run` and ts-node, so it needs a
-checkout with dev dependencies and network reach to the restore. The production image has
-neither npm scripts' ts-node nor a route in for an operator; the cutover itself runs the built
-scripts as one-off tasks (`ORG_TENANCY_CUTOVER.md`).
+checkout with dev dependencies and network reach to the restore. The production image ships
+without ts-node and gives an operator no shell, so the cutover itself runs the built scripts as
+one-off tasks (`ORG_TENANCY_CUTOVER.md`).
