@@ -205,7 +205,11 @@ const allowedPlatformPrefixes: Readonly<
   Record<AssistantIntent, readonly string[]>
 > = {
   greeting_or_thanks: ["platform:assistant:scope"],
-  platform_navigation: ["platform:navigation:", "platform:assistant:scope"],
+  platform_navigation: [
+    "platform:navigation:",
+    "platform:assistant:scope",
+    "platform:intelligence:",
+  ],
   proposal_creation: [
     "platform:navigation:create-proposal",
     "platform:proposal:guided-intake",
@@ -215,6 +219,7 @@ const allowedPlatformPrefixes: Readonly<
     "platform:proposal:workflow",
     "platform:proposal:pre-send-checklist",
     "platform:navigation:proposals",
+    "platform:intelligence:",
   ],
   pre_send_checklist: [
     "platform:proposal:pre-send-checklist",
@@ -237,6 +242,7 @@ const allowedPlatformPrefixes: Readonly<
     "proposal-portfolio:",
     "platform:assistant:proposal-workspace",
     "platform:navigation:proposals",
+    "platform:intelligence:",
   ],
   equipment_scope_review: [
     "selected-proposal:",
@@ -261,7 +267,12 @@ const allowedPlatformPrefixes: Readonly<
     "platform:proposal:",
   ],
   unsupported_or_off_topic: ["platform:assistant:scope"],
-  ambiguous: ["platform:assistant:", "platform:navigation:", "platform:proposal:"],
+  ambiguous: [
+    "platform:assistant:",
+    "platform:navigation:",
+    "platform:proposal:",
+    "platform:intelligence:",
+  ],
 };
 
 export const evidenceAllowedForIntent = (
