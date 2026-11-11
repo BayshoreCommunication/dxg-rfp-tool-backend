@@ -24,7 +24,12 @@ export const AUDIT_EXPORT_MAX = 5000;
 
 const invalid = (message: string) => new AuditLogError("AUDIT_FILTER_INVALID", message, 400);
 
-const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+// Query values must be plain strings: a repeated or bracketed parameter (?actor[$ne]=) is refused.
+const text = (value: unknown): string => {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") throw invalid("Filters must be single text values.");
+  return value.trim();
+};
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const parseDate = (value: unknown, name: "from" | "to"): Date | undefined => {
