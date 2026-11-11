@@ -65,6 +65,7 @@ export const authenticateWithCredentials = createAuthenticateCredentials({
   accounts: mongoAuthAccountRepository,
   passwords: bcryptPasswordVerifier,
   tokens: jwtAccessTokenIssuer,
+  audit: mongoSecurityAuditWriter,
 });
 
 /* Administrators sign in, sign up and reset passwords against the `admins`
@@ -73,6 +74,7 @@ export const authenticateAdminCredentials = createAuthenticateCredentials({
   accounts: mongoAdminAuthAccountRepository,
   passwords: bcryptPasswordVerifier,
   tokens: jwtAccessTokenIssuer,
+  audit: mongoSecurityAuditWriter,
 });
 
 export const registerAdminAccount = createRegisterAdmin({

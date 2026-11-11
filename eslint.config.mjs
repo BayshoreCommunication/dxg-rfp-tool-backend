@@ -36,6 +36,8 @@ export default tseslint.config(
       "routes/organizationVendorsRoute.ts",
       "controller/proposalTemplatesController.ts",
       "routes/proposalTemplatesRoute.ts",
+      "controller/auditLogController.ts",
+      "routes/auditLogRoute.ts",
       "routes/platformAssistantRoute.ts",
       "routes/historicalInsightsRoute.ts",
       "routes/requirementRegistryRoute.ts",

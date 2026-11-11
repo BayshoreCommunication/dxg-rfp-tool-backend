@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type { PasswordHasher, PasswordVerifier } from "../../../shared/security/passwordHasher";
 import type {
   AccessTokenIssuer,
   AuthAccountRepository,
   SafeAuthUser,
 } from "../domain/ports/authAccountPorts";
+import type { SecurityAuditWriter } from "../domain/ports/sessionPorts";
 
 const isAdminRole = (role?: string): boolean => {
   const normalized = String(role ?? "").toLowerCase().trim().replace(/[\s-]/g, "_");
@@ -22,20 +24,48 @@ export const createAuthenticateCredentials = (dependencies: {
   accounts: AuthAccountRepository;
   passwords: PasswordVerifier;
   tokens: AccessTokenIssuer;
+  // ORG-407: failed sign-ins on a known account are audited in that account's organization.
+  audit?: SecurityAuditWriter;
 }) => async (
   input: { email?: unknown; password?: unknown },
   mode: "customer" | "admin",
+  context: { correlationId?: string } = {},
 ): Promise<LoginResult> => {
   const email = typeof input.email === "string" ? input.email.toLowerCase().trim() : "";
   const password = typeof input.password === "string" ? input.password : "";
   if (!email || !password) return { kind: "validation" };
   const credentials = await dependencies.accounts.findCredentials(email);
   if (!credentials) return { kind: "not_found" };
+  // An unknown email has no organization to record against, so only known accounts are audited.
+  // The event never carries the email or the password, and a failed write never changes the answer.
+  const loginFailed = async (reason: "wrong_password" | "account_blocked") => {
+    const { id, organizationId } = credentials.user;
+    if (!dependencies.audit || !organizationId) return;
+    try {
+      await dependencies.audit.append({
+        organizationId,
+        actorUserId: id,
+        action: "auth.login.failed",
+        targetType: "user",
+        targetId: id,
+        decision: "denied",
+        reason,
+        correlationId: context.correlationId || randomUUID(),
+        metadata: { method: "password" },
+      });
+    } catch (error) {
+      console.error("Login failure audit error:", error instanceof Error ? error.message : error);
+    }
+  };
   if (!await dependencies.passwords.verify(password, credentials.passwordHash)) {
+    await loginFailed("wrong_password");
     return { kind: "wrong_password" };
   }
   if (mode === "admin" && !isAdminRole(credentials.user.role)) return { kind: "not_admin" };
-  if (credentials.isBlocked) return { kind: "blocked" };
+  if (credentials.isBlocked) {
+    await loginFailed("account_blocked");
+    return { kind: "blocked" };
+  }
   const role = mode === "customer" ? "customer" : credentials.user.role || "admin";
   return {
     kind: "authenticated",
