@@ -53,10 +53,25 @@ test("time to first RFP opened is the median from acceptance, leaving out member
     { acceptedAt: accepted, firstRfpOpenedAt: after(-86_400) },
   ]);
   assert.deepEqual(result, {
-    accepted: 5, opened: 3, notYetOpened: 1, excludedOpenedBeforeAccepting: 1,
+    accepted: 5, opened: 3, notYetOpened: 1, excludedOpenedBeforeAccepting: 1, excludedAcceptedBeforeTracking: 0,
     medianSeconds: 300, openedWithin5Minutes: 2, targetMedianSeconds: 300,
   });
   assert.equal(timeToFirstRfpOpened([]).medianSeconds, null);
+});
+
+test("members who accepted before opens were tracked are left out of the timing", () => {
+  const trackingSince = ago(10);
+  const result = timeToFirstRfpOpened([
+    // Accepted 20 days ago, first recorded open 9 days ago: they may have opened RFPs unrecorded before that.
+    { acceptedAt: ago(20), firstRfpOpenedAt: ago(9) },
+    { acceptedAt: ago(20), firstRfpOpenedAt: null },
+    { acceptedAt: ago(5), firstRfpOpenedAt: ago(5, 30_000) },
+    { acceptedAt: ago(4), firstRfpOpenedAt: null },
+  ], trackingSince);
+  assert.deepEqual(result, {
+    accepted: 4, opened: 1, notYetOpened: 1, excludedOpenedBeforeAccepting: 0, excludedAcceptedBeforeTracking: 2,
+    medianSeconds: 30, openedWithin5Minutes: 1, targetMedianSeconds: 300,
+  });
 });
 
 test("median handles even and odd counts", () => {
@@ -102,6 +117,7 @@ const fakeSource = (calls = []) => ({
   supportReads: async (since, until) => { calls.push(["supportReads", since, until]); return [{ at: ago(2), grant: { createdAt: ago(3), expiresAt: ago(1), revokedAt: null } }]; },
   supportRefusals: async () => 4,
   orphanedRfps: async () => ({ total: 2, organizations: 1 }),
+  firstOpenTrackingSince: async () => ago(25),
 });
 
 test("the report carries the five metrics for the asked window, as numbers only", async () => {
@@ -111,15 +127,22 @@ test("the report carries the five metrics for the asked window, as numbers only"
     generatedAt: NOW.toISOString(),
     window: { days: 30, since: ago(30).toISOString(), until: NOW.toISOString() },
     inviteAcceptance: { sent: 1, atLeast7DaysOld: 1, acceptedWithin7Days: 1, acceptedLater: 0, rate: 1, target: 0.6 },
-    timeToFirstRfpOpened: { accepted: 1, opened: 1, notYetOpened: 0, excludedOpenedBeforeAccepting: 0, medianSeconds: 120, openedWithin5Minutes: 1, targetMedianSeconds: 300 },
+    timeToFirstRfpOpened: { accepted: 1, opened: 1, notYetOpened: 0, excludedOpenedBeforeAccepting: 0, excludedAcceptedBeforeTracking: 0, medianSeconds: 120, openedWithin5Minutes: 1, targetMedianSeconds: 300 },
     supportAccessUnderGrant: { reads: 1, underActiveGrant: 1, withoutActiveGrant: 0, refusedWithoutGrant: 4, rate: 1, target: 1 },
     organizationsWithTwoOrMoreActiveUsers: { organizations: 2, withTwoOrMoreActiveUsers: 1, rate: 0.5, target: 0.25 },
     orphanedRfps: { total: 2, organizations: 1, target: 0 },
   });
-  for (const [, since, until] of calls) {
-    assert.equal(since.getTime(), ago(30).getTime());
-    assert.equal(until.getTime(), NOW.getTime());
+  // Invitations are the cohort that has had its 7 days; the rest use the window as asked.
+  for (const [name, since, until] of calls) {
+    const shift = name === "invitations" ? 7 : 0;
+    assert.equal(since.getTime(), ago(30 + shift).getTime(), name);
+    assert.equal(until.getTime(), ago(shift).getTime(), name);
   }
+  // A window shorter than 7 days still has a cohort to judge.
+  const short = [];
+  await launchMetricsReport(fakeSource(short), { days: 3, now: NOW });
+  const [, from, to] = short.find(([name]) => name === "invitations");
+  assert.deepEqual([from.getTime(), to.getTime()], [ago(10).getTime(), ago(7).getTime()]);
   // Counts, rates, durations and timestamps of the report itself: nothing that names a customer.
   const leaves = [];
   const walk = (value) => (value && typeof value === "object" ? Object.values(value).forEach(walk) : leaves.push(value));

@@ -63,24 +63,31 @@ export const mongoLaunchMetricsSource: LaunchMetricsSource = {
 
   async supportReads(since, until) {
     const events = await SecurityAuditEvent.find({ action: SUPPORT_AUDIT.used, createdAt: { $gte: since, $lte: until } })
-      .select("organizationId createdAt metadata.grantId -_id")
+      .select("organizationId createdAt targetType targetId metadata.grantId -_id")
       .lean();
     const grantIds = [...new Set(events.map((event) => String(event.metadata?.grantId ?? "")).filter((id) => mongoose.isValidObjectId(id)))];
     // scope-exempt: platform launch metrics; each grant is matched to its event's organization below, and only its dates are read
-    const grants = await SupportAccessGrant.find({ _id: { $in: grantIds } }).select("createdAt expiresAt revokedAt organizationId").lean();
+    const grants = await SupportAccessGrant.find({ _id: { $in: grantIds } }).select("createdAt expiresAt revokedAt organizationId proposalId").lean();
     const byId = new Map(grants.map((grant) => [String(grant._id), grant]));
     return events.map((event) => {
       const grant = byId.get(String(event.metadata?.grantId ?? ""));
       const sameOrganization = grant && String(grant.organizationId) === String(event.organizationId);
+      // An RFP-scoped grant covers only that RFP; an organization-wide one covers any target.
+      const covers = grant && (!grant.proposalId || (event.targetType === "proposal" && String(grant.proposalId) === String(event.targetId)));
       return {
         at: event.createdAt,
-        grant: grant && sameOrganization ? { createdAt: grant.createdAt, expiresAt: grant.expiresAt, revokedAt: grant.revokedAt ?? null } : null,
+        grant: grant && sameOrganization && covers ? { createdAt: grant.createdAt, expiresAt: grant.expiresAt, revokedAt: grant.revokedAt ?? null } : null,
       };
     });
   },
 
   supportRefusals: (since, until) =>
     SecurityAuditEvent.countDocuments({ action: SUPPORT_AUDIT.denied, reason: "no_active_grant", createdAt: { $gte: since, $lte: until } }),
+
+  async firstOpenTrackingSince() {
+    const earliest = await OrganizationMembership.findOne({ firstRfpOpenedAt: { $ne: null } }).sort({ firstRfpOpenedAt: 1 }).select("firstRfpOpenedAt -_id").lean();
+    return earliest?.firstRfpOpenedAt ?? null;
+  },
 
   // The ORG-109 check the nightly job runs: RFPs whose owner is not an active member.
   async orphanedRfps() {

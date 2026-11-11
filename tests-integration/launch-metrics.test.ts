@@ -172,12 +172,13 @@ test("invite acceptance and time to first RFP opened are exact over a window", a
   await invite(acme.organizationId, { createdAt: then(14), status: "revoked" });
   await invite(other.organizationId, { createdAt: then(9), status: "expired" });
   await invite(acme.organizationId, { createdAt: then(3), status: "pending" });                                                     // too recent to judge
-  await invite(acme.organizationId, { createdAt: then(40), status: "accepted", acceptedAt: then(39), acceptedBy: oid() });         // before the window
+  await invite(acme.organizationId, { createdAt: then(40), status: "accepted", acceptedAt: then(39), acceptedBy: oid() });         // before both windows
 
   const report = await launchMetricsReport(mongoLaunchMetricsSource, { days: 30, now: THEN });
-  assert.deepEqual(report.inviteAcceptance, { sent: 8, atLeast7DaysOld: 7, acceptedWithin7Days: 4, acceptedLater: 1, rate: 0.5714, target: 0.6 });
+  // The cohort is invitations created 37 to 7 days before: the one from 3 days before isn't in it yet.
+  assert.deepEqual(report.inviteAcceptance, { sent: 7, atLeast7DaysOld: 7, acceptedWithin7Days: 4, acceptedLater: 1, rate: 0.5714, target: 0.6 });
   assert.deepEqual(report.timeToFirstRfpOpened, {
-    accepted: 4, opened: 2, notYetOpened: 1, excludedOpenedBeforeAccepting: 1,
+    accepted: 4, opened: 2, notYetOpened: 1, excludedOpenedBeforeAccepting: 1, excludedAcceptedBeforeTracking: 0,
     medianSeconds: 360, openedWithin5Minutes: 1, targetMedianSeconds: 300,
   });
 });
@@ -190,8 +191,10 @@ test("support reads are checked against the grant each one names", async () => {
   const active = await grant(acmeId);
   const revoked = await grant(acmeId, { revokedAt: then(8), revokedBy: oid(acme.members.owner.userId) });
   const foreign = await grant(otherId);
-  const event = (organizationId: mongoose.Types.ObjectId, action: string, at: Date, metadata: Record<string, unknown>, reason = "rfp.read") =>
-    SecurityAuditEvent.collection.insertOne({ organizationId, actorUserId: dxg.agent, action, targetType: "organization", targetId: String(organizationId), decision: action.endsWith("used") ? "allowed" : "denied", reason, correlationId: randomMongoId(), metadata, createdAt: at });
+  const rfpId = oid();
+  const forOneRfp = await grant(acmeId, { proposalId: rfpId });
+  const event = (organizationId: mongoose.Types.ObjectId, action: string, at: Date, metadata: Record<string, unknown>, reason = "rfp.read", target: { type: string; id: string } = { type: "organization", id: String(organizationId) }) =>
+    SecurityAuditEvent.collection.insertOne({ organizationId, actorUserId: dxg.agent, action, targetType: target.type, targetId: target.id, decision: action.endsWith("used") ? "allowed" : "denied", reason, correlationId: randomMongoId(), metadata, createdAt: at });
 
   await event(acmeId, "support_access.used", then(9), { grantId: String(active) });
   await event(acmeId, "support_access.used", then(5), { grantId: String(active) });
@@ -201,11 +204,13 @@ test("support reads are checked against the grant each one names", async () => {
   await event(acmeId, "support_access.used", then(6), {});                                 // names no grant
   await event(acmeId, "support_access.used", then(6), { grantId: "not-an-id" });
   await event(acmeId, "support_access.used", then(45), { grantId: String(active) });       // before the window
+  await event(acmeId, "support_access.used", then(6), { grantId: String(forOneRfp) }, "rfp.read", { type: "proposal", id: String(rfpId) });
+  await event(acmeId, "support_access.used", then(6), { grantId: String(forOneRfp) }, "rfp.read", { type: "proposal", id: String(oid()) });   // a grant for a different RFP
   await event(acmeId, "support_access.denied", then(4), { operation: "rfp.list" }, "no_active_grant");
   await event(otherId, "support_access.denied", then(4), { operation: "rfp.list" }, "no_active_grant");
 
   const report = await launchMetricsReport(mongoLaunchMetricsSource, { days: 30, now: THEN });
-  assert.deepEqual(report.supportAccessUnderGrant, { reads: 7, underActiveGrant: 2, withoutActiveGrant: 5, refusedWithoutGrant: 2, rate: 0.2857, target: 1 });
+  assert.deepEqual(report.supportAccessUnderGrant, { reads: 9, underActiveGrant: 3, withoutActiveGrant: 6, refusedWithoutGrant: 2, rate: 0.3333, target: 1 });
 });
 
 test("organizations with 2+ active users leaves out holding tenants, inactive organizations and staff", async () => {
