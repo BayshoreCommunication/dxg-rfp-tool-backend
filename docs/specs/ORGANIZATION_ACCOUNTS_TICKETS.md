@@ -3,7 +3,7 @@
 > Derived from [ORGANIZATION_ACCOUNTS_PRD.md](ORGANIZATION_ACCOUNTS_PRD.md) on 2026-10-29. Updated 2026-11-01 for DXG's decisions on Q1–Q7 (see [dxg-open-questions.html](dxg-open-questions.html)): ORG-110 and M5 are new, and ORG-107, ORG-203, ORG-301 and ORG-402 changed. Each ticket names the PRD requirement or DXG decision it satisfies.
 > Repos: **BE** = `dxg-rfp-tool-backend`, **DB** = `dxg-rfp-tool-dashboard`, **AD** = `dxg-rfp-tool-admin`.
 > Size is engineer-days: S ≤ 2, M 3–5, L 6–8. Anything larger was split. A ticket that says it's blocked by a question can't start until DXG/Bayshore answers that question.
-> Status updated 2026-11-09: each ticket ends with ✅ **Closed** (merged to `main`) or ⏳ **Open** with its target date. Closed status follows `PROJECT_STATE.md` ("Organization accounts").
+> Status updated 2026-11-11, about 14:40 BDT, from the pull-request lists of the three repositories (ORG-504). Each ticket ends with one of: ✅ **Closed** (every PR for the ticket is merged to `main`), ⏳ **PR open, merge pending** (built and reviewed by its agent, not merged), or ⏳ **Open** (not done). "Merged to `main`" does not mean deployed: nothing from M4, M5 or the launch gate has been promoted to `production` as part of this work. What is still owed before launch is in `PROJECT_STATE.md` ("Organization accounts", "Before launch").
 
 ## Summary
 
@@ -12,10 +12,10 @@
 | M1 Tenancy foundation | ORG-101 … ORG-110 | 4S 4M 2L | 28–44 / 36 | ✅ Closed (10/10) | Merged |
 | M2 People | ORG-201 … ORG-210 | 2S 7M 1L | 29–47 / 38 | ✅ Closed (10/10) | Merged |
 | M3 Entry paths and auth | ORG-301 … ORG-307 | 2S 5M | 17–29 / 23 | ✅ Closed (7/7) | Merged 2026-11-08 |
-| M4 Experience | ORG-401 … ORG-407 | 2S 4M 1L | 20–32 / 26 | ⏳ Open (4/7 closed: ORG-401, ORG-402, ORG-403, ORG-404) | Thu 12 Nov 2026, 16:00 BDT |
-| M5 Plans and shared resources | ORG-601 … ORG-607 | 1S 6M | 19–32 / 25.5 | ⏳ Open (2/7 closed: ORG-601, ORG-606) | Thu 12 Nov 2026, 16:00 BDT |
-| Launch gate | ORG-501 … ORG-505 | 4S 1M | 7–13 / 10 | ⏳ Open (0/5) | Thu 12 Nov 2026, 16:00 BDT (ORG-503: see Timeline) |
-| **Total** | **46** | 15S 27M 4L | **120–197 / ~158.5** (≈24–39 eng-weeks, midpoint ~32) | **29 closed, 17 open** | **Thu 12 Nov 2026, 16:00 BDT** |
+| M4 Experience | ORG-401 … ORG-407 | 2S 4M 1L | 20–32 / 26 | ✅ Closed (7/7) | Merged 2026-11-11 |
+| M5 Plans and shared resources | ORG-601 … ORG-607 | 1S 6M | 19–32 / 25.5 | ✅ Closed (7/7) | Merged 2026-11-11 |
+| Launch gate | ORG-501 … ORG-505 | 4S 1M | 7–13 / 10 | ⏳ 3/5 closed (ORG-501, ORG-502, ORG-505). Merge pending: ORG-504 (#130). Open: ORG-503 | Thu 12 Nov 2026, 16:00 BDT (ORG-503: see Timeline) |
+| **Total** | **46** | 15S 27M 4L | **120–197 / ~158.5** (≈24–39 eng-weeks, midpoint ~32) | **44 closed, 1 with a PR open and merge pending (ORG-504), 1 open (ORG-503)** | **Thu 12 Nov 2026, 16:00 BDT** |
 
 Midpoints use S = 1.5, M = 4, L = 7 days. This bottom-up figure is well above the PRD's first planning range (11–16 eng-weeks). That range left out frontend work on both apps (each screen is its own ticket here), the repository-scoping sweep across every Mongo read path (ORG-104), and per-ticket testing. DXG's 1 Nov decisions added 8 tickets: placing legacy customers (ORG-110), free-trial plan limits (ORG-601 … ORG-603) and shared templates and vendor list (ORG-604 … ORG-607). Treat **~32 eng-weeks** as the working estimate: about 4 months of calendar time with two engineers in parallel after M1. The PRD timeline has been updated to match.
 
@@ -23,19 +23,21 @@ Critical path: ORG-101 → ORG-102 → ORG-103 → ORG-104 → ORG-106 → ORG-1
 
 ## Timeline (set 2026-11-09)
 
+> **Note, 2026-11-11:** the fixed merge windows below were dropped on Wed 11 Nov to finish early. PRs were merged as they became ready, and the last backend PRs were stacked into one chain and merged in order (#126 → #127 → #128 → #129, then #130 for ORG-504). The plan below is kept as written on 9 Nov; the lane table and the ticket lines show the actual state.
+
 **Deadline: Thursday 12 Nov 2026, 16:00 BDT (10:00 UTC)** for every milestone. Planned from Mon 9 Nov 19:00 BDT, which left about 69 hours. ORG-403 and ORG-401 merged on Tue 10 Nov, ahead of their 13:00 window, leaving 17 open tickets of about 55 engineer-days at midpoint estimates, so they run as **four Claude agents in parallel**, one per lane. Each agent works one ticket at a time in its own worktree (`.worktrees/org-<ticket>`, branch `feat/org-<ticket>-<slug>`), using `/ticket ORG-xxx`, and opens one PR per repo per ticket.
 
 ### Lanes
 
 Lanes are split to keep dependencies inside a lane and to keep agents out of each other's files as much as possible.
 
-| Lane | Focus | Tickets in order | Repos | Midpoint days |
+| Lane | Focus | Tickets in order | Repos | Left (as of 11 Nov) |
 |---|---|---|---|---|
-| **Agent 1** | M4 trust: history, support grants, audit | ~~ORG-403~~ ✅ → ~~404~~ ✅ → 405 → 407 → 406 | BE, DB, AD | 13.5 left |
-| **Agent 2** | M4 dashboards, then templates UI | ~~ORG-401~~ ✅ → ~~402~~ ✅ → 605 | BE, DB | 11 left |
-| **Agent 3** | M5 plans and templates backend, metrics | ~~ORG-601~~ ✅ → 603 → 602 → 604 → 505 | BE, DB, AD | 15 |
-| **Agent 4** | M5 vendor list, then launch gate | ~~ORG-606~~ ✅ → 607 → 501 → 502 → 504 | BE, DB | 15 |
-| Human | Reviews and merges, external access | ORG-503 coordination, prod snapshot access for ORG-501 | — | — |
+| **Agent 1** | M4 trust: history, support grants, audit | ~~ORG-403~~ ✅ → ~~404~~ ✅ → ~~405~~ ✅ → ~~407~~ ✅ → ~~406~~ ✅ | BE, DB, AD | None left |
+| **Agent 2** | M4 dashboards, then templates UI | ~~ORG-401~~ ✅ → ~~402~~ ✅ → ~~605~~ ✅ | BE, DB | None left |
+| **Agent 3** | M5 plans and templates backend, metrics | ~~ORG-601~~ ✅ → ~~603~~ ✅ → ~~602~~ ✅ → ~~604~~ ✅ → ~~505~~ ✅ | BE, DB, AD | None left |
+| **Agent 4** | M5 vendor list, then launch gate | ~~ORG-606~~ ✅ → ~~607~~ ✅ → ~~501~~ ✅ → ~~502~~ ✅ → 504 (PR #130 open) | BE, DB | ORG-504 merge left |
+| Human | Reviews and merges, external access | ORG-503 coordination (open), prod snapshot access for the ORG-501 rehearsal (still owed) | — | — |
 
 Cross-lane dependencies: ORG-605 (Agent 2) waits on ORG-604 (Agent 3, merged Thu 00:00). Everything else depends only on its own lane or on merged work.
 
@@ -228,13 +230,13 @@ Thu 10:00–14:00 QA: `npm run ci` in all three repos on `main`, the backend int
 - Admin-app routes that read customer RFP data require an active matching grant for the signed-in `admins` account. Every use writes an audit event (agent, grant, object).
 - AC: an expired or revoked grant is refused immediately. Reading ticket content in `supportDesk` still works without a grant, but reading the RFP behind a ticket requires one.
 
-**ORG-405 · Support grants UI (customer side)** · DB · S · P0-9 · blocked by: ORG-404 · ⏳ **Open** (Agent 1 · merge Thu 00:00 BDT)
+**ORG-405 · Support grants UI (customer side)** · DB · S · P0-9 · blocked by: ORG-404 · ✅ **Closed** (merged Wed 11 Nov, dashboard PR #75)
 - In org settings: grant for the whole org or a picked RFP, set expiry, revoke, and see past grants with their Support activity.
 
-**ORG-406 · Support workspace changes (admin app)** · AD · M · P0-9 · blocked by: ORG-404 · ⏳ **Open** (Agent 1 · merge Thu 10:00 BDT)
+**ORG-406 · Support workspace changes (admin app)** · AD · M · P0-9 · blocked by: ORG-404 · ✅ **Closed** (merged Wed 11 Nov, admin PR #14)
 - "Granted to me" list with expiry. RFP and vendor views reachable only through a grant. Clear banner showing the grant scope and time left. The existing `clients` and `proposals` pages are changed to respect grants.
 
-**ORG-407 · Org audit log view** · BE + DB · M · P0-10 · blocked by: ORG-203, ORG-206, ORG-208, ORG-404 · ⏳ **Open** (Agent 1 · merge Thu 00:00 BDT)
+**ORG-407 · Org audit log view** · BE + DB · M · P0-10 · blocked by: ORG-203, ORG-206, ORG-208, ORG-404 · ✅ **Closed** (merged Wed 11 Nov, backend PR #127 and dashboard PR #78)
 - Audit events for every action listed in PRD P0-10, on `SecurityAuditEvent` / the PG audit chain.
 - Admin view under `/settings/audit` with filters for user, action and date, plus CSV export.
 - AC: each audited action has a test asserting the event is written. Members can't read other orgs' events (covered by the isolation suite).
@@ -248,44 +250,44 @@ Thu 10:00–14:00 QA: `npm run ci` in all three repos on `main`, the backend int
 - Legacy holding tenants are exempt.
 - AC: the third create is refused, and so is a concurrent double-create at the limit (race test). Each gated route is refused on free and allowed after a plan change (the test enumerates the routes). Deleting a proposal doesn't free a slot.
 
-**ORG-602 · Locked states and upgrade prompts** · DB · M · DXG decision Q2 · blocked by: ORG-601 · ⏳ **Open** (Agent 3 · merge Wed 13:00 BDT)
+**ORG-602 · Locked states and upgrade prompts** · DB · M · DXG decision Q2 · blocked by: ORG-601 · ✅ **Closed** (merged Wed 11 Nov, dashboard PR #76)
 - Proposal-limit counter ("1 of 2 proposals used") and a clear message on the create button at the limit.
 - Vendor responses tab and the proposal intelligence pages show a locked state with the response count and an upgrade prompt ("Contact us" until paid plans exist), instead of an error.
 - AC: Playwright on a free org covers the limit, the locked tabs, and unlocking after a plan change.
 
-**ORG-603 · Plan management in the admin app** · AD + BE · S · DXG decision Q2 · blocked by: ORG-601 · ⏳ **Open** (Agent 3 · merge Wed 13:00 BDT)
+**ORG-603 · Plan management in the admin app** · AD + BE · S · DXG decision Q2 · blocked by: ORG-601 · ✅ **Closed** (merged Wed 11 Nov, backend PR #124 and admin PR #13)
 - DXG staff view and change an organization's plan, with an audit event for each change. Shows proposals created against the limit.
 
-**ORG-604 · Proposal templates backend** · BE · M · DXG decision Q4 · blocked by: ORG-104, ORG-601 · ⏳ **Open** (Agent 3 · merge Thu 00:00 BDT)
+**ORG-604 · Proposal templates backend** · BE · M · DXG decision Q4 · blocked by: ORG-104, ORG-601 · ✅ **Closed** (merged Wed 11 Nov, PR #125)
 - `ProposalTemplate` (org, owner, scope personal|organization, title, content snapshot, presentation layout, publishedBy, archived). Save from a proposal (content and layout, no vendors, responses or dates). Create a proposal from a template, which counts toward the plan limit.
 - Org-scope publish, unpublish and archive by Owner and Admin. Personal templates are visible only to their owner. Viewers can't use templates. Audit events for publish and archive.
 - AC: isolation suite covers templates. Policy tests per role. A proposal created from a template is owned by its creator and lands on their team (ORG-202).
 
-**ORG-605 · Templates UI** · DB · M · DXG decision Q4 · blocked by: ORG-604 · ⏳ **Open** (Agent 2 · merge Thu 10:00 BDT)
+**ORG-605 · Templates UI** · DB · M · DXG decision Q4 · blocked by: ORG-604 · ✅ **Closed** (merged Wed 11 Nov, dashboard PR #77)
 - "Save as template" on a proposal (personal, or organization for Owner and Admin). Template picker at the start of proposal creation, beside the two existing layouts. Template management list under org settings.
 
 **ORG-606 · Organization vendor list backend** · BE · M · DXG decision Q4 · blocked by: ORG-104 · ✅ **Closed** (merged Tue 10 Nov, PR #121)
 - `OrganizationVendor` (org, company, category, contacts [name, email], addedBy, archived). CRUD by Owner, Admin and Team Manager. Read by every non-viewer member. Search by company and category. Audit events for edits.
 - AC: isolation suite covers the vendor list. Vendors never see it through the submission link.
 
-**ORG-607 · Vendor list UI and picking vendors when sending** · DB · M · DXG decision Q4 · blocked by: ORG-606 · ⏳ **Open** (Agent 4 · merge Wed 13:00 BDT)
+**ORG-607 · Vendor list UI and picking vendors when sending** · DB · M · DXG decision Q4 · blocked by: ORG-606 · ✅ **Closed** (merged Wed 11 Nov, dashboard PR #74)
 - Vendor list page under org settings (add, edit, archive, search, paste-import of contacts). When sending a proposal, pick vendors and contacts from the list or type new ones, with an option to save a new vendor to the list if the user's role can edit it.
 
 ## Launch gate
 
-**ORG-501 · Migration rehearsal on prod snapshot** · BE · M · blocked by: ORG-107, ORG-109 · ⏳ **Open** (Agent 4 · merge Thu 00:00 BDT)
+**ORG-501 · Migration rehearsal on prod snapshot** · BE · M · blocked by: ORG-107, ORG-109 · ✅ **Closed** (merged Wed 11 Nov, PR #128) as a rehearsal on a generated fixture in local Docker (up to 150 customers), by the owner's decision of 10 Nov. **Still owed:** the rehearsal on a restored production snapshot that this ticket names has not been run; it is a go/no-go step in the cutover runbook
 - Restore a snapshot of prod Mongo + PG into an isolated environment (credentials via Secrets Manager), then run dry-run → apply → verify → rollback → verify, and record timings for the maintenance window.
 
-**ORG-502 · Cutover and rollback runbook** · BE · S · blocked by: ORG-501 · ⏳ **Open** (Agent 4 · merge Thu 10:00 BDT)
+**ORG-502 · Cutover and rollback runbook** · BE · S · blocked by: ORG-501 · ✅ **Closed** (merged Wed 11 Nov, PR #129). Written from the local rehearsal; seven steps are marked for the operator to confirm against production
 - `docs/runbooks/ORG_TENANCY_CUTOVER.md`: pause the worker and dispatcher, drain the outbox, migrate, verify, resume, smoke test. The rollback trigger and its steps are already rehearsed (ORG-501).
 
-**ORG-503 · External pen test** · — · S (coordination) · blocked by: M1–M4 · ⏳ **Open** (internal review Thu 14:00 BDT; external test date set by the vendor)
+**ORG-503 · External pen test** · — · S (coordination) · blocked by: M1–M4 · ⏳ **Open**. Per the owner it closes on an internal security review plus a booked external test date. As of 11 Nov neither has happened: the internal review has not been done and no external test date is booked
 - Scope: tenant isolation, role escalation, invite/token handling, support grants, 2FA bypass. Any high finding blocks launch.
 
-**ORG-504 · Docs and decisions** · BE · S · ⏳ **Open** (Agent 4 · Thu 14:00 BDT)
+**ORG-504 · Docs and decisions** · BE · S · ⏳ **PR open (#130), merge pending**
 - `DECISIONS.md` entries: per-customer tenancy with legacy holding tenants, scoped policy, support-grant model, auth-provider choice, and plan entitlements by proposals created. Update `DATABASE.md`, `API.md`, `PROJECT_STATE.md`.
 
-**ORG-505 · Launch metrics instrumentation** · BE · S · ⏳ **Open** (Agent 3 · merge Thu 10:00 BDT)
+**ORG-505 · Launch metrics instrumentation** · BE · S · ✅ **Closed** (merged Wed 11 Nov, PR #126). Queries, staff endpoint and report script; no admin-app screen
 - Queries and dashboard for the PRD success metrics: invite acceptance, time from invite to first RFP opened, orgs with 2+ users, support access under a grant, orphan count.
 
 ---
