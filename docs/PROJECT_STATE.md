@@ -426,12 +426,18 @@ security review plus a booked external pen test.
 | M1 Tenancy foundation | ORG-101 … 110 | Closed (merged). Scoped access policy, repository sweep with a CI guard, RLS alignment, signup creates an organization, legacy holding tenants + verification and nightly orphan check, cross-tenant isolation suite, legacy-customer placement with journaled rollback. |
 | M2 People | ORG-201 … 210 | Closed (merged). Teams, RFP team assignment, invitations (capped, team-aware, Google accept) and emails, accept-invite page, membership APIs, offboarding reassignment, RFP sharing, Users/Teams settings and the RFP access panel (share, team, reassign owner). |
 | M3 Entry paths and auth | ORG-301 … 307 | Closed (merged). Sign-up with organization onboarding, Google + Microsoft + company OIDC SSO (email-first discovery, Require SSO), TOTP 2FA and org-mandatory 2FA with admin reset, DNS TXT domain verification, domain-match access requests (2026-11-08), session hardening on membership changes. |
-| M4 Experience | ORG-401 … 407 | Open, due Thu 12 Nov 2026 16:00 BDT; 2 of 7 closed. ORG-403 (status history) merged: derived, stored lifecycle stage (draft, sent, receiving responses, under review, awarded, archived), append-only transitions, "Mark as awarded" plus comparison-selection awards (DECISIONS 2026-11-09), status-history endpoint, backfill (merged 2026-11-10, PR #117). ORG-401 (scoped dashboard list + summary with stage, owner, team, event-date and venue-city filters; summary property-tested against the list; p95 ≤ 136 ms on 5k RFPs) merged 2026-11-10 (PR #119). Open: role dashboards (ORG-402, next), support access grants (backend, customer UI, admin workspace), org audit log view. |
-| M5 Plans and shared resources | ORG-601 … 607 | Open, due Thu 12 Nov 2026 16:00 BDT. Not started, except that DXG's pricing corpus, expert rules and knowledge are now shared with every organization (2026-11-01). Plan entitlements, templates and the org vendor list remain. |
+| M4 Experience | ORG-401 … 407 | Open, due Thu 12 Nov 2026 16:00 BDT; 4 of 7 closed. ORG-403 (status history) merged: derived, stored lifecycle stage (draft, sent, receiving responses, under review, awarded, archived), append-only transitions, "Mark as awarded" plus comparison-selection awards (DECISIONS 2026-11-09), status-history endpoint, backfill (merged 2026-11-10, PR #117). ORG-401 (scoped dashboard list + summary with stage, owner, team, event-date and venue-city filters; summary property-tested against the list; p95 ≤ 136 ms on 5k RFPs) merged 2026-11-10 (PR #119). ORG-404 (support access grants backend) merged 2026-11-10 (PR #123): Owner/Admin grant, list and revoke RFPilot Support access per RFP or organization (7-day default, 30-day cap); grant-gated admin routes for RFPs, vendor responses and the RFPs behind a helpdesk ticket; every read audited in the customer's organization (DECISIONS 2026-11-10). Known gap, not part of ORG-404: the helpdesk inbox still shows agents only their own organization's tickets. ORG-402 (role dashboards UI for Planner, Team Manager, Admin/Owner and Viewer) merged 2026-11-10 (dashboard PR #73). Open: support grants customer UI (ORG-405) and admin workspace (ORG-406), org audit log view (ORG-407). |
+| M5 Plans and shared resources | ORG-601 … 607 | Open, due Thu 12 Nov 2026 16:00 BDT. 2 of 7 closed: ORG-606 (organization vendor list backend, PR #121) and ORG-601 (plan entitlements and the free-trial limit, PR #122) merged 2026-11-10. Also, DXG's pricing corpus, expert rules and knowledge are now shared with every organization (2026-11-01). Open: plan management in the admin app (ORG-603), locked states (ORG-602), templates (ORG-604, ORG-605), vendor list UI (ORG-607). |
 | Launch gate | ORG-501 … 505 | Open, due Thu 12 Nov 2026 16:00 BDT: prod-snapshot migration rehearsal, cutover/rollback runbook, external pen test, docs, launch metrics. |
 
 Operational notes:
 
+- Plan entitlements (ORG-601, built on a branch): every organization is on
+  `free_trial` (2 RFPs created, vendor responses and RFP intelligence locked)
+  unless its `plan` is `full_access`. Until ORG-603 ships the admin screen, a
+  plan is changed in MongoDB by hand. Before this reaches production, set
+  DXG's own organization and any customer DXG wants unlocked to `full_access`,
+  or they lose vendor responses and RFP intelligence on deploy.
 - Production now requires `OTP_PEPPER`, `TWO_FACTOR_ENCRYPTION_KEY` and
   `SSO_SECRET_KEY` (see `.env.example` and `docs/SSO_SETUP.md`); the API fails
   at startup without the pepper. The AWS deploy passes the 2FA and SSO keys to
@@ -440,6 +446,7 @@ Operational notes:
   see `ORGANIZATION_SETUP_REQUIRED`; place them with the ORG-110 script.
 - A user who still owns RFPs cannot be deleted; reassign first.
 - `scripts/purgeTestAccounts` removes test sign-ups (2026-11-08).
+- M5, ORG-606 (2026-11-10): the organization vendor list backend is built: `OrganizationVendor` in Mongo and `/api/v1/vendor-list` (list, search, categories, add, edit, archive, restore) with audit events; Owner, Admin and Team Manager edit, Planners read, Viewers have no access; covered by the cross-tenant isolation suite. The settings page and the picker when sending an RFP are ORG-607.
 
 ### Onboarding funnel report (2026-09-13)
 

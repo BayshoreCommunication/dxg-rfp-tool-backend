@@ -27,6 +27,7 @@ import {
 import { authenticate, authorizeAction, type AuthRequest } from "../middleware/auth";
 import { uploadVendorDocs } from "../middleware/upload";
 import { requirePublicGrant } from "../middleware/publicAccess";
+import { requirePlanFeature } from "../src/modules/entitlements/http/planGate";
 import {
   grantAndIpIdentity,
   securityRateLimit,
@@ -150,6 +151,12 @@ router.post(
   createVendorResponseRevisionDraft,
 );
 /* Protected routes — planner dashboard */
+/* Reading and exporting received responses is a plan feature (ORG-601). The vendor routes
+   above and the planner's send-side routes (questionnaire publish, rollout, recording a response
+   on a vendor's behalf) stay open on every plan: submissions are accepted and stored, and open
+   up when the organization's plan changes. Deleting by id also stays open: it returns no
+   response content, and an organization may always remove data it holds. */
+const responsesPlan = requirePlanFeature("vendorResponses");
 /* Authentication runs before the upload middleware so an anonymous caller can
    never stream files onto disk. */
 router.post(
@@ -178,6 +185,7 @@ router.get(
   "/",
   authenticate,
   authorizeAction("vendor-response:read"),
+  responsesPlan,
   getVendorResponses,
 );
 router.delete(
@@ -191,12 +199,14 @@ router.get(
   "/proposals",
   authenticate,
   authorizeAction("vendor-response:read"),
+  responsesPlan,
   getVendorResponseProposals,
 );
 router.get(
   "/:id/submission-detail",
   authenticate,
   authorizeAction("vendor-response:read"),
+  responsesPlan,
   validateResponseId,
   getVendorSubmissionDetail,
 );
@@ -204,6 +214,7 @@ router.get(
   "/:id/submission-export",
   authenticate,
   authorizeAction("vendor-response:read"),
+  responsesPlan,
   validateResponseId,
   exportVendorSubmissionVersion,
 );
@@ -211,6 +222,7 @@ router.get(
   "/:id",
   authenticate,
   authorizeAction("vendor-response:read"),
+  responsesPlan,
   validateResponseId,
   getVendorResponseById,
 );
@@ -218,6 +230,7 @@ router.patch(
   "/:id/read",
   authenticate,
   authorizeAction("vendor-response:read"),
+  responsesPlan,
   validateResponseId,
   markVendorResponseRead,
 );

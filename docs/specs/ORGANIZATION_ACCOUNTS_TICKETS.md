@@ -12,7 +12,7 @@
 | M1 Tenancy foundation | ORG-101 … ORG-110 | 4S 4M 2L | 28–44 / 36 | ✅ Closed (10/10) | Merged |
 | M2 People | ORG-201 … ORG-210 | 2S 7M 1L | 29–47 / 38 | ✅ Closed (10/10) | Merged |
 | M3 Entry paths and auth | ORG-301 … ORG-307 | 2S 5M | 17–29 / 23 | ✅ Closed (7/7) | Merged 2026-11-08 |
-| M4 Experience | ORG-401 … ORG-407 | 2S 4M 1L | 20–32 / 26 | ⏳ Open (3/7 closed: ORG-401, ORG-403, ORG-404) | Thu 12 Nov 2026, 16:00 BDT |
+| M4 Experience | ORG-401 … ORG-407 | 2S 4M 1L | 20–32 / 26 | ⏳ Open (4/7 closed: ORG-401, ORG-402, ORG-403, ORG-404) | Thu 12 Nov 2026, 16:00 BDT |
 | M5 Plans and shared resources | ORG-601 … ORG-607 | 1S 6M | 19–32 / 25.5 | ⏳ Open (2/7 closed: ORG-601, ORG-606) | Thu 12 Nov 2026, 16:00 BDT |
 | Launch gate | ORG-501 … ORG-505 | 4S 1M | 7–13 / 10 | ⏳ Open (0/5) | Thu 12 Nov 2026, 16:00 BDT (ORG-503: see Timeline) |
 | **Total** | **46** | 15S 27M 4L | **120–197 / ~158.5** (≈24–39 eng-weeks, midpoint ~32) | **29 closed, 17 open** | **Thu 12 Nov 2026, 16:00 BDT** |
@@ -32,7 +32,7 @@ Lanes are split to keep dependencies inside a lane and to keep agents out of eac
 | Lane | Focus | Tickets in order | Repos | Midpoint days |
 |---|---|---|---|---|
 | **Agent 1** | M4 trust: history, support grants, audit | ~~ORG-403~~ ✅ → ~~404~~ ✅ → 405 → 407 → 406 | BE, DB, AD | 13.5 left |
-| **Agent 2** | M4 dashboards, then templates UI | ~~ORG-401~~ ✅ → 402 → 605 | BE, DB | 11 left |
+| **Agent 2** | M4 dashboards, then templates UI | ~~ORG-401~~ ✅ → ~~402~~ ✅ → 605 | BE, DB | 11 left |
 | **Agent 3** | M5 plans and templates backend, metrics | ~~ORG-601~~ ✅ → 603 → 602 → 604 → 505 | BE, DB, AD | 15 |
 | **Agent 4** | M5 vendor list, then launch gate | ~~ORG-606~~ ✅ → 607 → 501 → 502 → 504 | BE, DB | 15 |
 | Human | Reviews and merges, external access | ORG-503 coordination, prod snapshot access for ORG-501 | — | — |
@@ -213,7 +213,7 @@ Thu 10:00–14:00 QA: `npm run ci` in all three repos on `main`, the backend int
 - One list endpoint with filters (status, owner, team, event date range, venue city) plus a summary endpoint (active RFPs, responses received, awarded this quarter). Both go through `rfpListScope`.
 - AC: the summary always equals aggregating the list (property test). p95 < 300 ms on an org with 5k RFPs, with indexes added.
 
-**ORG-402 · Role dashboards UI** · DB · L · P0-8 · blocked by: ORG-401 · ⏳ **Open** (Agent 2 · merge Thu 00:00 BDT)
+**ORG-402 · Role dashboards UI** · DB · L · P0-8 · blocked by: ORG-401 · ✅ **Closed** (merged Tue 10 Nov, dashboard PR #73)
 - Planner: My RFPs by status, deadlines, new submissions. Team Manager: adds a team tab with a planner filter. Admin: org-wide view with all filters and the summary row.
 - Planners see a one-line note that their organization's Admins can see their drafts (DXG decision Q6).
 - AC: Playwright as each role. A Viewer sees a "Shared with me" view only, read-only, with no commenting (DXG decision Q3).

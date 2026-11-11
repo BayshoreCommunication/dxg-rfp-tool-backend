@@ -4,17 +4,21 @@ export const ORGANIZATION_ACTIONS = [
   "knowledge:read", "knowledge:write", "knowledge:approve",
   "vendor-response:read", "vendor-response:write",
   "organization:manage", "security:admin",
+  // ORG-606: the organization's shared vendor list (companies and contacts).
+  "vendor-list:read", "vendor-list:write",
 ] as const;
 export type OrganizationAction = (typeof ORGANIZATION_ACTIONS)[number];
 
 // Coarse capabilities only. Which proposals a role reaches is decided by rfpAccessPolicy.
+// Vendor list (DXG decision Q4, F6): Owner, Admin and Team Manager edit it, every role that can
+// create RFPs reads it, Viewers and knowledge roles don't see it.
 const roleActions: Record<string, readonly OrganizationAction[]> = {
-  owner: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "knowledge:write", "knowledge:approve", "vendor-response:read", "vendor-response:write", "organization:manage"],
-  team_manager: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read", "vendor-response:write"],
+  owner: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "knowledge:write", "knowledge:approve", "vendor-response:read", "vendor-response:write", "organization:manage", "vendor-list:read", "vendor-list:write"],
+  team_manager: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read", "vendor-response:write", "vendor-list:read", "vendor-list:write"],
   viewer: ["proposal:read", "vendor-response:read"],
-  planner: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read", "vendor-response:write"],
-  organization_admin: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "knowledge:write", "knowledge:approve", "vendor-response:read", "vendor-response:write", "organization:manage"],
-  dxg_producer: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read", "vendor-response:write"],
+  planner: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read", "vendor-response:write", "vendor-list:read"],
+  organization_admin: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "knowledge:write", "knowledge:approve", "vendor-response:read", "vendor-response:write", "organization:manage", "vendor-list:read", "vendor-list:write"],
+  dxg_producer: ["proposal:read", "proposal:write", "proposal:publish", "assistant:use", "knowledge:read", "vendor-response:read", "vendor-response:write", "vendor-list:read"],
   knowledge_editor: ["proposal:read", "knowledge:read", "knowledge:write"],
   knowledge_approver: ["proposal:read", "knowledge:read", "knowledge:write", "knowledge:approve"],
   dxg_admin: ORGANIZATION_ACTIONS,

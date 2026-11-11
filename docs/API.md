@@ -64,6 +64,20 @@ Team administration (ORG-201) lives in `routes/teamsRoute.ts`; rules in `src/mod
 - `POST /api/v1/teams/:teamId/members` `{ userId, isManager? }`, `PATCH /api/v1/teams/:teamId/members/:userId` `{ isManager }`, `DELETE /api/v1/teams/:teamId/members/:userId` — Owner/Admin only. Members must be active in the organization; a manager must hold the `team_manager` role (422 `TEAM_MANAGER_ROLE_REQUIRED`).
 - Proposal team (ORG-202): `POST /api/proposals` and copy put a new proposal on its creator's team when they're on exactly one active team (a client-sent `teamId` is ignored). `PUT /api/proposals/:id` with `teamId` (an active team in the organization, or `null`) changes it for anyone allowed to edit; anything else is 422 `TEAM_NOT_ASSIGNABLE`. Resending the current team's id is accepted even after that team is archived.
 
+## Organization vendor list (ORG-606)
+
+`routes/organizationVendorsRoute.ts`, rules in `src/modules/organizationVendors/application/manageOrganizationVendors.ts`. One shared list of vendor companies and contacts per organization (DXG decision Q4), for picking recipients when sending an RFP. Every route needs a signed-in member and acts on the caller's own organization only; another organization's vendor is 404 `VENDOR_NOT_FOUND`. No route accepts a public access grant, so a vendor's submission link never reaches the list. Roles (`authorizationPolicy.ts`): `vendor-list:write` for Owner, Admin and Team Manager; `vendor-list:read` for those plus Planner; a Viewer gets 403 on every route.
+
+A vendor is `{ id, company, category, contacts: [{ name, email }], addedBy, archived, archivedAt, createdAt, updatedAt }`.
+
+- `GET /api/v1/vendor-list?search=&category=&status=active|archived|all&limit=&offset=` returns `{ items, total, limit, offset }`, sorted by company. `search` matches part of the company or the category, ignoring case; `category` is an exact match, ignoring case. `status` defaults to `active`; `limit` defaults to 50 (max 200). Any other `status` is 400 `INVALID_VENDOR_STATUS`.
+- `GET /api/v1/vendor-list/categories` returns the distinct categories of active vendors, as `string[]`.
+- `GET /api/v1/vendor-list/:vendorId` returns one vendor, archived or not. A malformed id is 404, like a missing one.
+- `POST /api/v1/vendor-list` `{ company, category?, contacts? }` adds a vendor (201). `company` is 1 to 200 characters, `category` free text up to 80, `contacts` up to 50 `{ name?, email }` with a valid email, each email once per vendor (400 `INVALID_VENDOR_COMPANY`, `INVALID_VENDOR_CATEGORY`, `INVALID_VENDOR_CONTACTS`, `INVALID_VENDOR_CONTACT_EMAIL`, `DUPLICATE_VENDOR_CONTACT_EMAIL`). Emails are stored in lower case. Active company names are unique per organization, ignoring case (409 `VENDOR_COMPANY_TAKEN`).
+- `PATCH /api/v1/vendor-list/:vendorId` changes only the fields sent; `contacts` replaces the whole list (`[]` removes every contact; `null` is 400), and `category: ""` clears the category. Two people editing the same vendor at once: the last write wins. An archived vendor can't be edited (409 `VENDOR_ARCHIVED`).
+- `POST /api/v1/vendor-list/:vendorId/archive` and `/restore` take a vendor off the default list and put it back. Both are idempotent. Restoring is 409 `VENDOR_COMPANY_TAKEN` when an active vendor has taken the name. There is no hard delete.
+- Each add, edit, archive and restore writes a `SecurityAuditEvent` with `targetType: "organization_vendor"` (`organization_vendor.created`, `.updated`, `.archived`, `.restored`). The metadata records which fields changed and the contact count, never contact names or emails.
+
 ## Dashboard RFP queries (ORG-401)
 
 `routes/rfpDashboardRoute.ts`, rules in `src/modules/rfpDashboard/`. Both endpoints need `proposal:read` and return only what `rfpListScope` lets the member see: everything in the organization for Owners and Admins, their managed teams' RFPs for Team Managers, their own for Planners, plus anything shared with them. Filters only narrow that set. Saved copies are never listed.
@@ -108,6 +122,28 @@ Sharing (ORG-208) lives in `routes/rfpSharesRoute.ts`; rules in `src/modules/rfp
 - `PUT /api/v1/proposals/:proposalId/shares/:userId` `{ permission: "view" | "edit" }` grants or changes a share; `DELETE` revokes it. The member must be active in the same organization (404 `MEMBER_NOT_FOUND`, 409 `MEMBER_INACTIVE`); Viewers get view only (422 `VIEWER_VIEW_ONLY`). Grants and revocations write `proposal.share_granted` / `proposal.share_revoked` audit events.
 - A share reaches list, detail and vendor-response reads through `rfpListScope` and `canAccessRfp`; an edit share also allows edits.
 
+## Support access grants (ORG-404)
+
+Routes in `routes/supportAccessRoute.ts`; rules in `src/modules/supportAccess/`. RFPilot Support (DXG staff signed in to the admin app with an `admins` account) reads a customer organization's RFP data only under an active grant from that organization. A grant is to RFPilot Support as a whole, not to a named agent.
+
+Organization side (Owner and Admin only; other roles get the route guard's plain 403, and a staff account 403 `SUPPORT_GRANT_FORBIDDEN`):
+
+- `POST /api/v1/organization/support-grants` `{ proposalId?, expiresInDays? | expiresAt?, reason? }` creates a grant for one RFP (`proposalId`) or, without it, the whole organization. Expiry defaults to 7 days and is refused past 30 (400 `INVALID_GRANT_EXPIRY`). An RFP outside the organization is 404 `PROPOSAL_NOT_FOUND`.
+- `GET /api/v1/organization/support-grants?page=` lists active and past grants, newest first: `{ id, scope: "organization" | "rfp", rfp, reason, status: "active" | "expired" | "revoked", grantedBy, createdAt, expiresAt, revokedAt, revokedBy, activity: { useCount, lastUsedAt } }`.
+- `GET /api/v1/organization/support-grants/:grantId` adds `events`: what Support did under the grant (`{ at, agent: { id, label: "RFPilot Support" }, operation, rfp }`, newest 200). Staff are never shown by name.
+- `POST /api/v1/organization/support-grants/:grantId/revoke` ends a grant at once (409 `SUPPORT_GRANT_EXPIRED` if it already expired; revoking twice is a no-op). Another organization's grant is 404 `SUPPORT_GRANT_NOT_FOUND`.
+
+RFPilot Support side (staff role and an `admins` account; customers get the route guard's plain 403, and a member holding a staff role 403 `SUPPORT_ACCESS_FORBIDDEN`):
+
+- `GET /api/v1/admin/support-access/grants` is "granted to me": every organization's active grants with `organization`, `scope`, `rfp: { id }`, `expiresAt` and `secondsRemaining`. It carries no RFP content (titles come from the audited routes below), so it is not logged as a use.
+- `GET /api/v1/admin/support-access/organizations/:organizationId/rfps?page=&search=` lists the RFPs the active grants cover (all of them under an organization grant, otherwise only the granted RFPs).
+- `GET /api/v1/admin/support-access/organizations/:organizationId/rfps/:proposalId` returns the RFP, its owner and the `grant` it was read under (for the admin app's banner). `…/vendor-responses` lists that RFP's vendor responses (summary fields, no document links).
+- `GET /api/v1/admin/support/tickets/:ticketId/rfps` lists the requester's RFPs in the ticket's organization. Reading the ticket itself (`/api/v1/admin/support/tickets/:ticketId`) needs no grant; this does. The ticket is found the way the helpdesk finds it, which today means tickets in the agent's own organization only; a customer organization's ticket is 404 until the helpdesk inbox spans organizations.
+- No active grant in the organization: 403 `SUPPORT_GRANT_REQUIRED`, whether the organization exists or not. An RFP the active grants don't cover, or one that isn't in that organization: 404 `PROPOSAL_NOT_FOUND`. Grants are checked on every request, so expiry and revocation apply to the next call.
+- Every successful read writes a `support_access.used` audit event in the customer's organization (agent, `metadata.grantId`, target, `metadata.operation`: `rfp.list`, `rfp.read`, `vendor_responses.list`, `ticket.rfp.list`) before anything is returned; a refused one writes `support_access.denied`. Creating and revoking write `support_access.granted` / `support_access.revoked`.
+
+The older `/api/admin/proposals` and `/api/all-clients` routes are unchanged: they read only the signed-in admin's own organization.
+
 ## Two-factor authentication (ORG-303, ORG-304)
 
 Routes in `routes/twoFactorRoute.ts` (`/api/auth/2fa`) and `routes/organizationSecurityRoute.ts`; rules in `src/modules/twoFactor/`.
@@ -148,6 +184,20 @@ Routes under `/api/organization/profile`; rules in `src/modules/organizationProf
 - `POST /api/organization/onboarding/plan` `{ plan: "free_trial" }` (`organization:manage`) records the plan and moves on to `"team"`; allowed at the plan or team step, otherwise 409 `ONBOARDING_STEP_CONFLICT` with the current `onboardingStep`.
 - `POST /api/organization/onboarding/complete` (`organization:manage`) finishes onboarding from the team step (inviting is optional); repeating it once done is a no-op; earlier steps answer 409 `ONBOARDING_STEP_CONFLICT`.
 - Every profile and onboarding write answers the whole profile, as GET does, and is rate-limited (30 per 15 minutes).
+
+## Plans and entitlements (ORG-601)
+
+Rules in `src/modules/entitlements/`. Pricing is by RFPs created; the plan table (`domain/plans.ts`) is the only definition of a plan's limit and features. The server enforces it; the dashboard only reads it.
+
+- Plans: `free_trial` (2 RFPs created per organization, vendor responses and RFP intelligence locked) and `full_access` (no limit, both features; assigned by DXG staff until paid plans exist). `PLAN_FREE_TRIAL_PROPOSAL_LIMIT` overrides the free-trial limit. An absent or unknown plan value is treated as `free_trial`. Legacy holding tenants are exempt.
+- `GET /api/organization/entitlements` (any member) answers `{ data: { plan, exempt, proposals: { created, limit, remaining, canCreate }, features: { vendorResponses, proposalIntelligence } } }` for the caller's organization; `limit` and `remaining` are `null` when there is no limit.
+- Creating an RFP (`POST /api/proposals`, `POST /api/proposals/:id/copy`) takes one slot in the same MongoDB transaction that inserts it. `Organization.proposalsCreated` counts every RFP created through the API since ORG-601 and never goes down, so archiving or deleting one doesn't free a slot. With no slot left the answer is 403 `{ success: false, code: "PLAN_LIMIT_REACHED", message, plan, limit, created }`.
+- Locked features answer 403 `{ success: false, code: "PLAN_FEATURE_LOCKED", message, title, status, plan, feature }` before the handler runs, whatever ids the request carries:
+  - `vendorResponses`: `GET /api/vendor-responses`, `/proposals`, `/:id`, `/:id/submission-detail`, `/:id/submission-export` and `PATCH /:id/read`.
+  - `proposalIntelligence`: every route under `/api/v1/proposals/:proposalId/intelligence/` (requirement sets, evidence extraction, vendor intelligence, evaluation, comparisons, clarifications, reports, retention and legal holds). No request can queue an intelligence job for a locked organization.
+  - Both: `/api/v1/vendor-responses/:responseId/analysis-*` (jobs, runs, export).
+- Open on every plan: the vendor submission routes (workspace, drafts, finalize, receipt, revisions), questionnaire publish and rollout, recording a response on a vendor's behalf, deleting a response by id, and public-access grants. Submissions received while locked are stored and readable once the plan changes. The planner's notification for a response received while locked says only that a vendor responded (`metadata: { planLocked: true, feature: "vendorResponses" }`).
+- `tests/plan-entitlements.test.js` lists every route of these routers with the feature it requires; a new route fails that test until it is classified.
 
 ## Sign-in: Google, Microsoft and company SSO
 

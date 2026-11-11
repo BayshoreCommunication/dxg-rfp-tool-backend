@@ -8,7 +8,7 @@ const path = require("node:path");
 // is a variable built from the tenant or the access policy, `scope-exempt: <reason>` for paths that
 // are deliberately not request-scoped (vendor token portal, cron, scripts).
 const ROOTS = ["src", "controller", "routes", "middleware", "utils"];
-const MODELS = ["Proposal", "VendorResponse", "VendorSubmission", "VendorSubmissionVersion", "VendorSubmissionDraft", "ProposalCanonicalSnapshot", "Notification", "PublicAccessGrant", "Team", "TeamMembership", "RfpShare", "ProposalStatusTransition"];
+const MODELS = ["Proposal", "VendorResponse", "VendorSubmission", "VendorSubmissionVersion", "VendorSubmissionDraft", "ProposalCanonicalSnapshot", "Notification", "PublicAccessGrant", "Team", "TeamMembership", "RfpShare", "ProposalStatusTransition", "OrganizationVendor", "SupportAccessGrant"];
 const METHODS = ["find", "findOne", "findById", "findOneAndUpdate", "findByIdAndUpdate", "findOneAndDelete", "findByIdAndDelete", "updateOne", "updateMany", "deleteOne", "deleteMany", "countDocuments", "exists", "aggregate", "distinct", "replaceOne", "bulkWrite"];
 const SCOPE_TOKENS = ["organizationId", "organizationMongoId", "tenantFilter(", "tenantObjectId(", "scopeProposalFilter(", "rfpListScope(", "scoped("];
 // Whole files that are deliberately not request-scoped. Keep this list short and the reasons exact.

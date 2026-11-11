@@ -60,12 +60,16 @@ const grantAppRole = async (migrationUrl: string) => {
 
 type Role = "owner" | "organization_admin" | "team_manager" | "planner" | "viewer";
 type SeedUser = { key: string; name: string; email: string; role: Role };
-type SeedOrganization = { name: string; slug: string; users: SeedUser[] };
+// plan and proposalsCreated mirror what ORG-601 enforces: Northwind is unlocked, Contoso is a
+// free trial with one of its two RFPs used, so limits and locked features can be seen locally.
+type SeedOrganization = { name: string; slug: string; plan: "free_trial" | "full_access"; proposalsCreated: number; users: SeedUser[] };
 
 const ORGANIZATIONS: SeedOrganization[] = [
   {
     name: "Northwind Events",
     slug: "northwind-events",
+    plan: "full_access",
+    proposalsCreated: 3,
     users: [
       { key: "nw-owner", name: "Olivia Owner", email: "owner.northwind@example.com", role: "owner" },
       { key: "nw-admin", name: "Adam Admin", email: "admin.northwind@example.com", role: "organization_admin" },
@@ -79,6 +83,8 @@ const ORGANIZATIONS: SeedOrganization[] = [
     // appear for a Northwind account.
     name: "Contoso Live",
     slug: "contoso-live",
+    plan: "free_trial",
+    proposalsCreated: 1,
     users: [
       { key: "ct-owner", name: "Casey Contoso", email: "owner.contoso@example.com", role: "owner" },
       { key: "ct-planner", name: "Chris Contoso", email: "planner.contoso@example.com", role: "planner" },
@@ -136,7 +142,10 @@ const main = async () => {
 const seedCustomers = async () => {
   const ids = new Map<string, mongoose.Types.ObjectId>();
   for (const seed of ORGANIZATIONS) {
-    const organization = await Organization.create({ name: seed.name, slug: seed.slug, kind: "customer", onboardingStep: "done" });
+    const organization = await Organization.create({
+      name: seed.name, slug: seed.slug, kind: "customer", onboardingStep: "done",
+      plan: seed.plan, proposalsCreated: seed.proposalsCreated,
+    });
     ids.set(seed.slug, organization._id as mongoose.Types.ObjectId);
     for (const person of seed.users) {
       // save() hashes the password (userModel pre-save hook).
@@ -206,7 +215,7 @@ const printAccounts = () => {
                       manager.northwind@example.com   Team Manager (Corporate Events)
                       planner.northwind@example.com   Planner (Corporate Events)
                       viewer.northwind@example.com    Viewer
-    Contoso Live      owner.contoso@example.com       Owner
+    Contoso Live      owner.contoso@example.com       Owner (free trial: 1 of 2 RFPs used)
                       planner.contoso@example.com     Planner
   Admin app (http://localhost:3101)
                       superadmin@example.com          super_admin

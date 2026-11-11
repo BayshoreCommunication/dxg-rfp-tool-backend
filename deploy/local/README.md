@@ -40,6 +40,10 @@ Password for every account: `Rfpilot-local-1`.
 Northwind has three RFPs (two drafts by the Planner, one published by the Owner) and Contoso
 has one draft. Anything from Contoso showing up for a Northwind account is a tenant leak.
 
+Northwind is on the `full_access` plan. Contoso is on the free trial with one of its two RFPs
+used, so it can create one more and its vendor responses and RFP intelligence are locked
+(ORG-601). A stack seeded before ORG-601 has both on the free trial: `npm run stack:reset`.
+
 ## How it is wired
 
 - `stack.env` is the backend's whole environment, loaded through `RFPILOT_ENV_FILE`
