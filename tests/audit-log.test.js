@@ -252,6 +252,8 @@ test("filters by user, action, category and date, and pages by cursor without ga
   } while (cursor);
   assert.deepEqual(seen, rows.filter((r) => r.action !== "auth.refresh.rotated").reverse().map((r) => r.id));
 
+  const signedIn = (await log.list(actor("owner"), { action: "auth.session.created" })).events[0];
+  assert.deepEqual(signedIn.target, { type: "refresh_session", id: null, name: null });
   const member = (await log.list(actor("owner"), { action: "auth.login.failed" })).events[0];
   assert.deepEqual(member.actor, { kind: "member", id: PLANNER, name: "pat@example.test", email: "pat@example.test" });
   assert.equal(member.target.name, "pat@example.test");

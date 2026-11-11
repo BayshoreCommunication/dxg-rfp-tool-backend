@@ -327,3 +327,23 @@ test("notification socket tickets are short-lived and cannot act as access token
   });
   assert.throws(() => verifyNotificationSocketTicket(access.accessToken));
 });
+
+// ORG-407: the audit log shows these events to the organization's Owner and Admins.
+test("revoking a session by id is audited only when a session was revoked", async () => {
+  const { manager, calls } = setup();
+  const session = await manager.begin({ account, correlationId: "c1" });
+  const audits = () => calls.filter(([kind, value]) => kind === "audit" && value.action === "auth.session.revoked").map(([, value]) => value);
+
+  // An id that isn't one of the caller's sessions (unknown, or another organization's).
+  assert.equal(await manager.revokeSession({ userId: "u1", organizationId: "o1", sessionId: "someone-elses-session", correlationId: "c2", reason: "user_revoked_device" }), 0);
+  assert.deepEqual(audits(), []);
+
+  assert.equal(await manager.revokeSession({ userId: "u1", organizationId: "o1", sessionId: session.sessionId, correlationId: "c3", reason: "user_revoked_device" }), 1);
+  assert.equal(audits().length, 1);
+  assert.equal(audits()[0].targetId, session.sessionId);
+  assert.equal(audits()[0].decision, "revoked");
+
+  // Revoking it again changes nothing and writes nothing.
+  assert.equal(await manager.revokeSession({ userId: "u1", organizationId: "o1", sessionId: session.sessionId, correlationId: "c4" }), 0);
+  assert.equal(audits().length, 1);
+});

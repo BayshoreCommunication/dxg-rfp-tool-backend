@@ -129,7 +129,8 @@ export const createAuditLog = (deps: { events: AuditEventReader }) => {
         decision: event.decision,
         reason: visibleReason(event.reason),
         actor: actorOf(event),
-        target: { type: event.targetType, id: event.targetId, name: targetMember ? targetMember.name || targetMember.email : null },
+        // A session id means nothing to a reader, and it is never needed to act on the event.
+        target: { type: event.targetType, id: event.targetType === "refresh_session" ? null : event.targetId, name: targetMember ? targetMember.name || targetMember.email : null },
         details: visibleDetails(event.metadata),
       };
     });
