@@ -8,8 +8,8 @@
 //   npm run rehearsal:run -- --run-id=<id> [--out=<dir>] [--from-slug=dxg]
 //
 // It mutates whatever database the environment points at. It prints the targets (never
-// credentials) first, and refuses anything that is not on loopback unless the operator repeats
-// the target: --confirm-target=<mongo-host>/<database>. docs/runbooks/ORG_TENANCY_REHEARSAL.md
+// credentials) first, and refuses anything but the local rehearsal stack unless the operator
+// repeats both targets: --confirm-target=<mongo-host>/<database>,<postgres-host>/<database>. docs/runbooks/ORG_TENANCY_REHEARSAL.md
 // has the full procedure, including the restored production snapshot.
 import "../config/env";
 import { spawnSync } from "node:child_process";
@@ -37,10 +37,10 @@ const fromSlug = args.get("--from-slug") || process.env.DEFAULT_ORGANIZATION_SLU
 const outDir = path.resolve(args.get("--out") || path.join(os.tmpdir(), `org-501-${runId}`));
 const mongoUri = process.env.MONGODB_URL || process.env.MONGO_URL;
 const postgresUri = process.env.POSTGRES_MIGRATION_URL || process.env.POSTGRES_URL;
-const LOCAL_HOSTS = /^(localhost|127\.0\.0\.1|\[::1\])$/;
+const LOCAL_HOSTS = /^(localhost|127\.0\.0\.1)$/;
 
 const help = () => process.stdout.write(`Usage:
-  npm run rehearsal:run -- --run-id=<id> [--out=<dir>] [--from-slug=dxg] [--confirm-target=<mongo-host>/<database>]
+  npm run rehearsal:run -- --run-id=<id> [--out=<dir>] [--from-slug=dxg] [--confirm-target=<mongo-host>/<database>,<postgres-host>/<database>]
 
 Runs the whole migration round trip against the databases in the environment and writes each
 step's output and a timing summary to --out (mode 0700; the files hold ids, no content).
@@ -61,11 +61,16 @@ const targets = () => {
   // An SRV or multi-host URI is not a plain URL; the first host is enough to name the target.
   const mongoHost = mongoUri.replace(/^mongodb(\+srv)?:\/\//, "").replace(/^[^@/]*@/, "").split(/[/?]/)[0];
   const postgres = postgresUri ? new URL(postgresUri) : null;
+  const postgresTarget = postgres ? `${postgres.host}${postgres.pathname}` : "none";
+  // Only the rehearsal stack itself runs unconfirmed: its env file and its two loopback ports.
+  const rehearsalStack = process.env.RFPILOT_ENV_FILE?.trim() === "deploy/rehearsal/rehearsal.env"
+    && /^(localhost|127\.0\.0\.1):37017$/.test(mongoHost)
+    && postgres !== null && LOCAL_HOSTS.test(postgres.hostname) && postgres.port === "35432";
   return {
     mongo: `${mongoHost}/${DATABASE_NAME}`,
-    postgres: postgres ? `${postgres.host}${postgres.pathname} as ${postgres.username}` : "not configured (Postgres steps are skipped)",
-    local: mongoHost.split(",").every((host) => LOCAL_HOSTS.test(host.replace(/:\d+$/, "")))
-      && (!postgres || LOCAL_HOSTS.test(postgres.hostname)),
+    postgres: postgres ? `${postgresTarget} as ${postgres.username}` : "not configured (Postgres steps are skipped)",
+    confirmation: `${mongoHost}/${DATABASE_NAME},${postgresTarget}`,
+    rehearsalStack,
   };
 };
 
@@ -175,8 +180,8 @@ const main = async () => {
   if (args.has("--help")) return help();
   const target = targets();
   process.stdout.write(`Rehearsal targets\n  MongoDB:    ${target.mongo}\n  PostgreSQL: ${target.postgres}\n  run id:     ${runId}\n  output:     ${outDir}\n`);
-  if (!target.local && args.get("--confirm-target") !== target.mongo) {
-    throw new Error(`These are not loopback databases. If this is an isolated restore and never production, repeat the target: --confirm-target=${target.mongo}`);
+  if (!target.rehearsalStack && args.get("--confirm-target") !== target.confirmation) {
+    throw new Error(`These are not the rehearsal stack's databases. If both are an isolated restore and never production, repeat both targets: --confirm-target=${target.confirmation}`);
   }
   fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
   const snapshotFile = path.join(outDir, "visibility-before.json");
@@ -232,7 +237,12 @@ const main = async () => {
     // "nothing customer-owned is left there" check fails by design and it exits 1.
     const afterRollback = run("07-verify-after-rollback", "verify:customer-organizations", [`--before=${snapshotFile}`, `--from-slug=${fromSlug}`], 1,
       "exit 1 is expected: customers are back in the shared organization");
-    summary.verifierChecksAfterRollback = afterRollback?.checks ?? null;
+    const checks = (afterRollback?.checks ?? null) as { visibilityUnchanged?: unknown; noCustomerRecordsInSharedOrganization?: unknown } | null;
+    summary.verifierChecksAfterRollback = checks;
+    // Exit 1 alone could be a crash: require the report, and the two answers a rollback must give.
+    if (checks?.visibilityUnchanged !== true || checks.noCustomerRecordsInSharedOrganization !== false) {
+      throw new Error(`Step '07-verify-after-rollback' did not report what a rollback should (visibility unchanged, customers back in the shared organization). See ${path.join(outDir, "07-verify-after-rollback.out")}. Nothing after it was run.`);
+    }
     summary.restoredByRollback = differences(before, await stateOf(sharedId, pool));
     summary.afterRollback = await stateOf(sharedId, pool);
 

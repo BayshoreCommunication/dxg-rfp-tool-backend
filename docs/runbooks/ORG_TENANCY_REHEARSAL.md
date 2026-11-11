@@ -284,18 +284,19 @@ For cutover day, before the real run. It needs an isolated restore that nothing 
    and role.
 3. Do not set `RFPILOT_ENV_FILE`, and run from a checkout with no `.env` or `.env.local`
    (`config/env.ts` loads them otherwise).
-4. Check the targets. `rehearsal:run` refuses any database that is not on loopback unless the
-   target it printed is repeated back: `--confirm-target=<mongo-host>/<database>`. Read the host
-   it prints and confirm it is the restore, not production, before adding the flag.
+4. Check the targets. `rehearsal:run` refuses anything but the local rehearsal stack unless
+   both targets it printed are repeated back:
+   `--confirm-target=<mongo-host>/<database>,<postgres-host>/<database>`. Read both hosts and
+   confirm each is the restore, not production, before adding the flag.
 5. Mark the platform organization if the snapshot predates it
    (`npm run platform:mark-organization -- --slug=dxg`, then `--apply`).
 6. Run it, with every environment variable supplied by `asm-exec` (see the `aws-secrets-manager`
    skill for the exact invocation):
-   `npm run rehearsal:run -- --run-id=prod-rehearsal-<date> --out=<private dir> --confirm-target=<host>/<db>`.
+   `npm run rehearsal:run -- --run-id=prod-rehearsal-<date> --out=<private dir> --confirm-target=<mongo-host>/<db>,<postgres-host>/<db>`.
    It stops at the first step that exits unexpectedly and says which.
 7. Read `<out>/summary.json`. It passes when: `unchangedByDryRun`, `restoredByRollback`,
    `sameAsFirstApply` and `bystanderUntouched` are all `[]`; steps 04, 09 and 11 exit 0; step 07
-   exits 1 with `visibilityUnchanged: true`; `customersConsideredOnRerun` is 0; and
+   exits 1 with `visibilityUnchanged: true` (the runner stops if it does not); `customersConsideredOnRerun` is 0; and
    `holdingTenantsFinal` shows as many holding tenants as customers, each with exactly one
    active Planner, none with an Owner, none inactive, none `notExemptFromPlanLimits`.
 8. Take the maintenance window from the step times: snapshot + dry run + apply + verify, plus

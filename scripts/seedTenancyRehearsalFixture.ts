@@ -232,7 +232,7 @@ const seed = async (superuser: Pool, customers: number, heavyProposals: number) 
     staffRows.expert_rules.push([crypto.randomUUID(), shared.pgId, `rehearsal-rule-${i}`, `Rehearsal rule ${i}`, String(userId)]);
     staffRows.pricing_regional_factors.push([crypto.randomUUID(), shared.pgId, `Rehearsal market ${i}`, 1.1, String(userId)]);
   }
-  legacy.mongo.users.push(...staff);
+  (legacy.mongo.users ??= []).push(...staff);
 
   const mongoCounts: Record<string, number> = {};
   for (const batches of [legacy.mongo, other.mongo]) {

@@ -70,6 +70,7 @@ test('before the migration the shared organization is full of customer records',
 // ORG-501: production runs the verifier as the table owner, which is no superuser, so forced
 // row-level security hides rfpilot.organizations until the session names an organization. The
 // check used to look the organization up first, find nothing, and pass without reading a row.
+// The app role stands in for the owner here: both are bound by the same policies.
 test('the Postgres check sees customer rows as a role bound by row-level security', async () => {
   await ensureAppRole();
   const bound = new Pool({ connectionString: TEST_APP_ROLE_URL, max: 1 });
