@@ -346,4 +346,12 @@ test("the export applies the list's filters and tenant, and escapes member-contr
   assert.equal(events.calls.at(-1).filter.before, undefined);
   await assert.rejects(() => log.exportCsv(actor("owner"), { from: "nope" }), (error) => error.status === 400);
   assert.equal(auditCsv([]).trimEnd().split("\r\n").length, 1);
+
+  // Customer-facing wording: internal "proposal" names become "rfp"; stored values are untouched.
+  const shared = createAuditLog({ events: fakeEvents([event({ action: "proposal.share_granted", targetType: "proposal", targetId: "f".repeat(24), decision: "created", reason: "shared", metadata: { proposalId: "f".repeat(24), domain: "proposals.example.test" } })]) });
+  const sharedCsv = (await shared.exportCsv(actor("owner"), {})).csv.split("\r\n")[1];
+  assert.ok(sharedCsv.includes('"rfp"'));
+  assert.ok(sharedCsv.includes("rfpId: " + "f".repeat(24)));
+  assert.ok(sharedCsv.includes("domain: proposals.example.test"));
+  assert.equal(sharedCsv.replace("proposals.example.test", "").includes("proposal"), false);
 });

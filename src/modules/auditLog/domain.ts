@@ -197,6 +197,10 @@ export const AUDIT_CSV_HEADER = [
 
 const categoryLabel = (key: AuditCategory) => AUDIT_CATEGORIES.find((category) => category.key === key)?.label ?? key;
 
+// The file is read by customers, who know an RFP as an "RFP": internal names (target type
+// `proposal`, key `proposalId`) are reworded. Recorded values are left exactly as stored.
+const rfpWording = (name: string) => name.replace(/proposal/g, "rfp").replace(/Proposal/g, "Rfp");
+
 export const auditCsv = (events: readonly AuditEventView[]): string => {
   const rows = events.map((event) => [
     event.occurredAt,
@@ -206,10 +210,10 @@ export const auditCsv = (events: readonly AuditEventView[]): string => {
     event.actor.name,
     event.actor.kind === "member" ? event.actor.email : "",
     event.actor.kind,
-    event.target.type,
+    rfpWording(event.target.type),
     event.target.name ?? event.target.id ?? "",
     event.reason ?? "",
-    Object.entries(event.details).map(([key, value]) => `${key}: ${value}`).join("; "),
+    Object.entries(event.details).map(([key, value]) => `${rfpWording(key)}: ${value}`).join("; "),
     event.id,
   ]);
   return [AUDIT_CSV_HEADER, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
