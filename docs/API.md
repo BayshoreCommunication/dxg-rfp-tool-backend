@@ -163,6 +163,17 @@ RFPilot Support side (staff role and an `admins` account; customers get the rout
 - No active grant in the organization: 403 `SUPPORT_GRANT_REQUIRED`, whether the organization exists or not. An RFP the active grants don't cover, or one that isn't in that organization: 404 `PROPOSAL_NOT_FOUND`. Grants are checked on every request, so expiry and revocation apply to the next call.
 - Every successful read writes a `support_access.used` audit event in the customer's organization (agent, `metadata.grantId`, target, `metadata.operation`: `rfp.list`, `rfp.read`, `vendor_responses.list`, `ticket.rfp.list`) before anything is returned; a refused one writes `support_access.denied`. Creating and revoking write `support_access.granted` / `support_access.revoked`.
 
+### Launch metrics (ORG-505)
+
+`GET /api/v1/admin/launch-metrics?days=` returns the PRD success metrics for Organization Accounts as counts, rates and durations across all customer organizations (`routes/launchMetricsRoute.ts`, `src/modules/launchMetrics`). It carries no names, emails, ids or RFP content. Staff role and an `admins` account only: customers get the route guard's plain 403, and a member holding a staff role 403 `LAUNCH_METRICS_FORBIDDEN`. Each read writes a `platform.launch_metrics.read` audit event in the staff organization before anything is returned. `days` (1 to 365, default 30; otherwise 400 `INVALID_WINDOW`) is the window for the first three figures; the last two are as of now. `npm run report:launch-metrics -- [--days=30]` prints the same report for an operator with database access.
+
+- `inviteAcceptance` `{ sent, atLeast7DaysOld, acceptedWithin7Days, acceptedLater, rate, target: 0.6 }`: of the invitations created in the window that are at least 7 days old, the share accepted within 7 days of creation. Revoked and expired invitations stay in the denominator.
+- `timeToFirstRfpOpened` `{ accepted, opened, notYetOpened, excludedOpenedBeforeAccepting, medianSeconds, openedWithin5Minutes, targetMedianSeconds: 300 }`: for invitations accepted in the window, the median time from acceptance to that member's first RFP opened in the organization (`OrganizationMembership.firstRfpOpenedAt`, stamped once by an authenticated `GET /api/proposals/:id`). Members who haven't opened one are counted, not timed.
+- `supportAccessUnderGrant` `{ reads, underActiveGrant, withoutActiveGrant, refusedWithoutGrant, rate, target: 1 }`: of the `support_access.used` audit events in the window, the share whose `metadata.grantId` names a grant in the same organization that was active at that moment. `refusedWithoutGrant` counts `support_access.denied` attempts, which returned no data.
+- `organizationsWithTwoOrMoreActiveUsers` `{ organizations, withTwoOrMoreActiveUsers, rate, target: 0.25 }`: active organizations (not legacy holding tenants) with at least one active member in a customer role, and how many have two or more. Staff memberships don't count.
+- `orphanedRfps` `{ total, organizations, target: 0 }`: RFPs whose owner is not an active member of the RFP's organization, from the same check the nightly job runs.
+- A `rate` or `medianSeconds` is `null` when there is nothing to measure yet.
+
 The older `/api/admin/proposals` and `/api/all-clients` routes are unchanged: they read only the signed-in admin's own organization.
 
 ## Two-factor authentication (ORG-303, ORG-304)
