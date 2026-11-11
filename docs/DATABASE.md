@@ -1,6 +1,6 @@
 # Database and Storage
 
-> Purpose: data ownership, consistency, and migration rules. Last updated: 2026-11-09. Owner: backend engineering.
+> Purpose: data ownership, consistency, and migration rules. Last updated: 2026-11-11. Owner: backend engineering.
 
 ## Ownership
 
@@ -15,7 +15,7 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 
 ## Migrations
 
-- PostgreSQL migrations are ordered under `src/platform/postgres/migrations/` and run through the repository migration command.
+- PostgreSQL migrations are ordered under `migrations/postgres/` (`NNN_name.up.sql` with a matching `.down.sql`) and run through the repository migration command.
 - Canonical proposal migration is non-destructive: immutable Mongo snapshots, dry-run by default, explicit tenant/run IDs, and no legacy overwrite.
 - Cross-store deletion uses purge propagation and must preserve audit-safe evidence without retaining deleted business content.
 - Schema changes that alter ownership or trust boundaries require an entry in [DECISIONS.md](DECISIONS.md).
@@ -37,6 +37,41 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 - `Proposal.teamId` (optional, indexed with `organizationId`) is the team whose managers reach the proposal.
 - `RfpShare` (organization, proposal, user, `permission` view|edit, `grantedBy`; unique per proposal and user). Revoking deletes the row (the audit event keeps the record); a deactivated member's rows are kept and ignored, because actor lookups run for active members only.
 
+## Organization Accounts: what M4, M5 and the launch gate added
+
+Everything these milestones added is in MongoDB. None of them added a PostgreSQL migration (the latest is still 065) or a PostgreSQL table. The sections below cover each item once:
+
+| Collection or field | Ticket | Section |
+|---|---|---|
+| `Proposal.lifecycle`, `ProposalStatusTransition` | ORG-403 | RFP lifecycle |
+| `SupportAccessGrant` | ORG-404 | Support access grants |
+| `SecurityAuditEvent` index change, `auth.login.failed` action | ORG-407 | Organization audit log |
+| `Organization.plan`, `Organization.proposalsCreated` | ORG-601, ORG-603 | Plans |
+| `OrganizationVendor` | ORG-606 | Organization vendor list |
+| `ProposalTemplate` | ORG-604 | RFP templates |
+| `OrganizationMembership.firstRfpOpenedAt`, `SecurityAuditEvent` index `{ action, createdAt }` | ORG-505 | Launch metrics |
+
+## RFP lifecycle
+
+- `Proposal.lifecycle` (ORG-403) holds the derived stage plus the facts it comes from: `revision` (the compare-and-set token), `stage`, `status` as of the last transition, `changedAt`, the award (`awardedAt`, `awardedByUserId`, `awardSource` manual|comparison, `awardDecisionId`), `reviewStartedAt`, `vendorsInvited` (distinct recipients of `vendor:submit` grants) and `vendorsResponded` (VendorResponse rows). Indexed as `{ organizationId, lifecycle.stage, updatedAt }`.
+- `ProposalStatusTransition` is append-only (the model throws on every update path). Each row has the organization, proposal, from/to stage and status, actor type and user, reason and time. Rows outlive a deleted proposal and go only with their organization.
+- The lifecycle write and its transition commit in one Mongo transaction, guarded by the proposal's status, draft and archive flags and `lifecycle.revision`.
+- `npm run backfill:proposal-lifecycle` is dry-run by default. `--apply` recomputes counts, fills a missing review start or comparison award from Postgres `comparison_runs`/`comparison_decisions` under the organization's RLS context, and appends a `backfill` transition only where the stage or status changed.
+
+## Support access grants
+
+- `SupportAccessGrant` (ORG-404; MongoDB): organization, `proposalId` (null for the whole organization), `grantedBy`, optional `reason`, `expiresAt` (the model refuses more than 30 days from creation), `revokedAt`, `revokedBy`. Rows are never deleted. Indexed `{ organizationId, createdAt }` and `{ revokedAt, expiresAt }`. No Postgres table.
+- Support activity is not a separate collection: it is the `SecurityAuditEvent` rows with action `support_access.used` in the customer's organization, joined to a grant by `metadata.grantId`.
+
+## Organization audit log
+
+- No new collection (ORG-407). The audit view reads `SecurityAuditEvent` for one organization, newest first, paged by `(createdAt, _id)`. The index `{ organizationId, createdAt }` is extended to `{ organizationId: 1, createdAt: -1, _id: -1 }` so that order comes from the index; Mongoose builds the new index on start-up (automatic index builds are not switched off anywhere in this repository) but never drops one, so the old two-field index (now a redundant prefix) stays on a deployed database until someone drops it by hand. Rows stay append-only; the view never writes. `auth.login.failed` is a new action on the same collection.
+
+## Plans
+
+- `Organization.plan` (`free_trial` | `full_access`, default `free_trial`) and `Organization.proposalsCreated` (ORG-601). The counter is incremented by one conditional update inside the transaction that inserts a proposal (`claimProposalSlot`), and nothing decrements it. Organizations that existed before ORG-601 start from the stored value, which is 0 unless set: their earlier proposals are not counted.
+- Plan management (ORG-603) adds no collection or field. A plan change and its `organization.plan_changed` `SecurityAuditEvent` are written in one MongoDB transaction in the organization whose plan changed; the plan history the admin app shows is read from those events.
+
 ## Organization vendor list
 
 - `OrganizationVendor` (organization, `company`, `category`, `contacts` [`name`, `email`], `addedBy`, `archived`, `archivedAt`), ORG-606. Active company names are unique per organization, ignoring case (partial unique index with a case-insensitive collation); an archived name can be reused. Read and written only by `src/modules/organizationVendors`, always with `organizationId` in the filter (the tenant-scope guard covers the model). Legacy holding tenants have no vendor list: their members can't sign in.
@@ -45,27 +80,10 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 
 - `ProposalTemplate` (organization, `ownerUserId`, `scope` personal|organization, `title`, `description`, `content`, `presentationLayout`, `publishedAt`, `publishedBy`, `archived`, `archivedAt`), ORG-604. `content` is a snapshot of an RFP's content sections built by `src/modules/proposals/domain/templateSnapshot.ts` (no vendors, responses, dates, files, contacts or system fields); it is customer content and is never copied across organizations. Read and written only by `src/modules/proposalTemplates`, always with `organizationId` in the filter (the tenant-scope guard covers the model); the list query also carries the visibility rule (own personal templates, published organization templates, and for Owners and Admins every organization template). An RFP started from a template is inserted by the proposals module's `createOwned`, never by this module.
 
-## Support access grants
-
-- `SupportAccessGrant` (ORG-404; MongoDB): organization, `proposalId` (null for the whole organization), `grantedBy`, optional `reason`, `expiresAt` (the model refuses more than 30 days from creation), `revokedAt`, `revokedBy`. Rows are never deleted. Indexed `{ organizationId, createdAt }` and `{ revokedAt, expiresAt }`. No Postgres table.
-- Support activity is not a separate collection: it is the `SecurityAuditEvent` rows with action `support_access.used` in the customer's organization, joined to a grant by `metadata.grantId`.
-
 ## Launch metrics
 
 - ORG-505 adds no collection or table. `OrganizationMembership.firstRfpOpenedAt` (null until the member first opens an RFP in that organization, then never changed; like `lastSignedInAt` it doesn't bump `version`) is the only new field. `SecurityAuditEvent` gains the index `{ action, createdAt }` for counting one action across organizations.
 - The report (`src/modules/launchMetrics/mongoLaunchMetricsSource.ts`) reads `Invitation`, `OrganizationMembership`, `Organization`, `SecurityAuditEvent` and `SupportAccessGrant` across all organizations and projects dates and counts only.
-
-## Organization audit log
-
-- No new collection (ORG-407). The audit view reads `SecurityAuditEvent` for one organization, newest first, paged by `(createdAt, _id)`. The index `{ organizationId, createdAt }` is extended to `{ organizationId: 1, createdAt: -1, _id: -1 }` so that order comes from the index; Mongoose builds the new index on start-up, and the old two-field index (now a redundant prefix) can be dropped from deployed databases by hand. Rows stay append-only; the view never writes. `auth.login.failed` is a new action on the same collection.
-
-## RFP lifecycle
-
-- `Proposal.lifecycle` (ORG-403) holds the derived stage plus the facts it comes from: `revision` (the compare-and-set token), `stage`, `status` as of the last transition, `changedAt`, the award (`awardedAt`, `awardedByUserId`, `awardSource` manual|comparison, `awardDecisionId`), `reviewStartedAt`, `vendorsInvited` (distinct recipients of `vendor:submit` grants) and `vendorsResponded` (VendorResponse rows). Indexed as `{ organizationId, lifecycle.stage, updatedAt }`.
-- `ProposalStatusTransition` is append-only (the model throws on every update path). Each row has the organization, proposal, from/to stage and status, actor type and user, reason and time. Rows outlive a deleted proposal and go only with their organization.
-- The lifecycle write and its transition commit in one Mongo transaction, guarded by the proposal's status, draft and archive flags and `lifecycle.revision`.
-- `npm run backfill:proposal-lifecycle` is dry-run by default. `--apply` recomputes counts, fills a missing review start or comparison award from Postgres `comparison_runs`/`comparison_decisions` under the organization's RLS context, and appends a `backfill` transition only where the stage or status changed.
-- `Organization.plan` (`free_trial` | `full_access`, default `free_trial`) and `Organization.proposalsCreated` (ORG-601). The counter is incremented by one conditional update inside the transaction that inserts a proposal (`claimProposalSlot`), and nothing decrements it. Organizations that existed before ORG-601 start from the stored value, which is 0 unless set: their earlier proposals are not counted.
 
 ## Pricing data
 
