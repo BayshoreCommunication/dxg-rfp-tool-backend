@@ -176,6 +176,17 @@ RFPilot Support side (staff role and an `admins` account; customers get the rout
 
 The older `/api/admin/proposals` and `/api/all-clients` routes are unchanged: they read only the signed-in admin's own organization.
 
+## Organization audit log (ORG-407)
+
+`routes/auditLogRoute.ts`, rules in `src/modules/auditLog/`. Read-only view of the caller's own organization's `SecurityAuditEvent` rows (PRD P0-10). Owner and Admin only (`audit:read` in `authorizationPolicy.ts`); every other role gets the route guard's plain 403. The organization always comes from the session, never from the request. Open on every plan.
+
+- `GET /api/v1/organization/audit-events?actor=&action=&category=&from=&to=&limit=&cursor=` returns `{ events, nextCursor }`, newest first. `actor` is a member's user id, or `support` for RFPilot Support activity. `action` is one catalogued action, `category` one of the keys below. `from` is inclusive and `to` exclusive (ISO timestamps); a bare `YYYY-MM-DD` is read as UTC, and a bare `to` date includes that whole day. `limit` defaults to 50 and is capped at 100. A bad filter is 400 `AUDIT_FILTER_INVALID`.
+- An event is `{ id, occurredAt, action, label, category, decision, reason, actor, target: { type, id, name }, details }`. `actor` is `{ kind: "member", id, name, email }`, `{ kind: "support", id, name: "RFPilot Support" }` (staff are never shown by name; the id is the stable agent reference ORG-404 uses), `{ kind: "unknown", id, name: "Unknown user" }` for an id that isn't a member of the organization, or `{ kind: "system" }`. `target.name` is filled only when the target is a member. `details` is an allowlist of scalar metadata (`role`, `previousRole`, `setting`, `from`, `to`, `scope`, `operation`, `domain`, `grantId`, ...); anything else a writer stored, and any value containing an email address, is left out. `reason` is shown only when it is a machine code.
+- `GET /api/v1/organization/audit-events/filters` returns `{ categories: [{ key, label, actions: [{ value, label }] }], supportActor }` for the filter controls.
+- `GET /api/v1/organization/audit-events/export` takes the same filters (no paging) and returns `text/csv`, newest first, up to 5,000 rows; `X-Audit-Export-Truncated: true` means the date range should be narrowed. Cells that a spreadsheet would run as a formula (leading `=`, `+`, `-`, `@`, tab or carriage return) are prefixed with an apostrophe. Limited to 20 exports per user per 15 minutes.
+- The view is an allowlist (`AUDIT_CATALOG` in `src/modules/auditLog/domain.ts`): sign-in (`auth.session.created`, `auth.login.failed`, session revocations), two-factor, invitations and access requests, members and roles, teams, RFP sharing, support access, organization settings (profile, domains, SSO) and the vendor list. An action that isn't catalogued (for example `auth.refresh.rotated`) is never returned. **A new audited action must be added to the catalog to appear**, with `staffActor` if its actor is an `admins` account.
+- `auth.login.failed` (new in ORG-407) is written when a password sign-in fails on a known account (`reason`: `wrong_password` or `account_blocked`), in that account's organization. It carries the user id, never the email or password. An unknown email has no organization and writes nothing.
+
 ## Two-factor authentication (ORG-303, ORG-304)
 
 Routes in `routes/twoFactorRoute.ts` (`/api/auth/2fa`) and `routes/organizationSecurityRoute.ts`; rules in `src/modules/twoFactor/`.

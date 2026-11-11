@@ -55,6 +55,10 @@ PostgreSQL tenant tables use forced row-level security. Cross-store records use 
 - ORG-505 adds no collection or table. `OrganizationMembership.firstRfpOpenedAt` (null until the member first opens an RFP in that organization, then never changed; like `lastSignedInAt` it doesn't bump `version`) is the only new field. `SecurityAuditEvent` gains the index `{ action, createdAt }` for counting one action across organizations.
 - The report (`src/modules/launchMetrics/mongoLaunchMetricsSource.ts`) reads `Invitation`, `OrganizationMembership`, `Organization`, `SecurityAuditEvent` and `SupportAccessGrant` across all organizations and projects dates and counts only.
 
+## Organization audit log
+
+- No new collection or index (ORG-407). The audit view reads `SecurityAuditEvent` by `{ organizationId, action, createdAt }` (added in ORG-404) and `{ organizationId, createdAt }`, newest first, paged by `(createdAt, _id)`. Rows stay append-only; the view never writes. `auth.login.failed` is a new action on the same collection.
+
 ## RFP lifecycle
 
 - `Proposal.lifecycle` (ORG-403) holds the derived stage plus the facts it comes from: `revision` (the compare-and-set token), `stage`, `status` as of the last transition, `changedAt`, the award (`awardedAt`, `awardedByUserId`, `awardSource` manual|comparison, `awardDecisionId`), `reviewStartedAt`, `vendorsInvited` (distinct recipients of `vendor:submit` grants) and `vendorsResponded` (VendorResponse rows). Indexed as `{ organizationId, lifecycle.stage, updatedAt }`.
