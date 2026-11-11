@@ -182,6 +182,7 @@ The same at both sizes (`summary.json` of each run):
 | 5 | Low | The scripts' stdout is not pure JSON | Open |
 | 6 | Low | A lost Postgres connection crashes the script instead of recording a failed customer | Open |
 | 7 | Info | The verifier exits 1 after a successful rollback | For ORG-502 |
+| 8 | Medium | The verifier still reports `postgres: "checked"` when the shared organization has no row in Postgres | Open |
 
 1. **Verifier blind in Postgres (high, fixed).** `findCustomerLeftovers` looked up the shared
    organization in `rfpilot.organizations` before naming an organization for the session. That
@@ -225,6 +226,13 @@ The same at both sizes (`summary.json` of each run):
    so nothing had changed. In an apply the customer in flight would be left journaled as
    `started`, which a re-run or rollback is written to pick up; that was not exercised.
 7. **Exit code after rollback (info).** See "Verifier results".
+8. **No Postgres row, no warning (medium, open).** The remainder of finding 1: if the shared
+   organization was never projected into Postgres, or the verifier is pointed at the wrong
+   database, it reads nothing there and still prints `"postgres": "checked"` with no leftovers.
+   Before trusting that line at cutover, confirm the organization exists in
+   `rfpilot.organizations` (the dry run's per-customer Postgres counts being non-empty shows it
+   does). Fixing it means changing a return shape that ORG-110 also uses, so it is left for a
+   follow-up.
 
 Environment, not the migration: the local stacks probe their containers every 2 s. Under load a
 timed-out probe killed a Postgres backend, and Postgres restarted itself in the middle of a
