@@ -225,16 +225,16 @@ Pricing is by proposals created. Every new organization starts on a free trial.
 
 DXG wants every role in from day one so permissions are never retrofitted. We keep that scope but ship it in internal milestones so the risky tenancy change lands and gets checked before UI work piles on top of it.
 
-| Milestone | Contents | Rough effort* |
-|---|---|---|
-| **M1. Tenancy foundation** | P0-1 (signup creates org, legacy holding-tenant migration, placing legacy users), P0-2 policy + repository scoping, isolation test suite | 5.5–9 eng-weeks |
-| **M2. People** | P0-4 invites, P0-6 users/teams, P0-7 ownership/sharing/reassignment | 6–9 eng-weeks |
-| **M3. Entry paths and auth** | P0-3 signup flow, P0-5 domain requests, P0-11 Microsoft + TOTP 2FA | 3.5–6 eng-weeks |
-| **M4. Experience** | P0-8 dashboards, P0-9 support grants + admin-app changes, P0-10 audit view + status history | 4–6.5 eng-weeks |
-| **M5. Plans and shared resources** | P0-12 free-trial limits and locked features, P0-13 org templates and vendor list | 4–6.5 eng-weeks |
-| **Launch gate** | Pen test, migration rehearsal on prod snapshot, cutover runbook, rollback rehearsal | 1.5–2.5 eng-weeks |
+| Milestone | Contents | Rough effort* | Status (2026-11-09) |
+|---|---|---|---|
+| **M1. Tenancy foundation** | P0-1 (signup creates org, legacy holding-tenant migration, placing legacy users), P0-2 policy + repository scoping, isolation test suite | 5.5–9 eng-weeks | Closed |
+| **M2. People** | P0-4 invites, P0-6 users/teams, P0-7 ownership/sharing/reassignment | 6–9 eng-weeks | Closed |
+| **M3. Entry paths and auth** | P0-3 signup flow, P0-5 domain requests, P0-11 Microsoft + TOTP 2FA | 3.5–6 eng-weeks | Closed |
+| **M4. Experience** | P0-8 dashboards, P0-9 support grants + admin-app changes, P0-10 audit view + status history | 4–6.5 eng-weeks | Due Thu 12 Nov 2026, 16:00 BDT |
+| **M5. Plans and shared resources** | P0-12 free-trial limits and locked features, P0-13 org templates and vendor list | 4–6.5 eng-weeks | Due Thu 12 Nov 2026, 16:00 BDT |
+| **Launch gate** | Pen test, migration rehearsal on prod snapshot, cutover runbook, rollback rehearsal | 1.5–2.5 eng-weeks | Due Thu 12 Nov 2026, 16:00 BDT |
 
-\*Bottom-up from the 46 tickets in [ORGANIZATION_ACCOUNTS_TICKETS.md](ORGANIZATION_ACCOUNTS_TICKETS.md): 24–39 eng-weeks, midpoint ~32, or about 4 months of calendar time with two engineers working in parallel after M1. Bayshore to confirm (source spec Q1).
+\*Bottom-up from the 46 tickets in [ORGANIZATION_ACCOUNTS_TICKETS.md](ORGANIZATION_ACCOUNTS_TICKETS.md): 24–39 eng-weeks, midpoint ~32, or about 4 months of calendar time with two engineers working in parallel after M1. On 2026-11-09 the remaining milestones were set to finish by Thu 12 Nov 2026, 16:00 BDT, with four agents working in parallel; the day-by-day plan and its risks are in the ticket breakdown's "Timeline" section.
 
 **Dependencies:** Microsoft Entra app registration (DXG tenant/admin); DNS access for domain verification testing; pen-test vendor booking; a prod Mongo + PG snapshot for migration rehearsal (prod access goes through Secrets Manager).
 
