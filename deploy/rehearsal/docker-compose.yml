@@ -1,0 +1,35 @@
+# Isolated stack for rehearsing the tenancy migration (ORG-501): MongoDB and PostgreSQL only.
+# The migration and its verifier use neither Redis nor mail, so nothing else is started.
+#
+# Always run under its own compose project name, so it never shares containers, networks or
+# volumes with the local stack (rfpilotlocal, 4xxxx ports) or the integration stack
+# (rfpilotintg, 5xxxx ports):
+#
+#   docker compose -p rfpilot501 -f deploy/rehearsal/docker-compose.yml up -d --wait
+#   docker compose -p rfpilot501 -f deploy/rehearsal/docker-compose.yml down -v
+#
+# (Wrapped by `npm run rehearsal:up` / `npm run rehearsal:down`.) Ports are bound to loopback and
+# sit in the 3xxxx range. Data lives in the containers and goes with `down -v`.
+services:
+  mongo:
+    # Single-node replica set: the migration moves each customer in a MongoDB transaction.
+    image: mongo:7
+    command: ["--replSet", "rs0", "--port", "37017", "--bind_ip_all"]
+    ports: ["127.0.0.1:37017:37017"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--port", "37017", "--quiet", "--eval", "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:37017' }] }).ok }"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_PASSWORD: rfpilot_rehearsal
+      POSTGRES_DB: rfpilot_rehearsal
+    ports: ["127.0.0.1:35432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rfpilot_rehearsal"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

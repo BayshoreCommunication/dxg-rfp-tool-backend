@@ -12,6 +12,8 @@ export default tseslint.config(
       "config/postgres.ts",
       "config/env.ts",
       "scripts/seedLocalStack.ts",
+      "scripts/seedTenancyRehearsalFixture.ts",
+      "scripts/rehearseCustomerOrganizations.ts",
       "controller/platformAssistantController.ts",
       "controller/historicalInsightsController.ts",
       "controller/requirementRegistryController.ts",

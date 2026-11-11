@@ -119,7 +119,7 @@ export const moveAllDocuments = async (input: {
 // what it was, for rollback. A customer with no membership gets one.
 export const moveMembership = async (input: {
   fromOrganizationId: string; toOrganizationId: string; userId: string; runId: string; session?: ClientSession;
-}): Promise<{ previousRoles: string[] | null; previousVersion: number | null }> => {
+}): Promise<{ previousRoles: string[] | null; previousVersion: number | null; previousStatus: string | null }> => {
   const filter = { organizationId: objectId(input.fromOrganizationId), userId: objectId(input.userId) };
   const existing = await OrganizationMembership.collection.findOne(filter, { session: input.session });
   if (existing) {
@@ -127,19 +127,19 @@ export const moveMembership = async (input: {
       $set: { organizationId: objectId(input.toOrganizationId), roles: ["planner"], status: "active", migrationRunId: input.runId, updatedAt: new Date() },
       $inc: { version: 1 },
     }, { session: input.session });
-    return { previousRoles: existing.roles as string[], previousVersion: Number(existing.version ?? 1) };
+    return { previousRoles: existing.roles as string[], previousVersion: Number(existing.version ?? 1), previousStatus: String(existing.status ?? "active") };
   }
   const now = new Date();
   await OrganizationMembership.collection.insertOne({
     organizationId: objectId(input.toOrganizationId), userId: objectId(input.userId), roles: ["planner"], status: "active",
     version: 1, activatedAt: now, migrationRunId: input.runId, createdAt: now, updatedAt: now,
   }, { session: input.session });
-  return { previousRoles: null, previousVersion: null };
+  return { previousRoles: null, previousVersion: null, previousStatus: null };
 };
 
 export const restoreMembership = async (input: {
   holdingOrganizationId: string; fromOrganizationId: string; userId: string;
-  previousRoles: string[] | null; previousVersion: number | null; session?: ClientSession;
+  previousRoles: string[] | null; previousVersion: number | null; previousStatus?: string | null; session?: ClientSession;
 }): Promise<void> => {
   const filter = { organizationId: objectId(input.holdingOrganizationId), userId: objectId(input.userId) };
   if (!input.previousRoles) {
@@ -150,6 +150,9 @@ export const restoreMembership = async (input: {
   await OrganizationMembership.collection.updateOne(filter, {
     $set: {
       organizationId: objectId(input.fromOrganizationId), roles: input.previousRoles, updatedAt: new Date(),
+      // The move made the membership active; one that was suspended or removed goes back as it was.
+      // Runs journaled before ORG-501 recorded no status and keep the old behaviour.
+      ...(input.previousStatus ? { status: input.previousStatus } : {}),
       // Past both the original and the moved version, so no token issued for either still matches.
       version: Math.max(Number(current?.version ?? 1), Number(input.previousVersion ?? 1)) + 1,
     },
