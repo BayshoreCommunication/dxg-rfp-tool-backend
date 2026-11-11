@@ -450,6 +450,7 @@ Operational notes:
 - A user who still owns RFPs cannot be deleted; reassign first.
 - `scripts/purgeTestAccounts` removes test sign-ups (2026-11-08).
 - M5, ORG-606 (2026-11-10): the organization vendor list backend is built: `OrganizationVendor` in Mongo and `/api/v1/vendor-list` (list, search, categories, add, edit, archive, restore) with audit events; Owner, Admin and Team Manager edit, Planners read, Viewers have no access; covered by the cross-tenant isolation suite. The settings page and the picker when sending an RFP are ORG-607.
+- M5, ORG-604 (2026-11-10): the RFP templates backend is built: `ProposalTemplate` in Mongo and `/api/v1/proposal-templates` (list, open, save from an RFP, rename, publish, unpublish, archive, restore, start an RFP) with audit events; personal templates are private to their owner, Owners and Admins manage organization templates, Viewers have no access; starting an RFP from a template counts toward the plan limit and lands on the creator's team; covered by the cross-tenant isolation suite. The picker and the management list are ORG-605.
 
 ### Onboarding funnel report (2026-09-13)
 

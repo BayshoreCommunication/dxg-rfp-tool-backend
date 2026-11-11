@@ -16,6 +16,7 @@ import Settings from "../modal/settingsModel";
 import SsoConnection from "../modal/ssoConnectionModel";
 import Team from "../modal/teamModel";
 import OrganizationVendor from "../modal/organizationVendorModel";
+import ProposalTemplate from "../modal/proposalTemplateModel";
 import TeamMembership from "../modal/teamMembershipModel";
 import TwoFactorChallenge from "../modal/twoFactorChallengeModel";
 import User from "../modal/userModel";
@@ -100,6 +101,7 @@ const plan = async (): Promise<Plan & { users: string[]; withoutAccount: string[
     ["ssoConnections", SsoConnection, byOrg],
     ["teams", Team, byOrg],
     ["organizationVendors", OrganizationVendor, byOrg],
+    ["proposalTemplates", ProposalTemplate, byOrg],
     ["invitationEmailQuotas", InvitationEmailQuota, byOrg],
     ["invitations", Invitation, { $or: [byOrg, { email: { $in: userEmails } }] }],
     ["accessRequests", AccessRequest, { $or: [byOrg, { email: { $in: userEmails } }] }],

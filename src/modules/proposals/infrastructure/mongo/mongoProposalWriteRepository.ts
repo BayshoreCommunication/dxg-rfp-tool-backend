@@ -21,7 +21,7 @@ const explainMiss = (actorUserId: string, proposalId: string, action: RfpAction)
 const DETAIL_PROPOSAL_SELECT = "-__v";
 
 export const mongoProposalWriteRepository: ProposalWriteRepository = {
-  // The only place a proposal row is inserted (new, copy and, later, from a template). The plan's
+  // The only place a proposal row is inserted (new, copy and from a template, ORG-604). The plan's
   // slot is taken and the row inserted in one transaction (ORG-601): a create at the limit throws
   // PlanLimitReachedError, a failed insert doesn't use a slot, and Organization.proposalsCreated
   // counts every proposal ever created.

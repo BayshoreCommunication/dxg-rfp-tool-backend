@@ -100,6 +100,7 @@ const PARAM_SOURCES: Record<string, { pg?: string; mongo?: string; field?: strin
   invitations: { mongo: 'invitations' },
   'vendor-list': { mongo: 'organizationvendors' },
   'support-grants': { mongo: 'supportaccessgrants' },
+  'proposal-templates': { mongo: 'proposaltemplates' },
 };
 // Parameters that name a kind rather than a record.
 const LITERAL_PARAMS: Record<string, string> = { sectionKey: 'event_overview', reportType: 'executive' };
@@ -323,6 +324,7 @@ const seedForeignOrganization = async () => {
     ['POST', '/api/organization/domains', { domain: `${MARKER.toLowerCase()}.example.com` }],
     ['POST', '/api/v1/vendor-list', { company: `${MARKER} Audio`, category: `${MARKER} audio`, contacts: [{ name: `${MARKER} contact`, email: `contact-${MARKER.toLowerCase()}@example.test` }] }],
     ['POST', '/api/v1/organization/support-grants', { proposalId, reason: `${MARKER} support access` }],
+    ['POST', '/api/v1/proposal-templates', { proposalId, title: `${MARKER} template`, description: `${MARKER} standard`, scope: 'organization' }],
   ];
   const skipped: string[] = [];
   for (const [method, path, body] of steps) {
@@ -448,7 +450,7 @@ test('the API is healthy when it logs in as the app role', async () => {
 });
 
 test('organization B has data the sweep can aim at', () => {
-  for (const required of ['proposals', 'vendor-responses', 'vendor-list']) assert.ok(foreignByParam.get(required), `no foreign ${required} id`);
+  for (const required of ['proposals', 'vendor-responses', 'vendor-list', 'proposal-templates']) assert.ok(foreignByParam.get(required), `no foreign ${required} id`);
   const covered = Object.keys(PARAM_SOURCES).filter((segment) => foreignByParam.has(segment));
   console.log(`# ${foreignIds.size} foreign ids; real foreign ids for: ${covered.join(', ')}`);
 });

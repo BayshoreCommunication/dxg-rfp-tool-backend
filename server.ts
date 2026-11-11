@@ -59,6 +59,7 @@ import invitationRoutes from "./routes/invitationRoute";
 import accessRequestRoutes from "./routes/accessRequestRoute";
 import teamsRoutes from "./routes/teamsRoute";
 import organizationVendorsRoutes from "./routes/organizationVendorsRoute";
+import proposalTemplatesRoutes from "./routes/proposalTemplatesRoute";
 import rfpDashboardRoutes from "./routes/rfpDashboardRoute";
 import rfpSharesRoutes from "./routes/rfpSharesRoute";
 import { startCronJobs } from "./utils/cronJobs";
@@ -246,6 +247,7 @@ app.use("/api/v1", invitationRoutes);
 app.use("/api", accessRequestRoutes);
 app.use("/api/v1", teamsRoutes);
 app.use("/api/v1", organizationVendorsRoutes);
+app.use("/api/v1", proposalTemplatesRoutes);
 app.use("/api/v1", rfpDashboardRoutes);
 app.use("/api/v1", rfpSharesRoutes);
 

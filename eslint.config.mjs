@@ -34,6 +34,8 @@ export default tseslint.config(
       "routes/invitationRoute.ts",
       "controller/organizationVendorsController.ts",
       "routes/organizationVendorsRoute.ts",
+      "controller/proposalTemplatesController.ts",
+      "routes/proposalTemplatesRoute.ts",
       "routes/platformAssistantRoute.ts",
       "routes/historicalInsightsRoute.ts",
       "routes/requirementRegistryRoute.ts",

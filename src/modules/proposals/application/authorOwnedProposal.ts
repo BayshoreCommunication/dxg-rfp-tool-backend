@@ -5,6 +5,7 @@ import type { ProposalTeamAssignment } from "../domain/ports/proposalTeamAssignm
 import type { ProposalLifecycleRecorder } from "../domain/ports/proposalLifecycleRecorder";
 import { withLiveSettings } from "./proposalPresentation";
 import { activeProposalWorkflowContent } from "../domain/workflowSections";
+import { templateContentOf } from "../domain/templateSnapshot";
 
 type AuthorDependencies = {
   proposals: ProposalWriteRepository;
@@ -198,4 +199,47 @@ export const createCopyOwnedProposal = (dependencies: AuthorDependencies) =>
       kind: "copied" as const,
       proposal: withLiveSettings(proposal, settings),
     };
+  };
+
+/* ORG-604: a new RFP started from a template. `content` is the template's snapshot; it is cut
+   down to the snapshot's sections again here (templateSnapshot.ts: no vendors, responses, dates,
+   files or contacts), so nothing else in it can set an owner, team, organization or status. The
+   result is an ordinary unsubmitted draft owned by its creator: it goes through createOwned like
+   every other new RFP, so it takes a plan slot (ORG-601), and it lands on the creator's team
+   (ORG-202). */
+export const createCreateProposalFromTemplate = (dependencies: AuthorDependencies) =>
+  async (input: {
+    ownerUserId: string;
+    content: Record<string, unknown>;
+    overrides: { eventName?: string };
+    fallbackEventName: string;
+  }) => {
+    // Only snapshot sections are read, whatever the caller passes.
+    const content: Record<string, unknown> = templateContentOf(input.content);
+    const templateEvent =
+      typeof content.event === "object" && content.event !== null && !Array.isArray(content.event)
+        ? (content.event as Record<string, unknown>)
+        : {};
+    const templateEventName = typeof templateEvent.eventName === "string" ? templateEvent.eventName.trim() : "";
+    const proposalData: Record<string, unknown> = {
+      ...content,
+      event: { ...templateEvent, eventName: input.overrides.eventName || templateEventName || input.fallbackEventName },
+      status: "unsubmitted",
+      isDraft: true,
+      isFavorite: false,
+      isAccepted: false,
+      isArchived: false,
+      archivedAt: null,
+      isCopy: false,
+      viewsCount: 0,
+      teamId: await defaultTeamId(dependencies, input.ownerUserId),
+    };
+    const proposal = await dependencies.proposals.createOwned({
+      ownerUserId: input.ownerUserId,
+      proposal: proposalData,
+    });
+    await dependencies.references?.synchronize({ proposal, ownerUserId: input.ownerUserId, eventType: "proposal.reference.updated" });
+    await dependencies.lifecycle?.recordChange({ proposalId: recordIdOf(proposal), actorUserId: input.ownerUserId, reason: "created" });
+    const settings = await settingsForResponse(dependencies, input.ownerUserId);
+    return withLiveSettings(proposal, settings);
   };
