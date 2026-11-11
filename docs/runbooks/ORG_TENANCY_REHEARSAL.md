@@ -82,11 +82,13 @@ test runs (load average 12 to 35 during these runs, swap nearly full). **Every f
 measured on 2026-11-11, after the machine restarted.** Runs made on 2026-11-10 were lost with the
 restart, before anything was written down, and none of their numbers are used.
 
-Three complete runs exist, in this order: 50 customers (10:51–11:15 BDT, the machine at its
-busiest), 150 customers (12:36–13:07) and 50 customers again (13:08–13:15, the quietest). The
-table shows the last two, which ran back to back. The first 50-customer run took 604 s for the
-dry run and 320 s for the apply on identical data, 5 times the second run, so read every figure
-as good to a factor of two or three, and the per-customer column as the useful part.
+Four complete runs exist, in this order: 50 customers (10:51–11:15 BDT, the machine at its
+busiest), 150 customers (12:36–13:07), 50 customers again (13:08–13:15) and 50 customers once
+more with the final version of the runner (13:53–13:57, the quietest). The table shows the
+second and third, which ran back to back. On identical 50-customer data the dry run took 604,
+126 and 50 s and the apply 320, 67 and 38 s across the three runs, so read every figure as
+good to a factor of two or three either way, and the per-customer column as the useful part:
+0.75 to 6 s per customer for an apply on this machine.
 
 The larger size was meant to be 500. It was cut to 150 because the machine could not carry
 more: a 200-customer attempt died in its dry run when Postgres restarted under load (finding 6),
@@ -132,7 +134,7 @@ where the time goes, which is Postgres, and that most of it is fixed per custome
   (npm + ts-node) is 5 to 30 s per command here and is included in every step.
 
 The dry run does the same Postgres work as the apply and rolls it back, so it is not a quick
-check: it took about as long as the apply (longer in two of three runs). Rollback is cheaper,
+check: it took about as long as the apply (longer in three of four runs). Rollback is cheaper,
 about 1 s per customer, because it moves each holding tenant whole without walking the edges.
 
 For the window: budget dry run + apply as roughly 2 × customers × (seconds per customer), and
@@ -140,7 +142,7 @@ take the seconds per customer from the snapshot rehearsal, not from this laptop.
 
 ## Verifier results
 
-The same at both sizes (`summary.json` of each run):
+The same in all four runs, at both sizes (`summary.json` of each run):
 
 | After | `visibilityUnchanged` | `noCustomerRecordsInSharedOrganization` | `everyProposalHasAnActiveOwner` | Exit |
 |---|---|---|---|---|
