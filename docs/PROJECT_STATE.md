@@ -434,10 +434,13 @@ Operational notes:
 
 - Plan entitlements (ORG-601, built on a branch): every organization is on
   `free_trial` (2 RFPs created, vendor responses and RFP intelligence locked)
-  unless its `plan` is `full_access`. Until ORG-603 ships the admin screen, a
-  plan is changed in MongoDB by hand. Before this reaches production, set
-  DXG's own organization and any customer DXG wants unlocked to `full_access`,
-  or they lose vendor responses and RFP intelligence on deploy.
+  unless its `plan` is `full_access`. ORG-603 (2026-11-10, built on a branch)
+  gives RFPilot staff the supported way to change it: the admin app's
+  Organizations page, backed by `/api/v1/admin/organization-plans` (staff
+  only, each change audited in the customer's organization; DECISIONS
+  2026-11-10). Right after the deploy that carries ORG-601, a staff admin
+  sets DXG's own organization and any customer DXG wants unlocked to
+  `full_access`, or they lose vendor responses and RFP intelligence.
 - Production now requires `OTP_PEPPER`, `TWO_FACTOR_ENCRYPTION_KEY` and
   `SSO_SECRET_KEY` (see `.env.example` and `docs/SSO_SETUP.md`); the API fails
   at startup without the pepper. The AWS deploy passes the 2FA and SSO keys to
