@@ -471,6 +471,13 @@ production or staging copy was available. Results, timings, findings and the ste
   (dry run included), so it cannot share the database with a serving API, and a suspended
   customer becomes an active Planner in their holding tenant.
 
+### Tenancy cutover runbook (ORG-502, 2026-11-11)
+
+`docs/runbooks/ORG_TENANCY_CUTOVER.md` is the maintenance-window procedure and rollback for the
+ORG-107 migration. It is written from the local rehearsal only: seven steps are marked for the
+operator to confirm against the production deployment, and the snapshot rehearsal it requires
+as a go/no-go has not been run.
+
 ### Onboarding funnel report (2026-09-13)
 
 `GET /api/dashboard/onboarding-funnel` (security-admin) answers two questions
