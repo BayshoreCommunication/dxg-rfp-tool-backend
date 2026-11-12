@@ -228,8 +228,8 @@ export const mongoGrantedRfpReader: GrantedRfpReader = {
 };
 
 export const mongoSupportTicketLookup: SupportTicketLookup = {
-  async find(agentOrganizationId, ticketId) {
-    const ticket = await mongoSupportDeskRepository.findTicket(agentOrganizationId, ticketId);
+  async find(ticketId) {
+    const ticket = await mongoSupportDeskRepository.findTicketInAnyOrganization(ticketId);
     return ticket ? { id: ticket.id, organizationId: ticket.organizationId, requesterUserId: ticket.requesterUserId } : null;
   },
 };

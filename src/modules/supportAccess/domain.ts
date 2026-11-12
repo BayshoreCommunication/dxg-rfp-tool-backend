@@ -167,6 +167,8 @@ export interface GrantedRfpReader {
 }
 
 export interface SupportTicketLookup {
-  // A helpdesk ticket the agent can already read (the support desk's own scope), or null.
-  find(agentOrganizationId: string, ticketId: string): Promise<{ id: string; organizationId: string; requesterUserId: string } | null>;
+  // A helpdesk ticket in whichever organization it belongs to, or null. RFPilot Support reads
+  // every organization's tickets (the caller has passed isSupportAgent); what this returns is
+  // the organization whose grant the RFPs behind the ticket need.
+  find(ticketId: string): Promise<{ id: string; organizationId: string; requesterUserId: string } | null>;
 }

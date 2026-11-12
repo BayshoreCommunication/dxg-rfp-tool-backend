@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-11-11 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131, `8420ee6`); the tenancy cutover has not been run, and browser checks against a real backend are owed. See "Organization accounts" and "Before launch" below.
+**Last updated:** 2026-11-12 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131, `8420ee6`); the tenancy cutover has not been run, and browser checks against a real backend are owed. See "Organization accounts" and "Before launch" below.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -405,6 +405,29 @@ guard, response targets and auto-close, automatic acknowledgement, a 3-day
 reopen window after resolve, one "DXG support" display name, triage activity
 kept internal to agents, and real-time admin alerts for new tickets.
 
+**Cross-organization fix (2026-11-12, branch `fix/helpdesk-cross-organization`).**
+Found on production the same day: a customer Owner's ticket in their own
+organization was created and acknowledged but never reached RFPilot staff,
+because every agent operation was bounded to the agent's organization and
+sign-up now gives each customer their own (ORG-106). No agent was assigned and
+no bell or real-time alert fired either, since both looked for admins inside
+the ticket's organization; only the alert email to `SUPPORT_DESK_NOTIFY_EMAIL`
+was not scoped that way. RFPilot staff (`admins` accounts with a staff role)
+now work every organization's tickets through `agentScopeFor`; customers are
+unchanged; the proposals behind a ticket still need a grant from the ticket's
+organization. Agent list and detail responses carry the ticket's
+`organization`, the inbox can be narrowed to one organization and searched by
+organization name, and ticket numbers stay per organization. Decision:
+`DECISIONS.md` 2026-11-12; API: `API.md` "Helpdesk (support tickets)". Tests:
+`tests/support-desk-cross-organization.test.js`,
+`tests/support-desk-notifier.test.js`,
+`tests-integration/support-desk-cross-organization.test.ts`. The admin app shows
+the organization on each ticket (admin branch of the same name). It reaches
+customers when `main` is merged into `production`. Not done: tickets opened
+before the release in a customer's organization have no owner until an agent
+replies or assigns them, and nobody was alerted about them; staff should look
+through the inbox once after the release.
+
 ### Organization accounts (2026-11-01 → 2026-11-11)
 
 Spec, PRD and 46-ticket breakdown: `docs/specs/ORGANIZATION_ACCOUNTS_*.md`;
@@ -575,8 +598,10 @@ with unit tests and a stubbed backend only, except where noted.
   analysis, vendor response, audit log and template routers. It does not cover the
   staff-only routers (support access, plan management, launch metrics) or the
   other member routers.
-- The helpdesk inbox shows agents only the staff organization's tickets, so the
-  grant-gated "RFPs behind a ticket" route is not reachable for customer tickets.
+- Done 2026-11-12 (not yet released): the helpdesk inbox spanned only the staff
+  organization, so customer tickets never reached staff and the grant-gated
+  "RFPs behind a ticket" route was unreachable for them. RFPilot staff now work
+  every organization's tickets; see "In-app helpdesk / support inbox".
 - The presentation layout saved on a template is returned when an RFP is started
   from it, but the dashboard does not apply it.
 - The dashboard sidebar's unread badge calls `GET /api/vendor-responses`, which is

@@ -187,10 +187,11 @@ export const createSupportAccess = (dependencies: Dependencies) => {
     },
 
     // The RFPs behind a helpdesk ticket: the requester's RFPs in the ticket's organization. The
-    // ticket itself needs no grant (the support desk decides who reads it); these do.
+    // ticket itself needs no grant (RFPilot Support reads every organization's tickets); these
+    // need an active grant from the ticket's organization, never the agent's own.
     async listTicketRfps(agent: SupportAgent, ticketId: string, query: { page?: unknown; search?: unknown }) {
       assertAgent(agent);
-      const ticket = dependencies.isValidId(ticketId) ? await tickets.find(agent.organizationId, ticketId) : null;
+      const ticket = dependencies.isValidId(ticketId) ? await tickets.find(ticketId) : null;
       if (!ticket) throw new SupportAccessError("SUPPORT_TICKET_NOT_FOUND", "The support ticket was not found.", 404);
       return listRfpsUnderGrants(agent, ticket.organizationId, query, {
         operation: "ticket.rfp.list",

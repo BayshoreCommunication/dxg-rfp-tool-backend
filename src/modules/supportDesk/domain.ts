@@ -43,6 +43,8 @@ export type SupportActor = {
   organizationId: string;
   role: string;
   roles: readonly string[];
+  /** "admin" for an `admins` account, "planner" for a `users` account. From the stored account, never the token. */
+  accountType?: string;
 };
 
 export type SupportAttachment = {
@@ -99,6 +101,12 @@ export type SupportUserSummary = {
   role: string;
 };
 
+/** The customer organization a ticket belongs to, as agents see it. */
+export type SupportOrganizationSummary = { id: string; name: string | null };
+
+/** The people on tickets: looked up per ticket so a planner only resolves inside the ticket's organization. */
+export type SupportTicketPeopleRef = { organizationId: string; userIds: readonly (string | null)[] };
+
 export type SupportTicketPatch = Partial<
   Pick<
     SupportTicketRecord,
@@ -127,6 +135,8 @@ export type SupportInboxFilters = {
   priority?: SupportTicketPriority;
   category?: SupportTicketCategory;
   search?: string;
+  /** Staff inbox only: one customer organization's tickets. */
+  organizationId?: string;
   /** "urgency": tickets owed an answer first, soonest due first. "recent": newest activity first. */
   sort?: "urgency" | "recent";
   page: number;
@@ -151,6 +161,14 @@ export const isAdministrativeRole = (role?: string): boolean => {
   const normalized = String(role ?? "").toLowerCase().trim().replace(/[\s-]/g, "_");
   return normalized === "admin" || normalized === "super_admin" || normalized === "superadmin";
 };
+
+/**
+ * RFPilot staff: an `admins` account holding a staff role, the same test as support access
+ * (ORG-404) and plan management (ORG-603). Only they work the helpdesk across organizations.
+ * A `users` account never qualifies, whatever account or membership role it holds.
+ */
+export const isPlatformSupportStaff = (actor: Pick<SupportActor, "role" | "accountType">): boolean =>
+  actor.accountType === "admin" && isAdministrativeRole(actor.role);
 
 export const assertAgent = (actor: SupportActor): void => {
   if (!isAdministrativeRole(actor.role)) {

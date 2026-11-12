@@ -68,7 +68,10 @@ export const createSupportDeskSweeper = (dependencies: {
   };
 
   const person = async (ticket: SupportTicketRecord, userId: string | null) =>
-    userId ? (await repository.findUserSummaries(ticket.organizationId, [userId])).get(userId) ?? null : null;
+    // The requester is in the ticket's organization; the owner is RFPilot staff outside it.
+    userId
+      ? (await repository.findTicketPeople([{ organizationId: ticket.organizationId, userIds: [userId] }])).get(userId) ?? null
+      : null;
 
   return {
     async run(): Promise<SupportDeskSweepResult> {

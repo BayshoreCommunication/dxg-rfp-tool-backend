@@ -63,6 +63,14 @@ Everything these milestones added is in MongoDB. None of them added a PostgreSQL
 - `SupportAccessGrant` (ORG-404; MongoDB): organization, `proposalId` (null for the whole organization), `grantedBy`, optional `reason`, `expiresAt` (the model refuses more than 30 days from creation), `revokedAt`, `revokedBy`. Rows are never deleted. Indexed `{ organizationId, createdAt }` and `{ revokedAt, expiresAt }`. No Postgres table.
 - Support activity is not a separate collection: it is the `SecurityAuditEvent` rows with action `support_access.used` in the customer's organization, joined to a grant by `metadata.grantId`.
 
+## Helpdesk (support tickets)
+
+- `SupportTicket`, `SupportMessage`, `SupportAttachment`, `SupportCannedReply` and `SupportTicketCounter` (MongoDB only). A ticket and all of its messages carry the `organizationId` of the customer who opened it, whoever writes the message: an RFPilot staff reply is stored in the customer's organization, not the agent's.
+- `ticketNumber` comes from `SupportTicketCounter`, one sequence per organization, unique on `{ organizationId, ticketNumber }`. It is not unique across organizations and is never renumbered; the ticket `_id` is the global identifier.
+- Customer reads always filter by the session's organization and the requester. The only reads without an organization filter are the RFPilot staff inbox (`findTicketInAnyOrganization`, `listTicketsInAnyOrganization`, `metricsForAllOrganizations` in `mongoSupportDeskRepository.ts`), the per-agent workload count used to assign a new ticket (`staffAgentLoads`, counts only) and the sweeper; each is marked `scope-exempt:` and `tests/tenant-scope-guard.test.js` covers both models.
+- `SupportAttachment` rows and S3 keys (`support-attachments/<organizationId>/…`) belong to the uploader's organization, so an agent's upload sits under the staff organization while the message that cites it sits in the customer's. `SupportCannedReply` rows belong to the staff organization.
+- Agents are `admins` accounts (`assigneeUserId` and agent `authorUserId` point there); requesters are `users` accounts in the ticket's organization.
+
 ## Organization audit log
 
 - No new collection (ORG-407). The audit view reads `SecurityAuditEvent` for one organization, newest first, paged by `(createdAt, _id)`. The index `{ organizationId, createdAt }` is extended to `{ organizationId: 1, createdAt: -1, _id: -1 }` so that order comes from the index; Mongoose builds the new index on start-up (automatic index builds are not switched off anywhere in this repository) but never drops one, so the old two-field index (now a redundant prefix) stays on a deployed database until someone drops it by hand. Rows stay append-only; the view never writes. `auth.login.failed` is a new action on the same collection.

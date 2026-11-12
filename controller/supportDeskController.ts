@@ -23,6 +23,9 @@ const actorFrom = (req: AuthRequest): SupportActor => {
     organizationId: user.organizationId,
     role: user.role,
     roles: user.roles ?? [],
+    // From the stored account (set by authenticate), never the token: only an `admins`
+    // account works the helpdesk across organizations.
+    accountType: user.accountType,
   };
 };
 
