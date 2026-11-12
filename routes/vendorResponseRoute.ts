@@ -36,7 +36,16 @@ import {
 const router = Router();
 const publicGrantLimit = securityRateLimit({
   name: "vendor-public",
-  limit: 60,
+  limit: 300,
+  windowMs: 15 * 60_000,
+  identity: grantAndIpIdentity,
+});
+// Autosave fires ~850ms after every typing pause, so a vendor filling the form
+// can send hundreds of saves in a session. Give it its own, larger bucket so it
+// neither trips nor starves loads, uploads and the final submit.
+const draftSaveLimit = securityRateLimit({
+  name: "vendor-draft-save",
+  limit: 1200,
   windowMs: 15 * 60_000,
   identity: grantAndIpIdentity,
 });
@@ -112,7 +121,7 @@ router.get(
 );
 router.patch(
   "/drafts/:draftId",
-  publicGrantLimit,
+  draftSaveLimit,
   requirePublicGrant("vendor:submit", alternateVendorContact),
   saveVendorResponseDraft,
 );

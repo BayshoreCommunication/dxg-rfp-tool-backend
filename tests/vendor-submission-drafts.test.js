@@ -818,4 +818,8 @@ test("draft HTTP routes validate grants before multipart intake and retire legac
     /"\/drafts\/:draftId\/documents",\s*publicGrantLimit,\s*requirePublicGrant\("vendor:submit", alternateVendorContact\),\s*receiveVendorDocuments/,
   );
   assert.doesNotMatch(routeSource, /router\.post\(\s*"\/",\s*publicGrantLimit,\s*receiveVendorDocuments/);
+  // Autosave got "Too many requests" mid-form when it shared the 60/15min public bucket.
+  assert.match(routeSource, /router\.patch\(\s*"\/drafts\/:draftId",\s*draftSaveLimit,\s*requirePublicGrant\("vendor:submit", alternateVendorContact\)/);
+  assert.match(routeSource, /name: "vendor-draft-save",\s*limit: 1200,/);
+  assert.match(routeSource, /name: "vendor-public",\s*limit: 300,/);
 });

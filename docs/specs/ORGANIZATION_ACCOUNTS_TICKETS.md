@@ -3,7 +3,7 @@
 > Derived from [ORGANIZATION_ACCOUNTS_PRD.md](ORGANIZATION_ACCOUNTS_PRD.md) on 2026-10-29. Updated 2026-11-01 for DXG's decisions on Q1–Q7 (see [dxg-open-questions.html](dxg-open-questions.html)): ORG-110 and M5 are new, and ORG-107, ORG-203, ORG-301 and ORG-402 changed. Each ticket names the PRD requirement or DXG decision it satisfies.
 > Repos: **BE** = `dxg-rfp-tool-backend`, **DB** = `dxg-rfp-tool-dashboard`, **AD** = `dxg-rfp-tool-admin`.
 > Size is engineer-days: S ≤ 2, M 3–5, L 6–8. Anything larger was split. A ticket that says it's blocked by a question can't start until DXG/Bayshore answers that question.
-> Status updated 2026-11-11, about 14:40 BDT, from the pull-request lists of the three repositories (ORG-504). Each ticket ends with one of: ✅ **Closed** (every PR for the ticket is merged to `main`), ⏳ **PR open, merge pending** (built and reviewed by its agent, not merged), or ⏳ **Open** (not done). "Merged to `main`" does not mean deployed: nothing from M4, M5 or the launch gate has been promoted to `production` as part of this work. What is still owed before launch is in `PROJECT_STATE.md` ("Organization accounts", "Before launch").
+> Status updated 2026-11-11, about 16:30 BDT, from the pull-request lists of the three repositories (ORG-504). Each ticket ends with one of: ✅ **Closed** (every PR for the ticket is merged to `main`), ⏳ **PR open, merge pending** (built and reviewed by its agent, not merged), or ⏳ **Open** (not done). "Merged to `main`" does not mean deployed. The backend was released to production on 2026-11-11 (PR #131); the tenancy cutover was not run. What is still owed before launch is in `PROJECT_STATE.md` ("Organization accounts", "Before launch").
 
 ## Summary
 
@@ -14,8 +14,8 @@
 | M3 Entry paths and auth | ORG-301 … ORG-307 | 2S 5M | 17–29 / 23 | ✅ Closed (7/7) | Merged 2026-11-08 |
 | M4 Experience | ORG-401 … ORG-407 | 2S 4M 1L | 20–32 / 26 | ✅ Closed (7/7) | Merged 2026-11-11 |
 | M5 Plans and shared resources | ORG-601 … ORG-607 | 1S 6M | 19–32 / 25.5 | ✅ Closed (7/7) | Merged 2026-11-11 |
-| Launch gate | ORG-501 … ORG-505 | 4S 1M | 7–13 / 10 | ⏳ 3/5 closed (ORG-501, ORG-502, ORG-505). Merge pending: ORG-504 (#130). Open: ORG-503 | Thu 12 Nov 2026, 16:00 BDT (ORG-503: see Timeline) |
-| **Total** | **46** | 15S 27M 4L | **120–197 / ~158.5** (≈24–39 eng-weeks, midpoint ~32) | **44 closed, 1 with a PR open and merge pending (ORG-504), 1 open (ORG-503)** | **Thu 12 Nov 2026, 16:00 BDT** |
+| Launch gate | ORG-501 … ORG-505 | 4S 1M | 7–13 / 10 | ⏳ 4/5 closed (ORG-501, ORG-502, ORG-504, ORG-505). Open: ORG-503 | Thu 12 Nov 2026, 16:00 BDT (ORG-503: see Timeline) |
+| **Total** | **46** | 15S 27M 4L | **120–197 / ~158.5** (≈24–39 eng-weeks, midpoint ~32) | **45 closed, 1 open (ORG-503)** | **Thu 12 Nov 2026, 16:00 BDT** |
 
 Midpoints use S = 1.5, M = 4, L = 7 days. This bottom-up figure is well above the PRD's first planning range (11–16 eng-weeks). That range left out frontend work on both apps (each screen is its own ticket here), the repository-scoping sweep across every Mongo read path (ORG-104), and per-ticket testing. DXG's 1 Nov decisions added 8 tickets: placing legacy customers (ORG-110), free-trial plan limits (ORG-601 … ORG-603) and shared templates and vendor list (ORG-604 … ORG-607). Treat **~32 eng-weeks** as the working estimate: about 4 months of calendar time with two engineers in parallel after M1. The PRD timeline has been updated to match.
 
@@ -36,7 +36,7 @@ Lanes are split to keep dependencies inside a lane and to keep agents out of eac
 | **Agent 1** | M4 trust: history, support grants, audit | ~~ORG-403~~ ✅ → ~~404~~ ✅ → ~~405~~ ✅ → ~~407~~ ✅ → ~~406~~ ✅ | BE, DB, AD | None left |
 | **Agent 2** | M4 dashboards, then templates UI | ~~ORG-401~~ ✅ → ~~402~~ ✅ → ~~605~~ ✅ | BE, DB | None left |
 | **Agent 3** | M5 plans and templates backend, metrics | ~~ORG-601~~ ✅ → ~~603~~ ✅ → ~~602~~ ✅ → ~~604~~ ✅ → ~~505~~ ✅ | BE, DB, AD | None left |
-| **Agent 4** | M5 vendor list, then launch gate | ~~ORG-606~~ ✅ → ~~607~~ ✅ → ~~501~~ ✅ → ~~502~~ ✅ → 504 (PR #130 open) | BE, DB | ORG-504 merge left |
+| **Agent 4** | M5 vendor list, then launch gate | ~~ORG-606~~ ✅ → ~~607~~ ✅ → ~~501~~ ✅ → ~~502~~ ✅ → ~~504~~ ✅ | BE, DB | done |
 | Human | Reviews and merges, external access | ORG-503 coordination (open), prod snapshot access for the ORG-501 rehearsal (still owed) | — | — |
 
 Cross-lane dependencies: ORG-605 (Agent 2) waits on ORG-604 (Agent 3, merged Thu 00:00). Everything else depends only on its own lane or on merged work.
@@ -284,7 +284,7 @@ Thu 10:00–14:00 QA: `npm run ci` in all three repos on `main`, the backend int
 **ORG-503 · External pen test** · — · S (coordination) · blocked by: M1–M4 · ⏳ **Open**. Per the owner it closes on an internal security review plus a booked external test date. As of 11 Nov neither has happened: the internal review has not been done and no external test date is booked
 - Scope: tenant isolation, role escalation, invite/token handling, support grants, 2FA bypass. Any high finding blocks launch.
 
-**ORG-504 · Docs and decisions** · BE · S · ⏳ **PR open (#130), merge pending**
+**ORG-504 · Docs and decisions** · BE · S · ✅ **Closed** (merged Wed 11 Nov, PR #130)
 - `DECISIONS.md` entries: per-customer tenancy with legacy holding tenants, scoped policy, support-grant model, auth-provider choice, and plan entitlements by proposals created. Update `DATABASE.md`, `API.md`, `PROJECT_STATE.md`.
 
 **ORG-505 · Launch metrics instrumentation** · BE · S · ✅ **Closed** (merged Wed 11 Nov, PR #126). Queries, staff endpoint and report script; no admin-app screen

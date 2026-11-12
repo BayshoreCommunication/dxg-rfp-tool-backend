@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-11-11 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) has its PR open and the pen test (ORG-503) is open. No M4, M5 or launch-gate backend work is in the `production` branch, the tenancy cutover has not been run, and browser checks against a real backend are owed. See "Organization accounts" and "Before launch" below.
+**Last updated:** 2026-11-11 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131, `8420ee6`); the tenancy cutover has not been run, and browser checks against a real backend are owed. See "Organization accounts" and "Before launch" below.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -415,9 +415,10 @@ legacy holding tenants, the scoped access policy and the auth-provider choice
 407, 505, 601, 603, 604 and 606. Work shipped directly on `main` without the
 `ORG_ACCOUNTS_ENABLED` flag the original 4-week plan proposed.
 
-**Where it stands (2026-11-11, about 14:40 BDT; from the pull-request lists of the
-three repositories):** 44 of 46 tickets are closed, meaning every PR for the ticket
-is merged to `main`. ORG-504 (these docs) has its PR open (#130). ORG-503 is open.
+**Where it stands (2026-11-11, about 16:30 BDT; from the pull-request lists of the
+three repositories):** 45 of 46 tickets are closed, meaning every PR for the ticket
+is merged to `main`. ORG-504 (these docs) merged as #130. ORG-503 is open. The
+backend was released to production the same day (see "Before launch").
 The commitment of 2026-11-09 was every milestone by Thursday 12 Nov 2026, 16:00
 BDT; the fixed merge windows were dropped on 11 Nov to finish early. Per-ticket
 state is in the ticket breakdown.
@@ -432,7 +433,7 @@ and what is still owed.
 | M3 Entry paths and auth | ORG-301 … 307 | Closed (merged). Sign-up with organization onboarding, Google + Microsoft + company OIDC SSO (email-first discovery, Require SSO), TOTP 2FA and org-mandatory 2FA with admin reset, DNS TXT domain verification, domain-match access requests (2026-11-08), session hardening on membership changes. |
 | M4 Experience | ORG-401 … 407 | Closed (merged to `main`, 2026-11-10 and 2026-11-11). ORG-403 (PR #117, merged 2026-11-10): derived, stored lifecycle stage (draft, sent, receiving responses, under review, awarded, archived), append-only transitions, "Mark as awarded" plus comparison-selection awards (DECISIONS 2026-11-09), status-history endpoint, backfill. ORG-401 (PR #119, 2026-11-10): scoped dashboard list and summary with stage, owner, team, event-date and venue-city filters; summary property-tested against the list; p95 ≤ 136 ms on 5k RFPs. ORG-404 (PR #123, 2026-11-10): Owner/Admin grant, list and revoke RFPilot Support access per RFP or organization (7-day default, 30-day cap); grant-gated admin routes for RFPs, vendor responses and the RFPs behind a helpdesk ticket; every read audited in the customer's organization (DECISIONS 2026-11-10). ORG-402 (dashboard PR #73, 2026-11-10): role dashboards for Planner, Team Manager, Admin/Owner and Viewer. ORG-405 (dashboard PR #75, 2026-11-11): support access grants screen for Owners and Admins. ORG-406 (admin PR #14, 2026-11-11): "Support access" workspace in the admin app, where RFPs and vendor responses are reachable only through a grant; the old Proposals pages redirect to it. ORG-407 (backend PR #127 and dashboard PR #78, 2026-11-11): Owner/Admin audit log at `/settings/audit`, read over `SecurityAuditEvent` with user, action, category and date filters, CSV export, an allowlisted action catalog, and failed sign-ins audited as `auth.login.failed` (DECISIONS 2026-11-11). |
 | M5 Plans and shared resources | ORG-601 … 607 | Closed (merged to `main`, 2026-11-10 and 2026-11-11). ORG-606 (PR #121) and ORG-601 (PR #122) merged 2026-11-10: organization vendor list backend, and plan entitlements with the free-trial limit. Merged 2026-11-11: ORG-603 (backend PR #124, admin PR #13: staff view and change an organization's plan from the admin app's Organizations page), ORG-604 (PR #125: RFP templates backend), ORG-605 (dashboard PR #77: save as template, picker, Settings → Templates) and ORG-607 (dashboard PR #74: vendor list settings page and picking vendors when sending). ORG-602 (dashboard PR #76, 2026-11-11): RFP counter, a message on the create button at the limit, and locked states with a "Contact us" prompt on the vendor-response and RFP-intelligence screens; the backend enforces the plan either way. Also, DXG's pricing corpus, expert rules and knowledge are shared with every organization (2026-11-01). |
-| Launch gate | ORG-501 … 505 | 3 of 5 closed. Merged 2026-11-11: ORG-505 (PR #126: the five PRD success metrics as counts and rates for DXG staff at `GET /api/v1/admin/launch-metrics` and `npm run report:launch-metrics`, plus a first-RFP-opened stamp on the membership; no admin-app screen), ORG-501 (PR #128: rehearsal on a seeded fixture in local Docker only; the production-snapshot rehearsal is still owed, see "Tenancy migration rehearsal") and ORG-502 (PR #129: `docs/runbooks/ORG_TENANCY_CUTOVER.md`, written from the local rehearsal). **PR open:** ORG-504 (#130: these docs). **Open, ORG-503 (external pen test):** it closes on an internal security review plus a booked external test date; neither has happened yet. |
+| Launch gate | ORG-501 … 505 | 4 of 5 closed. Merged 2026-11-11: ORG-505 (PR #126: the five PRD success metrics as counts and rates for DXG staff at `GET /api/v1/admin/launch-metrics` and `npm run report:launch-metrics`, plus a first-RFP-opened stamp on the membership; no admin-app screen), ORG-501 (PR #128: rehearsal on a seeded fixture in local Docker only; the production-snapshot rehearsal is still owed, see "Tenancy migration rehearsal") and ORG-502 (PR #129: `docs/runbooks/ORG_TENANCY_CUTOVER.md`, written from the local rehearsal). ORG-504 (PR #130: these docs) merged 2026-11-11. **Open, ORG-503 (external pen test):** it closes on an internal security review plus a booked external test date; neither has happened yet. |
 
 Operational notes:
 
@@ -489,30 +490,39 @@ What has to happen before external organizations are invited. Each line was
 checked against the code, the docs or the pull requests on 2026-11-11; where it
 could not be, it says so.
 
-**What is deployed (checked about 14:40 BDT)**
+**What is deployed (checked 2026-11-11, about 16:10 BDT)**
 
-- Backend: the `production` branch was last deployed on 2026-11-08 (`fd4b252`).
-  It contains none of the M4, M5 or launch-gate backend work; `main` is ahead of it.
-- Dashboard and admin app: these repositories have no `production` branch. GitHub
-  records successful Vercel "Production" deployments of `main` on 10 and 11 Nov,
-  the latest being dashboard `c7ce3f7` and admin `ea3d483`. Not confirmed from here:
-  whether those deployments are the ones serving the public domains. **If they
-  are, the live web apps are ahead of the live API**: screens merged on 10 and 11
-  Nov (role dashboards, support access, vendor list, templates, audit log, locked
-  states, and the admin app's Organizations and Support access pages) call routes
-  the production API does not have. Someone with access to the Vercel projects needs to confirm
-  which deployment the public domains serve.
+- Backend: released to production on 2026-11-11 by merging `main` into
+  `production` (PR #131, `8420ee6`, "Deploy to AWS" run 42997387438, all jobs
+  green). It carries M4, M5 and the launch-gate tooling. Checked without a session
+  afterwards: `GET /health` answers 200, and `/api/v1/rfps`, `/api/v1/rfps/summary`,
+  `/api/v1/vendor-list`, `/api/v1/proposal-templates`,
+  `/api/v1/organization/audit-events`, `/api/v1/organization/support-grants`,
+  `/api/v1/admin/organization-plans` and `/api/v1/admin/launch-metrics` answer 401
+  (they answered 404 before the release). Not checked: any screen while signed in.
+- Dashboard and admin app: these repositories have no `production` branch. Vercel
+  deploys `main` to its Production environment on every merge (latest: dashboard
+  `c7ce3f7`, admin `ea3d483`), and `av-rfpilot.com` is served from Vercel. Between
+  the dashboard merges of 10 Nov and the backend release of 11 Nov the live web
+  apps called routes the production API did not have. **A dashboard or admin PR
+  that needs a new API route must not merge before a backend release carries that
+  route.** Not confirmed from here: that the Vercel project making those
+  deployments is the one serving the public domain (two Vercel scopes appear in
+  the deployment URLs).
 
-**1. Merge what is open, then promote the backend.** Only ORG-504 (#130, these
-docs) is unmerged. The backend work is on `main` and reaches production only when
-`main` is merged into the `production` branch.
+**1. Released.** Nothing is left to merge for M4, M5 or the launch gate; ORG-504
+merged as #130. Later backend work still reaches production only when `main` is
+merged into the `production` branch.
 
-**2. Deploy with the plan change in mind (ORG-601).** From the backend deploy that
+**2. The plan change is live (ORG-601).** From the backend deploy that
 carries ORG-601, every existing organization is on `free_trial`: 2 RFPs created,
 vendor responses and RFP intelligence locked. RFPs created before that deploy are
 not counted. It stays that way until RFPilot staff set `full_access` on the admin
 app's Organizations page (ORG-603), which includes DXG's own organization. Legacy
 holding tenants are exempt.
+The owner reported on 2026-11-11, after the release, that Full access was set for
+the organizations that need it; which organizations were changed was not checked
+from here. Any organization created or left out since is on the free trial.
 
 **3. Tenancy cutover (ORG-107).** No production run is recorded, so existing
 customers are taken to be still in the shared organization (not checked against
