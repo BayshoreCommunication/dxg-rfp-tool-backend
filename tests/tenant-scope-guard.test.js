@@ -7,8 +7,11 @@ const path = require("node:path");
 // or carry a comment on the call line or the line above it: `tenant-scoped: <how>` when the filter
 // is a variable built from the tenant or the access policy, `scope-exempt: <reason>` for paths that
 // are deliberately not request-scoped (vendor token portal, cron, scripts).
+// Helpdesk tickets and messages are guarded too: customers read them inside their own organization,
+// and the only cross-organization reads are the RFPilot staff inbox and the sweeper, each marked
+// `scope-exempt:` in mongoSupportDeskRepository.ts.
 const ROOTS = ["src", "controller", "routes", "middleware", "utils"];
-const MODELS = ["Proposal", "VendorResponse", "VendorSubmission", "VendorSubmissionVersion", "VendorSubmissionDraft", "ProposalCanonicalSnapshot", "Notification", "PublicAccessGrant", "Team", "TeamMembership", "RfpShare", "ProposalStatusTransition", "OrganizationVendor", "SupportAccessGrant", "ProposalTemplate"];
+const MODELS = ["Proposal", "VendorResponse", "VendorSubmission", "VendorSubmissionVersion", "VendorSubmissionDraft", "ProposalCanonicalSnapshot", "Notification", "PublicAccessGrant", "Team", "TeamMembership", "RfpShare", "ProposalStatusTransition", "OrganizationVendor", "SupportAccessGrant", "ProposalTemplate", "SupportTicket", "SupportMessage"];
 const METHODS = ["find", "findOne", "findById", "findOneAndUpdate", "findByIdAndUpdate", "findOneAndDelete", "findByIdAndDelete", "updateOne", "updateMany", "deleteOne", "deleteMany", "countDocuments", "exists", "aggregate", "distinct", "replaceOne", "bulkWrite"];
 const SCOPE_TOKENS = ["organizationId", "organizationMongoId", "tenantFilter(", "tenantObjectId(", "scopeProposalFilter(", "rfpListScope(", "scoped("];
 // Whole files that are deliberately not request-scoped. Keep this list short and the reasons exact.

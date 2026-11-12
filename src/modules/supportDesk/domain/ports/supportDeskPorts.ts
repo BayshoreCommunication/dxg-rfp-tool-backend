@@ -5,6 +5,7 @@ import type {
   SupportMessageRecord,
   SupportTicketCategory,
   SupportTicketPatch,
+  SupportTicketPeopleRef,
   SupportTicketPriority,
   SupportTicketRecord,
   SupportTicketStatus,
@@ -26,6 +27,26 @@ export interface SupportDeskRepository {
     organizationId: string,
     filters: SupportInboxFilters & { requesterUserId?: string; assigneeUserId?: string },
   ): Promise<{ tickets: SupportTicketRecord[]; total: number }>;
+  /*
+   * Platform scope. The four reads below cross organizations, so only code that has already
+   * established RFPilot staff (`isPlatformSupportStaff`, through `agentScopeFor`) or that runs
+   * outside any request (the sweeper) may call them. No customer path does.
+   */
+  /** A ticket in whichever organization it belongs to. */
+  findTicketInAnyOrganization(ticketId: string): Promise<SupportTicketRecord | null>;
+  /** The staff inbox: every organization's tickets, optionally narrowed to one. */
+  listTicketsInAnyOrganization(
+    filters: SupportInboxFilters,
+  ): Promise<{ tickets: SupportTicketRecord[]; total: number }>;
+  /** Stat cards and the overdue figure over every organization. */
+  metricsForAllOrganizations(now: Date): Promise<SupportDeskMetrics>;
+  /**
+   * The people on tickets: a planner resolves only inside that ticket's own organization;
+   * RFPilot staff (`admins` accounts with a staff role) resolve wherever they sit.
+   */
+  findTicketPeople(refs: readonly SupportTicketPeopleRef[]): Promise<Map<string, SupportUserSummary>>;
+  /** Display names of organizations, for labelling tickets in the staff inbox. */
+  findOrganizationNames(organizationIds: readonly string[]): Promise<Map<string, string>>;
   updateTicket(
     organizationId: string,
     ticketId: string,
@@ -49,8 +70,10 @@ export interface SupportDeskRepository {
   ): Promise<SupportMessageRecord[]>;
   metrics(organizationId: string, now: Date): Promise<SupportDeskMetrics>;
   listAgents(organizationId: string): Promise<SupportUserSummary[]>;
-  /** Active (open or waiting) tickets per assignee, for automatic assignment. */
-  agentLoads(organizationId: string): Promise<Map<string, number>>;
+  /** RFPilot staff who answer tickets: every unblocked `admins` account with a staff role. */
+  listStaffAgents(): Promise<SupportUserSummary[]>;
+  /** Active (open or waiting) tickets per assignee across every organization, for automatic assignment. */
+  staffAgentLoads(): Promise<Map<string, number>>;
   /** Open tickets, across organizations, still unanswered at `answeredBefore`. */
   listUnansweredSince(answeredBefore: Date, limit: number): Promise<SupportTicketRecord[]>;
   /** Waiting tickets, across organizations, idle since `waitingBefore` with no reminder yet. */

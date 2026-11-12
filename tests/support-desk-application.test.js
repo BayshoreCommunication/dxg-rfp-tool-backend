@@ -164,10 +164,13 @@ const fakeRepository = () => {
     async listAgents() {
       return [users.get(AGENT), users.get(AGENT_TWO)];
     },
-    async agentLoads(organizationId) {
+    async listStaffAgents() {
+      return [users.get(AGENT), users.get(AGENT_TWO)];
+    },
+    async staffAgentLoads() {
       const loads = new Map();
       for (const t of tickets.values()) {
-        if (t.organizationId !== organizationId || !t.assigneeUserId) continue;
+        if (!t.assigneeUserId) continue;
         if (t.status !== "open" && t.status !== "waiting_on_customer") continue;
         loads.set(t.assigneeUserId, (loads.get(t.assigneeUserId) ?? 0) + 1);
       }
@@ -175,6 +178,13 @@ const fakeRepository = () => {
     },
     async findUserSummaries(organizationId, userIds) {
       return new Map(userIds.filter((id) => users.has(id)).map((id) => [id, users.get(id)]));
+    },
+    async findTicketPeople(refs) {
+      const ids = refs.flatMap((ref) => ref.userIds).filter((id) => users.has(id));
+      return new Map(ids.map((id) => [id, users.get(id)]));
+    },
+    async findOrganizationNames(organizationIds) {
+      return new Map(organizationIds.map((id) => [id, id === ORG ? "Acme Events" : "Another organization"]));
     },
     async listCannedReplies() {
       return [...canned.values()];

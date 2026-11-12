@@ -48,7 +48,10 @@ const sweepFixture = ({ unanswered = [], remind = [], resolve = [], close = [], 
       return { ...[...unanswered, ...remind, ...resolve, ...close].find((t) => t.id === id), ...patch };
     },
     async appendMessage(input) { messages.push(input); return { id: `m${messages.length}`, ...input, createdAt: input.now.toISOString() }; },
-    async findUserSummaries(organizationId, ids) { return new Map(ids.filter((id) => people.has(id)).map((id) => [id, people.get(id)])); },
+    async findTicketPeople(refs) {
+      const ids = refs.flatMap((ref) => ref.userIds);
+      return new Map(ids.filter((id) => people.has(id)).map((id) => [id, people.get(id)]));
+    },
   };
   const notifier = {
     async ticketEscalated(input) { events.push(["escalated", input]); },
@@ -141,7 +144,7 @@ const presenceFixture = () => {
     async remove(org, id, userId) { entries.delete(`${id}:${userId}`); },
   };
   const repository = {
-    async findTicket(org, id) { return id === "dddddddddddddddddddddddd" ? { id } : null; },
+    async findTicket(org, id) { return id === "dddddddddddddddddddddddd" ? { id, organizationId: org } : null; },
     async findUserSummaries(org, ids) { return new Map(ids.filter((id) => people.has(id)).map((id) => [id, people.get(id)])); },
   };
   const presence = createSupportPresence({ store, repository, clock: () => new Date(now) });

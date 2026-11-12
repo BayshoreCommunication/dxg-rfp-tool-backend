@@ -17,6 +17,7 @@ import type {
   SupportDeskRepository,
   SupportUploadScanner,
 } from "../domain/ports/supportDeskPorts";
+import { agentScopeFor } from "./agentScope";
 
 export const SUPPORT_ATTACHMENT_DOWNLOAD_SECONDS = 300;
 
@@ -108,11 +109,16 @@ export const createSupportAttachments = (dependencies: SupportAttachmentDependen
     if (!isSupportAttachmentId(attachmentId)) {
       throw new SupportDeskError("SUPPORT_ATTACHMENT_NOT_FOUND", "The attachment was not found.", 404);
     }
-    const ticket = await repository.findTicket(actor.organizationId, id);
+    // A planner reads only inside their own organization and only their own ticket. An
+    // agent reads through the agent scope (every organization for RFPilot staff only).
+    const ticket = options.customer
+      ? await repository.findTicket(actor.organizationId, id)
+      : await agentScopeFor(repository, actor).findTicket(id);
     if (!ticket || (options.customer && ticket.requesterUserId !== actor.userId)) {
       throw new SupportDeskError("SUPPORT_TICKET_NOT_FOUND", "The support ticket was not found.", 404);
     }
-    const found = await repository.findTicketAttachment(actor.organizationId, id, attachmentId.toLowerCase());
+    // The attachment must be on a message of this ticket, in the ticket's organization.
+    const found = await repository.findTicketAttachment(ticket.organizationId, ticket.id, attachmentId.toLowerCase());
     if (!found || (options.customer && !canBeReadByRequester({ kind: found.messageKind }))) {
       throw new SupportDeskError("SUPPORT_ATTACHMENT_NOT_FOUND", "The attachment was not found.", 404);
     }

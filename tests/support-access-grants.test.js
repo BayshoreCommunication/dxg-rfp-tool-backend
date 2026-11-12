@@ -46,7 +46,7 @@ const setup = () => {
     [RFP_TWO]: { id: RFP_TWO, organizationId: ORG, ownerUserId: MANAGER, teamId: null, title: "Sales kickoff" },
     [OTHER_RFP]: { id: OTHER_RFP, organizationId: OTHER_ORG, ownerUserId: OTHER_OWNER, teamId: null, title: "Foreign gala" },
   };
-  const tickets = { [TICKET]: { id: TICKET, organizationId: ORG, requesterUserId: PLANNER, visibleTo: STAFF_ORG } };
+  const tickets = { [TICKET]: { id: TICKET, organizationId: ORG, requesterUserId: PLANNER } };
   const state = { failAudit: false };
   const grants = {
     async create(input) {
@@ -109,7 +109,7 @@ const setup = () => {
     management: createSupportGrantManagement({ grants, directory, activity, audit: auditWriter, isValidId, clock }),
     access: createSupportAccess({
       grants, directory, reader, audit: auditWriter, isValidId, clock,
-      tickets: { async find(agentOrganizationId, ticketId) { const t = tickets[ticketId]; return t && t.visibleTo === agentOrganizationId ? t : null; } },
+      tickets: { async find(ticketId) { return tickets[ticketId] ?? null; } },
     }),
     rows, audit, state,
     advance(ms) { now = new Date(now.getTime() + ms); },
@@ -355,9 +355,16 @@ test("an organization-wide grant doesn't reach an RFP that isn't in the organiza
 test("AC: the RFPs behind a ticket need a grant from the ticket's organization", async () => {
   const { management, access, audit } = setup();
   await rejects(access.listTicketRfps(agent(), TICKET, {}), "SUPPORT_GRANT_REQUIRED", 403);
-  // A ticket the agent's support desk can't see is missing, grant or not.
-  await rejects(access.listTicketRfps(agent({ organizationId: hex("8") }), TICKET, {}), "SUPPORT_TICKET_NOT_FOUND", 404);
+  // RFPilot Support reads every organization's tickets, so the agent's own organization
+  // decides nothing: the grant has to come from the ticket's organization.
+  await rejects(access.listTicketRfps(agent({ organizationId: hex("8") }), TICKET, {}), "SUPPORT_GRANT_REQUIRED", 403);
   await rejects(access.listTicketRfps(agent(), "not-an-id", {}), "SUPPORT_TICKET_NOT_FOUND", 404);
+  await rejects(access.listTicketRfps(agent(), hex("9"), {}), "SUPPORT_TICKET_NOT_FOUND", 404);
+  // A grant from another organization does not open this ticket's proposals.
+  await management.create(member(OTHER_OWNER, OTHER_ORG), {});
+  await rejects(access.listTicketRfps(agent(), TICKET, {}), "SUPPORT_GRANT_REQUIRED", 403);
+  // A member holding a staff role is not RFPilot Support, with or without a grant.
+  await rejects(access.listTicketRfps(agent({ accountType: "planner" }), TICKET, {}), "SUPPORT_ACCESS_FORBIDDEN", 403);
 
   const grant = await management.create(member(OWNER), {});
   audit.length = 0;

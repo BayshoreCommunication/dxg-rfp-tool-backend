@@ -5,6 +5,7 @@ import SupportCannedReply from "../../../../../modal/supportCannedReplyModel";
 import SupportAttachment from "../../../../../modal/supportAttachmentModel";
 import User from "../../../../../modal/userModel";
 import Admin from "../../../../../modal/adminModel";
+import Organization from "../../../../../modal/organizationModel";
 import type {
   SupportCannedReplyRecord,
   SupportDeskRepository,
@@ -12,6 +13,7 @@ import type {
 import type {
   SupportAttachment as SupportAttachmentRecord,
   SupportDeskMetrics,
+  SupportInboxFilters,
   SupportMessageRecord,
   SupportTicketRecord,
   SupportUserSummary,
@@ -92,6 +94,137 @@ const ADMIN_ROLES = ["admin", "super_admin", "superadmin"];
 const toDate = (value: string | null | undefined): Date | null =>
   value ? new Date(value) : null;
 
+/**
+ * `null` is platform scope: every organization. Only the `…InAnyOrganization` /
+ * `…ForAllOrganizations` methods pass it, and their callers have established RFPilot staff.
+ */
+type TicketScope = string | null;
+const scopeFilter = (organizationId: TicketScope): Record<string, unknown> =>
+  organizationId ? { organizationId: oid(organizationId) } : {};
+
+const listTicketsIn = async (
+  organizationId: TicketScope,
+  filters: SupportInboxFilters & { requesterUserId?: string },
+): Promise<{ tickets: SupportTicketRecord[]; total: number }> => {
+  const query: Record<string, unknown> = scopeFilter(organizationId);
+  // The staff inbox can narrow to one customer organization; inside one organization the
+  // scope above already decides it, so the filter is ignored there.
+  if (!organizationId && filters.organizationId) query.organizationId = oid(filters.organizationId);
+  if (filters.requesterUserId) query.requesterUserId = oid(filters.requesterUserId);
+  if (filters.status === "active") query.status = { $in: ["open", "waiting_on_customer"] };
+  else if (filters.status) query.status = filters.status;
+  if (filters.assignee === "unassigned") query.assigneeUserId = null;
+  else if (filters.assignee && filters.assignee !== "me") query.assigneeUserId = oid(filters.assignee);
+  if (filters.priority) query.priority = filters.priority;
+  if (filters.category) query.category = filters.category;
+  if (filters.search) {
+    const regex = new RegExp(escapeRegex(filters.search), "i");
+    const numeric = Number.parseInt(filters.search.replace(/^#/, ""), 10);
+    const [matchingUsers, matchingOrganizations] = await Promise.all([
+      User.find({ ...scopeFilter(organizationId), $or: [{ name: regex }, { email: regex }] })
+        .select("_id")
+        .limit(organizationId ? 50 : 200)
+        .lean(),
+      // Staff find a customer's tickets by the organization's name.
+      organizationId
+        ? Promise.resolve([])
+        : Organization.find({ name: regex }).select("_id").limit(50).lean(),
+    ]);
+    query.$or = [
+      { subject: regex },
+      // Ticket numbers are per organization, so across organizations a number can match
+      // several tickets; each comes back with its organization.
+      ...(Number.isInteger(numeric) ? [{ ticketNumber: numeric }] : []),
+      ...(matchingUsers.length
+        ? [{ requesterUserId: { $in: matchingUsers.map((user) => user._id) } }]
+        : []),
+      ...(matchingOrganizations.length
+        ? [{ organizationId: { $in: matchingOrganizations.map((organization) => organization._id) } }]
+        : []),
+    ];
+  }
+  const skip = (filters.page - 1) * filters.perPage;
+  const [docs, total] = await Promise.all([
+    filters.sort === "recent"
+      ? // tenant-scoped: query starts from scopeFilter (one organization, or platform scope for RFPilot staff)
+        SupportTicket.find(query).sort({ lastMessageAt: -1, _id: -1 }).skip(skip).limit(filters.perPage).lean()
+      : // Tickets owed an answer first, soonest due (so most overdue) first;
+        // everything else after, newest activity first.
+        // tenant-scoped: query starts from scopeFilter (one organization, or platform scope for RFPilot staff)
+        SupportTicket.aggregate([
+          { $match: query },
+          { $addFields: { _owed: { $cond: [{ $ifNull: ["$responseDueAt", false] }, 0, 1] } } },
+          { $sort: { _owed: 1, responseDueAt: 1, lastMessageAt: -1, _id: -1 } },
+          { $skip: skip },
+          { $limit: filters.perPage },
+          { $project: { _owed: 0 } },
+        ]),
+    SupportTicket.countDocuments(query), // tenant-scoped: query starts from scopeFilter
+  ]);
+  return { tickets: docs.map((doc) => ticketRecord(doc as Record<string, unknown>)), total };
+};
+
+const metricsIn = async (organizationId: TicketScope, now: Date): Promise<SupportDeskMetrics> => {
+  const scope = scopeFilter(organizationId);
+  const active = { $in: ["open", "waiting_on_customer"] };
+  // tenant-scoped: every pipeline and count below starts from scopeFilter (one organization, or
+  // platform scope for RFPilot staff)
+  const [statusRows, unassigned, unreadRow, firstResponse, resolution, perAgentRows, overdue] = await Promise.all([
+    SupportTicket.aggregate<{ _id: string; count: number }>([ // tenant-scoped: scopeFilter
+      { $match: scope },
+      { $group: { _id: "$status", count: { $sum: 1 } } },
+    ]),
+    SupportTicket.countDocuments({ ...scope, assigneeUserId: null, status: active }), // tenant-scoped: scopeFilter
+    SupportTicket.aggregate<{ total: number }>([ // tenant-scoped: scopeFilter
+      // Only active tickets count as "unread": a closed ticket's leftover
+      // counter must not contradict an inbox that shows nothing open.
+      { $match: { ...scope, unreadForAgents: { $gt: 0 }, status: active } },
+      { $group: { _id: null, total: { $sum: "$unreadForAgents" } } },
+    ]),
+    SupportTicket.aggregate<{ average: number }>([ // tenant-scoped: scopeFilter
+      { $match: { ...scope, firstAgentResponseAt: { $ne: null } } },
+      {
+        $group: {
+          _id: null,
+          average: { $avg: { $subtract: ["$firstAgentResponseAt", "$createdAt"] } },
+        },
+      },
+    ]),
+    SupportTicket.aggregate<{ average: number }>([ // tenant-scoped: scopeFilter
+      {
+        $match: {
+          ...scope,
+          resolvedAt: { $ne: null },
+          // A resolve time before creation is bad data (an edited or
+          // imported record) and would drag the average below zero.
+          $expr: { $gte: ["$resolvedAt", "$createdAt"] },
+        },
+      },
+      { $group: { _id: null, average: { $avg: { $subtract: ["$resolvedAt", "$createdAt"] } } } },
+    ]),
+    SupportTicket.aggregate<{ _id: unknown; count: number }>([ // tenant-scoped: scopeFilter
+      { $match: { ...scope, assigneeUserId: { $ne: null }, status: active } },
+      { $group: { _id: "$assigneeUserId", count: { $sum: 1 } } },
+    ]),
+    SupportTicket.countDocuments({ ...scope, status: "open", responseDueAt: { $ne: null, $lte: now } }), // tenant-scoped: scopeFilter
+  ]);
+  const byStatus = new Map(statusRows.map((row) => [row._id, row.count]));
+  return {
+    open: byStatus.get("open") ?? 0,
+    waitingOnCustomer: byStatus.get("waiting_on_customer") ?? 0,
+    resolved: byStatus.get("resolved") ?? 0,
+    closed: byStatus.get("closed") ?? 0,
+    unassigned,
+    unreadForAgents: unreadRow[0]?.total ?? 0,
+    overdue,
+    averageFirstResponseMs: Number.isFinite(firstResponse[0]?.average)
+      ? Math.round(firstResponse[0].average)
+      : null,
+    averageResolutionMs: Number.isFinite(resolution[0]?.average) ? Math.round(resolution[0].average) : null,
+    perAgent: perAgentRows.map((row) => ({ agentUserId: String(row._id), openTickets: row.count })),
+  };
+};
+
 export const mongoSupportDeskRepository: SupportDeskRepository = {
   async createTicket(input) {
     const counter = await SupportTicketCounter.findOneAndUpdate(
@@ -118,50 +251,18 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
     return doc ? ticketRecord(doc as Record<string, unknown>) : null;
   },
 
+  async findTicketInAnyOrganization(ticketId) {
+    // scope-exempt: platform scope, RFPilot staff only (agentScopeFor) and the grant check behind a ticket
+    const doc = await SupportTicket.findOne({ _id: oid(ticketId) }).lean();
+    return doc ? ticketRecord(doc as Record<string, unknown>) : null;
+  },
+
   async listTickets(organizationId, filters) {
-    const query: Record<string, unknown> = { organizationId: oid(organizationId) };
-    if (filters.requesterUserId) query.requesterUserId = oid(filters.requesterUserId);
-    if (filters.status === "active") query.status = { $in: ["open", "waiting_on_customer"] };
-    else if (filters.status) query.status = filters.status;
-    if (filters.assignee === "unassigned") query.assigneeUserId = null;
-    else if (filters.assignee && filters.assignee !== "me") query.assigneeUserId = oid(filters.assignee);
-    if (filters.priority) query.priority = filters.priority;
-    if (filters.category) query.category = filters.category;
-    if (filters.search) {
-      const regex = new RegExp(escapeRegex(filters.search), "i");
-      const numeric = Number.parseInt(filters.search.replace(/^#/, ""), 10);
-      const matchingUsers = await User.find({
-        organizationId: oid(organizationId),
-        $or: [{ name: regex }, { email: regex }],
-      })
-        .select("_id")
-        .limit(50)
-        .lean();
-      query.$or = [
-        { subject: regex },
-        ...(Number.isInteger(numeric) ? [{ ticketNumber: numeric }] : []),
-        ...(matchingUsers.length
-          ? [{ requesterUserId: { $in: matchingUsers.map((user) => user._id) } }]
-          : []),
-      ];
-    }
-    const skip = (filters.page - 1) * filters.perPage;
-    const [docs, total] = await Promise.all([
-      filters.sort === "recent"
-        ? SupportTicket.find(query).sort({ lastMessageAt: -1, _id: -1 }).skip(skip).limit(filters.perPage).lean()
-        : // Tickets owed an answer first, soonest due (so most overdue) first;
-          // everything else after, newest activity first.
-          SupportTicket.aggregate([
-            { $match: query },
-            { $addFields: { _owed: { $cond: [{ $ifNull: ["$responseDueAt", false] }, 0, 1] } } },
-            { $sort: { _owed: 1, responseDueAt: 1, lastMessageAt: -1, _id: -1 } },
-            { $skip: skip },
-            { $limit: filters.perPage },
-            { $project: { _owed: 0 } },
-          ]),
-      SupportTicket.countDocuments(query),
-    ]);
-    return { tickets: docs.map((doc) => ticketRecord(doc as Record<string, unknown>)), total };
+    return listTicketsIn(organizationId, filters);
+  },
+
+  async listTicketsInAnyOrganization(filters) {
+    return listTicketsIn(null, filters);
   },
 
   async updateTicket(organizationId, ticketId, patch) {
@@ -229,87 +330,17 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
       ticketId: oid(ticketId),
     };
     if (!options.includeInternal) query.kind = { $ne: "internal_note" };
+    // tenant-scoped: query carries organizationId (built above)
     const docs = await SupportMessage.find(query).sort({ createdAt: 1, _id: 1 }).limit(500).lean();
     return docs.map((doc) => messageRecord(doc as Record<string, unknown>));
   },
 
   async metrics(organizationId, now) {
-    const organization = oid(organizationId);
-    const [statusRows, unassigned, unreadRow, firstResponse, resolution, perAgentRows, overdue] = await Promise.all([
-      SupportTicket.aggregate<{ _id: string; count: number }>([
-        { $match: { organizationId: organization } },
-        { $group: { _id: "$status", count: { $sum: 1 } } },
-      ]),
-      SupportTicket.countDocuments({
-        organizationId: organization,
-        assigneeUserId: null,
-        status: { $in: ["open", "waiting_on_customer"] },
-      }),
-      SupportTicket.aggregate<{ total: number }>([
-        // Only active tickets count as "unread": a closed ticket's leftover
-        // counter must not contradict an inbox that shows nothing open.
-        {
-          $match: {
-            organizationId: organization,
-            unreadForAgents: { $gt: 0 },
-            status: { $in: ["open", "waiting_on_customer"] },
-          },
-        },
-        { $group: { _id: null, total: { $sum: "$unreadForAgents" } } },
-      ]),
-      SupportTicket.aggregate<{ average: number }>([
-        { $match: { organizationId: organization, firstAgentResponseAt: { $ne: null } } },
-        {
-          $group: {
-            _id: null,
-            average: { $avg: { $subtract: ["$firstAgentResponseAt", "$createdAt"] } },
-          },
-        },
-      ]),
-      SupportTicket.aggregate<{ average: number }>([
-        {
-          $match: {
-            organizationId: organization,
-            resolvedAt: { $ne: null },
-            // A resolve time before creation is bad data (an edited or
-            // imported record) and would drag the average below zero.
-            $expr: { $gte: ["$resolvedAt", "$createdAt"] },
-          },
-        },
-        { $group: { _id: null, average: { $avg: { $subtract: ["$resolvedAt", "$createdAt"] } } } },
-      ]),
-      SupportTicket.aggregate<{ _id: unknown; count: number }>([
-        {
-          $match: {
-            organizationId: organization,
-            assigneeUserId: { $ne: null },
-            status: { $in: ["open", "waiting_on_customer"] },
-          },
-        },
-        { $group: { _id: "$assigneeUserId", count: { $sum: 1 } } },
-      ]),
-      SupportTicket.countDocuments({
-        organizationId: organization,
-        status: "open",
-        responseDueAt: { $ne: null, $lte: now },
-      }),
-    ]);
-    const byStatus = new Map(statusRows.map((row) => [row._id, row.count]));
-    const metrics: SupportDeskMetrics = {
-      open: byStatus.get("open") ?? 0,
-      waitingOnCustomer: byStatus.get("waiting_on_customer") ?? 0,
-      resolved: byStatus.get("resolved") ?? 0,
-      closed: byStatus.get("closed") ?? 0,
-      unassigned,
-      unreadForAgents: unreadRow[0]?.total ?? 0,
-      overdue,
-      averageFirstResponseMs: Number.isFinite(firstResponse[0]?.average)
-        ? Math.round(firstResponse[0].average)
-        : null,
-      averageResolutionMs: Number.isFinite(resolution[0]?.average) ? Math.round(resolution[0].average) : null,
-      perAgent: perAgentRows.map((row) => ({ agentUserId: String(row._id), openTickets: row.count })),
-    };
-    return metrics;
+    return metricsIn(organizationId, now);
+  },
+
+  async metricsForAllOrganizations(now) {
+    return metricsIn(null, now);
   },
 
   async listAgents(organizationId) {
@@ -324,21 +355,26 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
     return docs.map((doc) => userSummary(doc as Record<string, unknown>));
   },
 
-  async agentLoads(organizationId) {
+  async listStaffAgents() {
+    // RFPilot staff are the `admins` accounts, wherever their own organization is.
+    const docs = await Admin.find({ role: { $in: ADMIN_ROLES }, isBlocked: { $ne: true } })
+      .select("name email company role")
+      .sort({ name: 1 })
+      .lean();
+    return docs.map((doc) => userSummary(doc as Record<string, unknown>));
+  },
+
+  async staffAgentLoads() {
+    // scope-exempt: workload per staff member counts every organization's active tickets
     const rows = await SupportTicket.aggregate<{ _id: unknown; count: number }>([
-      {
-        $match: {
-          organizationId: oid(organizationId),
-          assigneeUserId: { $ne: null },
-          status: { $in: ["open", "waiting_on_customer"] },
-        },
-      },
+      { $match: { assigneeUserId: { $ne: null }, status: { $in: ["open", "waiting_on_customer"] } } },
       { $group: { _id: "$assigneeUserId", count: { $sum: 1 } } },
     ]);
     return new Map(rows.map((row) => [String(row._id), row.count]));
   },
 
   async listUnansweredSince(answeredBefore, limit) {
+    // scope-exempt: the sweeper runs outside any request, across every organization
     const docs = await SupportTicket.find({
       status: "open",
       responseDueAt: { $ne: null },
@@ -352,6 +388,7 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
   },
 
   async listNeedingCloseReminder(waitingBefore, limit) {
+    // scope-exempt: the sweeper runs outside any request, across every organization
     const docs = await SupportTicket.find({
       status: "waiting_on_customer",
       waitingSince: { $ne: null, $lte: waitingBefore },
@@ -364,6 +401,7 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
   },
 
   async listResolvedBefore(resolvedBefore, limit) {
+    // scope-exempt: the sweeper runs outside any request, across every organization
     const docs = await SupportTicket.find({
       status: "resolved",
       resolvedAt: { $ne: null, $lte: resolvedBefore },
@@ -375,6 +413,7 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
   },
 
   async listDueToAutoResolve(waitingBefore, remindedBefore, limit) {
+    // scope-exempt: the sweeper runs outside any request, across every organization
     const docs = await SupportTicket.find({
       status: "waiting_on_customer",
       waitingSince: { $ne: null, $lte: waitingBefore },
@@ -389,6 +428,7 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
   async backfillServiceLevels(now) {
     // Waiting tickets from before the auto-close clock existed start it now,
     // so nothing old closes without its reminder first.
+    // scope-exempt: one-time service-level backfill across every organization (sweeper)
     const waiting = await SupportTicket.updateMany(
       { status: "waiting_on_customer", waitingSince: { $exists: false } },
       { $set: { waitingSince: now, autoCloseReminderSentAt: null } },
@@ -398,6 +438,7 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
     // so the first sweep does not page every agent about old tickets.
     let owed = 0;
     for (const [priority, ms] of Object.entries(RESPONSE_TARGET_MS)) {
+      // scope-exempt: one-time service-level backfill across every organization (sweeper)
       const result = await SupportTicket.updateMany(
         {
           status: "open",
@@ -411,10 +452,12 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
       owed += result.modifiedCount;
     }
     // Everything else gets explicit nulls so this never matches it again.
+    // scope-exempt: one-time service-level backfill across every organization (sweeper)
     const rest = await SupportTicket.updateMany(
       { responseDueAt: { $exists: false } },
       { $set: { responseDueAt: null, escalatedAt: null } },
     );
+    // scope-exempt: one-time service-level backfill across every organization (sweeper)
     const restWaiting = await SupportTicket.updateMany(
       { waitingSince: { $exists: false } },
       { $set: { waitingSince: null, autoCloseReminderSentAt: null } },
@@ -434,6 +477,42 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
     return new Map(
       [...planners, ...admins].map((doc) => [String(doc._id), userSummary(doc as Record<string, unknown>)]),
     );
+  },
+
+  async findTicketPeople(refs) {
+    const perOrganization = refs
+      .map((ref) => ({
+        organizationId: ref.organizationId,
+        userIds: [...new Set(ref.userIds.filter((id): id is string => Boolean(id)))],
+      }))
+      .filter((ref) => ref.userIds.length > 0);
+    if (!perOrganization.length) return new Map();
+    const everyId = [...new Set(perOrganization.flatMap((ref) => ref.userIds))];
+    const [planners, staff] = await Promise.all([
+      // A planner resolves only inside the organization of the ticket that names them.
+      User.find({
+        $or: perOrganization.map((ref) => ({
+          organizationId: oid(ref.organizationId),
+          _id: { $in: ref.userIds.map(oid) },
+        })),
+      })
+        .select("name email company role")
+        .lean(),
+      // Agents, assignees and authors of agent replies are RFPilot staff, outside the customer's organization.
+      Admin.find({ _id: { $in: everyId.map(oid) }, role: { $in: ADMIN_ROLES } })
+        .select("name email role")
+        .lean(),
+    ]);
+    return new Map(
+      [...planners, ...staff].map((doc) => [String(doc._id), userSummary(doc as Record<string, unknown>)]),
+    );
+  },
+
+  async findOrganizationNames(organizationIds) {
+    const ids = [...new Set(organizationIds)];
+    if (!ids.length) return new Map();
+    const docs = await Organization.find({ _id: { $in: ids.map(oid) } }).select("name").lean();
+    return new Map(docs.map((doc) => [String(doc._id), text(doc.name)]));
   },
 
   async listCannedReplies(organizationId) {
