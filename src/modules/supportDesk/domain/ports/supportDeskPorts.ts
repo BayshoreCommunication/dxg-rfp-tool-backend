@@ -28,9 +28,9 @@ export interface SupportDeskRepository {
     filters: SupportInboxFilters & { requesterUserId?: string; assigneeUserId?: string },
   ): Promise<{ tickets: SupportTicketRecord[]; total: number }>;
   /*
-   * Platform scope. The four reads below cross organizations, so only code that has already
-   * established RFPilot staff (`isPlatformSupportStaff`, through `agentScopeFor`) or that runs
-   * outside any request (the sweeper) may call them. No customer path does.
+   * Platform scope. The next three reads return tickets of any organization, so only code that
+   * has already established RFPilot staff (`isPlatformSupportStaff`, through `agentScopeFor`;
+   * `isSupportAgent` for the grant check behind a ticket) may call them. No customer path does.
    */
   /** A ticket in whichever organization it belongs to. */
   findTicketInAnyOrganization(ticketId: string): Promise<SupportTicketRecord | null>;
@@ -42,7 +42,8 @@ export interface SupportDeskRepository {
   metricsForAllOrganizations(now: Date): Promise<SupportDeskMetrics>;
   /**
    * The people on tickets: a planner resolves only inside that ticket's own organization;
-   * RFPilot staff (`admins` accounts with a staff role) resolve wherever they sit.
+   * RFPilot staff (`admins` accounts with a staff role) resolve wherever they sit. Also used on
+   * the customer side and by the sweeper to name a ticket's staff owner; it returns no ticket data.
    */
   findTicketPeople(refs: readonly SupportTicketPeopleRef[]): Promise<Map<string, SupportUserSummary>>;
   /** Display names of organizations, for labelling tickets in the staff inbox. */
@@ -70,7 +71,10 @@ export interface SupportDeskRepository {
   ): Promise<SupportMessageRecord[]>;
   metrics(organizationId: string, now: Date): Promise<SupportDeskMetrics>;
   listAgents(organizationId: string): Promise<SupportUserSummary[]>;
-  /** RFPilot staff who answer tickets: every unblocked `admins` account with a staff role. */
+  /**
+   * RFPilot staff who answer tickets: every unblocked `admins` account with a staff role.
+   * This and `staffAgentLoads` also run when a customer opens a ticket, to pick its owner.
+   */
   listStaffAgents(): Promise<SupportUserSummary[]>;
   /** Active (open or waiting) tickets per assignee across every organization, for automatic assignment. */
   staffAgentLoads(): Promise<Map<string, number>>;

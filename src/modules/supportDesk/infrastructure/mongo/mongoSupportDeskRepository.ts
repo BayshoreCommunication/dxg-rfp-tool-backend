@@ -99,8 +99,10 @@ const toDate = (value: string | null | undefined): Date | null =>
  * `…ForAllOrganizations` methods pass it, and their callers have established RFPilot staff.
  */
 type TicketScope = string | null;
+// Only an explicit null widens the scope. Anything else must be a real organization id:
+// an empty or malformed one throws in `oid` instead of matching every organization.
 const scopeFilter = (organizationId: TicketScope): Record<string, unknown> =>
-  organizationId ? { organizationId: oid(organizationId) } : {};
+  organizationId === null ? {} : { organizationId: oid(organizationId) };
 
 const listTicketsIn = async (
   organizationId: TicketScope,
@@ -109,7 +111,7 @@ const listTicketsIn = async (
   const query: Record<string, unknown> = scopeFilter(organizationId);
   // The staff inbox can narrow to one customer organization; inside one organization the
   // scope above already decides it, so the filter is ignored there.
-  if (!organizationId && filters.organizationId) query.organizationId = oid(filters.organizationId);
+  if (organizationId === null && filters.organizationId) query.organizationId = oid(filters.organizationId);
   if (filters.requesterUserId) query.requesterUserId = oid(filters.requesterUserId);
   if (filters.status === "active") query.status = { $in: ["open", "waiting_on_customer"] };
   else if (filters.status) query.status = filters.status;
@@ -119,16 +121,19 @@ const listTicketsIn = async (
   if (filters.category) query.category = filters.category;
   if (filters.search) {
     const regex = new RegExp(escapeRegex(filters.search), "i");
-    const numeric = Number.parseInt(filters.search.replace(/^#/, ""), 10);
+    // A ticket number only when the whole search is one ("#3" or "3"): "3 day event" must not
+    // pull in ticket 3 of every organization.
+    const numeric = /^#?\d{1,9}$/.test(filters.search) ? Number.parseInt(filters.search.replace(/^#/, ""), 10) : Number.NaN;
     const [matchingUsers, matchingOrganizations] = await Promise.all([
       User.find({ ...scopeFilter(organizationId), $or: [{ name: regex }, { email: regex }] })
         .select("_id")
-        .limit(organizationId ? 50 : 200)
+        .sort({ _id: -1 })
+        .limit(organizationId === null ? 200 : 50)
         .lean(),
       // Staff find a customer's tickets by the organization's name.
       organizationId
         ? Promise.resolve([])
-        : Organization.find({ name: regex }).select("_id").limit(50).lean(),
+        : Organization.find({ name: regex }).select("_id").sort({ _id: -1 }).limit(50).lean(),
     ]);
     query.$or = [
       { subject: regex },

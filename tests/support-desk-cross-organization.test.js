@@ -74,7 +74,7 @@ const fakeRepository = () => {
     else if (filters.assignee) rows = rows.filter((t) => t.assigneeUserId === filters.assignee);
     if (filters.search) {
       const needle = filters.search.toLowerCase();
-      const numeric = Number.parseInt(filters.search.replace(/^#/, ""), 10);
+      const numeric = /^#?\d+$/.test(filters.search) ? Number.parseInt(filters.search.replace(/^#/, ""), 10) : Number.NaN;
       rows = rows.filter(
         (t) =>
           t.subject.toLowerCase().includes(needle) ||

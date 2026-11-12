@@ -218,11 +218,12 @@ test("numbering: each organization keeps its own numbers, and staff tell tickets
   assert.deepEqual(numbers.map((t) => t.ticketNumber), [1, 1, 1]);
 
   // #1 matches one ticket per organization; each comes back with its organization.
+  // (The shared test database can hold other organizations' #1 tickets too, so count, don't list.)
   const byNumber = await call(staffToken, "GET", search("#1"));
-  const mine = (byNumber.body.data.tickets as any[]).filter((t) => [bayshoreTicketId, acmeTicketId, dxgTicketId].includes(t.id));
-  // (The shared test database may hold more than one page of other organizations' #1 tickets.)
-  if (byNumber.body.data.pagination.total <= 50) assert.equal(mine.length, 3);
-  assert.ok(mine.every((t) => t.ticketNumber === 1 && typeof t.organization?.name === "string" && t.organization.name.length > 0));
+  assert.ok(byNumber.body.data.pagination.total >= 3, `#1 matches at least our three tickets (${byNumber.body.data.pagination.total})`);
+  assert.ok((byNumber.body.data.tickets as any[]).length > 0 && (byNumber.body.data.tickets as any[]).every((t) => t.ticketNumber === 1 && t.organization?.id === t.organizationId));
+  // A search that only starts with a number is text, not a ticket number.
+  assert.deepEqual(ids(await call(staffToken, "GET", `${search("1 day event nobody wrote about")}&organization=${bayshore.organizationId}`)), []);
   // Number plus organization is exact.
   for (const [organizationId, ticketId] of [[bayshore.organizationId, bayshoreTicketId], [acme.organizationId, acmeTicketId], [String(dxg.org), dxgTicketId]]) {
     assert.deepEqual(ids(await call(staffToken, "GET", `${search("#1")}&organization=${organizationId}`)), [ticketId]);
