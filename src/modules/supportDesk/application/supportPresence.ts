@@ -1,9 +1,9 @@
 import {
   SupportDeskError,
-  assertAgent,
   parseSupportObjectId,
   type SupportActor,
 } from "../domain";
+import { agentScopeFor, type AgentScope } from "./agentScope";
 import type {
   SupportDeskClock,
   SupportDeskRepository,
@@ -28,28 +28,29 @@ export const createSupportPresence = (dependencies: {
   const { store, repository } = dependencies;
   const clock = dependencies.clock ?? (() => new Date());
 
-  const requireTicketId = async (actor: SupportActor, ticketId: unknown) => {
-    const id = parseSupportObjectId(ticketId, "ticket id");
-    if (!(await repository.findTicket(actor.organizationId, id))) {
+  // Presence is keyed by the ticket's own organization, so every agent on a ticket
+  // shares one entry set whichever organization their account sits in.
+  const requireTicket = async (scope: AgentScope, ticketId: unknown) => {
+    const ticket = await scope.findTicket(parseSupportObjectId(ticketId, "ticket id"));
+    if (!ticket) {
       throw new SupportDeskError("SUPPORT_TICKET_NOT_FOUND", "The support ticket was not found.", 404);
     }
-    return id;
+    return ticket;
   };
 
   return {
     async heartbeat(actor: SupportActor, ticketId: unknown, input: { state?: unknown }) {
-      assertAgent(actor);
-      const id = await requireTicketId(actor, ticketId);
+      const scope = agentScopeFor(repository, actor);
+      const ticket = await requireTicket(scope, ticketId);
       const state: SupportPresenceState = input.state === "replying" ? "replying" : "viewing";
       const now = clock();
-      await store.touch(actor.organizationId, id, { userId: actor.userId, state, at: now.toISOString() });
-      const others = (await store.list(actor.organizationId, id)).filter(
+      await store.touch(ticket.organizationId, ticket.id, { userId: actor.userId, state, at: now.toISOString() });
+      const others = (await store.list(ticket.organizationId, ticket.id)).filter(
         (entry) => entry.userId !== actor.userId && now.getTime() - Date.parse(entry.at) <= PRESENCE_FRESH_MS,
       );
-      const people = await repository.findUserSummaries(
-        actor.organizationId,
-        others.map((entry) => entry.userId),
-      );
+      const people = await scope.people([
+        { organizationId: ticket.organizationId, userIds: others.map((entry) => entry.userId) },
+      ]);
       return {
         others: others
           .map((entry) => ({
@@ -63,9 +64,10 @@ export const createSupportPresence = (dependencies: {
     },
 
     async leave(actor: SupportActor, ticketId: unknown) {
-      assertAgent(actor);
-      const id = parseSupportObjectId(ticketId, "ticket id");
-      await store.remove(actor.organizationId, id, actor.userId);
+      const scope = agentScopeFor(repository, actor);
+      // Leaving a ticket that is gone, or out of the agent's scope, has nothing to clear.
+      const ticket = await scope.findTicket(parseSupportObjectId(ticketId, "ticket id"));
+      if (ticket) await store.remove(ticket.organizationId, ticket.id, actor.userId);
     },
   };
 };

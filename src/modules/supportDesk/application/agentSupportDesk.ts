@@ -14,6 +14,7 @@ import {
   ticketIsTerminal,
   type SupportActor,
   type SupportMessageRecord,
+  type SupportOrganizationSummary,
   type SupportTicketPatch,
   type SupportTicketRecord,
   type SupportTicketStatus,
@@ -25,6 +26,7 @@ import type {
   SupportDeskRepository,
 } from "../domain/ports/supportDeskPorts";
 import { claimAttachmentsForMessage } from "./supportAttachments";
+import { agentScopeFor, type AgentScope } from "./agentScope";
 import { serviceLevelPatch } from "../serviceLevels";
 
 export type AgentSupportDeskDependencies = {
@@ -40,28 +42,30 @@ const STATUS_LABEL: Record<SupportTicketStatus, string> = {
   closed: "Closed",
 };
 
-const requireTicket = async (
-  repository: SupportDeskRepository,
-  actor: SupportActor,
-  ticketId: unknown,
-): Promise<SupportTicketRecord> => {
+const requireTicket = async (scope: AgentScope, ticketId: unknown): Promise<SupportTicketRecord> => {
   const id = parseSupportObjectId(ticketId, "ticket id");
-  const ticket = await repository.findTicket(actor.organizationId, id);
+  const ticket = await scope.findTicket(id);
   if (!ticket) {
     throw new SupportDeskError("SUPPORT_TICKET_NOT_FOUND", "The support ticket was not found.", 404);
   }
   return ticket;
 };
 
-const summaries = async (
-  repository: SupportDeskRepository,
-  organizationId: string,
+/** The people on one ticket: its requester inside the ticket's organization, plus agents. */
+const peopleOn = (
+  scope: AgentScope,
+  ticket: Pick<SupportTicketRecord, "organizationId">,
   ids: readonly (string | null)[],
 ): Promise<Map<string, SupportUserSummary>> =>
-  repository.findUserSummaries(
-    organizationId,
-    [...new Set(ids.filter((id): id is string => Boolean(id)))],
-  );
+  scope.people([{ organizationId: ticket.organizationId, userIds: ids }]);
+
+const organizationOf = (
+  names: ReadonlyMap<string, string>,
+  ticket: Pick<SupportTicketRecord, "organizationId">,
+): SupportOrganizationSummary => ({
+  id: ticket.organizationId,
+  name: names.get(ticket.organizationId) || null,
+});
 
 const timestampsForStatus = (
   status: SupportTicketStatus,
@@ -73,9 +77,10 @@ const timestampsForStatus = (
 };
 
 /**
- * RFPilot-side helpdesk operations. Agents are organization members with an
- * administrative role; every operation is still bounded to the agent's own
- * organization so a tenant can never see another tenant's inbox.
+ * RFPilot-side helpdesk operations. RFPilot staff (`admins` accounts with a staff
+ * role) answer every organization's tickets; any other account that passes the agent
+ * check stays inside its own organization (see `agentScopeFor`). Ticket conversations
+ * and their attachments only: nothing here reads a customer's proposals.
  */
 export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencies) => {
   const { repository, notifier } = dependencies;
@@ -83,14 +88,14 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
 
   const auditMessage = async (
     actor: SupportActor,
-    ticketId: string,
+    ticket: SupportTicketRecord,
     body: string,
     now: Date,
     customerVisible: boolean,
   ) =>
     repository.appendMessage({
-      organizationId: actor.organizationId,
-      ticketId,
+      organizationId: ticket.organizationId,
+      ticketId: ticket.id,
       authorUserId: actor.userId,
       authorRole: "system",
       kind: customerVisible ? "system" : "internal_note",
@@ -108,12 +113,13 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
         priority?: unknown;
         category?: unknown;
         search?: unknown;
+        organization?: unknown;
         sort?: unknown;
         page?: unknown;
         perPage?: unknown;
       },
     ) {
-      assertAgent(actor);
+      const scope = agentScopeFor(repository, actor);
       const page = parsePage(query.page);
       const perPage = parsePerPage(query.perPage);
       const status =
@@ -133,9 +139,12 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
             : assigneeRaw === "me"
               ? actor.userId
               : parseSupportObjectId(assigneeRaw, "assignee id");
-      const result = await repository.listTickets(actor.organizationId, {
+      const organizationRaw = String(query.organization ?? "").trim();
+      const result = await scope.listTickets({
         status,
         assignee,
+        // One customer organization's tickets; only the staff inbox spans more than one.
+        organizationId: organizationRaw ? parseSupportObjectId(organizationRaw, "organization id") : undefined,
         priority: query.priority ? parsePriority(query.priority) : undefined,
         category: query.category ? parseCategory(query.category) : undefined,
         search: parseSearch(query.search),
@@ -143,15 +152,23 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
         page,
         perPage,
       });
-      const people = await summaries(
-        repository,
-        actor.organizationId,
-        result.tickets.flatMap((ticket) => [ticket.requesterUserId, ticket.assigneeUserId]),
-      );
+      const [people, organizations] = await Promise.all([
+        scope.people(
+          result.tickets.map((ticket) => ({
+            organizationId: ticket.organizationId,
+            userIds: [ticket.requesterUserId, ticket.assigneeUserId],
+          })),
+        ),
+        repository.findOrganizationNames(result.tickets.map((ticket) => ticket.organizationId)),
+      ]);
       const totalPages = Math.max(1, Math.ceil(result.total / perPage));
       return {
+        // Ticket numbers are per organization: with "all_organizations" a number is only
+        // unique together with the ticket's organization.
+        scope: scope.platform ? ("all_organizations" as const) : ("organization" as const),
         tickets: result.tickets.map((ticket) => ({
           ...ticket,
+          organization: organizationOf(organizations, ticket),
           requester: people.get(ticket.requesterUserId) ?? null,
           assignee: ticket.assigneeUserId ? people.get(ticket.assigneeUserId) ?? null : null,
         })),
@@ -160,22 +177,26 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
     },
 
     async getTicket(actor: SupportActor, ticketId: unknown) {
-      assertAgent(actor);
-      const ticket = await requireTicket(repository, actor, ticketId);
-      const messages = await repository.listMessages(actor.organizationId, ticket.id, {
+      const scope = agentScopeFor(repository, actor);
+      const ticket = await requireTicket(scope, ticketId);
+      const messages = await repository.listMessages(ticket.organizationId, ticket.id, {
         includeInternal: true,
       });
       const current =
         ticket.unreadForAgents > 0
-          ? (await repository.updateTicket(actor.organizationId, ticket.id, { unreadForAgents: 0 })) ?? ticket
+          ? (await repository.updateTicket(ticket.organizationId, ticket.id, { unreadForAgents: 0 })) ?? ticket
           : ticket;
-      const people = await summaries(repository, actor.organizationId, [
-        ticket.requesterUserId,
-        ticket.assigneeUserId,
-        ...messages.map((message) => message.authorUserId),
+      const [people, organizations] = await Promise.all([
+        peopleOn(scope, ticket, [
+          ticket.requesterUserId,
+          ticket.assigneeUserId,
+          ...messages.map((message) => message.authorUserId),
+        ]),
+        repository.findOrganizationNames([ticket.organizationId]),
       ]);
       return {
         ticket: current,
+        organization: organizationOf(organizations, ticket),
         requester: people.get(ticket.requesterUserId) ?? null,
         assignee: current.assigneeUserId ? people.get(current.assigneeUserId) ?? null : null,
         messages: messages.map((message) => ({
@@ -190,9 +211,10 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
       ticketId: unknown,
       input: { body?: unknown; attachments?: unknown; status?: unknown },
     ): Promise<{ ticket: SupportTicketRecord; message: SupportMessageRecord }> {
-      assertAgent(actor);
-      const ticket = await requireTicket(repository, actor, ticketId);
+      const scope = agentScopeFor(repository, actor);
+      const ticket = await requireTicket(scope, ticketId);
       const body = parseBody(input.body);
+      // An agent's uploads are pending under the agent's own account and organization.
       const attachments = await claimAttachmentsForMessage(
         repository,
         actor,
@@ -203,8 +225,9 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
           ? "waiting_on_customer"
           : parseStatus(input.status);
       const now = clock();
+      // The reply is written into the ticket's organization, where the customer reads it.
       const message = await repository.appendMessage({
-        organizationId: actor.organizationId,
+        organizationId: ticket.organizationId,
         ticketId: ticket.id,
         authorUserId: actor.userId,
         authorRole: "agent",
@@ -215,6 +238,7 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
       });
       if (attachments.length) {
         await repository.markAttachmentsUsed({
+          // The pending upload rows live under the agent's own organization.
           organizationId: actor.organizationId,
           ids: attachments.map((item) => item.id),
           ticketId: ticket.id,
@@ -222,7 +246,7 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
         });
       }
       const updated =
-        (await repository.updateTicket(actor.organizationId, ticket.id, {
+        (await repository.updateTicket(ticket.organizationId, ticket.id, {
           messageCountDelta: 1,
           unreadForRequester: ticket.unreadForRequester + 1,
           // Replying implies the agent has read everything the customer sent.
@@ -235,10 +259,7 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
           ...timestampsForStatus(nextStatus, now),
           ...serviceLevelPatch({ before: ticket, status: nextStatus, priority: ticket.priority, event: "agent_message", now }),
         })) ?? ticket;
-      const people = await summaries(repository, actor.organizationId, [
-        ticket.requesterUserId,
-        actor.userId,
-      ]);
+      const people = await peopleOn(scope, ticket, [ticket.requesterUserId, actor.userId]);
       await notifier.agentReplied({
         ticket: updated,
         requester: people.get(ticket.requesterUserId) ?? null,
@@ -261,14 +282,14 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
       ticketId: unknown,
       input: { body?: unknown },
     ): Promise<SupportMessageRecord> {
-      assertAgent(actor);
-      const ticket = await requireTicket(repository, actor, ticketId);
+      const scope = agentScopeFor(repository, actor);
+      const ticket = await requireTicket(scope, ticketId);
       const body = parseBody(input.body);
       const now = clock();
       // Internal notes are invisible to the customer, so they never count
       // toward the ticket's message count or move it in the inbox.
       return repository.appendMessage({
-        organizationId: actor.organizationId,
+        organizationId: ticket.organizationId,
         ticketId: ticket.id,
         authorUserId: actor.userId,
         authorRole: "agent",
@@ -284,12 +305,12 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
       ticketId: unknown,
       input: { assigneeUserId?: unknown; priority?: unknown; category?: unknown; status?: unknown; subject?: unknown },
     ): Promise<SupportTicketRecord> {
-      assertAgent(actor);
-      const ticket = await requireTicket(repository, actor, ticketId);
+      const scope = agentScopeFor(repository, actor);
+      const ticket = await requireTicket(scope, ticketId);
       const now = clock();
       const patch: SupportTicketPatch & { subject?: string } = {};
       const events: Array<{ body: string; customerVisible: boolean }> = [];
-      const people = await summaries(repository, actor.organizationId, [actor.userId]);
+      const people = await peopleOn(scope, ticket, [actor.userId]);
       const agentName = people.get(actor.userId)?.name ?? "An agent";
 
       if (input.assigneeUserId !== undefined) {
@@ -298,7 +319,7 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
             ? null
             : parseSupportObjectId(input.assigneeUserId, "assignee id");
         if (assigneeUserId) {
-          const agents = await repository.listAgents(actor.organizationId);
+          const agents = await scope.listAgents();
           if (!agents.some((agent) => agent.id === assigneeUserId)) {
             throw new SupportDeskError("SUPPORT_INVALID_ASSIGNEE", "The assignee must be a support agent.", 400);
           }
@@ -306,7 +327,7 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
         if (assigneeUserId !== ticket.assigneeUserId) {
           patch.assigneeUserId = assigneeUserId;
           const assigneeName = assigneeUserId
-            ? (await summaries(repository, actor.organizationId, [assigneeUserId])).get(assigneeUserId)?.name ?? "an agent"
+            ? (await peopleOn(scope, ticket, [assigneeUserId])).get(assigneeUserId)?.name ?? "an agent"
             : null;
           events.push({
             body: assigneeName ? `${agentName} assigned this ticket to ${assigneeName}.` : `${agentName} unassigned this ticket.`,
@@ -365,34 +386,31 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
           }),
         );
       }
-      const updated = (await repository.updateTicket(actor.organizationId, ticket.id, patch)) ?? ticket;
+      const updated = (await repository.updateTicket(ticket.organizationId, ticket.id, patch)) ?? ticket;
       for (const event of events) {
-        await auditMessage(actor, ticket.id, event.body, now, event.customerVisible);
+        await auditMessage(actor, ticket, event.body, now, event.customerVisible);
       }
       const publicEventCount = events.filter((event) => event.customerVisible).length;
       if (publicEventCount > 0) {
-        await repository.updateTicket(actor.organizationId, ticket.id, { messageCountDelta: publicEventCount });
+        await repository.updateTicket(ticket.organizationId, ticket.id, { messageCountDelta: publicEventCount });
       }
       if (patch.assigneeUserId && patch.assigneeUserId !== actor.userId) {
         await notifier.ticketAssigned({ ticket: updated, assigneeUserId: patch.assigneeUserId, assignedBy: agentName });
       }
       if (statusChanged) {
-        const requester = (await summaries(repository, actor.organizationId, [ticket.requesterUserId])).get(
-          ticket.requesterUserId,
-        ) ?? null;
+        const requester = (await peopleOn(scope, ticket, [ticket.requesterUserId])).get(ticket.requesterUserId) ?? null;
         await notifier.statusChanged({ ticket: updated, requester, status: statusChanged, byAgent: true });
       }
       return { ...updated, messageCount: updated.messageCount + publicEventCount };
     },
 
     async metrics(actor: SupportActor) {
-      assertAgent(actor);
-      const metrics = await repository.metrics(actor.organizationId, clock());
-      const people = await summaries(
-        repository,
-        actor.organizationId,
-        metrics.perAgent.map((row) => row.agentUserId),
-      );
+      const scope = agentScopeFor(repository, actor);
+      const metrics = await scope.metrics(clock());
+      // Assignees are agents; naming the actor's organization never resolves a customer here.
+      const people = await scope.people([
+        { organizationId: actor.organizationId, userIds: metrics.perAgent.map((row) => row.agentUserId) },
+      ]);
       return {
         ...metrics,
         perAgent: metrics.perAgent.map((row) => ({
@@ -403,10 +421,11 @@ export const createAgentSupportDesk = (dependencies: AgentSupportDeskDependencie
     },
 
     async listAgents(actor: SupportActor): Promise<SupportUserSummary[]> {
-      assertAgent(actor);
-      return repository.listAgents(actor.organizationId);
+      return agentScopeFor(repository, actor).listAgents();
     },
 
+    // Canned replies belong to the support team, not to a customer: they stay in the
+    // agent's own organization and are usable on any ticket the agent can answer.
     async listCannedReplies(actor: SupportActor) {
       assertAgent(actor);
       return repository.listCannedReplies(actor.organizationId);

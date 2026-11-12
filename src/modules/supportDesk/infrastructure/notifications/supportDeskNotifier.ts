@@ -1,4 +1,5 @@
 import Admin from "../../../../../modal/adminModel";
+import Organization from "../../../../../modal/organizationModel";
 import { createNotification } from "../../../../../utils/notificationService";
 import { sendCustomEmail } from "../../../../../utils/emailService";
 import type { SupportDeskNotifier } from "../../domain/ports/supportDeskPorts";
@@ -38,6 +39,20 @@ const agentLink = (ticket: SupportTicketRecord): string => `${adminUrl()}/suppor
 
 const label = (ticket: SupportTicketRecord): string => `#${ticket.ticketNumber} ${ticket.subject}`;
 
+/**
+ * How agents see a ticket in alerts. Ticket numbers are per organization, so the
+ * customer's organization is named beside the number. Planners keep the plain label.
+ */
+const agentLabel = async (ticket: SupportTicketRecord): Promise<string> => {
+  try {
+    const organization = await Organization.findById(ticket.organizationId).select("name").lean();
+    const name = typeof organization?.name === "string" ? organization.name.trim() : "";
+    return name ? `${label(ticket)} (${name})` : label(ticket);
+  } catch {
+    return label(ticket);
+  }
+};
+
 const STATUS_LABEL: Record<SupportTicketStatus, string> = {
   open: "open",
   waiting_on_customer: "waiting on you",
@@ -59,8 +74,9 @@ const notifyAgents = async (
   message: string,
   dedupeSuffix: string,
 ): Promise<void> => {
+  // RFPilot staff are the `admins` accounts. They sit outside the customer's organization,
+  // so the ticket's organization must not narrow who is alerted.
   const agents = await Admin.find({
-    organizationId: ticket.organizationId,
     role: { $in: ADMIN_ROLES },
     isBlocked: { $ne: true },
   })
@@ -154,14 +170,15 @@ const emailRequester = async (
 export const supportDeskNotifier: SupportDeskNotifier = {
   async ticketCreated({ ticket, requester, message }) {
     const who = requester?.name ?? "A customer";
+    const named = await agentLabel(ticket);
     await notifyOwnerOrAgents(
       ticket,
-      `New support ticket ${label(ticket)}`,
+      `New support ticket ${named}`,
       `${who}: ${excerpt(message.body)}`,
       `created:${message.id}`,
     );
     await emailDxg(
-      `[RFPilot support] New ticket ${label(ticket)}`,
+      `[RFPilot support] New ticket ${named}`,
       [`${who} opened a support ticket.`, excerpt(message.body)],
       agentLink(ticket),
     );
@@ -169,14 +186,15 @@ export const supportDeskNotifier: SupportDeskNotifier = {
 
   async customerReplied({ ticket, requester, message }) {
     const who = requester?.name ?? "The customer";
+    const named = await agentLabel(ticket);
     await notifyOwnerOrAgents(
       ticket,
-      `Reply on ${label(ticket)}`,
+      `Reply on ${named}`,
       `${who}: ${excerpt(message.body)}`,
       `customer:${message.id}`,
     );
     await emailDxg(
-      `[RFPilot support] Reply on ${label(ticket)}`,
+      `[RFPilot support] Reply on ${named}`,
       [`${who} replied.`, excerpt(message.body)],
       agentLink(ticket),
     );
@@ -209,7 +227,7 @@ export const supportDeskNotifier: SupportDeskNotifier = {
     if (!byAgent) {
       await notifyAgents(
         ticket,
-        `${label(ticket)} marked ${STATUS_LABEL[status]} by the customer`,
+        `${await agentLabel(ticket)} marked ${STATUS_LABEL[status]} by the customer`,
         `The customer marked this ticket ${STATUS_LABEL[status]}.`,
         `status:${status}:${ticket.updatedAt}`,
       );
@@ -236,12 +254,13 @@ export const supportDeskNotifier: SupportDeskNotifier = {
   },
 
   async ticketAssigned({ ticket, assigneeUserId, assignedBy }) {
+    const named = await agentLabel(ticket);
     await bestEffort(
       () =>
         createNotification({
           userId: assigneeUserId,
           type: "support_ticket",
-          title: `Assigned to you: ${label(ticket)}`,
+          title: `Assigned to you: ${named}`,
           message: assignedBy ? `${assignedBy} assigned this ticket to you.` : "This new ticket was assigned to you automatically.",
           metadata: { ticketId: ticket.id, ticketNumber: ticket.ticketNumber, audience: "agent" },
           dedupeKey: `support:${ticket.id}:assigned:${assigneeUserId}:${ticket.updatedAt}`,
@@ -253,7 +272,7 @@ export const supportDeskNotifier: SupportDeskNotifier = {
   async ticketEscalated({ ticket, assignee, waitingMinutes }) {
     await notifyAgents(
       ticket,
-      `Still waiting: ${label(ticket)}`,
+      `Still waiting: ${await agentLabel(ticket)}`,
       `No reply for ${waitingMinutes} minutes${assignee ? ` (assigned to ${assignee.name})` : ""}. Can someone pick it up?`,
       `escalated:${ticket.lastCustomerMessageAt ?? ticket.updatedAt}`,
     );

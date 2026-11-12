@@ -143,9 +143,12 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
       const assignee =
         dependencies.autoAssign === false
           ? null
-          : pickAssignee(
-              await repository.listAgents(actor.organizationId),
-              await repository.agentLoads(actor.organizationId),
+          : // RFPilot staff answer every organization's tickets, so the owner is picked
+            // from all of them by their workload across organizations. The customer's
+            // own organization has no agents.
+            pickAssignee(
+              await repository.listStaffAgents(),
+              await repository.staffAgentLoads(),
               dependencies.random,
             );
       const ticket =
@@ -207,10 +210,13 @@ export const createCustomerSupportDesk = (dependencies: CustomerSupportDeskDepen
         ticket.unreadForRequester > 0
           ? (await repository.updateTicket(actor.organizationId, ticket.id, { unreadForRequester: 0 })) ?? ticket
           : ticket;
+      // The owner is RFPilot staff, outside the planner's organization.
       const assignee = current.assigneeUserId
-        ? (await repository.findUserSummaries(actor.organizationId, [current.assigneeUserId])).get(
-            current.assigneeUserId,
-          ) ?? null
+        ? (
+            await repository.findTicketPeople([
+              { organizationId: ticket.organizationId, userIds: [current.assigneeUserId] },
+            ])
+          ).get(current.assigneeUserId) ?? null
         : null;
       return {
         ticket: current,

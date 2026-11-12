@@ -64,6 +64,7 @@ test("controller maps the actor, body, and query into the services", async () =>
     organizationId: "aaaaaaaaaaaaaaaaaaaaaaaa",
     role: "customer",
     roles: ["planner"],
+    accountType: undefined,
   });
   assert.deepEqual(captured.input, { subject: "s", body: "b" });
 
@@ -74,10 +75,12 @@ test("controller maps the actor, body, and query into the services", async () =>
 
   const patched = new MockResponse();
   await controller.updateTicket(
-    request({ params: { ticketId: "t1" }, body: { priority: "high" }, user: { userId: "c", organizationId: "a", role: "admin" } }),
+    // The account type is passed through from the stored account: it decides whether an
+    // agent works every organization's tickets (an `admins` account) or only their own.
+    request({ params: { ticketId: "t1" }, body: { priority: "high" }, user: { userId: "c", organizationId: "a", role: "admin", accountType: "admin" } }),
     patched,
   );
-  assert.deepEqual(captured, { actor: { userId: "c", organizationId: "a", role: "admin", roles: [] }, ticketId: "t1", input: { priority: "high" } });
+  assert.deepEqual(captured, { actor: { userId: "c", organizationId: "a", role: "admin", roles: [], accountType: "admin" }, ticketId: "t1", input: { priority: "high" } });
 });
 
 test("controller returns problem JSON for domain errors and hides internal failures", async () => {

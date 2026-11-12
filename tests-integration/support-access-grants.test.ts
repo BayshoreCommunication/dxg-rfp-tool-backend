@@ -325,6 +325,7 @@ test("AC: ticket content is readable without a grant; the RFP behind the ticket 
     [String(dxg.agent), created.body.data.id, "ticket.rfp.list", ticketId],
   ]);
 
-  // A ticket outside the agent's support desk is missing.
+  // A ticket that does not exist is missing. (A customer organization's ticket: see
+  // support-desk-cross-organization.test.ts.)
   assert.equal((await call(agentToken, "GET", `/api/v1/admin/support/tickets/${randomMongoId()}/rfps`)).status, 404);
 });
