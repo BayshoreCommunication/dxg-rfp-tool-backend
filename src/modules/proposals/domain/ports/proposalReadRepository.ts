@@ -1,4 +1,5 @@
 import type { LegacyProposalRecord } from "../../application/proposalPresentation";
+import type { RfpRowPermissions } from "../../../identity/domain/rfpRowPermissions";
 
 export interface ProposalReadRepository {
   findOwnedById(input: {
@@ -6,8 +7,9 @@ export interface ProposalReadRepository {
     ownerUserId: string;
   }): Promise<LegacyProposalRecord | null>;
 
+  // Each listed proposal carries what the requesting member may do to it (row actions).
   listOwned(input: ListOwnedProposalRepositoryInput): Promise<{
-    proposals: LegacyProposalRecord[];
+    proposals: Array<LegacyProposalRecord & { permissions: RfpRowPermissions }>;
     total: number;
     counts?: ProposalListCounts;
   }>;
