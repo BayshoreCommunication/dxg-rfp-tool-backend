@@ -6,6 +6,8 @@ import type {
   ProposalReadRepository,
 } from "../../domain/ports/proposalReadRepository";
 import { rfpListScope } from "../../../identity/domain/rfpAccessPolicy";
+import type { LegacyProposalRecord } from "../../application/proposalPresentation";
+import { rfpRowPermissions } from "../../../identity/domain/rfpRowPermissions";
 import {
   assertProposalMissIsNotFound,
   requestActorFor,
@@ -19,6 +21,10 @@ const LIST_PROPOSAL_SELECT = [
   "createdAt", "updatedAt", "event.eventName", "contact.contactFirstName",
   "contact.contactLastName",
 ].join(" ");
+// Read with each list row so its permissions can be decided without another query; they are not
+// part of the list response and are dropped again before the rows leave this repository.
+const ACCESS_FIELDS = ["organizationId", "userId", "teamId"] as const;
+type ListRow = LegacyProposalRecord & { _id: unknown; organizationId?: unknown; userId?: unknown; teamId?: unknown };
 
 const escapeRegex = (value: string) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -107,6 +113,7 @@ export const mongoProposalReadRepository: ProposalReadRepository = {
   },
 
   async listOwned(input) {
+    const actor = requestActorFor(input.ownerUserId);
     const filter = buildListFilter(input);
     const sort = {
       [input.sortBy]: input.sortOrder === "asc" ? (1 as const) : (-1 as const),
@@ -114,11 +121,11 @@ export const mongoProposalReadRepository: ProposalReadRepository = {
     };
     const [proposals, total, countsRows] = await Promise.all([
       Proposal.find(filter) // tenant-scoped: buildListFilter applies the access policy
-        .select(LIST_PROPOSAL_SELECT)
+        .select(`${LIST_PROPOSAL_SELECT} ${ACCESS_FIELDS.join(" ")}`)
         .sort(sort)
         .skip((input.page - 1) * input.limit)
         .limit(input.limit)
-        .lean(),
+        .lean<ListRow[]>(),
       Proposal.countDocuments(filter), // tenant-scoped: buildListFilter applies the access policy
       input.includeCounts
         ? Proposal.aggregate<ProposalListCounts>(buildCountsAggregation(input))
@@ -136,6 +143,18 @@ export const mongoProposalReadRepository: ProposalReadRepository = {
           saved: row?.saved ?? 0,
         }
       : undefined;
-    return { proposals, total, counts };
+    return {
+      proposals: proposals.map(({ organizationId, userId, teamId, ...proposal }) => ({
+        ...proposal,
+        permissions: rfpRowPermissions(actor, {
+          id: String(proposal._id),
+          organizationId: organizationId as string | undefined,
+          ownerUserId: userId as string | undefined,
+          teamId: (teamId as string | undefined) ?? null,
+        }),
+      })),
+      total,
+      counts,
+    };
   },
 };

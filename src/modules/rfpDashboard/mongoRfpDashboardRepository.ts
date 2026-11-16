@@ -3,6 +3,7 @@ import Proposal from "../../../modal/proposalsModel";
 import Team from "../../../modal/teamModel";
 import User from "../../../modal/userModel";
 import { rfpListScope, type RfpActor } from "../identity/domain/rfpAccessPolicy";
+import { rfpRowPermissions, type RfpRowPermissions } from "../identity/domain/rfpRowPermissions";
 import { LIFECYCLE_STAGES, type LifecycleStage } from "../proposalLifecycle/domain";
 import { ACTIVE_STAGES, emptyByStage, type DashboardFilters, type DashboardSummary, type ListRequest, type Quarter } from "./domain";
 
@@ -25,6 +26,8 @@ export type DashboardItem = {
   awardedAt: Date | null;
   createdAt: Date | null;
   updatedAt: Date | null;
+  // What the member may do to this row; the answers the mutation endpoints would give.
+  permissions: RfpRowPermissions;
 };
 
 export interface RfpDashboardRepository {
@@ -95,6 +98,7 @@ type Row = {
   effectiveStage: LifecycleStage;
   status?: string;
   isDraft?: boolean;
+  organizationId?: Types.ObjectId;
   userId?: Types.ObjectId;
   teamId?: Types.ObjectId | null;
   event?: { eventName?: string; startDate?: string; endDate?: string };
@@ -119,7 +123,7 @@ export const mongoRfpDashboardRepository: RfpDashboardRepository = {
             { $limit: request.limit },
             {
               $project: {
-                effectiveStage: 1, status: 1, isDraft: 1, userId: 1, teamId: 1,
+                effectiveStage: 1, status: 1, isDraft: 1, organizationId: 1, userId: 1, teamId: 1,
                 "event.eventName": 1, "event.startDate": 1, "event.endDate": 1,
                 "venueSchedule.venueCity": 1,
                 "lifecycle.vendorsInvited": 1, "lifecycle.vendorsResponded": 1,
@@ -167,6 +171,8 @@ export const mongoRfpDashboardRepository: RfpDashboardRepository = {
         awardedAt: row.lifecycle?.awardedAt ?? null,
         createdAt: row.createdAt ?? null,
         updatedAt: row.updatedAt ?? null,
+        // From the row's own owner and team and the actor resolved once for the request: no query.
+        permissions: rfpRowPermissions(actor, { id: row._id, organizationId: row.organizationId, ownerUserId: row.userId, teamId: row.teamId }),
       })),
     };
   },
