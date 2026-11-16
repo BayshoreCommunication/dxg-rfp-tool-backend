@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-11-12 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131, `8420ee6`); the tenancy cutover has not been run, and browser checks against a real backend are owed. See "Organization accounts" and "Before launch" below.
+**Last updated:** 2026-11-16 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -507,7 +507,70 @@ ORG-107 migration. It is written from the local rehearsal only: seven steps are 
 operator to confirm against the production deployment, and the snapshot rehearsal it requires
 as a go/no-go has not been run.
 
-### Before launch: Organization accounts (2026-11-11)
+### After the release: fixes and production checks (2026-11-12 → 2026-11-16)
+
+**Shipped on 2026-11-12**
+
+- Dashboard #79: "Proposal" replaces "RFP" as the user-facing noun across the
+  dashboard. The product name RFPilot, code identifiers, routes and API fields are
+  unchanged. `lib/wording.test.ts` fails the build on a user-visible standalone
+  "RFP"; the rule is in the dashboard `CLAUDE.md`. Deliberately kept: the one
+  sentence that defines the term, "Request for Proposal" on the rendered document
+  cover and in sign-in metadata, and the wordmark.
+- Dashboard #80: a proposal's title opens the edit page (the preview for Viewers);
+  Edit is no longer shown to Viewers; Settings → Users has a "What each role can
+  do" guide built from the backend's permission code
+  (`components/organization/members/roleAccess.ts`).
+- Dashboard #81: the dashboard list keeps filters, sort and page in the URL and
+  filters server-side; filters popover with chips; sortable headers for Proposal,
+  Event date and Updated (the only fields the backend sorts by); one date-range
+  field; row menu (Edit, Preview, Duplicate, Archive); status badges; page size 10.
+  `Badge`, `FilterChip`, `DataTable`, `DateRangePicker` and `Dropdown` are in
+  `components/ui/`; the last two are adapted from Untitled UI and add
+  `react-aria-components` and `@internationalized/date`.
+- Backend #133, admin #15, release #134: the helpdesk across organizations (see
+  "In-app helpdesk / support inbox"). The same release carried the vendor autosave
+  rate-limit fix, whose own deploy had failed at the image vulnerability scan
+  earlier that day, and the mongoose bump that clears the scan.
+
+**Checked on production while signed in**
+
+- 2026-11-11, as the Owner of "Bayshore Communication": dashboard home; vendor
+  responses locked on the free trial and open after the plan was set to Full
+  access, with no sign-out; the Security page links to the audit log and Support
+  access; the audit log and its user filter; templates end to end (save as
+  personal, start a proposal from it, dates dropped, archive); admin Support
+  access with no grant, an organization-scope grant, the customer's activity view
+  naming only "RFPilot Support", and a grant revoked mid-session.
+- 2026-11-12: a ticket opened by a customer organization appears in the admin
+  inbox with its organization, opens, and a staff reply reaches the customer.
+- 2026-11-16: a Google Workspace account (`dxg.agency`) signed in with "Continue
+  with Google", completed onboarding as the Owner of a new organization, and the
+  dashboard, Users, Security and audit log pages loaded correctly.
+
+**Not checked on production:** any role other than Owner; an RFP-scope support
+grant; publishing organization templates; the audit CSV export; Duplicate and
+Archive from the new dashboard row menu; the role guide on a phone; company single
+sign-on (blocked: nobody available could publish the DNS TXT record for
+`dxg.agency`); a second user joining by domain match; a legacy customer in the
+shared organization.
+
+**Test data left on production**
+
+- Organization "DXG Workspace QA" (free trial), Owner on a `dxg.agency` address,
+  with `dxg.agency` added as a pending, unverified domain. A pending domain routes
+  nobody. There is no organization delete in the customer app.
+- In "Bayshore Communication": two draft proposals named "Northstar Leadership
+  Summit 2027", one archived template "QA check 11 Nov", one revoked support
+  grant, and support ticket #3 "QA check 12 Nov: test ticket, please ignore" with
+  one staff test reply. Tickets #1 and #2 in that organization are real requests
+  that were invisible to staff before 2026-11-12.
+
+**Wording rule (changed 2026-11-12):** the user-facing noun is "Proposal". The
+earlier rule, "UI copy says RFP", is withdrawn. The admin app and text the backend
+writes have not been converted (see follow-ups).
+
+### Before launch: Organization accounts (2026-11-11, updated 2026-11-16)
 
 What has to happen before external organizations are invited. Each line was
 checked against the code, the docs or the pull requests on 2026-11-11; where it
@@ -522,10 +585,12 @@ could not be, it says so.
   `/api/v1/vendor-list`, `/api/v1/proposal-templates`,
   `/api/v1/organization/audit-events`, `/api/v1/organization/support-grants`,
   `/api/v1/admin/organization-plans` and `/api/v1/admin/launch-metrics` answer 401
-  (they answered 404 before the release). Not checked: any screen while signed in.
+  (they answered 404 before the release).
+- Backend, second release: 2026-11-12, PR #134, `744e81d`, "Deploy to AWS" run
+  43190684155, all jobs green. `GET /health` answered 200 afterwards.
 - Dashboard and admin app: these repositories have no `production` branch. Vercel
-  deploys `main` to its Production environment on every merge (latest: dashboard
-  `c7ce3f7`, admin `ea3d483`), and `av-rfpilot.com` is served from Vercel. Between
+  deploys `main` to its Production environment on every merge (on 2026-11-12:
+  dashboard `d0be97e`, admin `8fb6174`), and `av-rfpilot.com` is served from Vercel. Between
   the dashboard merges of 10 Nov and the backend release of 11 Nov the live web
   apps called routes the production API did not have. **A dashboard or admin PR
   that needs a new API route must not merge before a backend release carries that
@@ -567,22 +632,11 @@ production data).
 plus a booked external test date. Neither has happened yet. Any high finding from
 the external test blocks launch.
 
-**5. Browser verification against a real backend is owed.** It was skipped on
-11 Nov because the local stack was stopped to save memory; these were checked
-with unit tests and a stubbed backend only, except where noted.
-
-- ORG-602 locked states (dashboard #76): never run against a real backend.
-- ORG-605 templates UI: stub only.
-- ORG-407 audit log page: stub only. The link to it from the Security page has
-  not been clicked in a browser.
-- ORG-406 admin support workspace: the no-grant case passed on a real backend
-  (before its review fixes).
-  Under an organization-scope grant only the "Granted to me" list was seen; an
-  RFP-scope grant and a grant revoked mid-session were not verified in a browser.
-- ORG-405 support grants screen: passed on a real backend as every role before
-  its rebase, not repeated after. Opening it from the Security card passed on a
-  warm dev server and timed out twice on a cold one.
-- ORG-607 vendor list: its real-backend run was before the review fixes.
+**5. Browser verification: mostly done on production, some owed.** The checks
+that were skipped on 11 Nov were run on production on 11, 12 and 16 Nov as an
+Owner; see "After the release" for what passed and what was not checked. Still
+owed: every non-Owner role, an RFP-scope support grant, Duplicate and Archive from
+the dashboard row menu, the role guide on a phone, and company single sign-on.
 
 **6. Known follow-ups.**
 
@@ -598,7 +652,8 @@ with unit tests and a stubbed backend only, except where noted.
   analysis, vendor response, audit log and template routers. It does not cover the
   staff-only routers (support access, plan management, launch metrics) or the
   other member routers.
-- Done 2026-11-12 (not yet released): the helpdesk inbox spanned only the staff
+- Done and released 2026-11-12 (backend #133 and #134, admin #15; confirmed on
+  production): the helpdesk inbox spanned only the staff
   organization, so customer tickets never reached staff and the grant-gated
   "RFPs behind a ticket" route was unreachable for them. RFPilot staff now work
   every organization's tickets; see "In-app helpdesk / support inbox".
@@ -613,6 +668,41 @@ with unit tests and a stubbed backend only, except where noted.
   old one has to be dropped by hand on deployed databases after that deploy.
 - The "Workers Builds" check fails on the admin repository's `main`. It was
   already failing on 2026-10-27, before this work.
+- "Continue with Google" never asks Google for the account chooser: the
+  dashboard's `auth.ts` sends `prompt: "consent"` only, so a user with one Google
+  session, typically a personal account, is signed in with it and is not offered
+  their work account. Company single sign-on already sends `select_account`.
+- Settings → General → Branding shows a "Proposal Link Prefix" ending in
+  `.goprospero.com`, another product's domain.
+- Country offers only "United States" in onboarding and organization settings.
+- Team Manager cannot be chosen when inviting during onboarding (Planner, Admin
+  and Viewer only).
+- "RFP" still shows where the text is not the dashboard's: the admin app; audit
+  log category and action names; the backend form contract (`RFP Timeline` and two
+  helper texts, while the dashboard's own label says "Proposal Timeline"); refusals
+  such as `OWNER_HAS_RFPS`; the headline "This RFP has been sent to vendors";
+  backend-rendered emails. The admin Clients page also reads "1 RFPs".
+- `GET /api/v1/rfps` carries no per-row permissions, so the dashboard row menu is
+  offered to Owners and Admins on every row and to others only on their own rows
+  (Team Managers get none on team proposals), and a member with a view-only share
+  still gets Edit on the proposal list. Needs `canEdit` / `canArchive` per row.
+- Role rules where the code differs from the PRD (the Users page guide follows the
+  code): `allowManagerInvites` defaults to off and no customer route changes it;
+  reassigning a proposal's owner has only an Owner/Admin route; a Team Manager can
+  permanently delete proposals of teams they manage.
+- Pressing Enter in the "Access ends after" select submits the grant dialog.
+- A proposal started from a template takes the template's event name, so it can
+  duplicate an existing name; the dashboard tells them apart by date or ID.
+- Colour contrast: the "View activity" button on Support access failed the
+  light-theme axe check in local runs; the grey field labels (`labelClass`) in the
+  invite and change-role dialogs and the blue support button (3.77:1) also fail.
+- Flaky browser specs under load: "Enter on the title opens the edit page" and the
+  audit log user filter (50 rows where 2 were expected, once).
+- The dashboard has no pending indicator on tab, sort, chip or page links.
+- "Acme Events" is still on the free trial.
+- The built-in browser of the Claude desktop app cannot complete Google sign-in
+  for a second account when a security key for another account is saved on the
+  machine; use Chrome for sign-in tests.
 
 ### Onboarding funnel report (2026-09-13)
 
@@ -757,9 +847,13 @@ Fixtures shaped by hand will not catch that — shape them the way the form save
 4. Add the two questionnaire fields; promote the report envelope to columns.
 5. ~~Merge `ai-agent` to the default branch~~ (done). Stand up staging per the runbook.
 6. Organization accounts: work through "Before launch: Organization accounts"
-   in §3 (merge the open PRs, the production-snapshot rehearsal and cutover
-   decisions, ORG-503, real-backend browser checks) before inviting external
-   organizations.
+   in §3 before inviting external organizations. In order: (a) the small fixes
+   from the 16 Nov checks, starting with the Google account chooser and the
+   `.goprospero.com` text; (b) per-row permissions on `GET /api/v1/rfps`;
+   (c) "Proposal" wording in the admin app and in backend-written text;
+   (d) company single sign-on on production, once a DNS TXT record can be
+   published; (e) the production-snapshot rehearsal and cutover decisions;
+   (f) ORG-503.
 
 ---
 
