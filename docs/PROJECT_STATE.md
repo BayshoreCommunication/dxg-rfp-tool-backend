@@ -682,10 +682,16 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
   helper texts, while the dashboard's own label says "Proposal Timeline"); refusals
   such as `OWNER_HAS_RFPS`; the headline "This RFP has been sent to vendors";
   backend-rendered emails. The admin Clients page also reads "1 RFPs".
-- `GET /api/v1/rfps` carries no per-row permissions, so the dashboard row menu is
+- Row actions don't follow the access policy yet: the dashboard row menu is
   offered to Owners and Admins on every row and to others only on their own rows
   (Team Managers get none on team proposals), and a member with a view-only share
-  still gets Edit on the proposal list. Needs `canEdit` / `canArchive` per row.
+  still gets Edit on the proposal list. Backend half done (branch
+  `feat/rfp-list-row-permissions`): `GET /api/v1/rfps` and `GET /api/proposals`
+  items carry `permissions { canEdit, canDuplicate, canArchive }`, the same
+  decisions the mutation endpoints enforce (`docs/API.md`, "Dashboard RFP
+  queries"). Dashboard half pending: read the flags in the row menu and in the
+  proposal list's Edit and title link, after the backend release. No `canDelete`:
+  who may permanently delete is still an open product decision.
 - Role rules where the code differs from the PRD (the Users page guide follows the
   code): `allowManagerInvites` defaults to off and no customer route changes it;
   reassigning a proposal's owner has only an Owner/Admin route; a Team Manager can
