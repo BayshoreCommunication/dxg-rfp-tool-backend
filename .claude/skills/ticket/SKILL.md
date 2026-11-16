@@ -39,7 +39,7 @@ change. Then implement. Rules that are easy to miss here:
 - **Postgres** tables are under forced organization RLS. A schema change goes through `/migration`.
 - **Shared types** in `contracts/` go through `/contract-change` (the dashboard has a copy).
 - **API** changes are documented in `docs/API.md` in the same commit.
-- **UI copy** says "RFP", not "proposal". Role labels: Owner, Admin, Team Manager, Planner, Viewer
+- **UI copy** says "Proposal", not "RFP" (changed 2026-11-12; the product name RFPilot stays, and code identifiers, routes and API fields keep their names). Role labels: Owner, Admin, Team Manager, Planner, Viewer
   (`owner`, `organization_admin`, `team_manager`, `planner`, `viewer`). Show error codes as human messages.
 - Dashboard server actions live in `app/actions/*.ts` and use `authenticatedBackendFetch`, returning
   `{ success, message, data }`. Copy the look of `components/settings/*`.
