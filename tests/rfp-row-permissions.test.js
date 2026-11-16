@@ -233,9 +233,19 @@ for (const role of ["owner", "organization_admin", "team_manager", "planner", "v
       teamId: rfp.teamId ? new Types.ObjectId(rfp.teamId) : null,
       event: { eventName: "Annual Summit" },
     }));
+    let projection = {};
     await withModels(
       [
-        [Proposal, { aggregate: async () => [{ items: stored, total: [{ count: stored.length }] }] }],
+        // Like Mongo, hand back only what the pipeline's own $project asks for (plus _id), so a
+        // field the policy needs but the projection drops is missing here too.
+        [Proposal, {
+          aggregate: async (pipeline) => {
+            projection = pipeline.find((stage) => stage.$facet).$facet.items.find((stage) => stage.$project).$project;
+            const kept = new Set(["_id", ...Object.keys(projection).map((field) => field.split(".")[0])]);
+            const items = stored.map((row) => Object.fromEntries(Object.entries(row).filter(([field]) => kept.has(field))));
+            return [{ items, total: [{ count: stored.length }] }];
+          },
+        }],
         [User, { find: () => query([]) }],
         [Team, { find: () => query([]) }],
       ],
@@ -247,6 +257,8 @@ for (const role of ["owner", "organization_admin", "team_manager", "planner", "v
           assert.deepEqual(flags(items[index].permissions), expected[role][relationship], relationship);
           assert.deepEqual(items[index].permissions, rfpRowPermissions(actor, rfp), relationship);
         }
+        // Everything the policy decides from is read by the list query itself.
+        for (const field of ["organizationId", "userId", "teamId"]) assert.equal(projection[field], 1, `$project keeps ${field}`);
         // The same three queries as before this field existed, whatever the page size.
         assert.deepEqual(calls.sort(), ["Proposal.aggregate", "Team.find", "User.find"]);
       },
