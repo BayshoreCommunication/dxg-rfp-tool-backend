@@ -69,8 +69,8 @@ const assertLimitReached = (result: { status: number; body: Record<string, any> 
   assert.equal(result.body.code, 'PLAN_LIMIT_REACHED');
   assert.equal(result.body.success, false);
   assert.deepEqual({ plan: result.body.plan, limit: result.body.limit, created: result.body.created }, { plan: 'free_trial', limit: 2, created });
-  assert.match(result.body.message, /RFP/);
-  assert.doesNotMatch(result.body.message, /proposal/i);
+  assert.match(result.body.message, /2 proposals/);
+  assert.doesNotMatch(result.body.message, /RFP/);
 };
 
 // Express 4 keeps each mounted router's prefix only as a regexp; this reverses the simple ones
@@ -325,7 +325,7 @@ test('every gated route is refused on the free trial and open after a plan chang
     assert.equal(refused.body.feature, route.feature, label);
     assert.equal(refused.body.plan, 'free_trial', label);
     assert.doesNotMatch(JSON.stringify(refused.body), /Stored Audio|Stored quote/, label);
-    assert.doesNotMatch(refused.body.message, /proposal/i, label);
+    assert.doesNotMatch(refused.body.message, /\bRFP/, label);
   }
 
   // Nothing ran behind the gate: no intelligence job or run exists for the locked organization.

@@ -39,10 +39,10 @@ const LIST_STATUSES: readonly TemplateListStatus[] = ["active", "archived", "all
 const invalid = (code: string, message: string) => new ProposalTemplateError(code, message, 400);
 const notFound = () => new ProposalTemplateError("TEMPLATE_NOT_FOUND", "Template not found.", 404);
 const accessDenied = () => new ProposalTemplateError("TEMPLATE_ACCESS_DENIED", "You don't have access to this template.", 403);
-const useDenied = () => new ProposalTemplateError("TEMPLATE_USE_DENIED", "Your role can't use RFP templates.", 403);
+const useDenied = () => new ProposalTemplateError("TEMPLATE_USE_DENIED", "Your role can't use proposal templates.", 403);
 const publishDenied = () => new ProposalTemplateError("TEMPLATE_PUBLISH_DENIED", "Only Owners and Admins can manage organization templates.", 403);
 const archivedError = (message: string) => new ProposalTemplateError("TEMPLATE_ARCHIVED", message, 409);
-const sourceNotFound = () => new ProposalTemplateError("TEMPLATE_SOURCE_NOT_FOUND", "RFP not found.", 404);
+const sourceNotFound = () => new ProposalTemplateError("TEMPLATE_SOURCE_NOT_FOUND", "Proposal not found.", 404);
 
 const text = (value: unknown) => (typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "");
 
@@ -207,13 +207,13 @@ export const createProposalTemplates = (dependencies: Dependencies) => {
       const description = descriptionOf(input.description);
       const presentationLayout = layoutOf(input.presentationLayout);
       const proposalId = typeof input.proposalId === "string" ? input.proposalId : "";
-      if (!dependencies.isValidId(proposalId)) throw invalid("INVALID_TEMPLATE_SOURCE", "Choose the RFP to save as a template.");
+      if (!dependencies.isValidId(proposalId)) throw invalid("INVALID_TEMPLATE_SOURCE", "Choose the proposal to save as a template.");
 
       const proposal = await dependencies.source.findViewable({ proposalId, userId: actor.userId });
       if (!proposal) throw sourceNotFound();
       const content = templateContentOf(proposal);
       if (templateContentBytes(content) > MAX_TEMPLATE_CONTENT_BYTES) {
-        throw new ProposalTemplateError("TEMPLATE_TOO_LARGE", "This RFP is too large to save as a template.", 413);
+        throw new ProposalTemplateError("TEMPLATE_TOO_LARGE", "This proposal is too large to save as a template.", 413);
       }
       const at = now();
       const created = await templates.create({

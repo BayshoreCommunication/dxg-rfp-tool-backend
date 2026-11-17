@@ -97,7 +97,7 @@ export const entitlementsOf = (organization: OrganizationPlanState, env: NodeJS.
 
 const FEATURE_LOCKED_MESSAGES: Record<PlanFeature, string> = {
   vendorResponses: "Vendor responses aren't included in your plan. Contact us to upgrade.",
-  proposalIntelligence: "RFP intelligence isn't included in your plan. Contact us to upgrade.",
+  proposalIntelligence: "Proposal intelligence isn't included in your plan. Contact us to upgrade.",
 };
 
 export const PLAN_LIMIT_REACHED = "PLAN_LIMIT_REACHED";
@@ -108,7 +108,7 @@ export class PlanLimitReachedError extends Error {
   readonly status = PLAN_ERROR_STATUS;
   readonly code = PLAN_LIMIT_REACHED;
   constructor(readonly plan: PlanId, readonly limit: number, readonly created: number) {
-    super(`Your plan includes ${limit} ${limit === 1 ? "RFP" : "RFPs"} and your organization has created ${created}. Contact us to upgrade.`);
+    super(`Your plan includes ${limit} ${limit === 1 ? "proposal" : "proposals"} and your organization has created ${created}. Contact us to upgrade.`);
     this.name = "PlanLimitReachedError";
   }
 }

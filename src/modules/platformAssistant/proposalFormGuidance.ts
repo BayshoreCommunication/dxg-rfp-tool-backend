@@ -267,7 +267,7 @@ const LABEL_OVERRIDES: Readonly<Record<string, string>> = Object.freeze({
   "/content/event/primaryAudiences/*": "Primary Audience",
   "/content/event/sacredConstraints": "Sacred Constraints",
   "/content/event/organizationBackground": "About the Organization",
-  "/content/event/rfpTimelineNotes": "RFP Timeline",
+  "/content/event/rfpTimelineNotes": "Proposal Timeline",
   "/content/venueSchedule/unionVenue": "Is This a Union Venue?",
   "/content/venueSchedule/roomCount": "Number of Event Rooms",
   "/content/rooms/*/function": "Room / Function Name",

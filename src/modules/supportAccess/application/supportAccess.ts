@@ -26,7 +26,7 @@ const PER_PAGE = 20;
 
 const grantRequired = () =>
   new SupportAccessError("SUPPORT_GRANT_REQUIRED", "This organization hasn't granted RFPilot Support access, or the access has ended.", 403);
-const rfpNotFound = () => new SupportAccessError("PROPOSAL_NOT_FOUND", "RFP not found.", 404);
+const rfpNotFound = () => new SupportAccessError("PROPOSAL_NOT_FOUND", "Proposal not found.", 404);
 
 const pageOf = (value: unknown) => {
   const parsed = Number.parseInt(String(value ?? "1"), 10);

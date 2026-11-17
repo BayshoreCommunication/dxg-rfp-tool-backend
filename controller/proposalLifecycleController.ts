@@ -54,7 +54,7 @@ export const markProposalAwarded = async (req: AuthRequest, res: Response): Prom
       return;
     }
     if (result.kind === "not_awardable") {
-      res.status(409).json({ success: false, code: "PROPOSAL_NOT_AWARDABLE", message: "Only a sent, unarchived RFP can be marked as awarded" });
+      res.status(409).json({ success: false, code: "PROPOSAL_NOT_AWARDABLE", message: "Only a sent, unarchived proposal can be marked as awarded" });
       return;
     }
     res.json({ success: true, data: view(result.lifecycle) });

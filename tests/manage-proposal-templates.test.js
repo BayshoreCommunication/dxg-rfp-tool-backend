@@ -568,13 +568,14 @@ test("a plan refusal from the create path reaches the caller and records nothing
   await assert.rejects(service.createProposal(actor("planner"), template.id), PlanLimitReachedError);
 });
 
-test("template copy says RFP, never proposal", () => {
+test("template copy says proposal, never RFP", () => {
   const files = ["src/modules/proposalTemplates/application/manageProposalTemplates.ts", "controller/proposalTemplatesController.ts"];
   for (const file of files) {
     const source = fs.readFileSync(path.join(__dirname, "..", file), "utf8");
     const messages = [...source.matchAll(/"([A-Z][^"\n]*[.!?]|Validation failed)"/g)].map((match) => match[1]);
     assert.ok(messages.length > 0, file);
-    for (const message of messages) assert.doesNotMatch(message, /proposal/i, `${file}: ${message}`);
+    for (const message of messages) assert.doesNotMatch(message, /\bRFP/, `${file}: ${message}`);
+    assert.ok(messages.some((message) => /proposal/i.test(message)), file);
   }
 });
 
@@ -600,9 +601,9 @@ test("a change that loses a race answers with the stored state and records nothi
   assert.equal(audit.length, before);
 });
 
-test("the source RFP refusal on a template route is worded for RFPs", () => {
+test("the source proposal refusal on a template route is worded for proposals", () => {
   const controller = fs.readFileSync(path.join(__dirname, "../controller/proposalTemplatesController.ts"), "utf8");
   assert.match(controller, /isProposalAccessDenied\(error\)/);
-  assert.match(controller, /message: "You don't have access to this RFP\."/);
+  assert.match(controller, /message: "You don't have access to this proposal\."/);
   assert.doesNotMatch(controller, /respondIfProposalAccessDenied/);
 });
