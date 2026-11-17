@@ -61,7 +61,10 @@ const proposal = (organizationId: mongoose.Types.ObjectId, userId: string, event
   event: { eventName }, createdAt: new Date(), updatedAt: new Date(),
 });
 const campaign = (organizationId: mongoose.Types.ObjectId | undefined, userId: string, subject: string, sentCount: number) => ({
-  ...(organizationId ? { organizationId } : {}), userId: oid(userId), subject, recipients: [], totalRecipients: sentCount, sentCount,
+  ...(organizationId ? { organizationId } : {}), userId: oid(userId), subject,
+  // recipients.trackingId is unique across the collection, so each campaign carries one recipient.
+  recipients: [{ email: `recipient-${randomMongoId().slice(0, 8)}@vendor.example`, trackingId: randomMongoId() }],
+  totalRecipients: sentCount, sentCount,
   openedCount: 0, clickedCount: 0, vendorResponseClickCount: 0, createdAt: new Date(), updatedAt: new Date(),
 });
 const campaignSubjects = [`Home campaign A ${tag}`, `Home campaign B ${tag}`, `Other campaign ${tag}`, `Other owner campaign ${tag}`, `Unowned campaign ${tag}`];
