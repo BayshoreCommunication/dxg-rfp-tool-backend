@@ -15,11 +15,14 @@ import {
   rollbackPlacement,
   type PlacementTarget,
 } from "../src/modules/tenancy/legacyCustomerPlacement";
+import { runPlacementTask } from "../src/modules/tenancy/placementTaskRunner";
 
 // ORG-110 from the command line. Sign-in refuses an account still in a legacy holding tenant
 // (ORGANIZATION_SETUP_REQUIRED) until DXG places it. The API normally does that, but moving
 // Postgres rows needs the table-owner role, which in production only the one-off migration task
-// holds, so DXG runs this there. Same code path, journal, checks, audit and rollback as the API.
+// holds, so it runs there: started by the admin API with --task-run=<runId> (the request is read
+// from the placement journal; see src/modules/tenancy/placementTasks.ts), or by an operator with
+// the flags below. Same code path, journal, checks, audit and rollback either way.
 
 const args = new Map(process.argv.slice(2).map((argument) => {
   const [key, ...rest] = argument.split("=");
@@ -34,6 +37,7 @@ const help = () => process.stdout.write(`Usage (dry run unless --apply):
   node dist/scripts/placeLegacyCustomer.js --email=<customer> --admin-email=<DXG admin> --new-org="<name>" [--type=<type>] [--country=US] [--time-zone=America/New_York] [--apply]
   node dist/scripts/placeLegacyCustomer.js --email=<customer> --admin-email=<DXG admin> --org-slug=<slug> --role=organization_admin|team_manager|planner [--team-id=<id>] [--apply]
   node dist/scripts/placeLegacyCustomer.js --rollback=<runId> --admin-email=<DXG admin> [--apply]
+  node dist/scripts/placeLegacyCustomer.js --task-run=<runId>   (started by the admin API; runs the request it queued)
 
 --new-org makes the customer Owner of a new organization. --org-slug adds them to an existing
 one with the given role (never Owner or Viewer). The audit trail records --admin-email as the actor.
@@ -93,6 +97,21 @@ const main = async () => {
     ? new Pool({ connectionString, max: 2, ssl: process.env.POSTGRES_SSL === "true" ? { rejectUnauthorized: true } : undefined })
     : null;
   try {
+    const taskRun = arg("--task-run");
+    if (taskRun) {
+      // The admin API queued this run and started this task. Everything about the request,
+      // including the staff member, comes from the journal entry; there is no dry run.
+      const outcome = await runPlacementTask({
+        runId: taskRun, pool,
+        onLeaseLost: (reason) => {
+          process.stderr.write(`PLACEMENT_TASK_STOPPED: ${reason}; exiting without committing.\n`);
+          process.exit(70);
+        },
+      });
+      print({ mode: "task", runId: taskRun, ...outcome });
+      if (!outcome.ran || !outcome.ok) process.exitCode = 1;
+      return;
+    }
     const actor = await actorFor(arg("--admin-email"));
     const runId = arg("--rollback");
     if (runId) {
