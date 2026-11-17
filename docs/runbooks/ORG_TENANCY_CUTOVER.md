@@ -143,6 +143,10 @@ Every line must be "yes" or a recorded decision. Any "no" is a no-go.
    and knowledge grounding.
 6. **Placement list ready.** For every legacy customer: new organization or existing one, and
    the role. Customers are locked out until placed. Agree who places them and how fast.
+   Every staff member who will place customers through the admin API needs an unblocked
+   document in the `admins` collection with role `admin`, `super_admin` or `superadmin`, and
+   an active staff membership in the staff organization. Without both, the API answers 403
+   (`PLACEMENT_FORBIDDEN`) or the task refuses the request (`PLACEMENT_REQUEST_INVALID`).
 7. **Plans decided.** The list of organizations that get `full_access` (step 9.1).
 8. **Code deployed.** The production image contains the ORG-501 fixes (the verifier's Postgres
    check and rollback of membership status), and nobody will deploy during the window: a deploy
@@ -327,18 +331,160 @@ Stop condition: 4 or 5 fails → this is a rollback trigger while the window is 
    `free_trial`. DXG staff set `full_access` in the admin app's Organizations page for DXG's
    own organization and every organization on the list from step 0.7, and for each new
    organization created by a placement if that customer is meant to keep what they had.
-2. **Place legacy customers (ORG-110).** In production the API cannot place (it has no
-   table-owner role and answers 503 `PLACEMENT_REQUIRES_MIGRATION_ROLE`), so placement runs on
-   the migrate task, dry run first, then with `--apply`:
+2. **Place legacy customers (ORG-110).** The API has no table-owner role, so in production a
+   placement runs in a separate one-off task. There are two ways to start one; both run the
+   same placement code, journal, checks, audit and rollback.
+
+   **a. Through the admin API (decision 2026-11-17).** `POST
+   /api/admin/legacy-customers/:userId/placements` validates the request, journals it as a
+   queued run and starts an execution of the state machine `rfpilot-$ENV-placement`, which
+   runs the task `rfpilot-$ENV-placement` (its own task definition; the API cannot start or
+   alter a task itself). The API answers 202 with a run id, and
+   `GET /api/admin/legacy-customers/placements/:runId` reports `queued`, `running`,
+   `succeeded`, `failed` or `rolled_back` (`docs/API.md`, "Legacy customer placement"). The
+   admin app has no screen for this yet, so until it does this path is used by calling the API.
+   Only an `admins` account with a staff membership may call these routes (a `users` account
+   holding a staff role gets 403 `PLACEMENT_FORBIDDEN`).
+   **UNREHEARSED on production:** no execution or task has been started this way and none of
+   the new IAM statements has been exercised. The first time, check all of:
+
+   - the API answers 202, not 503 `PLACEMENT_REQUIRES_MIGRATION_ROLE`
+     (`PLACEMENT_STATE_MACHINE_ARN` is missing from the API task: the App stack did not
+     deploy), 503 `PLACEMENT_TASK_MISCONFIGURED` (the variable is not the state machine's ARN)
+     or 503 `PLACEMENT_TASK_START_FAILED` (Step Functions refused: the API log line
+     `placement_task_start_failed` carries the reason, for example `AccessDeniedException` on
+     `states:StartExecution`);
+   - the state machine shows one execution, named with a 64-character hex name, that ends
+     `SUCCEEDED`; if it ends `FAILED`, its history carries ECS's stop reason (an image pull
+     failure, a missing secret, `AccessDenied` on `ecs:RunTask` or `iam:PassRole` for the state
+     machine's role, a read-only filesystem error). If Step Functions cannot assume the state
+     machine's role at all (its trust policy names this account and this state machine's ARN;
+     a renamed machine or a wrong region or account in that ARN breaks it), the execution fails
+     at once, before any task exists, with an error saying the role could not be assumed; the
+     API then gives up on the run after 4 minutes with nothing moved;
+   - `aws logs tail /rfpilot/$ENV/placement --since 15m` shows `"mode":"task"` with
+     `"ok":true`;
+   - `GET …/placements/:runId` reaches `succeeded` with `verification.passed: true`, and the
+     customer can sign in;
+   - the `.sync` permissions are enough: the first execution created the EventBridge rule
+     `StepFunctionsGetEventsForECSTaskRule`, and the execution ended when the task did (an
+     execution that sits `RUNNING` after the task has stopped, or fails at once with an
+     `events:` or `ecs:DescribeTasks` access error, means they are not);
+   - the script runs on a read-only root filesystem: no `EROFS` or "read-only file system" in
+     `/rfpilot/$ENV/placement`;
+   - `lock_timeout` really comes from `PGOPTIONS`. This was never rehearsed. During a quiet
+     window hold a lock on a table the move updates from another session and start a
+     placement: it must fail after about 15 s with nothing moved, not wait;
+   - a deliberately bad input is harmless: start an execution by hand with
+     `{"runId":"not-a-run"}`. The task must exit 64 with the usage line, the execution must
+     fail, and no journal entry may change;
+   - the account's Fargate On-Demand vCPU quota (Service Quotas) leaves room for one more
+     0.5 vCPU task beside the running services.
+
+   One task runs at a time (429 `PLACEMENT_CAPACITY_REACHED` until it finishes), which is the
+   "one at a time" rule below, enforced. The task waits 15 s for a Postgres lock and then fails
+   with nothing moved (`PGOPTIONS=-c lock_timeout=15000` in its task definition, as in
+   `run_migrate_task`).
+
+   **b. By hand (the fallback, unchanged).** Dry run first, then with `--apply`:
    ```bash
    run_migrate_task "node dist/scripts/placeLegacyCustomer.js --list"
    run_migrate_task "node dist/scripts/placeLegacyCustomer.js --email=<customer> --admin-email=<DXG admin> --new-org='<name>'"
    run_migrate_task "node dist/scripts/placeLegacyCustomer.js --email=<customer> --admin-email=<DXG admin> --org-slug=<slug> --role=planner"
    ```
+   Do not run `--rollback=<runId>` by hand while the API shows that run `running`: until the
+   placement task has finished its checks the run is refused (`PLACEMENT_IN_PROGRESS`), by
+   hand as through the API.
+   A hand-run placement does not count toward the API's cap, so do not run one while the API
+   shows a run `queued` or `running`. A second placement of a user who is already being placed
+   is refused either way (`PLACEMENT_IN_PROGRESS`).
+
    A placement takes the same exclusive locks, briefly, for one customer, while the product is
    live. Do them at a quiet time, one at a time. Each is journaled and has its own rollback
-   (`--rollback=<runId>`). Placement was not part of the ORG-501 rehearsal; the integration
-   suite covers it.
+   (`POST …/placements/:runId/rollback`, or `--rollback=<runId>` by hand). Placement was not
+   part of the ORG-501 rehearsal; the integration suite covers it, with Step Functions faked.
+
+   **No placements during a deploy.** The deploy workflow runs Postgres migrations on the new
+   image before the services roll, so for some minutes the database is ahead of the running
+   API and of the placement task it starts (both still the old image). Do not place or roll
+   back between the start of a `production` deploy and its smoke checks passing, and do not
+   start a deploy while a run is `queued` or `running`. Nothing enforces this.
+
+   The same window exists in the workflow's `rolloutPolicyOnly=true` pass, which also
+   re-deploys the App stack when it runs.
+
+   **Executions cost Fargate capacity.** Anyone who can call the API's role can start
+   executions; each one that gets as far as a task uses 0.5 vCPU until the script exits (a
+   request that names no queued run exits in seconds). The API's own limits are the
+   one-task-at-a-time cap and 120 requests per staff member per 15 minutes, but neither binds
+   someone who has taken over the API. Recommended, **not built in this change** because it
+   belongs in the Observability stack: a CloudWatch alarm on `AWS/States` `ExecutionsStarted`
+   for `rfpilot-$ENV-placement` (for example more than 20 in 15 minutes) to the alert topic.
+
+   **What the task trusts.** The task holds the migration role and takes its instructions
+   from MongoDB. It checks each request again, but against MongoDB, which the API can write.
+   If the API were compromised, those checks would not stop it from having tenant rows moved
+   between organizations as MongoDB describes them. It could not run other SQL, change schema,
+   read the migration secret or change what the task runs. See `docs/DECISIONS.md`
+   (2026-11-17); a Postgres-side check that the API cannot write is a possible follow-up and
+   is not built.
+
+   **Switching the API path off.** Remove `PLACEMENT_STATE_MACHINE_ARN` from the API container
+   (comment out the `addEnvironment` line in `deploy/aws/lib/app-stack.ts` and deploy App, or
+   redeploy the previous image tag). The placement endpoints then answer 503
+   `PLACEMENT_REQUIRES_MIGRATION_ROLE` as they did before; runs already journaled stay
+   readable, and placing by hand (b) is unaffected. Do it only when no run is `queued` or
+   `running`.
+
+   **What is audited.** A placement or rollback that completes writes its audit events, naming
+   the staff member who asked. A request that is refused, fails or is given up on writes none:
+   its record is the journal entry (`GET …/placements/:runId`) and the API log
+   (`placement_task_started`, `placement_task_start_failed`, `placement_task_given_up`).
+
+   **A stuck or failed run.** Read it: `GET …/placements/:runId`. Reading is what makes the
+   API give up on a task that has not started within 4 minutes or has written no heartbeat for
+   3; when it does, it logs `placement_task_given_up` with the execution's status and cause.
+   - `failed` with `task.code` `PLACEMENT_TASK_NOT_STARTED`, `PLACEMENT_TASK_START_FAILED` or
+     `PLACEMENT_TASK_LOST`, and `rollbackRequired: false`: nothing moved. Find out why the task
+     did not run (the execution's history, the `/rfpilot/$ENV/placement` log), then place
+     again; the same `Idempotency-Key` may be reused.
+   - `rollbackRequired: true`: the customer's records are in the target but the run did not
+     finish cleanly. Either MongoDB moved and Postgres or the checks did not finish, or
+     (`task.code` `PLACEMENT_VERIFICATION_FAILED` with `details.rolledBack: false`) the checks
+     failed and the automatic rollback failed as well. The customer may be able to sign in to
+     an organization whose checks failed. Read `task.details.verification`, fix what made the
+     rollback refuse if it says (for example `USER_IS_OWNER`), roll the run back (API or
+     `--rollback=<runId> --apply`) before anything else, then run
+     `verifyCustomerOrganizations.js`.
+   - `task.code` `PLACEMENT_REQUEST_INVALID`: the task did not accept the queued request (the
+     staff member is no longer an active staff account, or the entry's organizations do not
+     match the customer). Nothing moved. If nobody on staff made that request, treat it as a
+     security incident: the journal can only be written by the API or someone with MongoDB
+     access.
+   - A rollback with `task.code` `ROLLBACK_TASK_NOT_STARTED` or `ROLLBACK_TASK_LOST` and
+     `status: succeeded`: the placement still stands; ask for the rollback again.
+   - `task.details.needsOperatorCheck: true` (a rollback whose MongoDB half finished, `state:
+     rolled_back`, but whose task failed or was lost before the Postgres commit): run
+     `verifyCustomerOrganizations.js` and compare the customer's Postgres rows with the
+     holding tenant before touching the run again. Not rehearsed.
+   - `succeeded` with `task.details.auditUnconfirmed: true`: the placement was made and its
+     checks passed, but the task then failed (`task.code` `PLACEMENT_TASK_ERROR`, usually the
+     audit write) or did not report back. The placement stands. Check that the
+     `organization.legacy_customer.placed` audit event exists for that customer; if it does
+     not, record the placement in the change log by hand.
+   - `failed` with `task.code` `PLACEMENT_TASK_ERROR` and `rollbackRequired: true`: the move
+     committed and the task failed before its checks passed (the checks themselves failed to
+     run, or could not be recorded). The customer's records are in the target, unchecked. Read
+     the task's log, then roll the run back.
+   - The task's log says `PLACEMENT_TASK_SUPERSEDED` or `PLACEMENT_TASK_RESULT_NOT_RECORDED`
+     and the task exited non-zero: it found the API had already given up on it and stopped.
+     The run shows what the API recorded; act on that.
+   - `running` for a while although `state` is `done`: the move has committed and the task is
+     doing its Postgres commit, checks and audit events. A rollback is refused
+     (`PLACEMENT_IN_PROGRESS`) until it finishes or is given up on.
+   - Still `queued` or `running` and the heartbeat (`task.heartbeatAt`) is moving: it is
+     working; a large customer takes minutes. If the task is plainly gone, wait out the 3
+     minutes and read again. Do not edit the journal by hand.
 3. **Orphan check.** The API's daily cron logs `[Cron] Orphaned proposals: N` in
    `/rfpilot/production/api`. Check it the morning after: it should be 0, or the number noted
    in step 3 if those accounts were left as they were. Anything new needs an owner reassigned.

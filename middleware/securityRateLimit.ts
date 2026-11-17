@@ -54,6 +54,8 @@ const redisHit = async (client: Redis, key: string, windowMs: number, now: numbe
 export const securityRateLimit = (options: {
   name: string; limit: number; windowMs: number;
   identity?: (req: Request) => string;
+  // Added to the 429 body, for callers that must tell this refusal from another 429 of theirs.
+  code?: string;
 }) => (req: Request, res: Response, next: NextFunction): void => {
   const now = Date.now();
   const identity = options.identity?.(req) || req.ip || "unknown";
@@ -68,7 +70,7 @@ export const securityRateLimit = (options: {
     res.setHeader("RateLimit-Reset", Math.ceil(bucket.resetAt / 1000));
     if (bucket.count > options.limit) {
       res.setHeader("Retry-After", Math.ceil((bucket.resetAt - now) / 1000));
-      res.status(429).json({ success: false, message: "Too many requests. Please try again later." });
+      res.status(429).json({ success: false, ...(options.code ? { code: options.code } : {}), message: "Too many requests. Please try again later." });
       return;
     }
     next();

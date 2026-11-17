@@ -46,6 +46,31 @@ from AWS on 2026-08-18 (see "Staging removal" below).
 - IAM role `rfpilot-staging-github-deploy` still exists (remove with
   `npx cdk deploy Rfpilot-Cicd --exclusively`).
 
+**Pending, not deployed (2026-11-17): legacy-customer placement from the
+admin API.** The App stack gains a Step Functions state machine
+`rfpilot-production-placement` and its role, a dedicated task definition
+`rfpilot-production-placement` (with its task and execution roles) and a log
+group `/rfpilot/production/placement`. The API task role gains
+`states:StartExecution` on that machine and `states:DescribeExecution` on
+its executions, and the API container one variable,
+`PLACEMENT_STATE_MACHINE_ARN`. The API gets no ECS or `iam:PassRole`
+permission and no new secret. App stack only: Network, Data, Observability
+and `deploy-aws.yml` are unchanged, and the ordinary `production` deploy
+carries it. Nothing has run on AWS: no execution or task was ever started
+and no statement was exercised, including whether the `.sync` permissions
+are sufficient and whether the script runs on a read-only root filesystem.
+First use of Step Functions in this account. Not built and worth adding:
+an alarm on the machine's `ExecutionsStarted` (Observability stack), and a
+Postgres-side anchor for placement that the API role cannot write
+(`docs/DECISIONS.md`, 2026-11-17). After the deploy, before
+relying on it: (1) the API task definition shows the variable and its
+role's policy shows the two `states:` statements and no `ecs:` or
+`iam:PassRole`; (2) place one test legacy customer through
+`POST /api/admin/legacy-customers/:userId/placements` and follow
+`docs/runbooks/ORG_TENANCY_CUTOVER.md` section 9 step 2a; (3) roll it back
+the same way. If it does not work, placement by hand (step 2b) is unaffected,
+and removing the variable switches the API path off.
+
 **Deploys since the 2026-09-01 entry below** (all green, ~20 min each):
 2026-11-04 run 41813249552 (SSO, password sign-up, onboarding, Users and
 Teams), 2026-11-08 run 42456189678 (ORG-306 domain-match access requests),
