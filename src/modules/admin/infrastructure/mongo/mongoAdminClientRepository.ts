@@ -1,14 +1,18 @@
 import User from "../../../../../modal/userModel";
 import type { AdminClientRepository } from "../../domain/ports/adminClientRepository";
+import { accountUsage } from "./accountUsageCounts";
 import { tenantFilter, tenantObjectId } from "../../../shared/tenancy/tenantContext";
 
 const escapeRegex = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+export { proposalCountPipeline } from "./accountUsageCounts";
+
 export const mongoAdminClientRepository: AdminClientRepository = {
   async list({ page, perPage, search }) {
+    const organizationId = tenantObjectId();
     const matchStage: Record<string, unknown> = {
-      organizationId: tenantObjectId(),
+      organizationId,
       role: { $nin: ["admin", "super_admin", "superadmin"] },
     };
     if (search) {
@@ -17,7 +21,7 @@ export const mongoAdminClientRepository: AdminClientRepository = {
     }
     const [result] = await User.aggregate<{
       metadata: { total: number }[];
-      data: Record<string, unknown>[];
+      data: Array<Record<string, unknown> & { id: unknown }>;
     }>([
       { $match: matchStage },
       {
@@ -28,28 +32,6 @@ export const mongoAdminClientRepository: AdminClientRepository = {
             { $skip: (page - 1) * perPage },
             { $limit: perPage },
             {
-              $lookup: {
-                from: "proposals",
-                let: { userId: "$_id" },
-                pipeline: [
-                  { $match: { $expr: { $eq: ["$userId", "$$userId"] } } },
-                  { $count: "count" },
-                ],
-                as: "proposalStats",
-              },
-            },
-            {
-              $lookup: {
-                from: "emailcampaigns",
-                let: { userId: "$_id" },
-                pipeline: [
-                  { $match: { $expr: { $eq: ["$userId", "$$userId"] } } },
-                  { $group: { _id: null, totalEmailSent: { $sum: "$sentCount" } } },
-                ],
-                as: "emailStats",
-              },
-            },
-            {
               $project: {
                 _id: 0,
                 id: "$_id",
@@ -58,16 +40,16 @@ export const mongoAdminClientRepository: AdminClientRepository = {
                 company: { $ifNull: ["$company", null] },
                 joinDate: "$createdAt",
                 isBlocked: { $ifNull: ["$isBlocked", false] },
-                totalProposals: { $ifNull: [{ $first: "$proposalStats.count" }, 0] },
-                totalEmailSent: { $ifNull: [{ $first: "$emailStats.totalEmailSent" }, 0] },
               },
             },
           ],
         },
       },
     ]);
+    const rows = result?.data ?? [];
+    const usageOf = await accountUsage(organizationId, rows.map((row) => row.id));
     return {
-      clients: result?.data ?? [],
+      clients: rows.map((row) => ({ ...row, ...usageOf(row.id) })),
       total: result?.metadata?.[0]?.total ?? 0,
     };
   },
