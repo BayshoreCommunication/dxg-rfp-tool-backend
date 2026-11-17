@@ -290,6 +290,8 @@ test("routes: every plan-management route sits behind authenticate and the staff
     "GET /admin/organization-plans",
     "GET /admin/organization-plans/:organizationId",
     "PUT /admin/organization-plans/:organizationId",
+    // The organization account detail (tests/organization-account-detail.test.js) shares the guard.
+    "GET /admin/organizations/:organizationId",
   ]);
   for (const route of routes) {
     assert.equal(route.stack[0].handle, authenticate, route.path);
