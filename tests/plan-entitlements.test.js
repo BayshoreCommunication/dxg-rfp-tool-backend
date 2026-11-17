@@ -74,15 +74,17 @@ test("the entitlement summary reports usage against the limit", () => {
   assert.deepEqual(entitlementsOf(full(9), {}).proposals, { created: 9, limit: null, remaining: null, canCreate: true });
 });
 
-test("plan errors say RFP, never proposal, and carry distinct codes", () => {
+test("plan errors say proposal, never RFP, and carry distinct codes", () => {
   const limit = new PlanLimitReachedError("free_trial", 2, 2);
   assert.equal(limit.code, "PLAN_LIMIT_REACHED");
   assert.equal(limit.status, 403);
-  assert.match(limit.message, /2 RFPs/);
+  assert.match(limit.message, /2 proposals/);
+  assert.match(new PlanLimitReachedError("free_trial", 1, 1).message, /1 proposal and/);
+  assert.match(new PlanFeatureLockedError("free_trial", "proposalIntelligence").message, /^Proposal intelligence isn't included/);
   for (const feature of ["vendorResponses", "proposalIntelligence"]) {
     const locked = new PlanFeatureLockedError("free_trial", feature);
     assert.equal(locked.code, "PLAN_FEATURE_LOCKED");
-    assert.doesNotMatch(`${locked.message}${limit.message}`, /proposal/i);
+    assert.doesNotMatch(`${locked.message}${limit.message}`, /(?<![A-Za-z0-9_])RFP(?:s|'s|’s)?(?![A-Za-z0-9_])/);
   }
 });
 

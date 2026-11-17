@@ -377,7 +377,7 @@ export class DeterministicAssistantProvider implements AssistantResponseProvider
       return result(
         "refusal",
         hasWorkflowLinks
-          ? "I can guide you, but I can’t create, publish, or email a proposal for you. Start at [Create a proposal](/proposals/add-new-proposal), complete and review the guided intake, explicitly generate or update the RFP, then use its send action from [Proposals](/proposals). Proposal email activity is available in [Email](/email)."
+          ? "I can guide you, but I can’t create, publish, or email a proposal for you. Start at [Create a proposal](/proposals/add-new-proposal), complete and review the guided intake, explicitly generate or update the proposal, then use its send action from [Proposals](/proposals). Proposal email activity is available in [Email](/email)."
           : "I can explain the steps, but I cannot edit, publish, delete, or send anything for you. Tell me which workflow you want to understand and I’ll guide you through it.",
         citationIds,
       );
@@ -481,7 +481,7 @@ export class DeterministicAssistantProvider implements AssistantResponseProvider
     ) {
       return result(
         "answer",
-        "Before sending, verify the event, venue, schedule, room and production scope, conditional hybrid and creative needs, technical and insurance requirements, budget and deadlines, uploads or co-vendor responsibilities, and contact/recipient details. Review the generated RFP for gaps, then use its send action from [Proposals](/proposals).",
+        "Before sending, verify the event, venue, schedule, room and production scope, conditional hybrid and creative needs, technical and insurance requirements, budget and deadlines, uploads or co-vendor responsibilities, and contact/recipient details. Review the generated proposal for gaps, then use its send action from [Proposals](/proposals).",
         idsPresent(input.evidence, [
           "platform:proposal:pre-send-checklist",
           "platform:navigation:proposals",
@@ -496,7 +496,7 @@ export class DeterministicAssistantProvider implements AssistantResponseProvider
     ) {
       return result(
         "answer",
-        "Open [Create a proposal](/proposals/add-new-proposal). If the guided form is enabled, optionally upload a source file or continue without one, then complete: Event Overview; Venue & Schedule; Room Specifications; Hybrid & Virtual when applicable; Content & Creative; Venue & Technical; Investment & Evaluation; Uploads & Co-Vendors; and Contact & Submit. Save a draft or explicitly generate/update the RFP at the end. The separate optional proposal-assistant experience uses five phases.",
+        "Open [Create a proposal](/proposals/add-new-proposal). If the guided form is enabled, optionally upload a source file or continue without one, then complete: Event Overview; Venue & Schedule; Room Specifications; Hybrid & Virtual when applicable; Content & Creative; Venue & Technical; Investment & Evaluation; Uploads & Co-Vendors; and Contact & Submit. Save a draft or explicitly generate/update the proposal at the end. The separate optional proposal-assistant experience uses five phases.",
         idsPresent(input.evidence, [
           "platform:navigation:create-proposal",
           "platform:proposal:guided-intake",

@@ -265,12 +265,12 @@ export const createMemberManagement = (dependencies: Dependencies) => {
     const manage = decideManage(actor);
     if (!manage.ok) return refuse(actor, action, input.fromUserId, manage);
     const toUserId = typeof input.toUserId === "string" ? input.toUserId : "";
-    if (!/^[a-f0-9]{24}$/i.test(toUserId)) return refusal(400, "REASSIGN_TARGET_REQUIRED", "Choose the member who receives the RFPs.");
+    if (!/^[a-f0-9]{24}$/i.test(toUserId)) return refusal(400, "REASSIGN_TARGET_REQUIRED", "Choose the member who receives the proposals.");
     let rfpIds: string[] | null = null;
     if (input.rfpIds !== undefined && input.rfpIds !== "all") {
       if (!Array.isArray(input.rfpIds) || input.rfpIds.length === 0 || input.rfpIds.length > MAX_SELECTED_RFPS ||
         !input.rfpIds.every((id) => typeof id === "string" && /^[a-f0-9]{24}$/i.test(id))) {
-        return refusal(400, "INVALID_RFP_SELECTION", `Select between 1 and ${MAX_SELECTED_RFPS} RFPs, or omit rfpIds to reassign all.`);
+        return refusal(400, "INVALID_RFP_SELECTION", `Select between 1 and ${MAX_SELECTED_RFPS} proposals, or omit rfpIds to reassign all.`);
       }
       rfpIds = [...new Set(input.rfpIds as string[])];
     }
@@ -283,10 +283,10 @@ export const createMemberManagement = (dependencies: Dependencies) => {
 
     const result = await dependencies.reassignments.reassign({ organizationId: actor.organizationId, fromUserId: input.fromUserId, toUserId, rfpIds });
     if (result === "target_ineligible") {
-      return refuse(actor, action, input.fromUserId, refusal(409, "REASSIGN_TARGET_INELIGIBLE", "RFPs can only go to an active member who isn't a Viewer."));
+      return refuse(actor, action, input.fromUserId, refusal(409, "REASSIGN_TARGET_INELIGIBLE", "Proposals can only go to an active member who isn't a Viewer."));
     }
     if ("notOwnedCount" in result) {
-      return refusal(409, "RFPS_NOT_OWNED_BY_MEMBER", "Some selected RFPs aren't owned by this member. Nothing was reassigned.", { notOwnedCount: result.notOwnedCount });
+      return refusal(409, "RFPS_NOT_OWNED_BY_MEMBER", "Some selected proposals aren't owned by this member. Nothing was reassigned.", { notOwnedCount: result.notOwnedCount });
     }
     for (const rfpId of result.rfpIds) {
       await dependencies.audit.append({

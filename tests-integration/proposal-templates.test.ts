@@ -263,7 +263,7 @@ test('a personal template is visible only to its owner: others in the organizati
 test('an RFP the member cannot see cannot be saved as a template', async () => {
   // The colleague is a Planner with no share on the owner's RFP: in the organization, out of reach.
   const refused = await call('colleague', 'POST', BASE, { proposalId: sourceId, title: 'Borrowed' });
-  assert.deepEqual([refused.status, refused.body.code, refused.body.message], [403, 'PROPOSAL_ACCESS_DENIED', "You don't have access to this RFP."]);
+  assert.deepEqual([refused.status, refused.body.code, refused.body.message], [403, 'PROPOSAL_ACCESS_DENIED', "You don't have access to this proposal."]);
   const missing = await call('colleague', 'POST', BASE, { proposalId: randomMongoId(), title: 'Borrowed' });
   assert.deepEqual([missing.status, missing.body.code], [404, 'TEMPLATE_SOURCE_NOT_FOUND']);
   assert.equal(await ProposalTemplate.countDocuments({ organizationId: orgA, ownerUserId: userIds.colleague }), 0);
@@ -324,8 +324,8 @@ test('a free-trial organization at its limit is refused when creating from a tem
     { code: refused.body.code, plan: refused.body.plan, limit: refused.body.limit, created: refused.body.created, success: refused.body.success },
     { code: 'PLAN_LIMIT_REACHED', plan: 'free_trial', limit: 2, created: 2, success: false },
   );
-  assert.match(refused.body.message, /RFP/);
-  assert.doesNotMatch(refused.body.message, /proposal/i);
+  assert.match(refused.body.message, /2 proposals/);
+  assert.doesNotMatch(refused.body.message, /(?<![A-Za-z0-9_])RFP(?:s|'s|’s)?(?![A-Za-z0-9_])/);
   assert.equal(await Proposal.countDocuments({ organizationId: free }), 2);
   assert.equal((await Organization.findById(free).select('proposalsCreated').lean())!.proposalsCreated, 2);
   // Templates themselves stay available at the limit; only a new RFP needs a slot.

@@ -36,7 +36,7 @@ const fail = (res: Response, error: unknown): void => {
   // The source RFP is in the organization but the member can't see it (403). Same code as the
   // RFP routes, worded for the reader.
   if (isProposalAccessDenied(error)) {
-    res.status(403).json({ success: false, code: error.code, message: "You don't have access to this RFP." });
+    res.status(403).json({ success: false, code: error.code, message: "You don't have access to this proposal." });
     return;
   }
   // An RFP started from a template needs a plan slot like any other (ORG-601).

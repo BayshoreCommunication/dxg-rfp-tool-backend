@@ -2,7 +2,7 @@ import type {
   AssistantMessage,
   AssistantUiContext,
 } from "./domain";
-import { PROPOSAL_FORM_FIELD_GUIDANCE } from "./proposalFormGuidance";
+import { PROPOSAL_FORM_FIELD_GUIDANCE, proposalFormFieldNamedIn } from "./proposalFormGuidance";
 import { normalizeCommonAssistantTypos } from "./queryNormalization";
 
 export const ASSISTANT_INTENT_VERSION = "assistant-intent-router.v2";
@@ -89,7 +89,7 @@ export const classifyAssistantIntent = (input: {
       query,
     ) &&
     PROPOSAL_FORM_FIELD_GUIDANCE.some((field) =>
-      query.includes(field.label.toLocaleLowerCase("en-US")),
+      proposalFormFieldNamedIn(field, query),
     );
 
   if (exactConversational.test(query)) {

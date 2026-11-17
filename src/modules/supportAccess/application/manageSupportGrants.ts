@@ -30,7 +30,7 @@ const ACTIVITY_LIMIT = 200;
 const NO_ACTIVITY: SupportActivitySummary = { useCount: 0, lastUsedAt: null };
 
 const grantNotFound = () => new SupportAccessError("SUPPORT_GRANT_NOT_FOUND", "Support access grant not found.", 404);
-const rfpNotFound = () => new SupportAccessError("PROPOSAL_NOT_FOUND", "RFP not found.", 404);
+const rfpNotFound = () => new SupportAccessError("PROPOSAL_NOT_FOUND", "Proposal not found.", 404);
 
 // The customer side of support access (ORG-404): an Owner or Admin grants RFPilot Support
 // read access to one RFP or the whole organization, sees every grant with what Support did
