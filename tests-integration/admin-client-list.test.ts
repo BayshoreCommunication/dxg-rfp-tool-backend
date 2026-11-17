@@ -4,7 +4,8 @@
 // on real MongoDB, with two organizations: the count for an account in the staff member's
 // organization leaves out proposals the same account id owns in another organization, the list
 // carries no proposal title or id, nothing is written to any audit log, and the removed paths
-// answer 404 for staff and for customers.
+// answer 404 for staff and for customers. The admin overview's recent clients use the same
+// counts, and the sent-email total is scoped the same way.
 import { TEST_MONGODB_DB_NAME } from "./env";
 import { connectMongo, disconnectMongo, ensureMigrated, ensureServices, randomMongoId } from "./setup";
 import assert from "node:assert/strict";
@@ -14,6 +15,7 @@ import http from "node:http";
 import mongoose from "mongoose";
 import app from "../server";
 import Admin from "../modal/adminModel";
+import EmailCampaign from "../modal/emailModel";
 import OrganizationMembership from "../modal/organizationMembershipModel";
 import Proposal from "../modal/proposalsModel";
 import SecurityAuditEvent from "../modal/securityAuditEventModel";
@@ -27,6 +29,8 @@ import { cleanupOrganizations, ROLES, seedOrganization, type Fixture } from "./m
 const tag = randomMongoId().slice(0, 10);
 const oid = (value?: string) => new mongoose.Types.ObjectId(value);
 const CLIENTS = "/api/all-clients";
+const OVERVIEW = "/api/admin/overview";
+const OVERVIEW_CLIENT_FIELDS = ["id", "name", "email", "company", "joinDate", "totalProposals", "totalEmailSent"];
 const CLIENT_FIELDS = ["id", "name", "email", "company", "joinDate", "isBlocked", "totalProposals", "totalEmailSent"];
 
 let server: http.Server;
@@ -56,6 +60,12 @@ const proposal = (organizationId: mongoose.Types.ObjectId, userId: string, event
   organizationId, userId: oid(userId), status: "unsubmitted", isDraft: true, isArchived: false,
   event: { eventName }, createdAt: new Date(), updatedAt: new Date(),
 });
+const campaign = (organizationId: mongoose.Types.ObjectId | undefined, userId: string, subject: string, sentCount: number) => ({
+  ...(organizationId ? { organizationId } : {}), userId: oid(userId), subject, recipients: [], totalRecipients: sentCount, sentCount,
+  openedCount: 0, clickedCount: 0, vendorResponseClickCount: 0, createdAt: new Date(), updatedAt: new Date(),
+});
+const campaignSubjects = [`Home campaign A ${tag}`, `Home campaign B ${tag}`, `Other campaign ${tag}`, `Other owner campaign ${tag}`, `Unowned campaign ${tag}`];
+const unownedTitle = `Unowned proposal ${tag}`;
 const auditEvents = () => SecurityAuditEvent.countDocuments({ organizationId: { $in: [homeId, otherId] } });
 
 before(async () => {
@@ -77,6 +87,17 @@ before(async () => {
     ...otherTitles.slice(0, 3).map((title) => proposal(otherId, planner, title)),
     ...otherTitles.slice(3).map((title) => proposal(otherId, other.members.owner.userId, title)),
   ]);
+  // Sent emails: 4 + 3 at home; 50 under the same account id in the other organization.
+  await EmailCampaign.collection.insertMany([
+    campaign(homeId, planner, campaignSubjects[0], 4),
+    campaign(homeId, planner, campaignSubjects[1], 3),
+    campaign(otherId, planner, campaignSubjects[2], 50),
+    campaign(otherId, other.members.owner.userId, campaignSubjects[3], 20),
+    // Rows with no organization at all are not counted either (an undercount, never a leak).
+    campaign(undefined, planner, campaignSubjects[4], 900),
+  ]);
+  const { organizationId: _none, ...unowned } = proposal(homeId, planner, unownedTitle);
+  await Proposal.collection.insertOne(unowned);
   homeProposalIds = Object.values(atHome.insertedIds).map(String);
   otherProposalIds = Object.values(elsewhere.insertedIds).map(String);
 
@@ -97,6 +118,11 @@ after(async () => {
   if (mongoose.connection.readyState === 1) {
     // Raw collection: the audit model itself is append-only.
     if (homeId && otherId) await SecurityAuditEvent.collection.deleteMany({ organizationId: { $in: [homeId, otherId] } });
+    if (home) {
+      const planner = oid(home.members.planner.userId);
+      await EmailCampaign.collection.deleteMany({ $or: [{ organizationId: { $in: [homeId, otherId] } }, { userId: planner }] });
+      await Proposal.collection.deleteMany({ userId: planner });
+    }
     await Admin.collection.deleteMany({ _id: { $in: [staff.admin, staff.superAdmin] } });
     await cleanupOrganizations();
   }
@@ -110,6 +136,7 @@ after(async () => {
 test("the client list counts an account's proposals in the staff organization only", async () => {
   // The data really is there to leak: five proposals carry the planner's id across both organizations.
   assert.equal(await Proposal.countDocuments({ organizationId: { $in: [homeId, otherId] }, userId: oid(home.members.planner.userId) }), 5);
+  assert.equal(await Proposal.collection.countDocuments({ userId: oid(home.members.planner.userId) }), 6);
 
   for (const token of [staffToken, superToken]) {
     const res = await request(token, "GET", CLIENTS);
@@ -123,9 +150,16 @@ test("the client list counts an account's proposals in the staff organization on
       assert.equal(typeof client.totalEmailSent, "number");
     }
     const counts = Object.fromEntries(clients.map((client) => [client.id, client.totalProposals]));
-    // Two, not five: the three proposals in the other organization are not counted.
+    // Two, not five or six: the three proposals in the other organization and the one with no
+    // organization are not counted.
     assert.equal(counts[home.members.planner.userId], 2);
-    for (const role of ROLES.filter((r) => r !== "planner")) assert.equal(counts[home.members[role].userId], 0, role);
+    const sent = Object.fromEntries(clients.map((client) => [client.id, client.totalEmailSent]));
+    // Seven, not 57 or 957.
+    assert.equal(sent[home.members.planner.userId], 7);
+    for (const role of ROLES.filter((r) => r !== "planner")) {
+      assert.equal(counts[home.members[role].userId], 0, role);
+      assert.equal(sent[home.members[role].userId], 0, role);
+    }
   }
 });
 
@@ -133,8 +167,28 @@ test("the client list carries no proposal title or id and nothing from the other
   const res = await request(staffToken, "GET", `${CLIENTS}?search=person`);
   assert.equal(res.status, 200, res.text);
   assert.equal(res.body.data.length, ROLES.length);
-  for (const leaked of [...homeTitles, ...otherTitles, ...homeProposalIds, ...otherProposalIds, other.organizationId, ...ROLES.flatMap((role) => [other.members[role].userId, other.members[role].email]), "not-a-real-hash"]) {
+  for (const leaked of [...homeTitles, ...otherTitles, ...campaignSubjects, unownedTitle, ...homeProposalIds, ...otherProposalIds, other.organizationId, ...ROLES.flatMap((role) => [other.members[role].userId, other.members[role].email]), "not-a-real-hash"]) {
     assert.ok(!res.text.includes(leaked), leaked);
+  }
+});
+
+test("the admin overview's recent clients show the staff organization's numbers only", async () => {
+  for (const token of [staffToken, superToken]) {
+    const res = await request(token, "GET", OVERVIEW);
+    assert.equal(res.status, 200, res.text);
+    const data = res.body.data;
+    assert.deepEqual(Object.keys(data), ["totals", "latestClients"]);
+    assert.deepEqual(data.totals, { totalClients: ROLES.length, totalProposals: 2, totalEmailSent: 7, totalClick: 0 });
+    const clients = data.latestClients as Array<Record<string, unknown>>;
+    assert.deepEqual(clients.map((client) => client.id).sort(), ROLES.map((role) => home.members[role].userId).sort());
+    for (const client of clients) assert.deepEqual(Object.keys(client), OVERVIEW_CLIENT_FIELDS);
+    const planner = clients.find((client) => client.id === home.members.planner.userId)!;
+    // The same numbers the client list gives for this account.
+    assert.deepEqual([planner.totalProposals, planner.totalEmailSent], [2, 7]);
+    for (const client of clients.filter((c) => c !== planner)) assert.deepEqual([client.totalProposals, client.totalEmailSent], [0, 0]);
+    for (const leaked of [...homeTitles, ...otherTitles, ...campaignSubjects, unownedTitle, ...homeProposalIds, ...otherProposalIds, other.organizationId, other.members.owner.userId, other.members.owner.email]) {
+      assert.ok(!res.text.includes(leaked), leaked);
+    }
   }
 });
 
@@ -142,6 +196,7 @@ test("reading the client list writes no audit event in either organization", asy
   const eventsBefore = await auditEvents();
   assert.equal((await request(staffToken, "GET", CLIENTS)).status, 200);
   assert.equal((await request(superToken, "GET", `${CLIENTS}?page=2`)).status, 200);
+  assert.equal((await request(staffToken, "GET", OVERVIEW)).status, 200);
   assert.equal(await auditEvents(), eventsBefore);
 });
 
