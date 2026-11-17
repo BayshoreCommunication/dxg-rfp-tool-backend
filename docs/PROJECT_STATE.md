@@ -572,14 +572,6 @@ earlier rule, "UI copy says RFP", is withdrawn. Text the backend writes is conve
 knowledge text and rows already stored; the admin app is converted separately (see
 follow-ups).
 
-**Organization account detail for staff (2026-11-17, backend half only).**
-`GET /api/v1/admin/organizations/:organizationId` gives RFPilot staff account-level
-facts about any organization without a support grant (owner decision 2026-11-17;
-`DECISIONS.md`, `API.md` "Organization account detail for RFPilot staff"). On branch
-`feat/admin-organization-detail`, not released. The admin app's Organizations page
-does not call it yet; that page is pending and must not merge before this route is
-in production.
-
 ### Before launch: Organization accounts (2026-11-11, updated 2026-11-16)
 
 What has to happen before external organizations are invited. Each line was
@@ -660,10 +652,13 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
   template actions in their audit log. The events are still written for staff and
   forensics; `AUDIT_CATALOG` carries a comment and the wording guard test fails if
   one is added.
-- Decided on 2026-11-17, not built (`DECISIONS.md`): the admin organization detail
-  page shows account information only (owner, plan, counts of members, teams and
-  proposals, domains, sign-in method, created and last-active dates) and no member
-  list without a support grant.
+- Decided on 2026-11-17 (`DECISIONS.md`): the admin organization detail page shows
+  account information only (owner, plan, counts of members, teams and proposals,
+  domains, sign-in method, created and last-active dates) and no member list
+  without a support grant. The backend route exists
+  (`GET /api/v1/admin/organizations/:organizationId`, `API.md` "Organization account
+  detail for RFPilot staff"; not released). The admin page is not built and must
+  not merge before the route is in production.
 - Decided on 2026-11-17, not built (`DECISIONS.md`): legacy-customer placement on
   production runs as a one-off task on the migrate task definition, started by the
   admin API. The API is never given `POSTGRES_MIGRATION_URL`.
