@@ -212,7 +212,7 @@ RFPilot Support side (staff role and an `admins` account; customers get the rout
 - No active grant in the organization: 403 `SUPPORT_GRANT_REQUIRED`, whether the organization exists or not. An RFP the active grants don't cover, or one that isn't in that organization: 404 `PROPOSAL_NOT_FOUND`. Grants are checked on every request, so expiry and revocation apply to the next call.
 - Every successful read writes a `support_access.used` audit event in the customer's organization (agent, `metadata.grantId`, target, `metadata.operation`: `rfp.list`, `rfp.read`, `vendor_responses.list`, `ticket.rfp.list`) before anything is returned; a refused one writes `support_access.denied`. Creating and revoking write `support_access.granted` / `support_access.revoked`.
 - "Granted to me" returns at most 500 active grants.
-- The older `GET /api/admin/proposals`, `GET /api/admin/proposals/:id` and `GET /api/all-clients` (which returns an RFP count per account) are unchanged by ORG-404: they are not grant-checked and write no audit event, and they read only the signed-in staff member's own organization. The admin app stopped calling the two `proposals` routes in ORG-406 and still uses `/api/all-clients` for account management. Gating or removing them is an open follow-up (`PROJECT_STATE.md`, "Before launch").
+- There is no ungated staff route to proposals. `GET /api/admin/proposals` and `GET /api/admin/proposals/:id`, which predated grants and read proposals with no grant check and no audit event, were removed on 2026-11-17 (DECISIONS) and answer the API's 404 (`{ success: false, message: "Route not found" }`) for every caller. What staff may see without a grant is account-level information and counts only: "Staff client list" and "Organization account detail for RFPilot staff" below.
 
 ## Helpdesk (support tickets)
 
@@ -304,6 +304,18 @@ Mounted at `/api/v1/admin/organization-plans`. RFPilot staff only: the caller ne
 | `security.autoApproveDomain`, `.allowManagerInvites` | The two organization settings of those names. |
 | `activity.lastSignInAt` | The latest sign-in by any active or deactivated member; a timestamp, no name. `null` if nobody has signed in since sign-ins were stamped. |
 | `supportAccess { active }` | Whether the organization has an active support grant (not revoked, not expired). Nothing else about the grant; its scope and expiry are on "granted to me" (Support access grants). |
+
+### Staff client list (`/api/all-clients`)
+
+`routes/allClientsRoute.ts`, `src/modules/admin/application/manageAdminClients.ts`. The admin app's Clients page. It lists the `users` accounts in the **signed-in staff member's own organization** whose account role is not administrative; that organization is the shared one that still holds legacy customers until the tenancy cutover. It never reads another organization.
+
+- Who: `authenticate` plus a staff membership role (`dxg_admin` or `super_admin`), and the controller requires an administrative account role. Customers get the route guard's plain 403. Block and delete need `super_admin`.
+- `GET /` `?search=&page=`, 10 per page, newest account first; `search` matches name or email. Answers `{ success, message, data: [client], pagination: { page, perPage, total, totalPages, hasNextPage, hasPrevPage }, filters: { search } }`.
+- A client is an allowlist built field by field: `{ id, name, email, company, joinDate, isBlocked, totalProposals, totalEmailSent }`. Nothing else a query returns can reach the response.
+- `totalProposals` is a **number**: how many proposals the account owns in the staff member's organization. It is account-level usage, which staff may see without a support grant (DECISIONS, 2026-11-17); no proposal title, id or other content is returned or loaded. The count is one grouped query on `Proposal` filtered by `organizationId` (the session's organization) and the listed account ids, so a proposal the same account id owns in any other organization is not counted, and `tests/tenant-scope-guard.test.js` covers the query.
+- `totalEmailSent` is the sum of `sentCount` over the account's email campaigns.
+- Audit: none. Like the organization-plans list, the list writes no audit event, in the staff organization or anywhere else.
+- `PATCH /:id/block` `{ isBlocked: boolean }` and `DELETE /:id` act on an account in the staff member's own organization only; another organization's account is 404, and an administrative account is 400.
 
 ## Organization vendor list (ORG-606)
 
