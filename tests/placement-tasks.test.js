@@ -2,20 +2,18 @@ require("ts-node/register/transpile-only");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { PlacementError } = require("../src/modules/tenancy/legacyCustomerPlacement");
-const { createPlacementTaskService, placementRunView, placementTaskPolicyFromEnv } = require("../src/modules/tenancy/placementTasks");
+const { createPlacementTaskService, placementRunView, placementTaskPolicyFromEnv, PlacementTaskSettingsError } = require("../src/modules/tenancy/placementTasks");
 const {
-  assertPlacementTaskConfig,
-  buildRunTaskInput,
-  createEcsPlacementTaskLauncher,
-  placementTaskCommand,
+  buildStartExecutionInput,
+  createPlacementTaskLauncher,
   placementTaskConfigFromEnv,
   PlacementTaskConfigError,
 } = require("../src/modules/tenancy/placementTaskLauncher");
 
-// ORG-110 on production: the API queues a placement or rollback and starts it as a one-off task
-// on the migrate task definition (owner's decision, 2026-11-17). In-memory journal and a fake
-// launcher here; the journal's real unique indexes, the task's side and the HTTP routes are
-// proven in tests-integration/legacy-customer-placement-tasks.test.ts.
+// ORG-110 on production: the API queues a placement or rollback and starts an execution of the
+// placement state machine, which runs the task (owner's decision, 2026-11-17). In-memory journal
+// and a fake launcher here; the journal's real unique indexes, the task's side and the HTTP
+// routes are proven in tests-integration/legacy-customer-placement-tasks.test.ts.
 
 const hex = (c) => c.repeat(24);
 const ANA = hex("a");
@@ -71,6 +69,7 @@ const memoryStore = () => {
       Object.assign(row.task, change.task ?? {});
       if (change.release) { delete row.inFlight; delete row.taskSlot; }
       if (change.clearRollbackFrom) delete row.rollbackFrom;
+      if (change.releaseIdempotencyKey) delete row.idempotencyKey;
       return true;
     },
   };
@@ -81,6 +80,8 @@ const setup = (options = {}) => {
   const launches = [];
   const clock = { now: new Date(START) };
   const state = { launchError: null, refusal: null, rollbackRefusal: null };
+  const logs = [];
+  const described = [];
   let sequence = 0;
   const service = createPlacementTaskService({
     store,
@@ -88,9 +89,13 @@ const setup = (options = {}) => {
       async launch(input) {
         if (state.launchError) throw state.launchError;
         launches.push(input);
-        return { taskArn: `arn:aws:ecs:us-east-2:111111111111:task/rfpilot-production/${launches.length}` };
+      },
+      async describe(input) {
+        described.push(input.launchToken);
+        return { status: "FAILED", error: "States.TaskFailed", cause: "arn:aws:ecs:us-east-2:111111111111:task/x stoppedReason: CannotPullContainerError" };
       },
     },
+    log: (event, fields) => logs.push({ event, ...fields }),
     async validatePlacement(userId, target) {
       if (state.refusal) throw state.refusal;
       return { holdingOrganizationId: HOLDING, previousVersion: 2, targetOrganizationId: TARGET, createdOrganization: target.kind === "new", role: target.kind === "new" ? "owner" : target.role, teamId: null, target };
@@ -115,7 +120,7 @@ const setup = (options = {}) => {
       delete row.inFlight; delete row.taskSlot; delete row.rollbackFrom;
     },
   };
-  return { service, store, launches, state, advance, task };
+  return { service, store, launches, state, advance, task, logs, described };
 };
 
 const refused = async (promise, code, status) => {
@@ -137,7 +142,9 @@ test("a placement request is journaled as queued and starts exactly one task wit
   assert.equal(run.userId, ANA);
   assert.equal(run.targetOrganizationId, TARGET);
   assert.equal(run.task.status, "queued");
-  assert.match(run.task.taskArn, /^arn:aws:ecs:/);
+  // Nothing that names the AWS account or a resource is shown to staff.
+  assert.ok(!JSON.stringify(run).includes("arn:"));
+  assert.ok(!("taskArn" in run.task));
   assert.equal(launches.length, 1);
   assert.deepEqual(Object.keys(launches[0]).sort(), ["launchToken", "runId"], "nothing from the request reaches the launcher");
   assert.equal(launches[0].runId, run.runId);
@@ -197,9 +204,46 @@ test("the same Idempotency-Key returns the same run and starts no second task", 
   assert.equal(launches.length, 1);
   // The key belongs to that request.
   await refused(service.requestPlacement({ userId: BEN, target: existing, actor, idempotencyKey: "key-1" }), "IDEMPOTENCY_KEY_REUSED", 409);
+  // And to that staff member: a colleague who happens to send the same key makes a new request.
+  const colleague = { adminUserId: hex("9"), adminOrganizationId: STAFF_ORG, correlationId: "corr-9" };
+  const theirs = await service.requestPlacement({ userId: BEN, target: existing, actor: colleague, idempotencyKey: "key-1" });
+  assert.equal(theirs.replayed, false);
+  assert.notEqual(theirs.run.runId, first.run.runId);
+  assert.equal(launches.length, 2);
   await refused(service.requestPlacement({ userId: ANA, target: { ...existing, role: "team_manager" }, actor, idempotencyKey: "key-1" }), "IDEMPOTENCY_KEY_REUSED", 409);
   await refused(service.requestPlacement({ userId: ANA, target: existing, actor, idempotencyKey: "has space" }), "INVALID_IDEMPOTENCY_KEY", 400);
+  assert.equal(launches.length, 2);
+});
+
+test("a staff account without an organization can't queue anything", async () => {
+  const { service, store, launches } = setup();
+  for (const bad of [{ ...actor, adminOrganizationId: undefined }, { ...actor, adminOrganizationId: "" }, { ...actor, adminUserId: "not-an-id" }]) {
+    await refused(service.requestPlacement({ userId: ANA, target: existing, actor: bad }), "STAFF_ORGANIZATION_REQUIRED", 403);
+    await refused(service.requestRollback({ runId: "placement-2026-11-17T09:00:00.000Z-00000001", actor: bad }), "STAFF_ORGANIZATION_REQUIRED", 403);
+  }
+  assert.equal(store.rows.size, 0);
+  assert.equal(launches.length, 0);
+});
+
+test("after a start failure or a task that never started, the same Idempotency-Key tries again", async () => {
+  const { service, store, launches, state, advance } = setup();
+  state.launchError = new Error("boom");
+  await refused(service.requestPlacement({ userId: ANA, target: existing, actor, idempotencyKey: "retry-me" }), "PLACEMENT_TASK_START_FAILED", 503);
+  const [failed] = [...store.rows.values()];
+  assert.equal(failed.idempotencyKey, undefined, "the key is released with the run");
+  state.launchError = null;
+  const second = await service.requestPlacement({ userId: ANA, target: existing, actor, idempotencyKey: "retry-me" });
+  assert.equal(second.replayed, false);
+  assert.notEqual(second.run.runId, failed.runId);
   assert.equal(launches.length, 1);
+  // While that one is queued the key replays it.
+  assert.equal((await service.requestPlacement({ userId: ANA, target: existing, actor, idempotencyKey: "retry-me" })).replayed, true);
+  // It never starts; once given up on, the key starts a third run.
+  advance(5 * 60_000);
+  const third = await service.requestPlacement({ userId: ANA, target: existing, actor, idempotencyKey: "retry-me" });
+  assert.equal(third.replayed, false);
+  assert.equal(store.rows.size, 3);
+  assert.equal(launches.length, 2);
 });
 
 test("two requests with one key that race to the journal start one task", async () => {
@@ -218,9 +262,17 @@ test("two requests with one key that race to the journal start one task", async 
 
 test("a task that can't be started fails the request, moves nothing and frees the user and the slot", async () => {
   const { service, store, launches, state } = setup();
-  state.launchError = new Error("AccessDeniedException: not authorized to perform ecs:RunTask");
-  await refused(service.requestPlacement({ userId: ANA, target: existing, actor }), "PLACEMENT_TASK_START_FAILED", 503);
+  const awsText = "AccessDeniedException: User: arn:aws:sts::111111111111:assumed-role/rfpilot-api-task-role/abc is not authorized to perform: states:StartExecution";
+  state.launchError = new Error(awsText);
+  let thrown;
+  await service.requestPlacement({ userId: ANA, target: existing, actor }).catch((error) => { thrown = error; });
+  assert.equal(thrown.code, "PLACEMENT_TASK_START_FAILED");
+  assert.equal(thrown.status, 503);
   const [row] = [...store.rows.values()];
+  // AWS's own words (account id, role names) are for the server log, not the client or the journal.
+  for (const text of [thrown.message, JSON.stringify(thrown.details), JSON.stringify(row), JSON.stringify(await service.getRun(row.runId))]) {
+    assert.ok(!/111111111111|arn:|AccessDenied|assumed-role/.test(text), text);
+  }
   assert.equal(row.state, "aborted");
   assert.equal(row.task.status, "failed");
   assert.equal(row.task.code, "PLACEMENT_TASK_START_FAILED");
@@ -235,11 +287,11 @@ test("a task that can't be started fails the request, moves nothing and frees th
 });
 
 test("a queued task that never starts is given up on when the run is read, and the user can be placed again", async () => {
-  const { service, store, launches, advance } = setup();
+  const { service, store, launches, advance, logs, described } = setup();
   const { run } = await service.requestPlacement({ userId: ANA, target: existing, actor });
-  advance(9 * 60_000);
+  advance(3 * 60_000);
   assert.equal((await service.getRun(run.runId)).status, "queued", "still inside the start timeout");
-  advance(2 * 60_000);
+  advance(61_000);
   const view = await service.getRun(run.runId);
   assert.equal(view.status, "failed");
   assert.equal(view.state, "aborted");
@@ -249,6 +301,13 @@ test("a queued task that never starts is given up on when the run is read, and t
   assert.equal(store.rows.get(run.runId).taskSlot, undefined);
   assert.equal((await service.requestPlacement({ userId: ANA, target: existing, actor })).run.status, "queued");
   assert.equal(launches.length, 2);
+  // Why it never started is fetched for the server log, and only for it.
+  assert.deepEqual(described, [launches[0].launchToken]);
+  const given = logs.find((entry) => entry.event === "placement_task_given_up");
+  assert.equal(given.execution.status, "FAILED");
+  assert.match(given.execution.cause, /CannotPullContainerError/);
+  assert.ok(!JSON.stringify(view).includes("CannotPull"));
+  assert.ok(!JSON.stringify(store.rows.get(run.runId)).includes("CannotPull"));
 });
 
 test("a stuck run is also given up on by the next request, so it can't block everyone", async () => {
@@ -343,6 +402,8 @@ test("rollback: refusals as before, one at a time, and one task per request", as
   assert.notEqual(launches[1].launchToken, launches[0].launchToken);
   await refused(service.requestRollback({ runId: run.runId, actor }), "ROLLBACK_IN_PROGRESS", 409);
   assert.equal((await service.requestRollback({ runId: run.runId, actor: other, idempotencyKey: "rb-1" })).replayed, true);
+  // The same key from another staff member is not a replay.
+  await refused(service.requestRollback({ runId: run.runId, actor, idempotencyKey: "rb-1" }), "ROLLBACK_IN_PROGRESS", 409);
   await refused(service.requestPlacement({ userId: BEN, target: existing, actor }), "PLACEMENT_CAPACITY_REACHED", 429);
   assert.equal(launches.length, 2);
 
@@ -366,7 +427,7 @@ test("a rollback task that is lost or never starts leaves the placement as it wa
     const { run } = await service.requestPlacement({ userId: ANA, target: existing, actor });
     task.claim(run.runId);
     task.finish(run.runId, "succeeded", "done");
-    await service.requestRollback({ runId: run.runId, actor });
+    await service.requestRollback({ runId: run.runId, actor, idempotencyKey: "rb" });
     if (claimed) task.claim(run.runId);
     advance(11 * 60_000);
     const view = await service.getRun(run.runId);
@@ -377,8 +438,9 @@ test("a rollback task that is lost or never starts leaves the placement as it wa
     assert.equal(view.task.code, claimed ? "ROLLBACK_TASK_LOST" : "ROLLBACK_TASK_NOT_STARTED");
     const row = store.rows.get(run.runId);
     assert.deepEqual([row.inFlight, row.taskSlot, row.rollbackFrom], [undefined, undefined, undefined]);
-    // And it can be asked for again.
-    assert.equal((await service.requestRollback({ runId: run.runId, actor })).run.status, "queued");
+    // And it can be asked for again, with the same key: the failed attempt moved nothing.
+    const again = await service.requestRollback({ runId: run.runId, actor, idempotencyKey: "rb" });
+    assert.deepEqual([again.replayed, again.run.status], [false, "queued"]);
   }
 });
 
@@ -393,95 +455,105 @@ test("run view: status follows the journal; a run made by the synchronous path h
   }
 });
 
-/* ── What is handed to ECS ─────────────────────────────────────────────────────────────────── */
+/* ── What is handed to Step Functions ──────────────────────────────────────────────────────── */
 
-const config = {
-  cluster: "rfpilot-production",
-  taskDefinition: "arn:aws:ecs:us-east-2:111111111111:task-definition/rfpilot-production-migrate:42",
-  subnets: ["subnet-0123456789abcdef0", "subnet-0fedcba9876543210"],
-  securityGroup: "sg-0123456789abcdef0",
-  container: "migrate",
-};
+const MACHINE = "arn:aws:states:us-east-2:111111111111:stateMachine:rfpilot-production-placement";
+const config = { stateMachineArn: MACHINE, region: "us-east-2" };
 const RUN = "placement-2026-11-17T09:00:00.000Z-ab12cd34";
 const TOKEN = "f".repeat(64);
 
-test("the task is started on the migrate task definition with a fixed command list", () => {
-  const input = buildRunTaskInput(config, { runId: RUN, launchToken: TOKEN });
-  assert.equal(input.taskDefinition, config.taskDefinition);
-  assert.equal(input.cluster, "rfpilot-production");
-  assert.equal(input.launchType, "FARGATE");
-  assert.equal(input.count, 1);
-  assert.equal(input.clientToken, TOKEN);
-  assert.deepEqual(input.networkConfiguration.awsvpcConfiguration, { subnets: config.subnets, securityGroups: [config.securityGroup], assignPublicIp: "DISABLED" });
-  const [override] = input.overrides.containerOverrides;
-  assert.equal(input.overrides.containerOverrides.length, 1);
-  assert.equal(override.name, "migrate");
-  // Discrete arguments, no shell, and nothing but the run id varies.
-  assert.deepEqual(override.command, ["node", "dist/scripts/placeLegacyCustomer.js", `--task-run=${RUN}`]);
-  assert.deepEqual(override.environment, [{ name: "PGOPTIONS", value: "-c lock_timeout=15000" }]);
-  // No role, image, CPU or memory override: the task runs as the migrate task definition says.
-  assert.deepEqual(Object.keys(input.overrides), ["containerOverrides"]);
-  assert.deepEqual(Object.keys(override).sort(), ["command", "environment", "name"]);
+test("an execution is started on the placement state machine with the run id as its whole input", () => {
+  const input = buildStartExecutionInput(config, { runId: RUN, launchToken: TOKEN });
+  assert.deepEqual(Object.keys(input).sort(), ["input", "name", "stateMachineArn"]);
+  assert.equal(input.stateMachineArn, MACHINE);
+  assert.equal(input.name, TOKEN);
+  // The state machine reads $.runId and nothing else; nothing else is sent.
+  assert.deepEqual(JSON.parse(input.input), { runId: RUN });
+  // Extra fields on the request never travel.
+  const extra = buildStartExecutionInput(config, { runId: RUN, launchToken: TOKEN, command: ["sh"], taskRoleArn: "arn:aws:iam::1:role/x", overrides: {} });
+  assert.deepEqual(extra, input);
 });
 
-test("a run id that isn't one of ours is never put on a command line", () => {
+test("a run id that isn't one of ours never becomes an execution input", () => {
   const hostile = [
     "", "x", `${RUN}; rm -rf /`, `${RUN} --rollback=other`, `${RUN}\n--apply`, "$(curl evil)", "`id`", "placement-2026-11-17T09:00:00.000Z-AB12CD34",
-    "--email=victim@example.com", `${RUN}&&true`, "../../etc/passwd", null, undefined, 42, ["a"], { runId: RUN },
+    "--email=victim@example.com", `${RUN}&&true`, "../../etc/passwd", `${RUN}","command":["sh"]`, null, undefined, 42, ["a"], { runId: RUN },
   ];
   for (const runId of hostile) {
-    assert.throws(() => placementTaskCommand(runId), PlacementTaskConfigError, JSON.stringify(runId));
-    assert.throws(() => buildRunTaskInput(config, { runId, launchToken: TOKEN }), PlacementTaskConfigError, JSON.stringify(runId));
+    assert.throws(() => buildStartExecutionInput(config, { runId, launchToken: TOKEN }), PlacementTaskConfigError, JSON.stringify(runId));
   }
-  assert.throws(() => buildRunTaskInput(config, { runId: RUN, launchToken: "not-a-token" }), PlacementTaskConfigError);
+  for (const launchToken of ["not-a-token", "", null, `${TOKEN}x`, RUN]) {
+    assert.throws(() => buildStartExecutionInput(config, { runId: RUN, launchToken }), PlacementTaskConfigError, JSON.stringify(launchToken));
+  }
 });
 
-test("only the migrate task definition can be started, in a well-formed network", () => {
+test("only the placement state machine can be started", () => {
   const bad = [
-    { taskDefinition: "arn:aws:ecs:us-east-2:111111111111:task-definition/rfpilot-production-api:7" },
-    { taskDefinition: "rfpilot-production-worker" },
-    { taskDefinition: "arn:aws:ecs:us-east-2:111111111111:task-definition/rfpilot-production-migrate-evil:1" },
-    { taskDefinition: "someone-elses-task" },
-    { taskDefinition: "rfpilot-production-migrate:1 --overrides {}" },
-    { cluster: "rfpilot production" },
-    { subnets: [] },
-    { subnets: ["subnet-0123456789abcdef0", "0.0.0.0/0"] },
-    { securityGroup: "sg-0123456789abcdef0,sg-00000000000000000" },
-    { container: "migrate; sh" },
+    "arn:aws:states:us-east-2:111111111111:stateMachine:something-else",
+    "arn:aws:states:us-east-2:111111111111:stateMachine:rfpilot-production-placement-evil",
+    "arn:aws:states:us-east-2:111111111111:execution:rfpilot-production-placement",
+    "arn:aws:ecs:us-east-2:111111111111:task-definition/rfpilot-production-migrate:1",
+    "rfpilot-production-placement",
+    `${MACHINE} extra`,
   ];
-  for (const override of bad) assert.throws(() => assertPlacementTaskConfig({ ...config, ...override }), PlacementTaskConfigError, JSON.stringify(override));
-  assert.doesNotThrow(() => assertPlacementTaskConfig({ ...config, taskDefinition: "rfpilot-production-migrate" }));
-});
-
-test("task settings come from the environment: all, or none", () => {
+  for (const stateMachineArn of bad) {
+    assert.throws(() => placementTaskConfigFromEnv({ PLACEMENT_STATE_MACHINE_ARN: stateMachineArn }), PlacementTaskConfigError, stateMachineArn);
+    assert.throws(() => buildStartExecutionInput({ stateMachineArn, region: "us-east-2" }, { runId: RUN, launchToken: TOKEN }), PlacementTaskConfigError, stateMachineArn);
+  }
+  // Unset is how the feature is switched off.
   assert.equal(placementTaskConfigFromEnv({}), null);
-  const env = {
-    PLACEMENT_TASK_CLUSTER: config.cluster, PLACEMENT_TASK_DEFINITION: config.taskDefinition, PLACEMENT_TASK_SUBNETS: config.subnets.join(","),
-    PLACEMENT_TASK_SECURITY_GROUP: config.securityGroup, PLACEMENT_TASK_CONTAINER: "migrate",
-  };
-  assert.deepEqual(placementTaskConfigFromEnv(env), { ...config, region: "us-east-2" });
-  assert.throws(() => placementTaskConfigFromEnv({ ...env, PLACEMENT_TASK_SECURITY_GROUP: "" }), /incomplete: PLACEMENT_TASK_SECURITY_GROUP/);
-  assert.throws(() => placementTaskConfigFromEnv({ ...env, PLACEMENT_TASK_DEFINITION: "rfpilot-production-api" }), PlacementTaskConfigError);
-  assert.deepEqual(placementTaskPolicyFromEnv({}), { maxConcurrent: 1, startTimeoutMs: 600_000, heartbeatTimeoutMs: 180_000 });
-  assert.equal(placementTaskPolicyFromEnv({ PLACEMENT_TASK_MAX_CONCURRENT: "3" }).maxConcurrent, 3);
-  assert.equal(placementTaskPolicyFromEnv({ PLACEMENT_TASK_MAX_CONCURRENT: "500" }).maxConcurrent, 1, "an absurd cap is ignored");
+  assert.equal(placementTaskConfigFromEnv({ PLACEMENT_STATE_MACHINE_ARN: "  " }), null);
+  assert.deepEqual(placementTaskConfigFromEnv({ PLACEMENT_STATE_MACHINE_ARN: MACHINE }), config);
 });
 
-test("the launcher sends one RunTask and reports a task ECS did not start as a failure", async () => {
+test("timeouts have floors and a setting out of range is an error, not a silent default", () => {
+  assert.deepEqual(placementTaskPolicyFromEnv({}), { maxConcurrent: 1, startTimeoutMs: 240_000, heartbeatTimeoutMs: 180_000 });
+  assert.equal(placementTaskPolicyFromEnv({ PLACEMENT_TASK_MAX_CONCURRENT: "3" }).maxConcurrent, 3);
+  assert.equal(placementTaskPolicyFromEnv({ PLACEMENT_TASK_START_TIMEOUT_SECONDS: "60" }).startTimeoutMs, 60_000);
+  assert.equal(placementTaskPolicyFromEnv({ PLACEMENT_TASK_HEARTBEAT_TIMEOUT_SECONDS: "120" }).heartbeatTimeoutMs, 120_000);
+  const bad = [
+    { PLACEMENT_TASK_START_TIMEOUT_SECONDS: "59" }, { PLACEMENT_TASK_START_TIMEOUT_SECONDS: "0" }, { PLACEMENT_TASK_START_TIMEOUT_SECONDS: "soon" },
+    { PLACEMENT_TASK_HEARTBEAT_TIMEOUT_SECONDS: "119" }, { PLACEMENT_TASK_HEARTBEAT_TIMEOUT_SECONDS: "30" }, { PLACEMENT_TASK_HEARTBEAT_TIMEOUT_SECONDS: "1.5" },
+    { PLACEMENT_TASK_MAX_CONCURRENT: "0" }, { PLACEMENT_TASK_MAX_CONCURRENT: "500" },
+  ];
+  for (const env of bad) {
+    assert.throws(() => placementTaskPolicyFromEnv(env), (error) => error instanceof PlacementTaskSettingsError && error.message.includes(Object.keys(env)[0]), JSON.stringify(env));
+  }
+});
+
+test("the launcher sends one StartExecution, treats a repeat of the same attempt as started, and passes other errors on", async () => {
   const sent = [];
-  const client = (response) => ({ async send(command) { sent.push(command); return response; } });
-  const started = await createEcsPlacementTaskLauncher(config, client({ tasks: [{ taskArn: "arn:aws:ecs:us-east-2:111111111111:task/rfpilot-production/abc" }], failures: [] }))
-    .launch({ runId: RUN, launchToken: TOKEN });
-  assert.equal(started.taskArn, "arn:aws:ecs:us-east-2:111111111111:task/rfpilot-production/abc");
+  const client = (respond) => ({ async send(command) { sent.push(command); return respond(command); } });
+  await createPlacementTaskLauncher(config, client(() => ({ executionArn: "x" }))).launch({ runId: RUN, launchToken: TOKEN });
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].constructor.name, "RunTaskCommand");
-  assert.deepEqual(sent[0].input, buildRunTaskInput(config, { runId: RUN, launchToken: TOKEN }));
-  await assert.rejects(
-    createEcsPlacementTaskLauncher(config, client({ tasks: [], failures: [{ reason: "RESOURCE:MEMORY" }] })).launch({ runId: RUN, launchToken: TOKEN }),
-    /ECS did not start the task: RESOURCE:MEMORY/,
-  );
-  await assert.rejects(createEcsPlacementTaskLauncher(config, client({ tasks: [] })).launch({ runId: `${RUN};id`, launchToken: TOKEN }), PlacementTaskConfigError);
-  assert.equal(sent.length, 2, "a hostile run id never reaches ECS");
+  assert.equal(sent[0].constructor.name, "StartExecutionCommand");
+  assert.deepEqual(sent[0].input, buildStartExecutionInput(config, { runId: RUN, launchToken: TOKEN }));
+
+  const already = Object.assign(new Error("Execution Already Exists"), { name: "ExecutionAlreadyExists" });
+  await createPlacementTaskLauncher(config, client(() => { throw already; })).launch({ runId: RUN, launchToken: TOKEN });
+  const denied = Object.assign(new Error("not authorized"), { name: "AccessDeniedException" });
+  await assert.rejects(createPlacementTaskLauncher(config, client(() => { throw denied; })).launch({ runId: RUN, launchToken: TOKEN }), /not authorized/);
+
+  const before = sent.length;
+  await assert.rejects(createPlacementTaskLauncher(config, client(() => ({}))).launch({ runId: `${RUN};id`, launchToken: TOKEN }), PlacementTaskConfigError);
+  assert.equal(sent.length, before, "a hostile run id never reaches Step Functions");
+
+  const described = await createPlacementTaskLauncher(config, client(() => ({ status: "FAILED", error: "States.TaskFailed", cause: "stopped" }))).describe({ launchToken: TOKEN });
+  assert.deepEqual(described, { status: "FAILED", error: "States.TaskFailed", cause: "stopped" });
+  assert.equal(sent.at(-1).constructor.name, "DescribeExecutionCommand");
+  assert.equal(sent.at(-1).input.executionArn, `arn:aws:states:us-east-2:111111111111:execution:rfpilot-production-placement:${TOKEN}`);
+});
+
+test("the API's code has no way to start an ECS task", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const root = path.join(__dirname, "..");
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  assert.ok(!("@aws-sdk/client-ecs" in manifest.dependencies), "the ECS client is not a dependency");
+  for (const file of ["placementTaskLauncher.ts", "placementTasks.ts", "placementTaskStore.ts"]) {
+    const source = fs.readFileSync(path.join(root, "src/modules/tenancy", file), "utf8");
+    assert.ok(!/RunTaskCommand|client-ecs/.test(source), file);
+  }
 });
 
 /* ── Staff only ────────────────────────────────────────────────────────────────────────────── */

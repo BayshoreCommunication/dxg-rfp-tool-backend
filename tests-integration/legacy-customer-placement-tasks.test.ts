@@ -1,13 +1,15 @@
-// ORG-110 on production (owner's decision, 2026-11-17): the API has no Postgres migration role, so
-// it journals a placement or rollback as a queued run and starts a one-off task on the migrate
-// task definition; the task does the move and writes the outcome. Here the API runs exactly as
-// in production (no POSTGRES_MIGRATION_URL, placement task settings present) on real MongoDB and
-// Postgres, with ECS faked: the "task" is the same function scripts/placeLegacyCustomer.js
-// --task-run calls, run in this process with the migration role the real task has.
+// ORG-110 on production (owner's decision, 2026-11-17): the API has no Postgres migration role and
+// may not start ECS tasks, so it journals a placement or rollback as a queued run and starts an
+// execution of the placement state machine, which runs the task; the task does the move and
+// writes the outcome. Here the API runs exactly as in production (no POSTGRES_MIGRATION_URL, a
+// placement launcher present) on real MongoDB and Postgres, with Step Functions faked: the "task"
+// is the same function scripts/runPlacementTask.js calls, run in this process with the migration
+// role the real task has.
 //
 // Proven here: the journal's unique indexes enforce one run per user, the global cap and the
 // idempotency key; the run record's states; a task that never starts or stops reporting is given
-// up on and cannot commit afterwards; the same audit events, naming the staff member who asked.
+// up on and cannot commit afterwards; the same audit events, naming the staff member who asked;
+// and that the task does not take a journal entry's word for who asked or where records go.
 import { TEST_MONGODB_DB_NAME, TEST_POSTGRES_URL } from "./env";
 import { connectMongo, disconnectMongo, ensureMigrated, ensureServices, randomMongoId } from "./setup";
 import assert from "node:assert/strict";
@@ -30,7 +32,7 @@ import { closePostgres, postgresPool } from "../config/postgres";
 import { closeSecurityRateLimitRedis } from "../middleware/securityRateLimit";
 import { closePlacementPool, setPlacementTaskLauncherForTests } from "../controller/adminLegacyCustomersController";
 import { findCustomerLeftovers } from "../src/modules/tenancy/migrationVerification";
-import { placementTaskCommand } from "../src/modules/tenancy/placementTaskLauncher";
+import { buildStartExecutionInput } from "../src/modules/tenancy/placementTaskLauncher";
 import { runPlacementTask, type PlacementTaskOutcome } from "../src/modules/tenancy/placementTaskRunner";
 import { recordTaskHeartbeat } from "../src/modules/tenancy/placementTaskStore";
 import { cleanupOrganizations, seedOrganization, type Fixture } from "./memberFixtures";
@@ -48,10 +50,11 @@ let receiving: Fixture;
 let taskPool: Pool;
 const dxg = { org: oid(), admin: oid(), secondAdmin: oid() };
 type Legacy = { userId: mongoose.Types.ObjectId; holding: mongoose.Types.ObjectId; proposals: mongoose.Types.ObjectId[]; pgOrg?: string };
-const names = ["ana", "ben", "cy", "dee", "eve", "fay", "gus", "hal"] as const;
+const names = ["ana", "ben", "cy", "dee", "eve", "fay", "gus", "hal", "ivy", "jon"] as const;
 const legacy = Object.fromEntries(names.map((name) => [name, { userId: oid(), holding: oid(), proposals: [oid()] }])) as Record<(typeof names)[number], Legacy>;
 
 const launches: Array<{ runId: string; launchToken: string }> = [];
+const MACHINE = { stateMachineArn: "arn:aws:states:us-east-2:111111111111:stateMachine:rfpilot-test-placement", region: "us-east-2" };
 let failLaunch = false;
 
 const api = async (token: string, method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {
@@ -101,11 +104,10 @@ before(async () => {
   delete process.env.POSTGRES_MIGRATION_URL;
   setPlacementTaskLauncherForTests({
     async launch(input) {
-      if (failLaunch) throw new Error("AccessDeniedException");
-      // The real launcher's own check: only a well-formed run id ever becomes a command.
-      placementTaskCommand(input.runId);
+      if (failLaunch) throw new Error("AccessDeniedException: User: arn:aws:sts::111111111111:assumed-role/api is not authorized to perform: states:StartExecution");
+      // The real launcher's own check: only a well-formed run id ever becomes an execution input.
+      buildStartExecutionInput(MACHINE, input);
       launches.push(input);
-      return { taskArn: `arn:aws:ecs:us-east-2:111111111111:task/rfpilot-test/${launches.length}` };
     },
   });
   await Organization.collection.insertOne({ _id: dxg.org, name: "DXG", slug: `intg-dxg-task-${tag}`, status: "active", kind: "customer", plan: "free_trial" });
@@ -189,6 +191,7 @@ test("a placement is queued (202), run by the task, and read back as succeeded; 
   const placement = queued.body.data.placement;
   assert.equal(queued.body.data.replayed, false);
   assert.deepEqual([placement.status, placement.operation, placement.state, placement.task.status], ["queued", "placement", "queued", "queued"]);
+  assert.ok(!JSON.stringify(queued.body).includes("arn:"), "no AWS identifier is returned to staff");
   assert.equal(launches.length, before + 1);
   assert.equal(launches[launches.length - 1].runId, placement.runId);
   // Nothing moves in the API process.
@@ -200,6 +203,9 @@ test("a placement is queued (202), run by the task, and read back as succeeded; 
   assert.deepEqual([again.status, again.body.data.replayed, again.body.data.placement.runId], [202, true, placement.runId]);
   assert.equal((await api(adminToken, "POST", `/${who.userId}/placements`, existing("team_manager"))).body.code, "PLACEMENT_IN_PROGRESS");
   assert.equal((await api(adminToken, "POST", `/${legacy.ben.userId}/placements`, existing(), { "idempotency-key": `ana-${tag}` })).body.code, "IDEMPOTENCY_KEY_REUSED");
+  // The key is the staff member's own: a colleague sending the same key is asking for something
+  // new, which here means the ordinary answer for a customer who is already being placed.
+  assert.equal((await api(secondAdminToken, "POST", `/${who.userId}/placements`, existing("team_manager"), { "idempotency-key": `ana-${tag}` })).body.code, "PLACEMENT_IN_PROGRESS");
   // One task at a time across the platform.
   const busy = await api(adminToken, "POST", `/${legacy.ben.userId}/placements`, existing());
   assert.deepEqual([busy.status, busy.body.code, busy.headers.get("retry-after")], [429, "PLACEMENT_CAPACITY_REACHED", "30"]);
@@ -257,7 +263,8 @@ test("a new organization: the details travel in the journal, never on the comman
   const queued = await api(adminToken, "POST", `/${who.userId}/placements`, { target: "new", organization: { name, type: "agency", country: "US" } });
   assert.equal(queued.status, 202, JSON.stringify(queued.body));
   const placement = queued.body.data.placement;
-  assert.deepEqual(placementTaskCommand(launches[launches.length - 1].runId), ["node", "dist/scripts/placeLegacyCustomer.js", `--task-run=${placement.runId}`]);
+  // All that leaves the API is the run id.
+  assert.deepEqual(JSON.parse(buildStartExecutionInput(MACHINE, launches[launches.length - 1]).input as string), { runId: placement.runId });
   const outcome = await runTask(placement.runId);
   assert.equal(outcome.ran && outcome.ok, true, JSON.stringify(outcome));
   const done = await run(placement.runId);
@@ -266,6 +273,16 @@ test("a new organization: the details travel in the journal, never on the comman
   const org = await Organization.findById(done.targetOrganizationId).lean();
   assert.deepEqual([org?.name, org?.kind, org?.type], [name, "customer", "agency"]);
   assert.deepEqual((await OrganizationMembership.findOne({ organizationId: done.targetOrganizationId, userId: who.userId }).lean())?.roles, ["owner"]);
+
+  // Rolling it back deletes the organization the run created, and only because the run created it.
+  assert.equal((await api(adminToken, "POST", `/placements/${placement.runId}/rollback`)).status, 202);
+  const rolled = await runTask(placement.runId);
+  assert.equal(rolled.ran && rolled.ok, true, JSON.stringify(rolled));
+  assert.equal((await run(placement.runId)).status, "rolled_back");
+  assert.equal(await Organization.exists({ _id: done.targetOrganizationId }), null);
+  assert.equal(await ownedIn(who.holding, who.userId), 1);
+  assert.equal(await pgReferences(who.pgOrg), 1);
+  assert.equal((await Organization.findById(who.holding).lean())?.status, "active");
 });
 
 test("concurrent requests for one user queue one run and start one task; concurrent rollbacks likewise", async () => {
@@ -303,19 +320,27 @@ test("concurrent requests for different users respect the global cap in the data
 test("a task that can't be started: 503, nothing queued behind it, and the request can be made again", async () => {
   const who = legacy.dee;
   failLaunch = true;
-  const res = await api(adminToken, "POST", `/${who.userId}/placements`, existing());
+  const res = await api(adminToken, "POST", `/${who.userId}/placements`, existing(), { "idempotency-key": `dee-${tag}` });
   failLaunch = false;
   assert.deepEqual([res.status, res.body.code], [503, "PLACEMENT_TASK_START_FAILED"]);
+  // AWS's error text (account id, role) stays in the server log.
+  const stored = await journal().findOne({ runId: res.body.details.runId });
+  for (const text of [JSON.stringify(res.body), JSON.stringify(stored)]) assert.ok(!/111111111111|arn:|AccessDenied/.test(text), text);
   const failed = await run(res.body.details.runId);
   assert.deepEqual([failed.status, failed.state, failed.task.code, failed.rollbackRequired], ["failed", "aborted", "PLACEMENT_TASK_START_FAILED", false]);
   await untouched(who, receiving.organizationId);
   // If ECS had started it after all, the task finds nothing to do.
   assert.deepEqual(await runTask(res.body.details.runId), { ran: false, reason: "NOT_QUEUED" });
   assert.equal((await api(adminToken, "POST", `/placements/${res.body.details.runId}/rollback`)).body.code, "NOTHING_TO_ROLL_BACK");
-  const retried = await api(adminToken, "POST", `/${who.userId}/placements`, existing());
-  assert.equal(retried.status, 202, JSON.stringify(retried.body));
+  // The same Idempotency-Key tries again: the failed run moved nothing and no longer holds the key.
+  const retried = await api(adminToken, "POST", `/${who.userId}/placements`, existing(), { "idempotency-key": `dee-${tag}` });
+  assert.deepEqual([retried.status, retried.body.data?.replayed], [202, false], JSON.stringify(retried.body));
+  assert.notEqual(retried.body.data.placement.runId, res.body.details.runId);
   assert.equal((await runTask(retried.body.data.placement.runId)).ran, true);
   assert.equal((await run(retried.body.data.placement.runId)).status, "succeeded");
+  // Once it has succeeded the key replays it.
+  const replayed = await api(adminToken, "POST", `/${who.userId}/placements`, existing(), { "idempotency-key": `dee-${tag}` });
+  assert.deepEqual([replayed.status, replayed.body.data.replayed, replayed.body.data.placement.status], [202, true, "succeeded"]);
 });
 
 test("a placement the task refuses or fails reports the code and moves nothing", async () => {
@@ -368,8 +393,8 @@ test("a queued task that never starts is given up on at the next read; a late st
   const queued = await api(adminToken, "POST", `/${who.userId}/placements`, existing());
   const runId = queued.body.data.placement.runId;
   assert.equal((await run(runId)).status, "queued");
-  // Eleven minutes pass (the start timeout is ten).
-  await journal().updateOne({ runId }, { $set: { "task.requestedAt": new Date(Date.now() - 11 * 60_000) } });
+  // Five minutes pass (the start timeout is four).
+  await journal().updateOne({ runId }, { $set: { "task.requestedAt": new Date(Date.now() - 5 * 60_000) } });
   const view = await run(runId);
   assert.deepEqual([view.status, view.state, view.task.status, view.task.code, view.rollbackRequired], ["failed", "aborted", "failed", "PLACEMENT_TASK_NOT_STARTED", false]);
   const entry = await journal().findOne({ runId });
@@ -432,4 +457,165 @@ test("a task the API has given up on cannot commit: nothing moves in either stor
   const secondRun = again.body.data.placement.runId;
   assert.equal((await runTask(secondRun)).ran, true);
   assert.equal((await run(secondRun)).status, "succeeded");
+});
+
+// Checks failed and the rollback that should follow failed too: the customer's records sit in the
+// target with failed checks. That must never read as a placement that succeeded.
+test("failed checks whose automatic rollback also fails read as failed and rollback-required", async () => {
+  const who = legacy.ivy;
+  const bare = oid();
+  await Organization.collection.insertOne({ _id: bare, name: `Task Events ${tag} Bare`, slug: `intg-bare-${tag}`, status: "active", kind: "customer", plan: "free_trial", createdAt: new Date("2020-01-01") });
+  const team = await Team.create({ organizationId: bare, name: `Task South ${tag}` });
+  const stray = oid();
+  await Proposal.collection.insertOne({ _id: stray, organizationId: who.holding, userId: oid(), status: "unsubmitted", isDraft: true });
+  const queued = await api(adminToken, "POST", `/${who.userId}/placements`, { target: "existing", organizationId: String(bare), role: "planner", teamId: String(team._id) });
+  assert.equal(queued.status, 202, JSON.stringify(queued.body));
+  const runId = queued.body.data.placement.runId;
+
+  // Inside the placement's transaction the customer becomes the organization's Owner, which is
+  // what makes the rollback refuse (USER_IS_OWNER) after the checks have failed.
+  const create = TeamMembership.create;
+  (TeamMembership as unknown as { create: unknown }).create = async function (this: unknown, ...args: unknown[]) {
+    const result = await (create as unknown as (...a: unknown[]) => unknown).apply(this, args);
+    await OrganizationMembership.collection.updateOne({ organizationId: bare, userId: who.userId }, { $set: { roles: ["owner"] } }, { session: (args[1] as { session: mongoose.ClientSession }).session });
+    return result;
+  };
+  let outcome: PlacementTaskOutcome;
+  try {
+    outcome = await runTask(runId);
+  } finally {
+    (TeamMembership as unknown as { create: unknown }).create = create;
+  }
+  assert.equal(outcome.ran && !outcome.ok && outcome.code, "PLACEMENT_VERIFICATION_FAILED");
+  const view = await run(runId);
+  assert.deepEqual([view.status, view.state, view.rollbackRequired, view.task.status, view.task.code, view.task.details.rolledBack], ["failed", "failed", true, "failed", "PLACEMENT_VERIFICATION_FAILED", false]);
+  assert.equal(view.task.details.verification.passed, false);
+  assert.equal(await ownedIn(bare, who.userId), 1, "the records are still in the target");
+
+  // Once the cause is gone, the run rolls back like any other.
+  await OrganizationMembership.collection.updateOne({ organizationId: bare, userId: who.userId }, { $set: { roles: ["planner"] } });
+  await Proposal.collection.deleteOne({ _id: stray });
+  assert.equal((await api(adminToken, "POST", `/placements/${runId}/rollback`)).status, 202);
+  const rolled = await runTask(runId);
+  assert.equal(rolled.ran && rolled.ok, true, JSON.stringify(rolled));
+  assert.equal((await run(runId)).status, "rolled_back");
+  await untouched(who, String(bare));
+  await Team.collection.deleteMany({ organizationId: bare });
+  await Organization.collection.deleteOne({ _id: bare });
+});
+
+/* ── The journal is the trust boundary ───────────────────────────────────────────────────────
+   The API writes the journal and the task, which holds the migration role, reads it. A
+   compromised API could write anything there, so the task checks the entry against the database
+   instead of believing it. These entries are written straight into the journal, as an attacker
+   with MongoDB access would. */
+
+const forge = async (fields: Record<string, unknown>, task: Record<string, unknown> = {}) => {
+  const now = new Date();
+  const runId = `placement-${now.toISOString()}-${randomMongoId().slice(0, 8)}`;
+  await journal().insertOne({
+    runId, createdOrganization: false, role: "planner", adminUserId: String(dxg.admin), adminOrganizationId: String(dxg.org), createdAt: now, updatedAt: now,
+    ...fields,
+    task: { operation: "placement", status: "queued", requestedAt: now, adminUserId: String(dxg.admin), adminOrganizationId: String(dxg.org), correlationId: "forged", ...task },
+  });
+  return runId;
+};
+const refusedRun = async (runId: string, code: string) => {
+  const outcome = await runTask(runId);
+  assert.equal(outcome.ran && !outcome.ok && outcome.code, code, JSON.stringify(outcome));
+  const entry = await journal().findOne({ runId });
+  assert.deepEqual([entry?.task.status, entry?.task.code], ["failed", code]);
+  return entry!;
+};
+
+test("a forged placement request: the task looks the staff member up and re-validates everything", async () => {
+  const who = legacy.jon;
+  const target = receiving.organizationId;
+  const request = (kind: Record<string, unknown>) => ({ target: kind, fingerprint: "forged" });
+  const base = { userId: String(who.userId), state: "queued", holdingOrganizationId: String(who.holding), targetOrganizationId: target, request: request({ kind: "existing", organizationId: target, role: "planner", teamId: null }) };
+
+  // Not a staff member at all: a customer Owner named as the actor.
+  const owner = receiving.members.owner.userId;
+  const asCustomer = await refusedRun(await forge(base, { adminUserId: owner, adminOrganizationId: target }), "PLACEMENT_REQUEST_INVALID");
+  assert.equal(asCustomer.state, "aborted");
+  // A real staff member named with someone else's organization.
+  await refusedRun(await forge(base, { adminOrganizationId: target }), "PLACEMENT_REQUEST_INVALID");
+  // A blocked staff account, and one with no staff membership.
+  const blocked = oid();
+  const unattached = oid();
+  await Admin.collection.insertMany([
+    { _id: blocked, organizationId: dxg.org, name: "Blocked", email: `blocked-task-${tag}@example.com`, password: "not-a-real-hash", role: "admin", isBlocked: true },
+    { _id: unattached, organizationId: dxg.org, name: "Unattached", email: `unattached-task-${tag}@example.com`, password: "not-a-real-hash", role: "admin", isBlocked: false },
+  ]);
+  await OrganizationMembership.collection.insertOne({ organizationId: dxg.org, userId: blocked, roles: ["dxg_admin"], status: "active", version: 1 });
+  await refusedRun(await forge(base, { adminUserId: String(blocked) }), "PLACEMENT_REQUEST_INVALID");
+  await refusedRun(await forge(base, { adminUserId: String(unattached) }), "PLACEMENT_REQUEST_INVALID");
+  await refusedRun(await forge(base, { adminUserId: "not-an-id" }), "PLACEMENT_REQUEST_INVALID");
+  await Admin.collection.deleteMany({ _id: { $in: [blocked, unattached] } });
+  await OrganizationMembership.collection.deleteMany({ organizationId: dxg.org, userId: blocked });
+
+  // A real staff member, but a request the API would have refused.
+  await refusedRun(await forge({ ...base, request: request({ kind: "existing", organizationId: target, role: "owner", teamId: null }) }), "INVALID_ROLE");
+  await refusedRun(await forge({ ...base, request: request({ kind: "existing", organizationId: String(legacy.eve.holding), role: "planner", teamId: null }) }), "ORGANIZATION_NOT_FOUND");
+  await refusedRun(await forge({ ...base, request: request({ kind: "new", organization: { name: "" } }) }), "ORGANIZATION_NAME_REQUIRED");
+  await refusedRun(await forge({ ...base, request: undefined }), "PLACEMENT_REQUEST_INVALID");
+  // Someone who is not a legacy customer, whatever holding tenant the entry claims for them.
+  const member = receiving.members.planner.userId;
+  await refusedRun(await forge({ ...base, userId: member }), "NOT_A_LEGACY_CUSTOMER");
+  assert.ok(await OrganizationMembership.exists({ organizationId: target, userId: member }), "the member is where they were");
+
+  await untouched(who, target);
+  assert.equal(await SecurityAuditEvent.countDocuments({ targetId: String(who.userId), action: /legacy_customer/ }), 0, "a refused run writes no audit event");
+  // The holding tenant and target a forged entry names are not used: the real ones are.
+  const lying = await forge({ ...base, holdingOrganizationId: String(legacy.eve.holding), targetOrganizationId: String(dxg.org) });
+  const outcome = await runTask(lying);
+  assert.equal(outcome.ran && outcome.ok, true, JSON.stringify(outcome));
+  const entry = await journal().findOne({ runId: lying });
+  assert.deepEqual([entry?.holdingOrganizationId, entry?.targetOrganizationId], [String(who.holding), target]);
+  assert.equal(await ownedIn(target, who.userId), 1);
+  assert.equal(await ownedIn(legacy.eve.holding, legacy.eve.userId), 1, "the other customer's holding tenant is untouched");
+});
+
+test("a forged rollback: records only go back to the customer's own holding tenant, and only a run's own organization is deleted", async () => {
+  const target = receiving.organizationId;
+  const member = receiving.members.planner;
+  const memberProposals = await ownedIn(target, new mongoose.Types.ObjectId(member.userId));
+  const membersBefore = await OrganizationMembership.countDocuments({ organizationId: target });
+  const rollback = (fields: Record<string, unknown>) => forge({ state: "rolling_back", rollbackFrom: "done", ...fields }, { operation: "rollback" });
+  const refusedRollback = async (fields: Record<string, unknown>) => {
+    const entry = await refusedRun(await rollback(fields), "PLACEMENT_REQUEST_INVALID");
+    assert.deepEqual([entry.state, entry.rollbackFrom], ["done", undefined], "the run is given back as it was");
+  };
+
+  // An ordinary member of an organization, "rolled back" into a tenant that isn't theirs: a
+  // customer organization, then another customer's holding tenant.
+  await refusedRollback({ userId: member.userId, holdingOrganizationId: String(dxg.org), targetOrganizationId: target });
+  await refusedRollback({ userId: member.userId, holdingOrganizationId: String(legacy.eve.holding), targetOrganizationId: target });
+  // An existing organization claimed as one the run created, so that it would be emptied and deleted.
+  await refusedRollback({ userId: member.userId, holdingOrganizationId: String(legacy.eve.holding), targetOrganizationId: target, createdOrganization: true });
+  // Jon really was placed (previous test) and really has a holding tenant of his own; the
+  // organization he is in is old, so it cannot be one a run created today.
+  const jon = legacy.jon;
+  await refusedRollback({ userId: String(jon.userId), holdingOrganizationId: String(jon.holding), targetOrganizationId: target, createdOrganization: true });
+  await refusedRollback({ userId: String(jon.userId), holdingOrganizationId: String(jon.holding), targetOrganizationId: target, request: { target: { kind: "existing", organizationId: String(dxg.org), role: "planner" }, fingerprint: "forged" } });
+  // The staff organization, a holding tenant as the target, the same organization twice, bad ids.
+  await refusedRollback({ userId: String(jon.userId), holdingOrganizationId: String(jon.holding), targetOrganizationId: String(dxg.org) });
+  await refusedRollback({ userId: String(jon.userId), holdingOrganizationId: String(jon.holding), targetOrganizationId: String(legacy.eve.holding) });
+  await refusedRollback({ userId: String(jon.userId), holdingOrganizationId: target, targetOrganizationId: target });
+  await refusedRollback({ userId: String(jon.userId), holdingOrganizationId: "$(reboot)", targetOrganizationId: target });
+  // A customer who isn't in the organization the entry names.
+  await refusedRollback({ userId: String(legacy.eve.userId), holdingOrganizationId: String(legacy.eve.holding), targetOrganizationId: target });
+  // And the actor is checked here too.
+  const asCustomer = await rollback({ userId: String(jon.userId), holdingOrganizationId: String(jon.holding), targetOrganizationId: target });
+  await journal().updateOne({ runId: asCustomer }, { $set: { "task.adminUserId": receiving.members.owner.userId, "task.adminOrganizationId": target } });
+  await refusedRun(asCustomer, "PLACEMENT_REQUEST_INVALID");
+
+  // Nothing moved or disappeared.
+  assert.ok(await Organization.exists({ _id: target, status: "active" }));
+  assert.equal(await OrganizationMembership.countDocuments({ organizationId: target }), membersBefore);
+  assert.equal(await ownedIn(target, new mongoose.Types.ObjectId(member.userId)), memberProposals);
+  assert.equal(await ownedIn(target, jon.userId), 1);
+  assert.equal(await ownedIn(legacy.eve.holding, legacy.eve.userId), 1);
+  assert.equal(await pgReferences(legacy.eve.pgOrg), 1);
+  assert.equal(await OrganizationMembership.exists({ organizationId: legacy.eve.holding, userId: member.userId }), null);
 });

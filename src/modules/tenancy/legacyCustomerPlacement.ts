@@ -489,7 +489,6 @@ const adoptRollback = async (runId: string, taskRequestedAt: Date): Promise<Jour
 // from a customer organization they are a member of to that same customer's own retired holding
 // tenant, and only deletes an organization the run can have created.
 const invalidRun = (why: string) => new PlacementError("PLACEMENT_REQUEST_INVALID", `The queued rollback doesn't match the organizations it names (${why}); nothing was moved.`, 409);
-const CLOCK_SKEW_MS = 5 * 60_000;
 const assertRollbackEntryConsistent = async (entry: JournalEntry) => {
   if (!isObjectId(entry.userId) || !isObjectId(entry.holdingOrganizationId) || !isObjectId(entry.targetOrganizationId)) throw invalidRun("ids");
   if (entry.holdingOrganizationId === entry.targetOrganizationId) throw invalidRun("same organization");
@@ -505,7 +504,9 @@ const assertRollbackEntryConsistent = async (entry: JournalEntry) => {
     // Deleting an organization: it must be one this run can have created.
     if (requested && requested.kind !== "new") throw invalidRun("created organization");
     const createdAt = (target as { createdAt?: Date }).createdAt;
-    if (!createdAt || !entry.createdAt || createdAt.getTime() < new Date(entry.createdAt).getTime() - CLOCK_SKEW_MS) throw invalidRun("created organization");
+    // The run's entry is written before its organization is; an organization older than the
+    // run was not created by it.
+    if (!createdAt || !entry.createdAt || createdAt.getTime() < new Date(entry.createdAt).getTime()) throw invalidRun("created organization");
   } else if (requested && (requested.kind !== "existing" || requested.organizationId !== entry.targetOrganizationId)) {
     throw invalidRun("target organization");
   }
