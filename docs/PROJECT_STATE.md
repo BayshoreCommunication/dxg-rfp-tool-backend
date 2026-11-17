@@ -649,12 +649,16 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
   proposals only under a support grant. The count on `GET /api/all-clients` stays
   as an account-level count under the owner's decision of the same date; it is a
   number, counted inside the staff member's organization only, and the list writes
-  no audit event (`API.md`, "Staff client list"). What remains, found and not
-  changed: `GET /api/admin/overview` still counts each recent client's proposals
-  by owner id without naming the organization; the tenant scope guard does not see
-  `$lookup` stages or calls written with a type argument (`Model.aggregate<T>(`);
-  and the staff guards do not require the caller's organization to be RFPilot's
-  own (MongoDB stores no platform marker).
+  no audit event (`API.md`, "Staff client list"). The sent-email total on that
+  list and both per-account numbers on `GET /api/admin/overview` are counted the
+  same way, inside the staff member's organization. Rows with no `organizationId`
+  are no longer counted (an undercount, not checked against production data).
+  What remains, found and not changed: the tenant scope guard does not see
+  `$lookup` stages, calls written with a type argument (`Model.aggregate<T>(`) or
+  raw `Model.collection.*` calls, and `EmailCampaign` is not in its model list;
+  `/api/all-clients` and `/api/admin/overview` check the account role but not the
+  account type; and the staff guards do not require the caller's organization to
+  be RFPilot's own (MongoDB stores no platform marker).
 - ~~Template audit actions (`proposal_template.*`) are not in the customer audit
   catalog.~~ Resolved by decision (2026-11-16, `DECISIONS.md`): customers do not see
   template actions in their audit log. The events are still written for staff and

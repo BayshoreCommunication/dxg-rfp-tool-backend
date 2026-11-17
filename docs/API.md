@@ -312,10 +312,18 @@ Mounted at `/api/v1/admin/organization-plans`. RFPilot staff only: the caller ne
 - Who: `authenticate` plus a staff membership role (`dxg_admin` or `super_admin`), and the controller requires an administrative account role. Customers get the route guard's plain 403. Block and delete need `super_admin`.
 - `GET /` `?search=&page=`, 10 per page, newest account first; `search` matches name or email. Answers `{ success, message, data: [client], pagination: { page, perPage, total, totalPages, hasNextPage, hasPrevPage }, filters: { search } }`.
 - A client is an allowlist built field by field: `{ id, name, email, company, joinDate, isBlocked, totalProposals, totalEmailSent }`. Nothing else a query returns can reach the response.
-- `totalProposals` is a **number**: how many proposals the account owns in the staff member's organization. It is account-level usage, which staff may see without a support grant (DECISIONS, 2026-11-17); no proposal title, id or other content is returned or loaded. The count is one grouped query on `Proposal` filtered by `organizationId` (the session's organization) and the listed account ids, so a proposal the same account id owns in any other organization is not counted, and `tests/tenant-scope-guard.test.js` covers the query.
-- `totalEmailSent` is the sum of `sentCount` over the account's email campaigns.
+- `totalProposals` is a **number**: how many proposals the account owns in the staff member's organization. It is account-level usage, which staff may see without a support grant (DECISIONS, 2026-11-17); no proposal title, id or other content is returned or loaded.
+- `totalEmailSent` is a **number**: the sum of `sentCount` over the account's email campaigns in the staff member's organization. No campaign subject, recipient or other content is returned or loaded.
+- Both numbers come from one grouped query each (`src/modules/admin/infrastructure/mongo/accountUsageCounts.ts`), on `Proposal` and on `EmailCampaign`, filtered by `organizationId` (the session's organization) and the listed account ids. A proposal or campaign the same account id owns in any other organization is not counted. A row with no `organizationId` at all is not counted either: that is an undercount, never a leak. `tests/tenant-scope-guard.test.js` covers the proposal query.
 - Audit: none. Like the organization-plans list, the list writes no audit event, in the staff organization or anywhere else.
 - `PATCH /:id/block` `{ isBlocked: boolean }` and `DELETE /:id` act on an account in the staff member's own organization only; another organization's account is 404, and an administrative account is 400.
+
+### Admin overview (`GET /api/admin/overview`)
+
+`routes/adminRoute.ts`, `src/modules/admin/infrastructure/mongo/mongoAdminOverviewReadRepository.ts`. The admin app's dashboard. Same guard as the staff client list, and the same boundary: numbers about the signed-in staff member's own organization, no customer content, no audit event. It is the only route left on the `/api/admin` router besides legacy-customer placement.
+
+- Answers `{ success, message, data: { totals: { totalClients, totalProposals, totalEmailSent, totalClick }, latestClients: [{ id, name, email, company, joinDate, totalProposals, totalEmailSent }] } }`. `latestClients` is the 10 newest non-administrative `users` accounts in that organization.
+- Every number is counted with `organizationId` in the filter. The per-account `totalProposals` and `totalEmailSent` in `latestClients` are the same two queries the staff client list uses, so the dashboard and the Clients page agree for the same account, and what an account owns in another organization (or with no `organizationId`) is not counted.
 
 ## Organization vendor list (ORG-606)
 
