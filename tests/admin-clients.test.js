@@ -1,5 +1,9 @@
+require("ts-node/register/transpile-only");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
+const mongoose = require("mongoose");
 
 const {
   createDeleteAdminClient,
@@ -49,4 +53,143 @@ test("client deletion distinguishes missing, admin, and deleted targets", async 
   target = { id: "x", role: "customer" };
   assert.deepEqual(await remove("x"), { kind: "deleted", id: "x" });
   assert.equal(deleted, "x");
+});
+
+// Owner decision 2026-11-17: staff see account-level information and counts without a support
+// grant, and no customer content. The client list carries a proposal count per account; these
+// tests keep it a number, scoped to the caller's organization, with nothing else attached.
+// The real-database proof is tests-integration/admin-client-list.test.ts.
+
+const CLIENT_FIELDS = ["id", "name", "email", "company", "joinDate", "isBlocked", "totalProposals", "totalEmailSent"];
+
+test("each client is returned as an allowlist of account fields with the proposal count as a number", async () => {
+  const joined = new Date("2026-10-01T00:00:00.000Z");
+  const list = createListAdminClients({
+    async list() {
+      return {
+        total: 3,
+        clients: [
+          {
+            id: "c1", name: "Pat Planner", email: "pat@example.com", company: "Acme", joinDate: joined, isBlocked: true,
+            totalProposals: 4, totalEmailSent: 12,
+            // What a careless repository could hand back. None of it may pass through.
+            proposalStats: [{ _id: "6adf186c99740ffeab7ac9f6", event: { eventName: "Annual Gala 2027" } }],
+            proposals: [{ id: "6adf186c99740ffeab7ac9f6", title: "Annual Gala 2027" }],
+            proposalIds: ["6adf186c99740ffeab7ac9f6"],
+            password: "$2a$10$hash", organizationId: "org-1", role: "customer",
+          },
+          { id: "c2", name: "No Proposals", email: "none@example.com" },
+          { id: "c3", name: "Odd Count", email: "odd@example.com", totalProposals: [{ eventName: "Annual Gala 2027" }], totalEmailSent: "7" },
+        ],
+      };
+    },
+  });
+  const result = await list({});
+  for (const client of result.data) {
+    assert.deepEqual(Object.keys(client), CLIENT_FIELDS);
+    assert.equal(typeof client.totalProposals, "number");
+    assert.equal(typeof client.totalEmailSent, "number");
+  }
+  assert.deepEqual(result.data[0], {
+    id: "c1", name: "Pat Planner", email: "pat@example.com", company: "Acme", joinDate: joined, isBlocked: true, totalProposals: 4, totalEmailSent: 12,
+  });
+  assert.deepEqual(result.data[1], {
+    id: "c2", name: "No Proposals", email: "none@example.com", company: null, joinDate: null, isBlocked: false, totalProposals: 0, totalEmailSent: 0,
+  });
+  // A count that is not a number is not passed on, whatever it holds.
+  assert.equal(result.data[2].totalProposals, 0);
+  const json = JSON.stringify(result);
+  for (const leaked of ["Annual Gala 2027", "6adf186c99740ffeab7ac9f6", "$2a$10$hash", "org-1", "proposalStats", "proposalIds"]) {
+    assert.ok(!json.includes(leaked), leaked);
+  }
+});
+
+const repositoryPath = "../src/modules/admin/infrastructure/mongo/mongoAdminClientRepository";
+
+test("the proposal count is one grouped query that names the organization", () => {
+  const { proposalCountPipeline } = require(repositoryPath);
+  const organizationId = new mongoose.Types.ObjectId();
+  const owners = [new mongoose.Types.ObjectId(), new mongoose.Types.ObjectId()];
+  assert.deepEqual(proposalCountPipeline(organizationId, owners), [
+    { $match: { organizationId, userId: { $in: owners } } },
+    { $group: { _id: "$userId", count: { $sum: 1 } } },
+  ]);
+});
+
+test("the client list counts proposals inside the caller's organization only and loads no proposal", async (t) => {
+  const { mongoAdminClientRepository } = require(repositoryPath);
+  const Proposal = require("../modal/proposalsModel").default;
+  const User = require("../modal/userModel").default;
+  const { runWithTenant } = require("../src/modules/shared/tenancy/tenantContext");
+
+  const staffOrganization = new mongoose.Types.ObjectId();
+  const withProposals = new mongoose.Types.ObjectId();
+  const withoutProposals = new mongoose.Types.ObjectId();
+  const calls = { users: [], proposals: [] };
+  t.mock.method(User, "aggregate", async (pipeline) => {
+    calls.users.push(pipeline);
+    return [{
+      metadata: [{ total: 2 }],
+      data: [
+        { id: withProposals, name: "Pat", email: "pat@example.com", company: null, joinDate: new Date(0), isBlocked: false, totalEmailSent: 3 },
+        { id: withoutProposals, name: "Sam", email: "sam@example.com", company: null, joinDate: new Date(0), isBlocked: false, totalEmailSent: 0 },
+      ],
+    }];
+  });
+  t.mock.method(Proposal, "aggregate", async (pipeline) => {
+    calls.proposals.push(pipeline);
+    return [{ _id: withProposals, count: 2 }];
+  });
+
+  const result = await runWithTenant(
+    { organizationId: String(staffOrganization), userId: String(new mongoose.Types.ObjectId()) },
+    () => mongoAdminClientRepository.list({ page: 1, perPage: 10, search: "" }),
+  );
+
+  // One count query, filtered by the session's organization and the listed accounts.
+  assert.equal(calls.proposals.length, 1);
+  const [match, group, ...rest] = calls.proposals[0];
+  assert.deepEqual(rest, []);
+  assert.equal(String(match.$match.organizationId), String(staffOrganization));
+  assert.deepEqual(match.$match.userId.$in.map(String), [String(withProposals), String(withoutProposals)]);
+  assert.deepEqual(Object.keys(match.$match).sort(), ["organizationId", "userId"]);
+  assert.deepEqual(group, { $group: { _id: "$userId", count: { $sum: 1 } } });
+
+  // The account query is in the same organization and no longer joins the proposals collection.
+  assert.equal(String(calls.users[0][0].$match.organizationId), String(staffOrganization));
+  assert.ok(!JSON.stringify(calls.users[0]).includes('"proposals"'));
+
+  assert.deepEqual(result.clients.map((client) => [String(client.id), client.totalProposals]), [
+    [String(withProposals), 2],
+    [String(withoutProposals), 0],
+  ]);
+  assert.equal(result.total, 2);
+});
+
+test("an empty page asks nothing about proposals", async (t) => {
+  const { mongoAdminClientRepository } = require(repositoryPath);
+  const Proposal = require("../modal/proposalsModel").default;
+  const User = require("../modal/userModel").default;
+  const { runWithTenant } = require("../src/modules/shared/tenancy/tenantContext");
+  t.mock.method(User, "aggregate", async () => [{ metadata: [], data: [] }]);
+  const counted = t.mock.method(Proposal, "aggregate", async () => []);
+  const result = await runWithTenant(
+    { organizationId: String(new mongoose.Types.ObjectId()), userId: String(new mongoose.Types.ObjectId()) },
+    () => mongoAdminClientRepository.list({ page: 1, perPage: 10, search: "" }),
+  );
+  assert.deepEqual(result, { clients: [], total: 0 });
+  assert.equal(counted.mock.callCount(), 0);
+});
+
+test("the tenant scope guard sees the count query, with a real scope and no exemption", () => {
+  const file = "src/modules/admin/infrastructure/mongo/mongoAdminClientRepository.ts";
+  const source = fs.readFileSync(path.join(__dirname, "..", file), "utf8");
+  // tests/tenant-scope-guard.test.js matches `Proposal.aggregate(` and reads the call's arguments.
+  // A type argument on the call, or a $lookup into proposals, would hide the query from it.
+  const calls = [...source.matchAll(/\bProposal\.aggregate\(([^;]*);/g)];
+  assert.equal(calls.length, 1);
+  assert.match(calls[0][1], /organizationId/);
+  assert.doesNotMatch(source, /Proposal\.\w+</);
+  assert.doesNotMatch(source, /scope-exempt|tenant-scoped:/);
+  assert.doesNotMatch(source, /from:\s*"proposals"/);
 });
