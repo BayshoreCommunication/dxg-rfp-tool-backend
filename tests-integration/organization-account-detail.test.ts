@@ -119,7 +119,6 @@ before(async () => {
   await Invitation.collection.insertMany([
     invitation(acmeId, acmeOwner, `invitee-one-${tag}@example.com`, "pending", new Date(NOW + 3 * DAY)),
     invitation(acmeId, acmeOwner, `invitee-two-${tag}@example.com`, "pending", new Date(NOW + 3 * DAY)),
-    // Still marked pending but past its expiry (the sweeper hasn't run): not counted.
     invitation(acmeId, acmeOwner, `invitee-late-${tag}@example.com`, "pending", new Date(NOW - DAY)),
     invitation(acmeId, acmeOwner, `invitee-done-${tag}@example.com`, "accepted", new Date(NOW + 3 * DAY)),
   ]);
@@ -175,7 +174,7 @@ before(async () => {
   await OrganizationVendor.collection.insertMany([1, 2, 3, 4].map((n) => vendor(otherId, n === 1 ? `Other Florist ${tag}` : `Other Vendor ${n} ${tag}`)));
   await SupportTicket.collection.insertOne(ticket(otherId, otherOwner, 1, `Other ticket ${tag}`, "open"));
   await SsoConnection.collection.insertOne({ organizationId: otherId, issuer: `https://other-idp-${tag}.example`, clientId: `other-sso-client-${tag}`, clientSecretSealed: `other-sealed-${tag}`, domains: [], status: "draft", version: 1, updatedByUserId: oid(otherOwner) });
-  await SupportAccessGrant.collection.insertOne({ organizationId: otherId, proposalId: otherProposals.insertedIds[0], grantedBy: oid(otherOwner), reason: null, expiresAt: OTHER_GRANT_EXPIRY, revokedAt: null, revokedBy: null, createdAt: new Date(NOW) });
+  await SupportAccessGrant.collection.insertOne({ organizationId: otherId, proposalId: otherProposals.insertedIds[0], grantedBy: oid(otherOwner), reason: null, expiresAt: OTHER_GRANT_EXPIRY, revokedAt: new Date(NOW), revokedBy: oid(otherOwner), createdAt: new Date(NOW) });
 
   await Organization.collection.insertOne({ _id: dxg.org, name: `DXG ${tag}`, slug: `${SLUG_PREFIX}dxg-${tag}`, status: "active", kind: "customer", plan: "free_trial", proposalsCreated: 0 });
   await Organization.collection.insertOne({ _id: holding, name: `Holding ${tag}`, slug: `${SLUG_PREFIX}holding-${tag}`, status: "active", kind: "legacy_holding", plan: "free_trial", proposalsCreated: 0 });
@@ -242,11 +241,11 @@ test("staff read one organization's account and see only that organization's cou
 
   assert.deepEqual(data.counts, {
     members: {
-      active: 5, deactivated: 1, pendingInvitations: 2,
+      active: 5, deactivated: 1,
       byRole: { owner: 1, organization_admin: 1, team_manager: 1, planner: 1, viewer: 1, other: 0 },
     },
     teams: { active: 2, archived: 1 },
-    proposals: { total: 3, archived: 1 },
+    proposals: { total: 3 },
     openSupportTickets: 2,
   });
   assert.deepEqual(data.security, {
@@ -258,10 +257,10 @@ test("staff read one organization's account and see only that organization's cou
     autoApproveDomain: true,
     allowManagerInvites: true,
   });
-  // The removed member's later sign-in is not counted; timestamps only, no names.
-  assert.deepEqual(data.activity, { lastSignInAt: "2026-11-16T10:00:00.000Z", lastProposalUpdateAt: "2026-11-15T12:00:00.000Z" });
-  // One active organization-wide grant; the revoked and the expired ones don't count.
-  assert.deepEqual(data.supportAccess, { active: true, scope: "organization", activeGrants: 1, expiresAt: ACME_GRANT_EXPIRY.toISOString() });
+  // The removed member's later sign-in is not counted; a timestamp only, no name.
+  assert.deepEqual(data.activity, { lastSignInAt: "2026-11-16T10:00:00.000Z" });
+  // A grant is active; nothing about it (scope, expiry, how many, which proposal) is returned.
+  assert.deepEqual(data.supportAccess, { active: true });
 
   const json = JSON.stringify(res.body);
   // No member list: the Owner's is the only email address, and no other member is named.
@@ -272,7 +271,7 @@ test("staff read one organization's account and see only that organization's cou
     assert.ok(!json.includes(acme.members[role].userId), role);
   }
   // No customer content, no secrets, and nothing from the other organization.
-  for (const leaked of [...acmeContent, ...acmeSecrets, ...otherContent, `Plan note ${tag}`, other.organizationId, other.members.owner.email, "not-a-real-hash"]) {
+  for (const leaked of [...acmeContent, ...acmeSecrets, ...otherContent, "pendingInvitations", "expiresAt", `Plan note ${tag}`, other.organizationId, other.members.owner.email, "not-a-real-hash"]) {
     assert.ok(!json.includes(leaked), leaked);
   }
 });
@@ -285,9 +284,9 @@ test("the other organization answers its own numbers, with nothing of the first"
   assert.deepEqual(data.owner, { name: "owner person", email: other.members.owner.email });
   assert.deepEqual([data.plan.plan, data.plan.proposals.limit, data.plan.lastChange], ["free_trial", 2, null]);
   assert.deepEqual(data.counts, {
-    members: { active: 5, deactivated: 0, pendingInvitations: 0, byRole: { owner: 1, organization_admin: 1, team_manager: 1, planner: 1, viewer: 1, other: 0 } },
+    members: { active: 5, deactivated: 0, byRole: { owner: 1, organization_admin: 1, team_manager: 1, planner: 1, viewer: 1, other: 0 } },
     teams: { active: 1, archived: 0 },
-    proposals: { total: 5, archived: 2 },
+    proposals: { total: 5 },
     openSupportTickets: 1,
   });
   assert.deepEqual(data.security, {
@@ -298,8 +297,9 @@ test("the other organization answers its own numbers, with nothing of the first"
     autoApproveDomain: false,
     allowManagerInvites: false,
   });
-  assert.deepEqual(data.activity, { lastSignInAt: "2026-11-17T07:00:00.000Z", lastProposalUpdateAt: "2026-11-17T06:00:00.000Z" });
-  assert.deepEqual(data.supportAccess, { active: true, scope: "rfp", activeGrants: 1, expiresAt: OTHER_GRANT_EXPIRY.toISOString() });
+  assert.deepEqual(data.activity, { lastSignInAt: "2026-11-17T07:00:00.000Z" });
+  // Other Co's only grant is revoked, and Acme's active one doesn't count here.
+  assert.deepEqual(data.supportAccess, { active: false });
 
   const json = JSON.stringify(res.body);
   assert.deepEqual(json.match(/[\w.+-]+@[\w.-]+/g), [other.members.owner.email]);
@@ -375,8 +375,8 @@ test("an unknown organization is a 404 and a malformed id a 400; a holding tenan
   assert.equal(held.status, 200, JSON.stringify(held.body));
   assert.deepEqual([held.body.data.organization.kind, held.body.data.organization.standing, held.body.data.owner], ["legacy_holding", "awaiting_placement", null]);
   assert.deepEqual([held.body.data.plan.exempt, held.body.data.plan.proposals.limit], [true, null]);
-  assert.deepEqual(held.body.data.counts.members, { active: 0, deactivated: 0, pendingInvitations: 0, byRole: { owner: 0, organization_admin: 0, team_manager: 0, planner: 0, viewer: 0, other: 0 } });
-  assert.deepEqual(held.body.data.supportAccess, { active: false, scope: null, activeGrants: 0, expiresAt: null });
+  assert.deepEqual(held.body.data.counts.members, { active: 0, deactivated: 0, byRole: { owner: 0, organization_admin: 0, team_manager: 0, planner: 0, viewer: 0, other: 0 } });
+  assert.deepEqual(held.body.data.supportAccess, { active: false });
 
   const own = await call(staffToken, "GET", `${DETAIL}/${dxg.org}`);
   assert.equal(own.status, 200, JSON.stringify(own.body));

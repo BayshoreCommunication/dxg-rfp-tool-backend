@@ -34,16 +34,16 @@ export type OrganizationAccountFacts = {
   owner: { name: string; email: string } | null;
   /** Active and deactivated memberships grouped by status and role set. */
   memberGroups: Array<{ status: string; roles: string[]; count: number; lastSignedInAt: Date | null }>;
-  pendingInvitations: number;
   teams: { active: number; archived: number };
-  proposals: { total: number; archived: number; lastUpdatedAt: Date | null };
+  /** How many proposals the organization has stored. */
+  proposals: number;
   openSupportTickets: number;
   domains: Array<{ domain: string; status: string }>;
   /** The company SSO connection's status, or null when there is none. */
   ssoStatus: string | null;
   /** `admins` accounts that live in this organization: more than zero makes it RFPilot's own. */
   staffAccounts: number;
-  activeGrants: Array<{ proposalId: string | null; expiresAt: Date }>;
+  hasActiveGrant: boolean;
 };
 
 export interface OrganizationAccountSource {
@@ -97,18 +97,6 @@ const memberCounts = (groups: OrganizationAccountFacts["memberGroups"]) => {
     if (customerRoles.length === 0) otherRoles += group.count;
   }
   return { active, deactivated, byRole, otherRoles, lastSignInAt };
-};
-
-const supportAccessOf = (grants: OrganizationAccountFacts["activeGrants"]) => {
-  const organizationWide = grants.filter((grant) => grant.proposalId === null);
-  const widest = organizationWide.length > 0 ? organizationWide : grants;
-  const latest = widest.reduce<Date | null>((max, grant) => (!max || grant.expiresAt > max ? grant.expiresAt : max), null);
-  return {
-    active: grants.length > 0,
-    scope: grants.length === 0 ? null : organizationWide.length > 0 ? ("organization" as const) : ("rfp" as const),
-    activeGrants: grants.length,
-    expiresAt: latest,
-  };
 };
 
 export const createOrganizationAccountDetail = (dependencies: Dependencies) => {
@@ -188,11 +176,10 @@ export const createOrganizationAccountDetail = (dependencies: Dependencies) => {
           members: {
             active: members.active,
             deactivated: members.deactivated,
-            pendingInvitations: facts.pendingInvitations,
             byRole: { ...members.byRole, other: members.otherRoles },
           },
           teams: { active: facts.teams.active, archived: facts.teams.archived },
-          proposals: { total: facts.proposals.total, archived: facts.proposals.archived },
+          proposals: { total: facts.proposals },
           openSupportTickets: facts.openSupportTickets,
         },
         security: {
@@ -208,8 +195,8 @@ export const createOrganizationAccountDetail = (dependencies: Dependencies) => {
           autoApproveDomain: organization.autoApproveDomain,
           allowManagerInvites: organization.allowManagerInvites,
         },
-        activity: { lastSignInAt: members.lastSignInAt, lastProposalUpdateAt: facts.proposals.lastUpdatedAt },
-        supportAccess: supportAccessOf(facts.activeGrants),
+        activity: { lastSignInAt: members.lastSignInAt },
+        supportAccess: { active: facts.hasActiveGrant === true },
       };
     },
   };

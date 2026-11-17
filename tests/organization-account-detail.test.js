@@ -29,9 +29,8 @@ const row = (overrides) => ({
   country: null, requireTwoFactor: false, requireSso: false, allowManagerInvites: false, autoApproveDomain: false, ...overrides,
 });
 const emptyFacts = () => ({
-  owner: null, memberGroups: [], pendingInvitations: 0, teams: { active: 0, archived: 0 },
-  proposals: { total: 0, archived: 0, lastUpdatedAt: null },
-  openSupportTickets: 0, domains: [], ssoStatus: null, staffAccounts: 0, activeGrants: [],
+  owner: null, memberGroups: [], teams: { active: 0, archived: 0 }, proposals: 0,
+  openSupportTickets: 0, domains: [], ssoStatus: null, staffAccounts: 0, hasActiveGrant: false,
 });
 
 // What a careless source could hand back: the view must not pass any of it through.
@@ -58,16 +57,14 @@ const setup = ({ env = {}, passwordSignInEnabled } = {}) => {
         { status: "active", roles: ["knowledge_editor"], count: 1, lastSignedInAt: null },
         { status: "suspended", roles: ["viewer"], count: 2, lastSignedInAt: at("2026-10-01T00:00:00.000Z") },
       ],
-      pendingInvitations: 3,
       teams: { active: 2, archived: 1 },
-      proposals: { total: 9, archived: 4, lastUpdatedAt: at("2026-11-15T12:00:00.000Z") },
+      proposals: 9,
       openSupportTickets: 1,
       domains: [{ domain: "acme.example", status: "verified", ...LEAKS }, { domain: "acme-events.example", status: "pending" }],
       ssoStatus: "active",
-      activeGrants: [
-        { proposalId: hex("9"), expiresAt: at("2026-12-10T00:00:00.000Z") },
-        { proposalId: null, expiresAt: at("2026-11-20T00:00:00.000Z") },
-      ],
+      hasActiveGrant: true,
+      // Things a source must never hand over, in case one does.
+      pendingInvitations: 3, activeGrants: [{ proposalId: hex("9"), expiresAt: at("2026-12-10T00:00:00.000Z") }],
       ...LEAKS,
     }],
     [HOLDING, emptyFacts()],
@@ -115,12 +112,12 @@ test("staff read an organization's account: identity, Owner, plan, counts, secur
     },
     counts: {
       members: {
-        active: 7, deactivated: 2, pendingInvitations: 3,
+        active: 7, deactivated: 2,
         // A member with two roles counts under each; one with no customer role counts under `other`.
         byRole: { owner: 1, organization_admin: 0, team_manager: 1, planner: 5, viewer: 0, other: 1 },
       },
       teams: { active: 2, archived: 1 },
-      proposals: { total: 9, archived: 4 },
+      proposals: { total: 9 },
       openSupportTickets: 1,
     },
     security: {
@@ -131,16 +128,16 @@ test("staff read an organization's account: identity, Owner, plan, counts, secur
       autoApproveDomain: true,
       allowManagerInvites: true,
     },
-    activity: { lastSignInAt: at("2026-11-17T08:30:00.000Z"), lastProposalUpdateAt: at("2026-11-15T12:00:00.000Z") },
-    // An organization-wide grant decides the scope and the expiry, even when an RFP grant lasts longer.
-    supportAccess: { active: true, scope: "organization", activeGrants: 2, expiresAt: at("2026-11-20T00:00:00.000Z") },
+    activity: { lastSignInAt: at("2026-11-17T08:30:00.000Z") },
+    // Whether a grant is active, and nothing about it: no scope, expiry, count or proposal.
+    supportAccess: { active: true },
   });
 });
 
 test("allowlist: nothing a source returns beyond the listed fields reaches the response", async () => {
   const { detail } = setup();
   const json = JSON.stringify(await detail.get(staff(), ACME));
-  for (const leaked of ["$2a$10$hash", "okta-client-id", "sealed-secret", "okta.example", "rfpilot-verify-abc", "deadbeef", "Pat Planner", "pat@acme.example", "Annual Gala 2027", "billingStatus", "note", "Trial ended", hex("9")]) {
+  for (const leaked of ["$2a$10$hash", "okta-client-id", "sealed-secret", "okta.example", "rfpilot-verify-abc", "deadbeef", "Pat Planner", "pat@acme.example", "Annual Gala 2027", "billingStatus", "note", "Trial ended", hex("9"), "pendingInvitations", "activeGrants", "expiresAt", "scope"]) {
     assert.ok(!json.includes(leaked), leaked);
   }
   // The Owner's is the only email address in the response.
@@ -150,17 +147,17 @@ test("allowlist: nothing a source returns beyond the listed fields reaches the r
 test("an organization with nothing yet: zero counts, no Owner, no plan change, no grant", async () => {
   const { detail, facts, rows } = setup({ passwordSignInEnabled: () => false });
   rows.set(ACME, row({ id: ACME, name: "Acme Events", slug: "acme-events", plan: null, proposalsCreated: null, createdAt: null }));
-  facts.set(ACME, { ...emptyFacts(), ssoStatus: "draft", activeGrants: [{ proposalId: hex("9"), expiresAt: at("2026-11-18T00:00:00.000Z") }, { proposalId: hex("8"), expiresAt: at("2026-11-25T00:00:00.000Z") }] });
+  facts.set(ACME, { ...emptyFacts(), ssoStatus: "draft" });
   const result = await detail.get(staff({ role: "super_admin" }), ACME);
   assert.equal(result.owner, null);
   assert.deepEqual(result.organization, { id: ACME, name: "Acme Events", slug: "acme-events", createdAt: null, country: null, status: "active", kind: "customer", standing: "active" });
-  assert.deepEqual(result.counts.members, { active: 0, deactivated: 0, pendingInvitations: 0, byRole: { owner: 0, organization_admin: 0, team_manager: 0, planner: 0, viewer: 0, other: 0 } });
-  assert.deepEqual(result.activity, { lastSignInAt: null, lastProposalUpdateAt: null });
+  assert.deepEqual(result.counts.members, { active: 0, deactivated: 0, byRole: { owner: 0, organization_admin: 0, team_manager: 0, planner: 0, viewer: 0, other: 0 } });
+  assert.deepEqual(result.activity, { lastSignInAt: null });
+  assert.deepEqual(result.counts.proposals, { total: 0 });
   // A draft connection is configured but not a way to sign in; password sign-in is off platform-wide here.
   assert.deepEqual(result.security.signInMethods, ["google", "microsoft"]);
   assert.deepEqual(result.security.companySso, { configured: true, enabled: false, required: false, type: "oidc" });
-  // RFP grants only: the scope says so and the latest expiry is shown.
-  assert.deepEqual(result.supportAccess, { active: true, scope: "rfp", activeGrants: 2, expiresAt: at("2026-11-25T00:00:00.000Z") });
+  assert.deepEqual(result.supportAccess, { active: false });
 });
 
 test("standing: a legacy holding tenant awaits placement, RFPilot's own organization is the platform, an inactive one says so", async () => {
@@ -173,7 +170,7 @@ test("standing: a legacy holding tenant awaits placement, RFPilot's own organiza
     features: { vendorResponses: true, proposalIntelligence: true }, lastChange: null,
   });
   assert.deepEqual(holding.security.companySso, { configured: false, enabled: false, required: false, type: null });
-  assert.deepEqual(holding.supportAccess, { active: false, scope: null, activeGrants: 0, expiresAt: null });
+  assert.deepEqual(holding.supportAccess, { active: false });
 
   assert.equal((await detail.get(staff(), STAFF_ORG)).organization.standing, "platform");
 
@@ -235,28 +232,49 @@ test("the read is not in the customer audit catalog, so it can never appear in a
 
 // ── Mongo source ─────────────────────────────────────────────────────────────────────────────
 
+// The text between one call's own parentheses (the approach of tests/tenant-scope-guard.test.js).
+const argumentsOf = (source, openIndex) => {
+  let depth = 0;
+  for (let i = openIndex; i < source.length; i++) {
+    if (source[i] === "(") depth++;
+    else if (source[i] === ")" && --depth === 0) return source.slice(openIndex + 1, i);
+  }
+  return source.slice(openIndex + 1);
+};
+const queryCalls = (source) =>
+  [...source.matchAll(/\b([A-Z]\w+)\.(find|findOne|countDocuments|exists|aggregate|distinct)(?:<[^(]*>)?\(/g)]
+    .map((match) => ({ model: match[1], method: match[2], args: argumentsOf(source, match.index + match[0].length - 1) }));
+const namesOrganization = ({ model, args }) =>
+  model === "Organization" ? /_id: oid\(organizationId\)/.test(args)
+    : model === "User" ? /_id: membership\.userId/.test(args)
+      : /organizationId: id\b/.test(args);
+const unscopedQueries = (source) => queryCalls(source).filter((call) => !namesOrganization(call)).map((call) => `${call.model}.${call.method}`);
+
 test("the Mongo source names the organization in every query and selects no customer content", () => {
   const source = fs.readFileSync(path.join(__dirname, "../src/modules/entitlements/infrastructure/mongoOrganizationAccountSource.ts"), "utf8");
-  const calls = [...source.matchAll(/\b([A-Z]\w+)\.(find|findOne|countDocuments|aggregate)(?:<[^(]*>)?\(/g)];
-  // 12 queries: the organization row, then eleven for the facts (the Owner takes two). With the
-  // last plan change (one, plus one for the staff name) a request runs at most 14 reads.
-  assert.equal(calls.length, 12);
-  for (const call of calls) {
-    const rest = source.slice(call.index, call.index + 420);
-    const scoped = /organizationId: id\b/.test(rest) || (call[1] === "Organization" && /_id: oid\(organizationId\)/.test(rest)) || (call[1] === "User" && /_id: membership\.userId/.test(rest));
-    assert.ok(scoped, `${call[1]}.${call[2]} must name the organization`);
-  }
+  // 11 queries: the organization row, then ten for the facts (the Owner takes two). With the
+  // last plan change (one, plus one for the staff name) a request runs at most 13 reads.
+  const calls = queryCalls(source);
+  assert.equal(calls.length, 11);
+  assert.deepEqual(unscopedQueries(source), []);
+  // The check reads each call's own arguments, so a scoped neighbour can't vouch for an unscoped query.
+  const tampered = source.replace("Proposal.countDocuments({ organizationId: id })", "Proposal.countDocuments({})");
+  assert.notEqual(tampered, source);
+  assert.deepEqual(unscopedQueries(tampered), ["Proposal.countDocuments"]);
+  assert.deepEqual(unscopedQueries(source.replace("SupportTicket.countDocuments({ organizationId: id,", "SupportTicket.countDocuments({")), ["SupportTicket.countDocuments"]);
+  // Proposals are counted from the index: no aggregate or find that would load proposal documents.
+  assert.deepEqual(calls.filter((call) => call.model === "Proposal").map((call) => [call.method, call.args]), [["countDocuments", "{ organizationId: id }"]]);
   // Rows are selected from four collections only, each with an explicit field list.
   const selects = [...source.matchAll(/\.select\(("[^"]+"|FIELDS)\)/g)].map((match) => match[1]);
-  assert.deepEqual(selects, ['"userId"', '"name email"', "FIELDS", '"domain status"', '"status"', '"proposalId expiresAt"']);
+  assert.deepEqual(selects, ['"userId"', '"name email"', "FIELDS", '"domain status"', '"status"']);
   for (const forbidden of ["clientId", "clientSecretSealed", "issuer", "verificationToken", "tokenHash", "password", "contacts", "content", "subject", "eventName", "reason"]) {
     assert.ok(!new RegExp(`["\\s.]${forbidden}\\b`).test(source.replace(/\/\*[\s\S]*?\*\//g, "")), forbidden);
   }
-  for (const model of ["Proposal", "SupportTicket", "Team", "Invitation"]) {
-    assert.ok(!new RegExp(`\\b${model}\\.(find|findOne)\\(`).test(source), `${model} is only counted`);
+  for (const model of ["Proposal", "SupportTicket", "Team", "SupportAccessGrant"]) {
+    assert.ok(!new RegExp(`\\b${model}\\.(find|findOne)\\(`).test(source), `${model} is only counted or checked for existence`);
   }
-  // The vendor list and templates are outside the approved list: not read, not even counted.
-  assert.doesNotMatch(source, /organizationVendorModel|OrganizationVendor|proposalTemplateModel|ProposalTemplate/);
+  // Invitations, the vendor list and templates are outside the approved list: not read, not even counted.
+  assert.doesNotMatch(source, /invitationModel|Invitation\b|organizationVendorModel|OrganizationVendor|proposalTemplateModel|ProposalTemplate/);
 });
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────────────────────
