@@ -318,9 +318,21 @@ export const placeLegacyCustomer = async (input: {
 }) => {
   const adopt = input.adoptQueuedRun;
   const runId = adopt?.runId ?? input.runId ?? newPlacementRunId();
-  // Every write of an adopted run names the task attempt, so a task that has been given up on
-  // (and whose run may since have been asked for again) cannot change the entry.
+  // What stops a task that no longer owns its run, exactly:
+  // - `owned` names the task attempt. It tells this attempt from a later one on the same run (a
+  //   rollback asked for afterwards has another `task.requestedAt`), but not from an attempt
+  //   the API has given up on, whose `requestedAt` is unchanged.
+  // - The MongoDB move's commit is guarded by `state: "started"`: giving up on a task moves the
+  //   state on, so a given-up task cannot commit the move.
+  // - After that commit, `live` adds `task.status: "running"`, which giving up changes, so a
+  //   given-up task cannot record a failure, its checks, or claim its own rollback.
+  // A write that matches nothing means this task has lost the run: it stops (lostRun).
   const owned = adopt ? { "task.requestedAt": adopt.taskRequestedAt } : {};
+  const live = adopt ? { ...owned, "task.status": "running" } : {};
+  const lostRun = (step: string) => {
+    console.error(`Legacy customer placement: run ${runId} is no longer this task's (${step}); stopping.`);
+    return new PlacementError("PLACEMENT_TASK_SUPERSEDED", `This task no longer owns run ${runId}; it stopped at: ${step}.`, 409);
+  };
   const finishRun = (set: Partial<JournalEntry>, session?: ClientSession) =>
     journal().updateOne({ runId, ...owned }, { $set: { ...set, updatedAt: new Date() }, $unset: { inFlight: "" } }, { session });
   await ensureIndexes();
@@ -339,11 +351,12 @@ export const placeLegacyCustomer = async (input: {
       // role are all worked out again from the database, and refused exactly as the API would.
       if (queued.createdOrganization && !isObjectId(queued.targetOrganizationId)) throw new PlacementError("PLACEMENT_REQUEST_INVALID", "The queued request is malformed.", 400);
       validated = await validatePlacement(input.userId, input.target, queued.createdOrganization ? queued.targetOrganizationId : undefined);
-      await journal().updateOne({ runId, ...owned }, { $set: {
+      const recorded = await journal().updateOne({ runId, state: "started", ...owned }, { $set: {
         holdingOrganizationId: validated.holding.organizationId, previousVersion: validated.holding.version,
         targetOrganizationId: validated.target.organizationId, createdOrganization: validated.target.created !== null,
         role: validated.target.role, teamId: validated.target.teamId, updatedAt: new Date(),
       } });
+      if (recorded.matchedCount !== 1) throw lostRun("recording the validated request");
     } catch (error) {
       await finishRun({ state: "aborted", error: safeError(error, runId) });
       throw error;
@@ -434,24 +447,27 @@ export const placeLegacyCustomer = async (input: {
     await held.commit();
   } catch (error) {
     safeError(error, runId);
-    await journal().updateOne({ runId, ...owned }, { $set: { state: "failed", error: "The Postgres commit failed after the MongoDB move; roll this run back.", updatedAt: new Date() } });
+    const marked = await journal().updateOne({ runId, ...live }, { $set: { state: "failed", error: "The Postgres commit failed after the MongoDB move; roll this run back.", updatedAt: new Date() } });
+    if (marked.matchedCount !== 1) lostRun("marking the failed Postgres commit");
     throw new PlacementError("PLACEMENT_FAILED", `The placement failed part way and must be rolled back with run id ${runId}.`, 409);
   }
 
   const verification = await verify({ userId: input.userId, holdingOrganizationId: holding.organizationId, targetOrganizationId, before, orphansBefore, pool: input.pool });
-  await journal().updateOne({ runId, ...owned }, { $set: { verification, updatedAt: new Date() } });
+  const checked = await journal().updateOne({ runId, ...live }, { $set: { verification, updatedAt: new Date() } });
+  if (checked.matchedCount !== 1) throw lostRun("recording the checks");
   if (!verification.passed) {
     let rolledBack = true;
     try {
-      await rollbackRun({ runId, actor: input.actor, pool: input.pool, reason: "verification_failed" });
+      await rollbackRun({ runId, actor: input.actor, pool: input.pool, reason: "verification_failed", ownedBy: adopt ? { taskRequestedAt: adopt.taskRequestedAt } : "direct" });
     } catch {
       rolledBack = false;
       // The move stands with failed checks. That is not a placement that succeeded: mark it as
       // one that has to be rolled back, so it never reads as done.
-      await journal().updateOne(
-        { runId, state: "done", ...owned },
+      const marked = await journal().updateOne(
+        { runId, state: "done", ...live },
         { $set: { state: "failed", error: "The placement's checks failed and the automatic rollback did not complete.", updatedAt: new Date() } },
       );
+      if (marked.matchedCount !== 1) lostRun("marking the failed automatic rollback");
     }
     throw new PlacementError(
       "PLACEMENT_VERIFICATION_FAILED",
@@ -473,9 +489,17 @@ export const placeLegacyCustomer = async (input: {
 
 // One rollback per run: the journal entry is claimed (done | failed → rolling_back) before
 // anything moves, and released back to its state if the rollback refuses or fails.
-const claimRollback = async (runId: string) => {
+//
+// A run whose placement task is still working (the journal says `done` before the Postgres
+// commit, the checks and the audit events) is not claimable by anyone else: not the API, and not
+// an operator running --rollback by hand. The one exception is that task's own rollback after
+// failed checks, which must be the attempt that is still running (`ownedBy`).
+const claimRollback = async (runId: string, ownedBy?: { taskRequestedAt: Date }) => {
   const claimed = await journal().findOneAndUpdate(
-    { runId, state: { $in: ["done", "failed"] } },
+    {
+      runId, state: { $in: ["done", "failed"] },
+      ...(ownedBy ? { "task.requestedAt": ownedBy.taskRequestedAt, "task.status": "running" } : { "task.status": { $nin: ["queued", "running"] } }),
+    },
     [{ $set: { rollbackFrom: "$state", state: "rolling_back", updatedAt: "$$NOW" } }],
     { returnDocument: "before" },
   );
@@ -524,8 +548,17 @@ const assertRollbackEntryConsistent = async (entry: JournalEntry) => {
   }
 };
 
-const rollbackRun = async (input: { runId: string; actor: PlacementActor; pool: Pool | null; reason: string; adoptQueued?: { taskRequestedAt: Date } }) => {
-  const entry = input.adoptQueued ? await adoptRollback(input.runId, input.adoptQueued.taskRequestedAt) : await claimRollback(input.runId);
+const rollbackRun = async (input: {
+  runId: string; actor: PlacementActor; pool: Pool | null; reason: string;
+  // A rollback the API queued, taken over by its task.
+  adoptQueued?: { taskRequestedAt: Date };
+  // A placement's own rollback after failed checks: by the task attempt that ran it, or
+  // ("direct") inside a synchronous placement, which has no task.
+  ownedBy?: { taskRequestedAt: Date } | "direct";
+}) => {
+  const entry = input.adoptQueued
+    ? await adoptRollback(input.runId, input.adoptQueued.taskRequestedAt)
+    : await claimRollback(input.runId, input.ownedBy && input.ownedBy !== "direct" ? input.ownedBy : undefined);
   // Names the task attempt, as the commit does: a stale rollback task must not give back a run
   // that has since been claimed again.
   const release = () => journal().updateOne(
@@ -537,7 +570,8 @@ const rollbackRun = async (input: { runId: string; actor: PlacementActor; pool: 
     if (input.adoptQueued) await assertRollbackEntryConsistent(entry);
     result = await performRollback(entry, input.pool);
   } catch (error) {
-    await release().catch(() => undefined);
+    const released = await release().catch(() => null);
+    if (released && released.matchedCount !== 1) console.error(`Legacy customer placement: rollback of run ${entry.runId} failed and the run was not given back (it is no longer rolling_back, or no longer this task's).`);
     throw error;
   }
   await auditBoth(input.actor, {

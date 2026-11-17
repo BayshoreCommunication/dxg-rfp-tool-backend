@@ -33,6 +33,7 @@ import { closeSecurityRateLimitRedis } from "../middleware/securityRateLimit";
 import { closePlacementPool, setPlacementTaskLauncherForTests } from "../controller/adminLegacyCustomersController";
 import { findCustomerLeftovers } from "../src/modules/tenancy/migrationVerification";
 import { buildStartExecutionInput } from "../src/modules/tenancy/placementTaskLauncher";
+import { PlacementError, rollbackPlacement } from "../src/modules/tenancy/legacyCustomerPlacement";
 import { runPlacementTask, type PlacementTaskOutcome } from "../src/modules/tenancy/placementTaskRunner";
 import { recordTaskHeartbeat } from "../src/modules/tenancy/placementTaskStore";
 import { cleanupOrganizations, seedOrganization, type Fixture } from "./memberFixtures";
@@ -53,7 +54,7 @@ let receiving: Fixture;
 let taskPool: Pool;
 const dxg = { org: oid(), admin: oid(), secondAdmin: oid() };
 type Legacy = { userId: mongoose.Types.ObjectId; holding: mongoose.Types.ObjectId; proposals: mongoose.Types.ObjectId[]; pgOrg?: string };
-const names = ["ana", "ben", "cy", "dee", "eve", "fay", "gus", "hal", "ivy", "jon", "kim"] as const;
+const names = ["ana", "ben", "cy", "dee", "eve", "fay", "gus", "hal", "ivy", "jon", "kim", "lee", "max"] as const;
 const legacy = Object.fromEntries(names.map((name) => [name, { userId: oid(), holding: oid(), proposals: [oid()] }])) as Record<(typeof names)[number], Legacy>;
 
 const launches: Array<{ runId: string; launchToken: string }> = [];
@@ -661,12 +662,15 @@ test("while the placement task is still checking its work the run reads running 
 
   // The audit write is the task's last step, after the move, both commits and the checks.
   const create = SecurityAuditEvent.create;
-  const seen: { calls: number; view: Record<string, any> | null; rollback: { status: number; body: Record<string, any> } | null; state: string | null } = { calls: 0, view: null, rollback: null, state: null };
+  const seen: { calls: number; view: Record<string, any> | null; rollback: { status: number; body: Record<string, any> } | null; state: string | null; byHand: unknown } = { calls: 0, view: null, rollback: null, state: null, byHand: null };
   (SecurityAuditEvent as unknown as { create: unknown }).create = async function (this: unknown, ...args: unknown[]) {
     if (seen.calls++ === 0) {
       seen.state = (await journal().findOne({ runId }))?.state ?? null;
       seen.view = await run(runId);
       seen.rollback = await api(secondAdminToken, "POST", `/placements/${runId}/rollback`);
+      // What an operator's `placeLegacyCustomer.js --rollback=<runId> --apply` would do now.
+      seen.byHand = await rollbackPlacement({ runId, actor: { adminUserId: String(dxg.admin), adminOrganizationId: String(dxg.org), correlationId: "by-hand" }, pool: taskPool })
+        .catch((error: unknown) => error);
     }
     return (create as unknown as (...a: unknown[]) => unknown).apply(this, args);
   };
@@ -681,6 +685,8 @@ test("while the placement task is still checking its work the run reads running 
   assert.deepEqual([seen.view?.status, seen.view?.operation, seen.view?.rollbackRequired], ["running", "placement", false]);
   assert.deepEqual([seen.rollback?.status, seen.rollback?.body.code], [409, "PLACEMENT_IN_PROGRESS"]);
   assert.equal(launches.length, before, "no rollback task was started");
+  assert.ok(seen.byHand instanceof PlacementError, "a rollback by hand is refused as well");
+  assert.equal((seen.byHand as PlacementError).code, "PLACEMENT_IN_PROGRESS");
 
   // The placement task was left alone and finished its work.
   assert.equal(outcome.ran && outcome.ok, true, JSON.stringify(outcome));
@@ -694,4 +700,58 @@ test("while the placement task is still checking its work the run reads running 
   assert.equal((await runTask(runId)).ran, true);
   assert.equal((await run(runId)).status, "rolled_back");
   await untouched(who, target);
+});
+
+// `succeeded` has to mean the checks passed. The journal says `done` as soon as the MongoDB move
+// commits; a task that then fails must not leave a run that reads as succeeded unless they did.
+test("a task that fails after the move: failed and rollback-required if its checks never ran; succeeded but flagged if only the audit write failed", async () => {
+  const target = receiving.organizationId;
+
+  // 1. The checks themselves blow up (here: the first of ORG-109's queries).
+  const lee = legacy.lee;
+  const queued = await api(adminToken, "POST", `/${lee.userId}/placements`, existing());
+  assert.equal(queued.status, 202, JSON.stringify(queued.body));
+  const runId = queued.body.data.placement.runId;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const verification = require("../src/modules/tenancy/migrationVerification") as { findCustomerLeftovers: (...args: unknown[]) => unknown };
+  const leftovers = verification.findCustomerLeftovers;
+  verification.findCustomerLeftovers = async () => { throw new Error("connection to 10.0.3.17:5432 terminated unexpectedly"); };
+  let outcome: PlacementTaskOutcome;
+  try {
+    outcome = await runTask(runId);
+  } finally {
+    verification.findCustomerLeftovers = leftovers;
+  }
+  assert.equal(outcome.ran && !outcome.ok && outcome.code, "PLACEMENT_TASK_ERROR", JSON.stringify(outcome));
+  const view = await run(runId);
+  assert.deepEqual([view.status, view.state, view.rollbackRequired, view.task.status, view.task.code, view.task.details.rollbackRequired], ["failed", "failed", true, "failed", "PLACEMENT_TASK_ERROR", true]);
+  assert.equal(view.verification, undefined, "no checks were recorded");
+  assert.ok(!JSON.stringify(view).includes("10.0.3.17"), "the driver's message is not returned");
+  assert.equal(await ownedIn(target, lee.userId), 1, "the move did happen");
+  assert.equal(await SecurityAuditEvent.exists({ action: "organization.legacy_customer.placed", targetId: String(lee.userId) }), null);
+  // And it rolls back.
+  assert.equal((await api(adminToken, "POST", `/placements/${runId}/rollback`)).status, 202);
+  const rolled = await runTask(runId);
+  assert.equal(rolled.ran && rolled.ok, true, JSON.stringify(rolled));
+  assert.equal((await run(runId)).status, "rolled_back");
+  await untouched(lee, target);
+
+  // 2. The move, both commits and the checks went through; only the audit write fails.
+  const max = legacy.max;
+  const second = await api(adminToken, "POST", `/${max.userId}/placements`, existing());
+  assert.equal(second.status, 202, JSON.stringify(second.body));
+  const secondRun = second.body.data.placement.runId;
+  const create = SecurityAuditEvent.create;
+  (SecurityAuditEvent as unknown as { create: unknown }).create = async () => { throw new Error("audit store unavailable"); };
+  let audited: PlacementTaskOutcome;
+  try {
+    audited = await runTask(secondRun);
+  } finally {
+    (SecurityAuditEvent as unknown as { create: unknown }).create = create;
+  }
+  assert.equal(audited.ran && !audited.ok && audited.code, "PLACEMENT_TASK_ERROR", JSON.stringify(audited));
+  const stands = await run(secondRun);
+  assert.deepEqual([stands.status, stands.state, stands.rollbackRequired, stands.verification.passed, stands.task.status, stands.task.details.auditUnconfirmed], ["succeeded", "done", false, true, "failed", true]);
+  assert.equal(await ownedIn(target, max.userId), 1);
+  assert.equal(await pgReferences(max.pgOrg), 0);
 });

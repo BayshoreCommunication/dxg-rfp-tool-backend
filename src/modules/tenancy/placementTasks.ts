@@ -110,6 +110,14 @@ export type PlacementRunStatus = "queued" | "running" | "succeeded" | "failed" |
 // run is not something to report as succeeded, or to roll back.
 export const placementTaskActive = (entry: Pick<PlacementJournalEntry, "task">) =>
   entry.task?.operation === "placement" && (entry.task.status === "queued" || entry.task.status === "running");
+// A placement whose journal says `done` (the MongoDB move committed) but whose task then failed
+// or was lost. `succeeded` must mean the checks passed: if they did, the placement stands and
+// only its audit events are in doubt; if they did not run or did not pass, the run is one that
+// has to be rolled back, whatever the journal state says.
+export const unfinishedPlacementOutcome = (entry: Pick<PlacementJournalEntry, "verification">) =>
+  entry.verification?.passed === true
+    ? { stands: true as const, details: { verified: true, auditUnconfirmed: true } }
+    : { stands: false as const, details: { rollbackRequired: true } };
 const statusOf = (entry: PlacementJournalEntry): PlacementRunStatus => {
   if (placementTaskActive(entry)) return entry.state === "queued" ? "queued" : "running";
   switch (entry.state) {
@@ -215,19 +223,14 @@ export const createPlacementTaskService = (deps: {
         message: task.operation === "rollback" ? `${why}; the placement was not rolled back.` : `${why} while rolling back after failed checks; roll this run back.`,
         ...(back === "failed" ? { details: { rollbackRequired: true } } : {}),
       });
-    } else if (entry.state === "done" && task.operation === "placement" && entry.verification?.passed) {
-      // The move committed in both stores and its checks passed; only the task's last report
-      // (and possibly its audit events) is missing. That is a placement that stands.
-      settled = await settle({
-        message: `${why} after the placement was made and its checks passed; check that its audit events were written.`,
-        details: { verified: true, auditUnconfirmed: true },
-      });
     } else if (entry.state === "done" && task.operation === "placement") {
-      // MongoDB committed; whether Postgres did, and the checks, are unknown.
-      settled = await settle({
-        state: "failed", error: `${why} before its checks finished.`,
-        message: `${why} after the move but before its checks finished; roll this run back.`, details: { rollbackRequired: true },
-      });
+      // MongoDB committed and the task did not finish. Whether that is a placement that stands
+      // depends on whether its checks passed: the same rule the task applies to itself when it
+      // fails after the move (placementTaskRunner.ts).
+      const outcome = unfinishedPlacementOutcome(entry);
+      settled = await settle(outcome.stands
+        ? { message: `${why} after the placement was made and its checks passed; check that its audit events were written.`, details: outcome.details }
+        : { state: "failed", error: `${why} before its checks finished.`, message: `${why} after the move but before its checks finished; roll this run back.`, details: outcome.details });
     } else {
       // The journal reached an end state and only the task's own report is missing.
       settled = await settle({

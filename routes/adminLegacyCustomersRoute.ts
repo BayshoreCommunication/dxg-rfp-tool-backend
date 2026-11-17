@@ -29,18 +29,25 @@ export const requireStaffAccount = (req: AuthRequest, res: Response, next: NextF
 };
 router.use(authenticate, authorize("admin", "super_admin", "superadmin"), requireStaffAccount);
 
-// Per staff member. Reads are polled (a run every few seconds); a write queues a move and, in
-// production, starts a task, so it gets a much smaller allowance.
+// Per staff member, three allowances per 15 minutes. A refusal is 429 PLACEMENT_RATE_LIMITED,
+// which is not PLACEMENT_CAPACITY_REACHED (another placement is running; try again shortly).
+// - Reading a run is what the admin screen polls. At the recommended 3 s that is 300 per tab
+//   per window; 1500 leaves room for a few tabs and faster polling.
+// - The lists and the organization search (a typeahead) share 600.
+// - A write queues a move and, in production, starts a task: 120.
 const staffIdentity = (req: Request) => (req as AuthRequest).user?.userId || req.ip || "unknown";
-const placementReads = securityRateLimit({ name: "legacy-placement-read", limit: 600, windowMs: 15 * 60_000, identity: staffIdentity });
-const placementWrites = securityRateLimit({ name: "legacy-placement-write", limit: 120, windowMs: 15 * 60_000, identity: staffIdentity });
+const limit = (name: string, allowance: number) =>
+  securityRateLimit({ name, limit: allowance, windowMs: 15 * 60_000, identity: staffIdentity, code: "PLACEMENT_RATE_LIMITED" });
+const runReads = limit("legacy-placement-run-read", 1500);
+const listReads = limit("legacy-placement-read", 600);
+const placementWrites = limit("legacy-placement-write", 120);
 
-router.get("/", placementReads, listLegacyCustomers);
-router.get("/target-organizations", placementReads, listPlacementTargets);
+router.get("/", listReads, listLegacyCustomers);
+router.get("/target-organizations", listReads, listPlacementTargets);
 // Body: { target: "new", organization: { name, type?, industry?, country?, timeZone?, eventsPerYear? } }
 //    or { target: "existing", organizationId, role: organization_admin|team_manager|planner, teamId? }
 router.post("/:userId/placements", placementWrites, placeCustomer);
-router.get("/placements/:runId", placementReads, getPlacementRun);
+router.get("/placements/:runId", runReads, getPlacementRun);
 router.post("/placements/:runId/rollback", placementWrites, rollbackPlacementRun);
 
 export default router;

@@ -4,6 +4,7 @@ import OrganizationMembership from "../../../modal/organizationMembershipModel";
 import { legacyAuthorizationRoles } from "../identity/domain/authorizationPolicy";
 import { placeLegacyCustomer, PlacementError, rollbackPlacement, type PlacementActor, type PlacementJournalEntry, type PlacementTaskRecord } from "./legacyCustomerPlacement";
 import { claimQueuedTask, mongoPlacementTaskStore, recordTaskHeartbeat } from "./placementTaskStore";
+import { unfinishedPlacementOutcome } from "./placementTasks";
 
 // The task's side of a queued run (scripts/runPlacementTask.js --task-run=<runId>): claim the
 // request the API journaled, run the same placement or rollback the synchronous path runs, and
@@ -92,11 +93,21 @@ export const runPlacementTask = async (input: {
       result = await rollbackPlacement({ runId: input.runId, actor, pool: input.pool, adoptQueued: { taskRequestedAt: task.requestedAt } });
     }
     stopHeartbeat();
-    // The work is done, verified and audited. If this last write fails, try once more and
-    // otherwise leave it: the API sees a verified run and does not treat it as a failure.
-    await finish({ status: "succeeded" })
+    // The work is done: a placement verified and audited, or a rollback committed and audited.
+    // The last write records that. It is tried twice. If it cannot be written, or matches
+    // nothing because the API has already given up on this task, the task says so and exits
+    // non-zero: it must not report a success the journal does not show. What the API then shows
+    // is decided by the journal: a verified placement stays `succeeded` (with
+    // `auditUnconfirmed`); a finished rollback reads `rolled_back` with ROLLBACK_TASK_LOST and
+    // `needsOperatorCheck`, because the API cannot tell it from one that stopped before its
+    // Postgres commit.
+    const recorded = await finish({ status: "succeeded" })
       .catch(() => finish({ status: "succeeded" }))
-      .catch((error) => console.error("Placement task: could not record its result:", error instanceof Error ? error.message : error));
+      .catch((error) => { console.error("Placement task: could not record its result:", error instanceof Error ? error.message : error); return false; });
+    if (!recorded) {
+      console.error(`Placement task: run ${input.runId} finished its ${task.operation}, but the result was not recorded (the run is no longer this task's, or the journal could not be written).`);
+      return { ran: true, ok: false, operation: task.operation, code: "PLACEMENT_TASK_RESULT_NOT_RECORDED", message: `The ${task.operation} finished but its result could not be recorded; read the run.` };
+    }
     return { ran: true, ok: true, operation: task.operation, result };
   } catch (error) {
     stopHeartbeat();
@@ -104,22 +115,36 @@ export const runPlacementTask = async (input: {
       ? { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) }
       : { code: task.operation === "placement" ? "PLACEMENT_TASK_ERROR" : "ROLLBACK_TASK_ERROR", message: `The ${task.operation} task failed unexpectedly; see the task's log.` };
     if (!(error instanceof PlacementError)) console.error("Placement task error:", error instanceof Error ? error.message : error);
+    const running = { ...expect, taskStatus: "running" as const };
     if (task.operation === "placement") {
       // A request that was refused before the run opened is still `queued`.
-      await mongoPlacementTaskStore.update(input.runId, { ...expect, state: "queued" }, { state: "aborted", error: failure.message.slice(0, 300) });
+      await mongoPlacementTaskStore.update(input.runId, { ...running, state: "queued" }, { state: "aborted", error: failure.message.slice(0, 300) });
       // Nothing moved: the same Idempotency-Key may be used to try again.
-      await mongoPlacementTaskStore.update(input.runId, { ...expect, state: "aborted" }, { releaseIdempotencyKey: true });
+      await mongoPlacementTaskStore.update(input.runId, { ...running, state: "aborted" }, { releaseIdempotencyKey: true });
+      // The move committed (the journal says `done`) and this task failed after it: in its
+      // checks, in recording them, or in the audit write. `done` alone must not read as a
+      // placement that succeeded. Same rule as the API applies to a task it gives up on.
+      const after = await mongoPlacementTaskStore.find(input.runId);
+      if (after?.state === "done" && after.task?.status === "running") {
+        const outcome = unfinishedPlacementOutcome(after);
+        if (!outcome.stands) {
+          await mongoPlacementTaskStore.update(input.runId, { ...running, state: "done" }, { state: "failed", error: "The placement task failed after the move, before its checks passed; roll this run back." });
+        }
+        failure.details = { ...failure.details, ...outcome.details };
+      }
     } else {
       // A rollback refused before it began leaves the run claimed; give it back.
       const back = claimed.rollbackFrom === "failed" ? "failed" : "done";
-      await mongoPlacementTaskStore.update(input.runId, { ...expect, state: "rolling_back", taskStatus: "running" }, { state: back, clearRollbackFrom: true });
+      await mongoPlacementTaskStore.update(input.runId, { ...running, state: "rolling_back" }, { state: back, clearRollbackFrom: true });
       // A rollback that failed after its MongoDB half (the Postgres commit comes last) leaves
       // the journal `rolled_back` with Postgres not moved back: someone has to look.
       if ((await mongoPlacementTaskStore.find(input.runId))?.state === "rolled_back") {
         failure.details = { ...failure.details, needsOperatorCheck: true };
       }
     }
-    await finish({ status: "failed", ...failure });
+    const recorded = await finish({ status: "failed", ...failure }).catch(() => false);
+    if (!recorded) console.error(`Placement task: run ${input.runId} failed (${failure.code}) and the failure was not recorded (the run is no longer this task's, or the journal could not be written).`);
+
     return { ran: true, ok: false, operation: task.operation, ...failure };
   }
 };

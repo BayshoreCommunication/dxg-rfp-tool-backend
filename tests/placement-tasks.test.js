@@ -2,7 +2,7 @@ require("ts-node/register/transpile-only");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { PlacementError } = require("../src/modules/tenancy/legacyCustomerPlacement");
-const { createPlacementTaskService, placementRunView, placementTaskPolicyFromEnv, PlacementTaskSettingsError } = require("../src/modules/tenancy/placementTasks");
+const { createPlacementTaskService, placementRunView, placementTaskPolicyFromEnv, PlacementTaskSettingsError, unfinishedPlacementOutcome } = require("../src/modules/tenancy/placementTasks");
 const {
   buildStartExecutionInput,
   createPlacementTaskLauncher,
@@ -598,6 +598,32 @@ test("every placement route sits behind the staff guard: a staff membership role
   ]) assert.equal(attempt(account, user), 403, JSON.stringify(user));
   // And each route has a per-staff rate limit ahead of its handler.
   for (const layer of router.stack.slice(firstRoute)) assert.equal(layer.route.stack.length, 2, layer.route.path);
+  // Reading a run (what a screen polls) has a bucket of its own, apart from the lists.
+  const limiterOf = (path, method) => router.stack.find((layer) => layer.route?.path === path && layer.route.methods[method]).route.stack[0].handle;
+  assert.notEqual(limiterOf("/placements/:runId", "get"), limiterOf("/", "get"));
+  assert.equal(limiterOf("/", "get"), limiterOf("/target-organizations", "get"));
+  assert.equal(limiterOf("/:userId/placements", "post"), limiterOf("/placements/:runId/rollback", "post"));
+});
+
+test("the rate limiter's refusal carries its own code, not the capacity code", async () => {
+  const { securityRateLimit } = require("../middleware/securityRateLimit");
+  const limiter = securityRateLimit({ name: `placement-test-${Date.now()}`, limit: 1, windowMs: 60_000, identity: () => "staff-1", code: "PLACEMENT_RATE_LIMITED" });
+  const hit = () => new Promise((resolve) => {
+    const res = { headers: {}, code: null, body: null, setHeader(name, value) { this.headers[name] = value; }, status(code) { this.code = code; return this; }, json(body) { this.body = body; resolve(this); } };
+    limiter({ ip: "127.0.0.1" }, res, () => resolve("passed"));
+  });
+  assert.equal(await hit(), "passed");
+  const refusal = await hit();
+  assert.equal(refusal.code, 429);
+  assert.equal(refusal.body.code, "PLACEMENT_RATE_LIMITED");
+  assert.ok(Number(refusal.headers["Retry-After"]) > 0);
+  // Other users of the limiter are unchanged: no code unless one is asked for.
+  const plain = securityRateLimit({ name: `placement-test-plain-${Date.now()}`, limit: 0, windowMs: 60_000, identity: () => "x" });
+  const plainRefusal = await new Promise((resolve) => {
+    const res = { setHeader() {}, status() { return this; }, json(body) { resolve(body); } };
+    plain({ ip: "127.0.0.1" }, res, () => resolve("passed"));
+  });
+  assert.deepEqual(plainRefusal, { success: false, message: "Too many requests. Please try again later." });
 });
 
 /* ── A placement is not finished until its task is ─────────────────────────────────────────── */
@@ -637,6 +663,23 @@ test("a task lost after a verified placement leaves a placement that stands, not
   const view = await service.getRun(run.runId);
   assert.deepEqual([view.status, view.state, view.rollbackRequired, view.task.status, view.task.code], ["succeeded", "done", false, "failed", "PLACEMENT_TASK_LOST"]);
   assert.deepEqual(view.task.details, { verified: true, auditUnconfirmed: true });
+});
+
+test("a placement whose task failed or was lost after the move: succeeded only if its checks passed", async () => {
+  // The one rule, used by the task when it fails after the move and by the API when it gives up.
+  assert.deepEqual(unfinishedPlacementOutcome({ verification: { passed: true } }), { stands: true, details: { verified: true, auditUnconfirmed: true } });
+  for (const verification of [undefined, null, { passed: false }, {}, { passed: "yes" }]) {
+    assert.deepEqual(unfinishedPlacementOutcome({ verification }), { stands: false, details: { rollbackRequired: true } }, JSON.stringify(verification));
+  }
+  // What the client then sees. The task failed after the move, before its checks were recorded:
+  // it marks the run failed, and the view agrees.
+  const base = { runId: "r", userId: ANA, holdingOrganizationId: HOLDING, targetOrganizationId: TARGET, createdOrganization: false, role: "planner", adminUserId: STAFF, adminOrganizationId: STAFF_ORG, createdAt: START, updatedAt: START };
+  const failedTask = (details) => ({ operation: "placement", status: "failed", requestedAt: START, adminUserId: STAFF, adminOrganizationId: STAFF_ORG, correlationId: "c", code: "PLACEMENT_TASK_ERROR", details });
+  const unchecked = placementRunView({ ...base, state: "failed", task: failedTask({ rollbackRequired: true }) });
+  assert.deepEqual([unchecked.status, unchecked.rollbackRequired, unchecked.task.details.rollbackRequired], ["failed", true, true]);
+  // The audit write failed after the checks passed: the placement stands, flagged.
+  const unaudited = placementRunView({ ...base, state: "done", verification: { passed: true }, task: failedTask({ verified: true, auditUnconfirmed: true }) });
+  assert.deepEqual([unaudited.status, unaudited.rollbackRequired, unaudited.task.status, unaudited.task.details.auditUnconfirmed], ["succeeded", false, "failed", true]);
 });
 
 /* ── The task's command line ───────────────────────────────────────────────────────────────── */
