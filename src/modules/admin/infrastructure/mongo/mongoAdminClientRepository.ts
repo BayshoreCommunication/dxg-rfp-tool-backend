@@ -1,25 +1,12 @@
-import type mongoose from "mongoose";
-import Proposal from "../../../../../modal/proposalsModel";
 import User from "../../../../../modal/userModel";
 import type { AdminClientRepository } from "../../domain/ports/adminClientRepository";
+import { accountUsage } from "./accountUsageCounts";
 import { tenantFilter, tenantObjectId } from "../../../shared/tenancy/tenantContext";
 
 const escapeRegex = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/* The per-account proposal count on the staff client list (owner decision, 2026-11-17: staff see
-   counts without a support grant, never proposal content). It is its own query on Proposal so
-   the tenant is named in the filter, where tests/tenant-scope-guard.test.js can see it: an
-   account's proposals in any other organization are not counted. Only the owner id and a number
-   leave the database; no proposal document is loaded. Served by the
-   { organizationId, userId, createdAt } index. */
-export const proposalCountPipeline = (
-  organizationId: mongoose.Types.ObjectId,
-  userIds: readonly unknown[],
-) => [
-  { $match: { organizationId, userId: { $in: [...userIds] } } },
-  { $group: { _id: "$userId", count: { $sum: 1 } } },
-];
+export { proposalCountPipeline } from "./accountUsageCounts";
 
 export const mongoAdminClientRepository: AdminClientRepository = {
   async list({ page, perPage, search }) {
@@ -45,17 +32,6 @@ export const mongoAdminClientRepository: AdminClientRepository = {
             { $skip: (page - 1) * perPage },
             { $limit: perPage },
             {
-              $lookup: {
-                from: "emailcampaigns",
-                let: { userId: "$_id" },
-                pipeline: [
-                  { $match: { $expr: { $eq: ["$userId", "$$userId"] } } },
-                  { $group: { _id: null, totalEmailSent: { $sum: "$sentCount" } } },
-                ],
-                as: "emailStats",
-              },
-            },
-            {
               $project: {
                 _id: 0,
                 id: "$_id",
@@ -64,7 +40,6 @@ export const mongoAdminClientRepository: AdminClientRepository = {
                 company: { $ifNull: ["$company", null] },
                 joinDate: "$createdAt",
                 isBlocked: { $ifNull: ["$isBlocked", false] },
-                totalEmailSent: { $ifNull: [{ $first: "$emailStats.totalEmailSent" }, 0] },
               },
             },
           ],
@@ -72,13 +47,9 @@ export const mongoAdminClientRepository: AdminClientRepository = {
       },
     ]);
     const rows = result?.data ?? [];
-    // No type argument on this call: the tenant scope guard only matches an untyped call.
-    const counts: Array<{ _id: unknown; count: number }> = rows.length
-      ? await Proposal.aggregate(proposalCountPipeline(organizationId, rows.map((row) => row.id)))
-      : [];
-    const proposalsByOwner = new Map(counts.map((entry) => [String(entry._id), entry.count]));
+    const usageOf = await accountUsage(organizationId, rows.map((row) => row.id));
     return {
-      clients: rows.map((row) => ({ ...row, totalProposals: proposalsByOwner.get(String(row.id)) ?? 0 })),
+      clients: rows.map((row) => ({ ...row, ...usageOf(row.id) })),
       total: result?.metadata?.[0]?.total ?? 0,
     };
   },
