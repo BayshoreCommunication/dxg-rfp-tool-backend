@@ -4,6 +4,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
@@ -239,7 +240,7 @@ export class AppStack extends cdk.Stack {
 
     /* ── API ─────────────────────────────────────────────────────────── */
     const apiTaskDef = makeTaskDefinition('Api', config.ecs.api);
-    apiTaskDef.addContainer('api', {
+    const apiContainer = apiTaskDef.addContainer('api', {
       image: appImage,
       command: ['node', 'dist/server.js'],
       environment: {
@@ -697,5 +698,74 @@ export class AppStack extends cdk.Stack {
         })
         .subnetIds.join(','),
     });
+
+    /* ── The API starts legacy-customer placement as a one-off task ───── */
+    // Owner's decision, 2026-11-17 (docs/DECISIONS.md): placing a legacy
+    // customer moves Postgres rows between organizations, which needs the
+    // table-owner role. The API never gets POSTGRES_MIGRATION_URL; it starts
+    // scripts/placeLegacyCustomer.js on the migrate task definition instead.
+    //
+    // The API task role gets exactly two statements and no others for this:
+    //   - ecs:RunTask on this stack's migrate task definition revision only,
+    //     and only in this cluster;
+    //   - iam:PassRole on that task definition's two roles, only to ECS tasks.
+    // It cannot register or change a task definition, read the app secret's
+    // POSTGRES_MIGRATION_URL, or describe/stop tasks (the run's state comes
+    // from the placement journal, which the task writes).
+    //
+    // The subnet and security-group ids below are the Network stack exports
+    // the outputs above already import; no export is added or changed.
+    //
+    // The revision is pinned on purpose. CloudFormation registers a new
+    // migrate revision with every image, in the same update that rolls the
+    // API, so the API always starts the revision built from its own image.
+    // The deploy workflow also registers migrate revisions (new image, before
+    // the services roll); the API never runs those, so a placement cannot
+    // run code newer than the API that validated it, or code from a deploy
+    // that later failed.
+    const migrateExecutionRole = migrateTaskDef.obtainExecutionRole();
+    apiTaskDef.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'RunPlacementTaskOnMigrateDefinition',
+        actions: ['ecs:RunTask'],
+        resources: [migrateTaskDef.taskDefinitionArn],
+        conditions: {
+          ArnEquals: { 'ecs:cluster': this.cluster.clusterArn },
+        },
+      }),
+    );
+    apiTaskDef.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'PassMigrateTaskRolesToEcsTasks',
+        actions: ['iam:PassRole'],
+        resources: [
+          migrateTaskDef.taskRole.roleArn,
+          migrateExecutionRole.roleArn,
+        ],
+        conditions: {
+          StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' },
+        },
+      }),
+    );
+    // Plain, non-secret identifiers: which task to start and where.
+    apiContainer.addEnvironment(
+      'PLACEMENT_TASK_CLUSTER',
+      this.cluster.clusterName,
+    );
+    apiContainer.addEnvironment(
+      'PLACEMENT_TASK_DEFINITION',
+      migrateTaskDef.taskDefinitionArn,
+    );
+    apiContainer.addEnvironment(
+      'PLACEMENT_TASK_SUBNETS',
+      network.vpc
+        .selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS })
+        .subnetIds.join(','),
+    );
+    apiContainer.addEnvironment(
+      'PLACEMENT_TASK_SECURITY_GROUP',
+      network.migrateSg.securityGroupId,
+    );
+    apiContainer.addEnvironment('PLACEMENT_TASK_CONTAINER', 'migrate');
   }
 }
