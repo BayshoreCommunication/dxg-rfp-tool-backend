@@ -567,8 +567,10 @@ shared organization.
   that were invisible to staff before 2026-11-12.
 
 **Wording rule (changed 2026-11-12):** the user-facing noun is "Proposal". The
-earlier rule, "UI copy says RFP", is withdrawn. The admin app and text the backend
-writes have not been converted (see follow-ups).
+earlier rule, "UI copy says RFP", is withdrawn. Text the backend writes is converted
+(2026-11-16, guarded by `tests/proposal-wording-guard.test.js`) except AI prompts and
+knowledge text and rows already stored; the admin app is converted separately (see
+follow-ups).
 
 ### Before launch: Organization accounts (2026-11-11, updated 2026-11-16)
 
@@ -645,9 +647,11 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
   event. They read only the staff member's own organization, which is the shared
   organization that holds legacy customers until the cutover. The admin app
   no longer calls the two `proposals` routes (ORG-406). Gate or remove them.
-- RFP template audit actions (`proposal_template.*`) are written but are not in
-  the customer audit catalog (`AUDIT_CATALOG` in `src/modules/auditLog/domain.ts`),
-  so Owners and Admins do not see them in the audit log.
+- ~~Template audit actions (`proposal_template.*`) are not in the customer audit
+  catalog.~~ Resolved by decision (2026-11-16, `DECISIONS.md`): customers do not see
+  template actions in their audit log. The events are still written for staff and
+  forensics; `AUDIT_CATALOG` carries a comment and the wording guard test fails if
+  one is added.
 - `tests/plan-entitlements.test.js` classifies the RFP intelligence, vendor
   analysis, vendor response, audit log and template routers. It does not cover the
   staff-only routers (support access, plan management, launch metrics) or the
@@ -677,11 +681,28 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
 - Country offers only "United States" in onboarding and organization settings.
 - Team Manager cannot be chosen when inviting during onboarding (Planner, Admin
   and Viewer only).
-- "RFP" still shows where the text is not the dashboard's: the admin app; audit
-  log category and action names; the backend form contract (`RFP Timeline` and two
-  helper texts, while the dashboard's own label says "Proposal Timeline"); refusals
-  such as `OWNER_HAS_RFPS`; the headline "This RFP has been sent to vendors";
-  backend-rendered emails. The admin Clients page also reads "1 RFPs".
+- "RFP" in text the backend writes: converted on 2026-11-16 (branch
+  `fix/proposal-wording-backend`). Audit log category and action labels and the CSV
+  export (which no longer rewords stored names to `rfp`; it exports `proposal` and
+  `proposalId` as stored), the form contract (`Proposal Timeline` and two helper
+  texts; the dashboard's generated copy is regenerated in its own pull request),
+  refusal and error messages (`OWNER_HAS_RFPS` and the other member, template, plan,
+  support-access and award refusals: codes unchanged), the headline "This proposal
+  has been sent to vendors", the dashboard list's "Untitled proposal" and the vendor
+  confirmation email's sign-off. `tests/proposal-wording-guard.test.js` fails on a
+  new standalone "RFP" in `src/`, the legacy top-level folders or `contracts/`, with
+  a listed exception for each one that stays. Still saying "RFP":
+  - AI prompts, assistant knowledge and assistant answers
+    (`platformAssistant/platformKnowledge.ts`, `deterministicAssistantProvider.ts`,
+    `liveAi/operations.ts`, the vendor fact-mapping instruction, the legacy
+    extraction prompt) and requirement titles derived from field keys
+    (`requirementRegistry/generator.ts`, "RFP Timeline Notes"). Changing these
+    changes model input and needs its own evaluation run.
+  - Rows already stored: notifications, helpdesk messages, canned replies, saved
+    requirement sets and audit rows keep the text they were written with. No
+    backfill is planned.
+  - The admin app's own text (separate pull request there), including "1 RFPs" on
+    the Clients page.
 - Row actions don't follow the access policy yet: the dashboard row menu is
   offered to Owners and Admins on every row and to others only on their own rows
   (Team Managers get none on team proposals), and a member with a view-only share
@@ -856,7 +877,8 @@ Fixtures shaped by hand will not catch that — shape them the way the form save
    in §3 before inviting external organizations. In order: (a) the small fixes
    from the 16 Nov checks, starting with the Google account chooser and the
    `.goprospero.com` text; (b) per-row permissions on `GET /api/v1/rfps`;
-   (c) "Proposal" wording in the admin app and in backend-written text;
+   (c) "Proposal" wording in the admin app (backend-written text is done except
+   AI prompts and knowledge text, which need an evaluation run);
    (d) company single sign-on on production, once a DNS TXT record can be
    published; (e) the production-snapshot rehearsal and cutover decisions;
    (f) ORG-503.
