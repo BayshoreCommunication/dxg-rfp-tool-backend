@@ -652,6 +652,15 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
   template actions in their audit log. The events are still written for staff and
   forensics; `AUDIT_CATALOG` carries a comment and the wording guard test fails if
   one is added.
+- Decided on 2026-11-17, not built (`DECISIONS.md`): the admin organization detail
+  page shows account information only (owner, plan, counts of members, teams and
+  proposals, domains, sign-in method, created and last-active dates) and no member
+  list without a support grant.
+- Decided on 2026-11-17, not built (`DECISIONS.md`): legacy-customer placement on
+  production runs as a one-off task on the migrate task definition, started by the
+  admin API. The API is never given `POSTGRES_MIGRATION_URL`.
+- The admin app has no legacy-customer placement screen, although ORG-110
+  describes one. Placement is run with the ORG-110 script.
 - `tests/plan-entitlements.test.js` classifies the RFP intelligence, vendor
   analysis, vendor response, audit log and template routers. It does not cover the
   staff-only routers (support access, plan management, launch metrics) or the
