@@ -54,7 +54,7 @@ The sections from here to "Launch metrics" document the Organization Accounts AP
 | People | Organization members · Teams · Organization invitations · RFP sharing |
 | Working with RFPs | Dashboard RFP queries · RFP lifecycle · Support access grants · Organization audit log |
 | Plans and shared resources | Plans and entitlements (with plan management for RFPilot staff) · Organization vendor list · RFP templates |
-| RFPilot staff only | Legacy customer placement · Launch metrics (plus the staff halves of support access and plan management) |
+| RFPilot staff only | Legacy customer placement · Launch metrics · Organization account detail (plus the staff halves of support access and plan management) |
 
 Conventions that hold across these sections:
 
@@ -269,6 +269,45 @@ Mounted at `/api/v1/admin/organization-plans`. RFPilot staff only: the caller ne
 - Each change writes one `organization.plan_changed` audit event in the organization whose plan changed, in the same MongoDB transaction as the plan: actor (the staff account), `metadata.fromPlan`, `metadata.toPlan`, `metadata.proposalsCreated`, `metadata.actorOrganizationId` and the optional `metadata.note`.
 - Errors: 400 `INVALID_PLAN` or `INVALID_PLAN_NOTE`; 404 `ORGANIZATION_NOT_FOUND` for a missing organization, a malformed id or a legacy holding tenant (identical bodies); 409 `PLAN_CHANGE_CONFLICT` when someone else changed the plan between the read and the write.
 - A downgrade keeps the organization's RFPs, stored vendor responses and `proposalsCreated`; it locks the features and refuses new RFPs once the count is at the limit. AI jobs queued before a downgrade still finish (DECISIONS, ORG-603).
+
+### Organization account detail for RFPilot staff
+
+`GET /api/v1/admin/organizations/:organizationId` (`routes/adminOrganizationPlansRoute.ts`, `src/modules/entitlements/application/organizationAccountDetail.ts`). Read-only. RFPilot staff may see account-level information about any organization **without a support grant**, and nothing else (DECISIONS, 2026-11-17): the response is an allowlist of counts, settings and timestamps. It never carries a member list (no names, emails, roles or ids of members other than the Owner), and never customer content (proposal titles or bodies, vendor companies or contacts, template titles, ticket subjects or messages, invitation emails, team names, grant reasons, plan-change notes) or secrets (SSO issuer, client id or secret, domain verification tokens, hashes). Those still need a grant ("Support access grants").
+
+- Who: the same guard as plan management, a staff membership role **and** an `admins` account with role `admin` or `super_admin`. Every customer role gets the route guard's plain 403; a `users` account holding a staff role gets 403 `PLAN_MANAGEMENT_FORBIDDEN`; no session 401. Rate-limited to 300 reads per 15 minutes per staff account.
+- Unlike the plan routes it also answers for a legacy holding tenant and for RFPilot's own organization, and says which it is (`organization.standing`).
+- Errors: 400 `INVALID_ORGANIZATION_ID` for an id that is not 24 hex characters; 404 `ORGANIZATION_NOT_FOUND` for an unknown organization.
+- Audit: each successful read writes one `platform.organization_account.read` event in the **staff** organization's audit trail (actor: the staff account; `targetType: "organization"`, `targetId`: the organization read; `metadata.agentAccountType: "admin"`) before anything is returned, and the read fails if the event can't be written. Nothing is written in the customer's organization, and the action is not in the customer audit catalog, so the customer's audit log never shows it. A refused, invalid or not-found request writes no event.
+- Cost: at most 16 MongoDB reads and 1 write per request, each read keyed on the organization id (13 run in parallel). Counts come from `countDocuments` or one `$group` per collection; the proposal figures are one `$group` over that organization's proposals.
+
+`data` is `{ organization, owner, plan, counts, security, activity, supportAccess }`:
+
+| Field | Meaning |
+|---|---|
+| `organization.id`, `.name`, `.slug`, `.createdAt` | Identity. `createdAt` is `null` on rows written without timestamps. |
+| `organization.country` | ISO 3166-1 alpha-2 code from the organization profile, or `null`. |
+| `organization.status` | `active` or `inactive`, as stored. |
+| `organization.kind` | `customer` or `legacy_holding`, as stored. |
+| `organization.standing` | One word for the page: `awaiting_placement` (a legacy holding tenant, ORG-110), `platform` (RFPilot's own organization: one that `admins` accounts belong to), otherwise `active` or `inactive`. |
+| `owner` | `{ name, email }` of the active Owner, the account contact and the only person named; `null` when there is no active Owner with a `users` account. |
+| `plan.plan`, `.exempt`, `.proposals { created, limit, remaining, canCreate }`, `.features { vendorResponses, proposalIntelligence }` | The same figures as plan management. `exempt` is true for a holding tenant (no limit, every feature). |
+| `plan.lastChange` | `{ at, fromPlan, toPlan, changedBy: { id, name } \| null }` for the newest plan change by staff, or `null`. `changedBy` is a staff account. The change's note is not included. |
+| `counts.members.active`, `.deactivated` | Memberships by status (`deactivated` is a suspended membership). Removed members are not counted. |
+| `counts.members.pendingInvitations` | Invitations still pending and not past their expiry. |
+| `counts.members.byRole` | Active members per role: `owner`, `organization_admin`, `team_manager`, `planner`, `viewer`, and `other` for a member with none of those. A member holding two roles counts under each. |
+| `counts.teams { active, archived }` | Teams. |
+| `counts.proposals { total, archived }` | Proposals stored for the organization, and how many of them are archived. (`plan.proposals.created` is the lifetime counter the plan limit uses and never goes down.) |
+| `counts.organizationTemplates` | Published, unarchived organization templates. Personal templates are not counted. |
+| `counts.vendorListEntries { active, archived }` | Companies on the organization vendor list. |
+| `counts.openSupportTickets` | Helpdesk tickets with status `open` or `waiting_on_customer`. |
+| `security.signInMethods` | What the organization's members may use: `password` (absent when `PASSWORD_SIGN_IN_ENABLED=false`), `google`, `microsoft`, and `company_sso` when the organization's connection is active. Google and Microsoft are platform-wide options; this does not check that the provider is configured in the environment. |
+| `security.requireTwoFactor` | Whether the organization requires two-factor authentication. |
+| `security.companySso { configured, enabled, required, type }` | Whether a company SSO connection exists, is active, and is required for members on its domains (`requireSso`). `type` is `oidc` or `null`. No issuer, client id or secret. |
+| `security.domains` | `[{ domain, status }]`, `status` one of `verified`, `pending`, `unverified`; sorted by name, at most 50. |
+| `security.autoApproveDomain`, `.allowManagerInvites` | The two organization settings of those names. |
+| `activity.lastSignInAt` | The latest sign-in by any active or deactivated member; a timestamp, no name. `null` if nobody has signed in since sign-ins were stamped. |
+| `activity.lastProposalUpdateAt` | The latest `updatedAt` of any of the organization's proposals, or `null`. |
+| `supportAccess { active, scope, activeGrants, expiresAt }` | Whether the organization has an active support grant (what staff already see under "granted to me"). `scope` is `organization` when any active grant covers the whole organization, `rfp` when only single proposals are granted, else `null`. `expiresAt` is the latest expiry among the grants of that scope. `activeGrants` counts up to 50. No proposal ids and no reasons. |
 
 ## Organization vendor list (ORG-606)
 
