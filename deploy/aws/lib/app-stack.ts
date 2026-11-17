@@ -759,10 +759,21 @@ export class AppStack extends cdk.Stack {
     });
 
     const placementMachineName = `rfpilot-${config.envName}-placement`;
+    // Built from its parts rather than from the state machine construct,
+    // which needs this role first.
+    const placementMachineArn = this.formatArn({
+      service: 'states',
+      resource: 'stateMachine',
+      resourceName: placementMachineName,
+      arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+    });
     const placementMachineRole = new iam.Role(this, 'PlacementMachineRole', {
+      // Only Step Functions, only this account, and only on behalf of this
+      // one state machine.
       assumedBy: new iam.ServicePrincipal('states.amazonaws.com', {
         conditions: {
           StringEquals: { 'aws:SourceAccount': this.account },
+          ArnLike: { 'aws:SourceArn': placementMachineArn },
         },
       }),
       description:

@@ -48,8 +48,9 @@ export type PlacementTarget =
 // placement runs and is unique per user, so a double submit can't start a second run.
 //
 // Where the API has no migration role (production) a run starts as `queued`: the API validates
-// and journals the request, and a one-off task on the migrate task definition adopts it
-// (queued → started) and carries on exactly as above. `task` is that one-off task's record,
+// and journals the request, and a one-off task on the placement task definition (started
+// through the placement state machine) adopts it (queued → started) and carries on exactly as
+// above. `task` is that one-off task's record,
 // `request` what it was asked to do, and `taskSlot` its place under the global cap. See
 // placementTasks.ts.
 export type PlacementState = "queued" | "started" | "done" | "failed" | "aborted" | "rolling_back" | "rolled_back";
@@ -108,7 +109,14 @@ export const newPlacementRunId = () => `placement-${new Date().toISOString()}-${
 const isDuplicateKey = (error: unknown) => (error as { code?: number })?.code === 11000;
 const objectId = (value: string) => new mongoose.Types.ObjectId(value);
 const isObjectId = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{24}$/i.test(value);
-const safeError = (error: unknown) => (error instanceof Error ? error.message : "Placement step failed").slice(0, 300);
+// What the journal keeps, and the run view returns, about a failure. A PlacementError's message
+// is written for staff; anything else (a driver or database error) can carry hosts, statements
+// and identifiers, so it goes to the server log and the journal gets a plain sentence.
+const safeError = (error: unknown, runId?: string) => {
+  if (error instanceof PlacementError) return error.message.slice(0, 300);
+  console.error(`Legacy customer placement step failed${runId ? ` (run ${runId})` : ""}:`, error instanceof Error ? error.message : error);
+  return "A placement step failed unexpectedly; see the server log.";
+};
 
 const slugFor = (name: string) => {
   const base = name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "organization";
@@ -310,8 +318,11 @@ export const placeLegacyCustomer = async (input: {
 }) => {
   const adopt = input.adoptQueuedRun;
   const runId = adopt?.runId ?? input.runId ?? newPlacementRunId();
+  // Every write of an adopted run names the task attempt, so a task that has been given up on
+  // (and whose run may since have been asked for again) cannot change the entry.
+  const owned = adopt ? { "task.requestedAt": adopt.taskRequestedAt } : {};
   const finishRun = (set: Partial<JournalEntry>, session?: ClientSession) =>
-    journal().updateOne({ runId }, { $set: { ...set, updatedAt: new Date() }, $unset: { inFlight: "" } }, { session });
+    journal().updateOne({ runId, ...owned }, { $set: { ...set, updatedAt: new Date() }, $unset: { inFlight: "" } }, { session });
   await ensureIndexes();
 
   let validated: Awaited<ReturnType<typeof validatePlacement>>;
@@ -328,13 +339,13 @@ export const placeLegacyCustomer = async (input: {
       // role are all worked out again from the database, and refused exactly as the API would.
       if (queued.createdOrganization && !isObjectId(queued.targetOrganizationId)) throw new PlacementError("PLACEMENT_REQUEST_INVALID", "The queued request is malformed.", 400);
       validated = await validatePlacement(input.userId, input.target, queued.createdOrganization ? queued.targetOrganizationId : undefined);
-      await journal().updateOne({ runId }, { $set: {
+      await journal().updateOne({ runId, ...owned }, { $set: {
         holdingOrganizationId: validated.holding.organizationId, previousVersion: validated.holding.version,
         targetOrganizationId: validated.target.organizationId, createdOrganization: validated.target.created !== null,
         role: validated.target.role, teamId: validated.target.teamId, updatedAt: new Date(),
       } });
     } catch (error) {
-      await finishRun({ state: "aborted", error: safeError(error) });
+      await finishRun({ state: "aborted", error: safeError(error, runId) });
       throw error;
     }
   } else {
@@ -404,7 +415,7 @@ export const placeLegacyCustomer = async (input: {
         // The run must still be this process's: a one-off task the API gave up on (no heartbeat)
         // has had its entry settled, and must not commit a move after that.
         const finished = await journal().updateOne(
-          { runId, state: "started", ...(adopt ? { "task.requestedAt": adopt.taskRequestedAt } : {}) },
+          { runId, state: "started", ...owned },
           { $set: { state: "done", mongo, postgres: postgres === "skipped" ? {} : postgres, updatedAt: new Date() }, $unset: { inFlight: "" } },
           { session },
         );
@@ -415,19 +426,20 @@ export const placeLegacyCustomer = async (input: {
     }
   } catch (error) {
     await held?.abort();
-    await finishRun({ state: "aborted", error: safeError(error) });
+    await finishRun({ state: "aborted", error: safeError(error, runId) });
     if (error instanceof PlacementError) throw error;
     throw new PlacementError("PLACEMENT_FAILED", `The placement failed (run ${runId}); nothing was moved.`, 409);
   }
   try {
     await held.commit();
   } catch (error) {
-    await journal().updateOne({ runId }, { $set: { state: "failed", error: `Postgres commit failed: ${safeError(error)}`, updatedAt: new Date() } });
+    safeError(error, runId);
+    await journal().updateOne({ runId, ...owned }, { $set: { state: "failed", error: "The Postgres commit failed after the MongoDB move; roll this run back.", updatedAt: new Date() } });
     throw new PlacementError("PLACEMENT_FAILED", `The placement failed part way and must be rolled back with run id ${runId}.`, 409);
   }
 
   const verification = await verify({ userId: input.userId, holdingOrganizationId: holding.organizationId, targetOrganizationId, before, orphansBefore, pool: input.pool });
-  await journal().updateOne({ runId }, { $set: { verification, updatedAt: new Date() } });
+  await journal().updateOne({ runId, ...owned }, { $set: { verification, updatedAt: new Date() } });
   if (!verification.passed) {
     let rolledBack = true;
     try {
@@ -437,7 +449,7 @@ export const placeLegacyCustomer = async (input: {
       // The move stands with failed checks. That is not a placement that succeeded: mark it as
       // one that has to be rolled back, so it never reads as done.
       await journal().updateOne(
-        { runId, state: "done" },
+        { runId, state: "done", ...owned },
         { $set: { state: "failed", error: "The placement's checks failed and the automatic rollback did not complete.", updatedAt: new Date() } },
       );
     }
@@ -514,7 +526,12 @@ const assertRollbackEntryConsistent = async (entry: JournalEntry) => {
 
 const rollbackRun = async (input: { runId: string; actor: PlacementActor; pool: Pool | null; reason: string; adoptQueued?: { taskRequestedAt: Date } }) => {
   const entry = input.adoptQueued ? await adoptRollback(input.runId, input.adoptQueued.taskRequestedAt) : await claimRollback(input.runId);
-  const release = () => journal().updateOne({ runId: entry.runId, state: "rolling_back" }, { $set: { state: entry.state, updatedAt: new Date() }, $unset: { rollbackFrom: "" } });
+  // Names the task attempt, as the commit does: a stale rollback task must not give back a run
+  // that has since been claimed again.
+  const release = () => journal().updateOne(
+    { runId: entry.runId, state: "rolling_back", ...(entry.task ? { "task.requestedAt": entry.task.requestedAt } : {}) },
+    { $set: { state: entry.state, updatedAt: new Date() }, $unset: { rollbackFrom: "" } },
+  );
   let result: { mongo: MongoMoveCounts; postgres: MoveCounts | "skipped"; leftInTarget: { proposals: number } };
   try {
     if (input.adoptQueued) await assertRollbackEntryConsistent(entry);

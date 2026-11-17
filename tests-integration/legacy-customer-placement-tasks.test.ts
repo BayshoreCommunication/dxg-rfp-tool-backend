@@ -45,12 +45,15 @@ let baseUrl: string;
 let adminToken: string;
 let secondAdminToken: string;
 let customerToken: string;
+// A `users` account that holds a staff membership role but is not an `admins` account.
+let staffRoleUserToken: string;
+const staffRoleUser = oid();
 let receiving: Fixture;
 // The migration role, which only the task holds.
 let taskPool: Pool;
 const dxg = { org: oid(), admin: oid(), secondAdmin: oid() };
 type Legacy = { userId: mongoose.Types.ObjectId; holding: mongoose.Types.ObjectId; proposals: mongoose.Types.ObjectId[]; pgOrg?: string };
-const names = ["ana", "ben", "cy", "dee", "eve", "fay", "gus", "hal", "ivy", "jon"] as const;
+const names = ["ana", "ben", "cy", "dee", "eve", "fay", "gus", "hal", "ivy", "jon", "kim"] as const;
 const legacy = Object.fromEntries(names.map((name) => [name, { userId: oid(), holding: oid(), proposals: [oid()] }])) as Record<(typeof names)[number], Legacy>;
 
 const launches: Array<{ runId: string; launchToken: string }> = [];
@@ -117,6 +120,9 @@ before(async () => {
   }
   adminToken = (await beginAuthenticatedSession({ userId: String(dxg.admin), organizationId: String(dxg.org), correlationId: randomMongoId() })).accessToken;
   secondAdminToken = (await beginAuthenticatedSession({ userId: String(dxg.secondAdmin), organizationId: String(dxg.org), correlationId: randomMongoId() })).accessToken;
+  await User.collection.insertOne({ _id: staffRoleUser, organizationId: dxg.org, name: "Leftover", email: `leftover-task-${tag}@example.com`, password: "not-a-real-hash", role: "customer", isBlocked: false });
+  await OrganizationMembership.collection.insertOne({ organizationId: dxg.org, userId: staffRoleUser, roles: ["dxg_admin"], status: "active", version: 1 });
+  staffRoleUserToken = (await beginAuthenticatedSession({ userId: String(staffRoleUser), organizationId: String(dxg.org), correlationId: randomMongoId() })).accessToken;
   for (const name of names) await seedLegacy(name, legacy[name]);
   receiving = await seedOrganization("Task Receiving Org");
   customerToken = receiving.members.organization_admin.accessToken;
@@ -137,7 +143,7 @@ after(async () => {
     await Proposal.collection.deleteMany({ organizationId: { $in: orgIds } });
     await TeamMembership.collection.deleteMany({ userId: { $in: userIds } });
     await Team.collection.deleteMany({ organizationId: new mongoose.Types.ObjectId(receiving.organizationId) });
-    await User.collection.deleteMany({ _id: { $in: userIds } });
+    await User.collection.deleteMany({ _id: { $in: [...userIds, staffRoleUser] } });
     await Admin.collection.deleteMany({ _id: { $in: [dxg.admin, dxg.secondAdmin] } });
     await Organization.collection.deleteMany({ _id: { $in: orgIds } });
     await cleanupOrganizations();
@@ -154,6 +160,28 @@ test("customers can't request, read or roll back a placement", async () => {
   assert.equal((await api(customerToken, "POST", `/${legacy.ana.userId}/placements`, existing())).status, 403);
   assert.equal((await api(customerToken, "POST", "/placements/placement-2026-11-17T09:00:00.000Z-00000000/rollback")).status, 403);
   assert.equal((await api(customerToken, "GET", "/placements/placement-2026-11-17T09:00:00.000Z-00000000")).status, 403);
+  assert.equal(launches.length, before);
+  assert.equal(await journal().countDocuments({ userId: String(legacy.ana.userId) }), 0);
+});
+
+test("a staff membership role without an admins account is refused on every route", async () => {
+  const before = launches.length;
+  const run = "placement-2026-11-17T09:00:00.000Z-00000000";
+  const attempts: Array<[string, string, unknown?]> = [
+    ["GET", "/"],
+    ["GET", "/target-organizations"],
+    ["POST", `/${legacy.ana.userId}/placements`, existing()],
+    ["GET", `/placements/${run}`],
+    ["POST", `/placements/${run}/rollback`],
+  ];
+  for (const [method, path, body] of attempts) {
+    const res = await api(staffRoleUserToken, method, path, body);
+    assert.deepEqual([res.status, res.body.code], [403, "PLACEMENT_FORBIDDEN"], `${method} ${path}`);
+    assert.ok(!("data" in res.body), `${method} ${path} returns nothing`);
+  }
+  // The same requests from a real staff account get past the guard.
+  assert.equal((await api(adminToken, "GET", "/")).status, 200);
+  assert.equal((await api(adminToken, "GET", "/target-organizations")).status, 200);
   assert.equal(launches.length, before);
   assert.equal(await journal().countDocuments({ userId: String(legacy.ana.userId) }), 0);
 });
@@ -618,4 +646,52 @@ test("a forged rollback: records only go back to the customer's own holding tena
   assert.equal(await ownedIn(legacy.eve.holding, legacy.eve.userId), 1);
   assert.equal(await pgReferences(legacy.eve.pgOrg), 1);
   assert.equal(await OrganizationMembership.exists({ organizationId: legacy.eve.holding, userId: member.userId }), null);
+});
+
+// The journal says `done` once the MongoDB move commits, which is before the Postgres commit, the
+// checks and the audit events. A rollback asked for in that window must not be accepted: it would
+// take the run away from the placement task in the middle of its checks.
+test("while the placement task is still checking its work the run reads running and can't be rolled back", async () => {
+  const who = legacy.kim;
+  const target = receiving.organizationId;
+  const queued = await api(adminToken, "POST", `/${who.userId}/placements`, existing());
+  assert.equal(queued.status, 202, JSON.stringify(queued.body));
+  const runId = queued.body.data.placement.runId;
+  const before = launches.length;
+
+  // The audit write is the task's last step, after the move, both commits and the checks.
+  const create = SecurityAuditEvent.create;
+  const seen: { calls: number; view: Record<string, any> | null; rollback: { status: number; body: Record<string, any> } | null; state: string | null } = { calls: 0, view: null, rollback: null, state: null };
+  (SecurityAuditEvent as unknown as { create: unknown }).create = async function (this: unknown, ...args: unknown[]) {
+    if (seen.calls++ === 0) {
+      seen.state = (await journal().findOne({ runId }))?.state ?? null;
+      seen.view = await run(runId);
+      seen.rollback = await api(secondAdminToken, "POST", `/placements/${runId}/rollback`);
+    }
+    return (create as unknown as (...a: unknown[]) => unknown).apply(this, args);
+  };
+  let outcome: PlacementTaskOutcome;
+  try {
+    outcome = await runTask(runId);
+  } finally {
+    (SecurityAuditEvent as unknown as { create: unknown }).create = create;
+  }
+  assert.equal(seen.calls, 1);
+  assert.equal(seen.state, "done", "the journal already says done");
+  assert.deepEqual([seen.view?.status, seen.view?.operation, seen.view?.rollbackRequired], ["running", "placement", false]);
+  assert.deepEqual([seen.rollback?.status, seen.rollback?.body.code], [409, "PLACEMENT_IN_PROGRESS"]);
+  assert.equal(launches.length, before, "no rollback task was started");
+
+  // The placement task was left alone and finished its work.
+  assert.equal(outcome.ran && outcome.ok, true, JSON.stringify(outcome));
+  const done = await run(runId);
+  assert.deepEqual([done.status, done.state, done.task.operation, done.task.status, done.verification.passed], ["succeeded", "done", "placement", "succeeded", true]);
+  assert.ok(await SecurityAuditEvent.exists({ organizationId: target, action: "organization.legacy_customer.placed", targetId: String(who.userId) }));
+  assert.equal(await ownedIn(target, who.userId), 1);
+  assert.equal(await pgReferences(who.pgOrg), 0);
+  // Now it can be rolled back.
+  assert.equal((await api(adminToken, "POST", `/placements/${runId}/rollback`)).status, 202);
+  assert.equal((await runTask(runId)).ran, true);
+  assert.equal((await run(runId)).status, "rolled_back");
+  await untouched(who, target);
 });

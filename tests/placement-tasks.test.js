@@ -6,6 +6,7 @@ const { createPlacementTaskService, placementRunView, placementTaskPolicyFromEnv
 const {
   buildStartExecutionInput,
   createPlacementTaskLauncher,
+  placementTaskRunIdFromArgv,
   placementTaskConfigFromEnv,
   PlacementTaskConfigError,
 } = require("../src/modules/tenancy/placementTaskLauncher");
@@ -55,7 +56,7 @@ const memoryStore = () => {
     },
     async queueRollback(runId, task, max) {
       const row = rows.get(runId);
-      if (!row || !["done", "failed"].includes(row.state)) return { queued: false, refusal: "state" };
+      if (!row || !["done", "failed"].includes(row.state) || ["queued", "running"].includes(row.task?.status)) return { queued: false, refusal: "state" };
       const slot = freeSlot(max);
       if (slot === null) return { queued: false, refusal: "capacity" };
       Object.assign(row, { rollbackFrom: row.state, state: "rolling_back", inFlight: true, taskSlot: slot, task: copy(task) });
@@ -558,24 +559,125 @@ test("the API's code has no way to start an ECS task", () => {
 
 /* ── Staff only ────────────────────────────────────────────────────────────────────────────── */
 
-test("every placement route sits behind the staff guard", () => {
-  const router = require("../routes/adminLegacyCustomersRoute").default;
+test("every placement route sits behind the staff guard: a staff membership role and an admins account", () => {
+  const route = require("../routes/adminLegacyCustomersRoute");
+  const router = route.default;
   const firstRoute = router.stack.findIndex((layer) => layer.route);
   const guards = router.stack.slice(0, firstRoute);
-  assert.equal(guards.length, 2, "authenticate, then authorize, before any route");
+  assert.equal(guards.length, 3, "authenticate, authorize, then the staff-account check, before any route");
+  assert.equal(guards[2].handle, route.requireStaffAccount);
   assert.ok(router.stack.slice(firstRoute).every((layer) => layer.route), "no route is registered ahead of the guards");
   assert.deepEqual(
     router.stack.slice(firstRoute).map((layer) => `${Object.keys(layer.route.methods)[0].toUpperCase()} ${layer.route.path}`),
     ["GET /", "GET /target-organizations", "POST /:userId/placements", "GET /placements/:runId", "POST /placements/:runId/rollback"],
   );
-  const authorize = guards[1].handle;
-  const attempt = (user) => {
-    const res = { code: null, status(code) { this.code = code; return this; }, json() { return this; } };
+  const attempt = (guard, user) => {
+    const res = { code: null, body: null, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } };
     let passed = false;
-    authorize({ user }, res, () => { passed = true; });
+    guard({ user }, res, () => { passed = true; });
     return passed ? "passed" : res.code;
   };
-  assert.equal(attempt(undefined), 401);
-  for (const roles of [["owner"], ["organization_admin"], ["team_manager"], ["planner"], ["viewer"], []]) assert.equal(attempt({ roles }), 403, roles.join());
-  assert.equal(attempt({ roles: ["dxg_admin"] }), "passed");
+  const authorize = guards[1].handle;
+  assert.equal(attempt(authorize, undefined), 401);
+  for (const roles of [["owner"], ["organization_admin"], ["team_manager"], ["planner"], ["viewer"], []]) assert.equal(attempt(authorize, { roles }), 403, roles.join());
+  assert.equal(attempt(authorize, { roles: ["dxg_admin"] }), "passed");
+
+  // The membership role is not enough: the account itself must be an admins account with a
+  // staff account role. A users account left holding a staff membership is refused.
+  const account = route.requireStaffAccount;
+  assert.equal(attempt(account, { roles: ["dxg_admin"], accountType: "admin", role: "admin" }), "passed");
+  assert.equal(attempt(account, { roles: ["super_admin"], accountType: "admin", role: "super_admin" }), "passed");
+  for (const user of [
+    undefined,
+    { roles: ["dxg_admin"] },
+    { roles: ["dxg_admin"], accountType: "user", role: "customer" },
+    { roles: ["dxg_admin"], accountType: "user", role: "admin" },
+    { roles: ["super_admin"], accountType: "user", role: "super_admin" },
+    { roles: ["dxg_admin"], accountType: "admin", role: "customer" },
+    { roles: ["dxg_admin"], accountType: "admin" },
+  ]) assert.equal(attempt(account, user), 403, JSON.stringify(user));
+  // And each route has a per-staff rate limit ahead of its handler.
+  for (const layer of router.stack.slice(firstRoute)) assert.equal(layer.route.stack.length, 2, layer.route.path);
+});
+
+/* ── A placement is not finished until its task is ─────────────────────────────────────────── */
+
+test("while the placement task is still verifying, the run reads running and cannot be rolled back", async () => {
+  const { service, store, launches, task } = setup();
+  const { run } = await service.requestPlacement({ userId: ANA, target: existing, actor });
+  task.claim(run.runId);
+  // The MongoDB move has committed: the journal says done and the user's lock is gone, but the
+  // task still has the Postgres commit, the checks and the audit events to do.
+  task.journal(run.runId, "done");
+  const view = await service.getRun(run.runId);
+  assert.deepEqual([view.status, view.operation, view.state, view.rollbackRequired], ["running", "placement", "done", false]);
+  await refused(service.requestRollback({ runId: run.runId, actor }), "PLACEMENT_IN_PROGRESS", 409);
+  // The journal refuses the claim too, whatever the service checked.
+  const direct = await store.queueRollback(run.runId, { operation: "rollback", status: "queued", requestedAt: new Date(), adminUserId: STAFF, adminOrganizationId: STAFF_ORG, correlationId: "x" }, 1);
+  assert.deepEqual(direct, { queued: false, refusal: "state" });
+  assert.equal(store.rows.get(run.runId).task.operation, "placement", "the placement task's record is not overwritten");
+  assert.equal(launches.length, 1);
+  // Its own rollback after failed checks is not a finished run either.
+  task.journal(run.runId, "rolling_back");
+  assert.deepEqual([(await service.getRun(run.runId)).status, (await service.getRun(run.runId)).operation], ["running", "placement"]);
+  await refused(service.requestRollback({ runId: run.runId, actor }), "PLACEMENT_IN_PROGRESS", 409);
+  // Once the task has reported, it can be.
+  task.finish(run.runId, "succeeded", "done");
+  assert.equal((await service.getRun(run.runId)).status, "succeeded");
+  assert.equal((await service.requestRollback({ runId: run.runId, actor })).run.status, "queued");
+});
+
+test("a task lost after a verified placement leaves a placement that stands, not one to roll back", async () => {
+  const { service, store, task, advance } = setup();
+  const { run } = await service.requestPlacement({ userId: ANA, target: existing, actor });
+  task.claim(run.runId);
+  task.journal(run.runId, "done");
+  store.rows.get(run.runId).verification = { passed: true, holdingLeftovers: { mongo: {}, postgres: {} }, orphanedProposalsInTarget: 0, lostProposals: [] };
+  advance(4 * 60_000);
+  const view = await service.getRun(run.runId);
+  assert.deepEqual([view.status, view.state, view.rollbackRequired, view.task.status, view.task.code], ["succeeded", "done", false, "failed", "PLACEMENT_TASK_LOST"]);
+  assert.deepEqual(view.task.details, { verified: true, auditUnconfirmed: true });
+});
+
+/* ── The task's command line ───────────────────────────────────────────────────────────────── */
+
+test("the placement task accepts exactly one argument, --task-run=<run id>", () => {
+  assert.equal(placementTaskRunIdFromArgv([`--task-run=${RUN}`]), RUN);
+  const refusedArgv = [
+    [], [""], [RUN], ["--task-run"], ["--task-run="], [`--task-run=${RUN}`, "--apply"], ["--apply", `--task-run=${RUN}`],
+    [`--task-run=${RUN}`, `--task-run=${RUN}`], [`--task-run=${RUN}\n`], [`--task-run=${RUN}\n--apply`], [`--task-run=${RUN} --apply`],
+    [` --task-run=${RUN}`], [`--Task-Run=${RUN}`], [`--rollback=${RUN}`], [`--task-run=${RUN.toUpperCase()}`], ["--task-run=x; rm -rf /"],
+    ["--email=victim@example.com"], ["--list"], ["--help"], [`-task-run=${RUN}`], [`--task-run==${RUN}`], [null], [42], [[`--task-run=${RUN}`]],
+  ];
+  for (const argv of refusedArgv) assert.equal(placementTaskRunIdFromArgv(argv), null, JSON.stringify(argv));
+  assert.equal(placementTaskRunIdFromArgv(`--task-run=${RUN}`), null, "a string is not an argument list");
+  // The entry file uses this parser and nothing else to decide what to run.
+  const fs = require("node:fs");
+  const entry = fs.readFileSync(require("node:path").join(__dirname, "../scripts/runPlacementTask.ts"), "utf8");
+  assert.match(entry, /placementTaskRunIdFromArgv\(process\.argv\.slice\(2\)\)/);
+  assert.ok(!/--email|--new-org|--org-slug|--rollback|--apply|--list/.test(entry.replace(/\/\/.*$/gm, "")), "none of the operator CLI's flags");
+});
+
+/* ── A source check of the infrastructure definition (not a synth check) ───────────────────────
+   This reads deploy/aws/lib/app-stack.ts as text. It catches an edit that adds an input path to
+   the state machine or an ECS/IAM action to the API role in the placement block. It does not
+   prove what CloudFormation receives: that is the synthesized template in the pull request. */
+test("source check: the state machine reads only the run id, and the API gets only states actions", () => {
+  const fs = require("node:fs");
+  const source = fs.readFileSync(require("node:path").join(__dirname, "../deploy/aws/lib/app-stack.ts"), "utf8");
+  const start = source.indexOf("Legacy-customer placement: API");
+  assert.ok(start > 0);
+  const block = source.slice(start).replace(/\/\/.*$/gm, "");
+  // Every Amazon States Language key that takes a path from the input ends in `.$`.
+  assert.deepEqual(block.match(/['"][A-Za-z]+\.\$['"]/g), ["'Command.$'"]);
+  assert.match(block, /States\.Array\(States\.Format\('--task-run=\{\}', \$\.runId\)\)/);
+  assert.equal((block.match(/\$\.[A-Za-z]/g) ?? []).length, 1, "one reference to the execution input");
+  // What is added to the API task role.
+  const apiStatements = [...block.matchAll(/apiTaskDef\.taskRole\.addToPrincipalPolicy\(\s*new iam\.PolicyStatement\(\{[\s\S]*?\}\),\s*\);/g)].map((m) => m[0]);
+  assert.equal(apiStatements.length, 2);
+  const actions = apiStatements.flatMap((statement) => [...statement.matchAll(/actions: \[([^\]]*)\]/g)].flatMap((m) => m[1].match(/'[^']+'/g)));
+  assert.deepEqual(actions.sort(), ["'states:DescribeExecution'", "'states:StartExecution'"]);
+  for (const statement of apiStatements) assert.ok(!/ecs:|iam:|\*'\]/.test(statement.replace(/resourceName: `[^`]*`/, "")), statement);
+  // Outside this block the API role is granted nothing by hand.
+  assert.equal((source.match(/apiTaskDef\.taskRole\.addToPrincipalPolicy/g) ?? []).length, 2);
 });

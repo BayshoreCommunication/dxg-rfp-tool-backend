@@ -24,6 +24,17 @@ const LAUNCH_TOKEN = /^[a-f0-9]{64}$/;
 
 export class PlacementTaskConfigError extends Error {}
 
+// The placement task's whole command line: exactly one argument, `--task-run=<runId>`, with a
+// run id in the journal's own format. Anything else (another flag, a second argument, a newline,
+// an empty list) is refused (scripts/runPlacementTask.ts).
+export const placementTaskRunIdFromArgv = (argv: readonly unknown[]): string | null => {
+  if (!Array.isArray(argv) || argv.length !== 1 || typeof argv[0] !== "string") return null;
+  const prefix = "--task-run=";
+  if (!argv[0].startsWith(prefix)) return null;
+  const runId = argv[0].slice(prefix.length);
+  return PLACEMENT_RUN_ID.test(runId) && !/\s/.test(runId) ? runId : null;
+};
+
 export const PLACEMENT_STATE_MACHINE_ENV = "PLACEMENT_STATE_MACHINE_ARN";
 
 // null when this process isn't set up to start placement tasks (local, rehearsal, or the feature

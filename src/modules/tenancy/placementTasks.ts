@@ -105,7 +105,13 @@ export type ValidatedPlacement = Pick<PlacementJournalEntry, "holdingOrganizatio
 // What the admin app polls. `status` is the run as a whole; `task` is the latest one-off task, so
 // a rollback that failed shows as status "succeeded" (the placement stands) with a failed task.
 export type PlacementRunStatus = "queued" | "running" | "succeeded" | "failed" | "rolled_back";
+// The journal says `done` as soon as the MongoDB move commits, but the placement task still has
+// the Postgres commit, the checks and the audit events to do. Until that task has finished the
+// run is not something to report as succeeded, or to roll back.
+export const placementTaskActive = (entry: Pick<PlacementJournalEntry, "task">) =>
+  entry.task?.operation === "placement" && (entry.task.status === "queued" || entry.task.status === "running");
 const statusOf = (entry: PlacementJournalEntry): PlacementRunStatus => {
+  if (placementTaskActive(entry)) return entry.state === "queued" ? "queued" : "running";
   switch (entry.state) {
     case "queued": return "queued";
     case "started": return "running";
@@ -124,9 +130,10 @@ export const placementRunView = (entry: PlacementJournalEntry) => {
   return {
     ...journal,
     status: statusOf(entry),
-    operation: (entry.state === "rolling_back" || entry.state === "rolled_back" ? "rollback" : "placement") as TaskOperation,
+    operation: (!placementTaskActive(entry) && (entry.state === "rolling_back" || entry.state === "rolled_back") ? "rollback" : "placement") as TaskOperation,
     // A placement that moved MongoDB but not Postgres, or whose checks never ran: roll it back.
-    rollbackRequired: entry.state === "failed",
+    // Not while its own task is still working on it.
+    rollbackRequired: entry.state === "failed" && !placementTaskActive(entry),
     task: task
       ? {
           operation: task.operation, status: task.status, requestedAt: task.requestedAt, startedAt: task.startedAt ?? null,
@@ -207,6 +214,13 @@ export const createPlacementTaskService = (deps: {
         state: back, clearRollbackFrom: true,
         message: task.operation === "rollback" ? `${why}; the placement was not rolled back.` : `${why} while rolling back after failed checks; roll this run back.`,
         ...(back === "failed" ? { details: { rollbackRequired: true } } : {}),
+      });
+    } else if (entry.state === "done" && task.operation === "placement" && entry.verification?.passed) {
+      // The move committed in both stores and its checks passed; only the task's last report
+      // (and possibly its audit events) is missing. That is a placement that stands.
+      settled = await settle({
+        message: `${why} after the placement was made and its checks passed; check that its audit events were written.`,
+        details: { verified: true, auditUnconfirmed: true },
       });
     } else if (entry.state === "done" && task.operation === "placement") {
       // MongoDB committed; whether Postgres did, and the checks, are unknown.
@@ -319,10 +333,12 @@ export const createPlacementTaskService = (deps: {
         if (keyHash && entry.task?.operation === "rollback" && entry.task.idempotencyKey === keyHash && entry.task.status !== "failed") {
           return { run: placementRunView(entry), replayed: true };
         }
+        // Still being verified (or rolled back by its own checks) by the placement task.
+        if (placementTaskActive(entry)) throw new PlacementError("PLACEMENT_IN_PROGRESS", "This placement is still running.", 409);
         if (entry.state === "rolled_back") throw new PlacementError("ALREADY_ROLLED_BACK", "This placement was already rolled back.", 409);
         if (entry.state === "rolling_back") throw new PlacementError("ROLLBACK_IN_PROGRESS", "This placement is being rolled back.", 409);
         if (entry.state === "aborted") throw new PlacementError("NOTHING_TO_ROLL_BACK", "This placement failed before anything moved.", 409);
-        if (entry.state === "queued" || entry.state === "started") throw new PlacementError("PLACEMENT_IN_PROGRESS", "This placement is still running.", 409);
+        if (entry.state === "queued" || entry.state === "started" || placementTaskActive(entry)) throw new PlacementError("PLACEMENT_IN_PROGRESS", "This placement is still running.", 409);
         await deps.assertRollbackAllowed(entry);
         const queued = await deps.store.queueRollback(input.runId, taskFor("rollback", input.actor, keyHash), policy.maxConcurrent);
         if (queued.queued) return { run: await start(input.runId), replayed: false };

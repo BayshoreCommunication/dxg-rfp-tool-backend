@@ -92,11 +92,15 @@ export const runPlacementTask = async (input: {
       result = await rollbackPlacement({ runId: input.runId, actor, pool: input.pool, adoptQueued: { taskRequestedAt: task.requestedAt } });
     }
     stopHeartbeat();
-    await finish({ status: "succeeded" });
+    // The work is done, verified and audited. If this last write fails, try once more and
+    // otherwise leave it: the API sees a verified run and does not treat it as a failure.
+    await finish({ status: "succeeded" })
+      .catch(() => finish({ status: "succeeded" }))
+      .catch((error) => console.error("Placement task: could not record its result:", error instanceof Error ? error.message : error));
     return { ran: true, ok: true, operation: task.operation, result };
   } catch (error) {
     stopHeartbeat();
-    const failure = error instanceof PlacementError
+    const failure: { code: string; message: string; details?: Record<string, unknown> } = error instanceof PlacementError
       ? { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) }
       : { code: task.operation === "placement" ? "PLACEMENT_TASK_ERROR" : "ROLLBACK_TASK_ERROR", message: `The ${task.operation} task failed unexpectedly; see the task's log.` };
     if (!(error instanceof PlacementError)) console.error("Placement task error:", error instanceof Error ? error.message : error);
@@ -109,6 +113,11 @@ export const runPlacementTask = async (input: {
       // A rollback refused before it began leaves the run claimed; give it back.
       const back = claimed.rollbackFrom === "failed" ? "failed" : "done";
       await mongoPlacementTaskStore.update(input.runId, { ...expect, state: "rolling_back", taskStatus: "running" }, { state: back, clearRollbackFrom: true });
+      // A rollback that failed after its MongoDB half (the Postgres commit comes last) leaves
+      // the journal `rolled_back` with Postgres not moved back: someone has to look.
+      if ((await mongoPlacementTaskStore.find(input.runId))?.state === "rolled_back") {
+        failure.details = { ...failure.details, needsOperatorCheck: true };
+      }
     }
     await finish({ status: "failed", ...failure });
     return { ran: true, ok: false, operation: task.operation, ...failure };

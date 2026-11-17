@@ -2,7 +2,7 @@ import "../config/env";
 import mongoose from "mongoose";
 import { Pool } from "pg";
 import { DATABASE_NAME } from "../config/db";
-import { PLACEMENT_RUN_ID } from "../src/modules/tenancy/placementTaskLauncher";
+import { placementTaskRunIdFromArgv } from "../src/modules/tenancy/placementTaskLauncher";
 import { runPlacementTask } from "../src/modules/tenancy/placementTaskRunner";
 
 // The entry point of the placement task definition (ORG-110; owner's decision 2026-11-17). The
@@ -17,14 +17,8 @@ import { runPlacementTask } from "../src/modules/tenancy/placementTaskRunner";
 const EXIT_USAGE = 64;
 const EXIT_LEASE_LOST = 70;
 
-const runIdFrom = (argv: string[]): string | null => {
-  if (argv.length !== 1) return null;
-  const match = /^--task-run=(.+)$/.exec(argv[0]);
-  return match && PLACEMENT_RUN_ID.test(match[1]) ? match[1] : null;
-};
-
 const main = async () => {
-  const runId = runIdFrom(process.argv.slice(2));
+  const runId = placementTaskRunIdFromArgv(process.argv.slice(2));
   if (!runId) {
     process.stderr.write("Usage: node dist/scripts/runPlacementTask.js --task-run=<runId>\nStarted by the placement state machine; takes no other argument.\n");
     process.exitCode = EXIT_USAGE;

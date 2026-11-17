@@ -65,7 +65,9 @@ export const mongoPlacementTaskStore: PlacementTaskStore = {
     const journal = await placementJournal();
     return inAFreeSlot(maxConcurrent, async (slot) => {
       const claimed = await journal.updateOne(
-        { runId, state: { $in: ["done", "failed"] } },
+        // Never while a task is still working on the run: a placement is `done` in the journal
+        // before its Postgres commit, checks and audit events.
+        { runId, state: { $in: ["done", "failed"] }, "task.status": { $nin: ["queued", "running"] } },
         [{ $set: { rollbackFrom: "$state", state: "rolling_back", inFlight: true, taskSlot: slot, task: { $literal: task }, updatedAt: "$$NOW" } }],
       );
       return claimed.matchedCount === 1;
