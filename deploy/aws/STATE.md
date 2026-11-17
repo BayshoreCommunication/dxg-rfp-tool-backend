@@ -59,7 +59,10 @@ and `deploy-aws.yml` are unchanged, and the ordinary `production` deploy
 carries it. Nothing has run on AWS: no execution or task was ever started
 and no statement was exercised, including whether the `.sync` permissions
 are sufficient and whether the script runs on a read-only root filesystem.
-First use of Step Functions in this account. After the deploy, before
+First use of Step Functions in this account. Not built and worth adding:
+an alarm on the machine's `ExecutionsStarted` (Observability stack), and a
+Postgres-side anchor for placement that the API role cannot write
+(`docs/DECISIONS.md`, 2026-11-17). After the deploy, before
 relying on it: (1) the API task definition shows the variable and its
 role's policy shows the two `states:` statements and no `ecs:` or
 `iam:PassRole`; (2) place one test legacy customer through

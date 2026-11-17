@@ -339,6 +339,8 @@ Stop condition: 4 or 5 fails → this is a rollback trigger while the window is 
    `GET /api/admin/legacy-customers/placements/:runId` reports `queued`, `running`,
    `succeeded`, `failed` or `rolled_back` (`docs/API.md`, "Legacy customer placement"). The
    admin app has no screen for this yet, so until it does this path is used by calling the API.
+   Only an `admins` account with a staff membership may call these routes (a `users` account
+   holding a staff role gets 403 `PLACEMENT_FORBIDDEN`).
    **UNREHEARSED on production:** no execution or task has been started this way and none of
    the new IAM statements has been exercised. The first time, check all of:
 
@@ -355,7 +357,21 @@ Stop condition: 4 or 5 fails → this is a rollback trigger while the window is 
    - `aws logs tail /rfpilot/$ENV/placement --since 15m` shows `"mode":"task"` with
      `"ok":true`;
    - `GET …/placements/:runId` reaches `succeeded` with `verification.passed: true`, and the
-     customer can sign in.
+     customer can sign in;
+   - the `.sync` permissions are enough: the first execution created the EventBridge rule
+     `StepFunctionsGetEventsForECSTaskRule`, and the execution ended when the task did (an
+     execution that sits `RUNNING` after the task has stopped, or fails at once with an
+     `events:` or `ecs:DescribeTasks` access error, means they are not);
+   - the script runs on a read-only root filesystem: no `EROFS` or "read-only file system" in
+     `/rfpilot/$ENV/placement`;
+   - `lock_timeout` really comes from `PGOPTIONS`. This was never rehearsed. During a quiet
+     window hold a lock on a table the move updates from another session and start a
+     placement: it must fail after about 15 s with nothing moved, not wait;
+   - a deliberately bad input is harmless: start an execution by hand with
+     `{"runId":"not-a-run"}`. The task must exit 64 with the usage line, the execution must
+     fail, and no journal entry may change;
+   - the account's Fargate On-Demand vCPU quota (Service Quotas) leaves room for one more
+     0.5 vCPU task beside the running services.
 
    One task runs at a time (429 `PLACEMENT_CAPACITY_REACHED` until it finishes), which is the
    "one at a time" rule below, enforced. The task waits 15 s for a Postgres lock and then fails
@@ -382,6 +398,25 @@ Stop condition: 4 or 5 fails → this is a rollback trigger while the window is 
    API and of the placement task it starts (both still the old image). Do not place or roll
    back between the start of a `production` deploy and its smoke checks passing, and do not
    start a deploy while a run is `queued` or `running`. Nothing enforces this.
+
+   The same window exists in the workflow's `rolloutPolicyOnly=true` pass, which also
+   re-deploys the App stack when it runs.
+
+   **Executions cost Fargate capacity.** Anyone who can call the API's role can start
+   executions; each one that gets as far as a task uses 0.5 vCPU until the script exits (a
+   request that names no queued run exits in seconds). The API's own limits are the
+   one-task-at-a-time cap and 120 requests per staff member per 15 minutes, but neither binds
+   someone who has taken over the API. Recommended, **not built in this change** because it
+   belongs in the Observability stack: a CloudWatch alarm on `AWS/States` `ExecutionsStarted`
+   for `rfpilot-$ENV-placement` (for example more than 20 in 15 minutes) to the alert topic.
+
+   **What the task trusts.** The task holds the migration role and takes its instructions
+   from MongoDB. It checks each request again, but against MongoDB, which the API can write.
+   If the API were compromised, those checks would not stop it from having tenant rows moved
+   between organizations as MongoDB describes them. It could not run other SQL, change schema,
+   read the migration secret or change what the task runs. See `docs/DECISIONS.md`
+   (2026-11-17); a Postgres-side check that the API cannot write is a possible follow-up and
+   is not built.
 
    **Switching the API path off.** Remove `PLACEMENT_STATE_MACHINE_ARN` from the API container
    (comment out the `addEnvironment` line in `deploy/aws/lib/app-stack.ts` and deploy App, or
@@ -417,9 +452,16 @@ Stop condition: 4 or 5 fails → this is a rollback trigger while the window is 
      access.
    - A rollback with `task.code` `ROLLBACK_TASK_NOT_STARTED` or `ROLLBACK_TASK_LOST` and
      `status: succeeded`: the placement still stands; ask for the rollback again.
-   - `task.details.needsOperatorCheck: true` (a rollback that stopped after its MongoDB half):
-     run `verifyCustomerOrganizations.js` and compare the customer's Postgres rows with the
+   - `task.details.needsOperatorCheck: true` (a rollback whose MongoDB half finished, `state:
+     rolled_back`, but whose task failed or was lost before the Postgres commit): run
+     `verifyCustomerOrganizations.js` and compare the customer's Postgres rows with the
      holding tenant before touching the run again. Not rehearsed.
+   - `succeeded` with `task.details.auditUnconfirmed: true`: the placement was made and its
+     checks passed, but the task did not report back. The placement stands. Check that the
+     `organization.legacy_customer.placed` audit event exists for that customer.
+   - `running` for a while although `state` is `done`: the move has committed and the task is
+     doing its Postgres commit, checks and audit events. A rollback is refused
+     (`PLACEMENT_IN_PROGRESS`) until it finishes or is given up on.
    - Still `queued` or `running` and the heartbeat (`task.heartbeatAt`) is moving: it is
      working; a large customer takes minutes. If the task is plainly gone, wait out the 3
      minutes and read again. Do not edit the journal by hand.

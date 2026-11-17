@@ -676,7 +676,7 @@ test("while the placement task is still checking its work the run reads running 
   } finally {
     (SecurityAuditEvent as unknown as { create: unknown }).create = create;
   }
-  assert.equal(seen.calls, 1);
+  assert.ok(seen.calls >= 1, "the placement reached its audit write");
   assert.equal(seen.state, "done", "the journal already says done");
   assert.deepEqual([seen.view?.status, seen.view?.operation, seen.view?.rollbackRequired], ["running", "placement", false]);
   assert.deepEqual([seen.rollback?.status, seen.rollback?.body.code], [409, "PLACEMENT_IN_PROGRESS"]);

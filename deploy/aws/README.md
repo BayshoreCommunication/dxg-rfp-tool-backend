@@ -123,7 +123,13 @@ cd deploy/aws && npx cdk deploy Rfpilot-<env>-App -c imageTag=sha-<commit> --req
   `iam:PassRole` on its two roles, and what the `.sync` integration needs
   (`ecs:DescribeTasks`/`ecs:StopTask` on this cluster's tasks; three
   `events:` actions on the rule Step Functions manages,
-  `StepFunctionsGetEventsForECSTaskRule`). CloudFormation re-registers the
+  `StepFunctionsGetEventsForECSTaskRule`); only Step Functions can assume
+  it, for this account and this state machine (`aws:SourceAccount`,
+  `aws:SourceArn`). What remains trusted is MongoDB: the task acts on what
+  the placement journal and the organization records say, and the API can
+  write those (see `docs/DECISIONS.md`, 2026-11-17). An alarm on the
+  machine's `ExecutionsStarted` is recommended and not built (it belongs in
+  the Observability stack). CloudFormation re-registers the
   placement task definition with every image and updates the machine in the
   same deploy, so a placement runs the image the API runs. The deploy
   workflow is unchanged and its migrate revisions are never used for

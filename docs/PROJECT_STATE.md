@@ -684,6 +684,9 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
   deployed: legacy-customer placement on production runs in a one-off task that
   the admin API starts through a Step Functions state machine. The API is never
   given `POSTGRES_MIGRATION_URL` or permission to start ECS tasks.
+  Not built, for the owner to decide: a Postgres-side anchor the API's database
+  role cannot write (the task's checks all read MongoDB, which the API can write),
+  and an alarm on the state machine's `ExecutionsStarted`.
 - The admin app has no legacy-customer placement screen, although ORG-110
   describes one. Until it exists, placement is run with the ORG-110 script (or by
   calling the placement API once the change above is deployed).
