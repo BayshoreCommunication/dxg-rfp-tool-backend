@@ -184,7 +184,8 @@ test("the admin overview's recent clients show the staff organization's numbers 
     assert.deepEqual(data.totals, { totalClients: ROLES.length, totalProposals: 2, totalEmailSent: 7, totalClick: 0 });
     const clients = data.latestClients as Array<Record<string, unknown>>;
     assert.deepEqual(clients.map((client) => client.id).sort(), ROLES.map((role) => home.members[role].userId).sort());
-    for (const client of clients) assert.deepEqual(Object.keys(client), OVERVIEW_CLIENT_FIELDS);
+    // MongoDB decides the key order of a projected row; the set of fields is the contract.
+    for (const client of clients) assert.deepEqual(Object.keys(client).sort(), [...OVERVIEW_CLIENT_FIELDS].sort());
     const planner = clients.find((client) => client.id === home.members.planner.userId)!;
     // The same numbers the client list gives for this account.
     assert.deepEqual([planner.totalProposals, planner.totalEmailSent], [2, 7]);
