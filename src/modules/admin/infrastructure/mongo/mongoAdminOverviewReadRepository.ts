@@ -2,6 +2,7 @@ import EmailCampaign from "../../../../../modal/emailModel";
 import Proposal from "../../../../../modal/proposalsModel";
 import User from "../../../../../modal/userModel";
 import type { AdminOverviewReadRepository } from "../../domain/ports/adminOverviewReadRepository";
+import { accountUsage } from "./accountUsageCounts";
 import { tenantObjectId } from "../../../shared/tenancy/tenantContext";
 
 const CLIENT_ROLE_FILTER = {
@@ -12,7 +13,7 @@ export const mongoAdminOverviewReadRepository: AdminOverviewReadRepository = {
   async getOverview() {
     const organizationId = tenantObjectId();
     const tenantClients = { ...CLIENT_ROLE_FILTER, organizationId };
-    const [totalClients, totalProposals, emailStats, latestClients] =
+    const [totalClients, totalProposals, emailStats, latestAccounts] =
       await Promise.all([
         User.countDocuments(tenantClients),
         Proposal.countDocuments({ organizationId }),
@@ -35,39 +36,10 @@ export const mongoAdminOverviewReadRepository: AdminOverviewReadRepository = {
           email: string;
           company?: string | null;
           joinDate: Date;
-          totalProposals: number;
-          totalEmailSent: number;
         }>([
           { $match: tenantClients },
           { $sort: { createdAt: -1 } },
           { $limit: 10 },
-          {
-            $lookup: {
-              from: "proposals",
-              let: { userId: "$_id" },
-              pipeline: [
-                { $match: { $expr: { $eq: ["$userId", "$$userId"] } } },
-                { $count: "count" },
-              ],
-              as: "proposalStats",
-            },
-          },
-          {
-            $lookup: {
-              from: "emailcampaigns",
-              let: { userId: "$_id" },
-              pipeline: [
-                { $match: { $expr: { $eq: ["$userId", "$$userId"] } } },
-                {
-                  $group: {
-                    _id: null,
-                    totalEmailSent: { $sum: "$sentCount" },
-                  },
-                },
-              ],
-              as: "emailStats",
-            },
-          },
           {
             $project: {
               _id: 0,
@@ -76,16 +48,14 @@ export const mongoAdminOverviewReadRepository: AdminOverviewReadRepository = {
               email: 1,
               company: { $ifNull: ["$company", null] },
               joinDate: "$createdAt",
-              totalProposals: {
-                $ifNull: [{ $first: "$proposalStats.count" }, 0],
-              },
-              totalEmailSent: {
-                $ifNull: [{ $first: "$emailStats.totalEmailSent" }, 0],
-              },
             },
           },
         ]),
       ]);
+
+    // Counted inside this organization only, by the same queries as the staff client list.
+    const usageOf = await accountUsage(organizationId, latestAccounts.map((account) => account.id));
+    const latestClients = latestAccounts.map((account) => ({ ...account, ...usageOf(account.id) }));
 
     return {
       totals: {

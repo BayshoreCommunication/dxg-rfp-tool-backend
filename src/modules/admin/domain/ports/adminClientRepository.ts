@@ -1,5 +1,18 @@
+/** One account in the staff client list, as the repository reads it. */
+export type AdminClientRow = {
+  id: unknown;
+  name?: unknown;
+  email?: unknown;
+  company?: unknown;
+  joinDate?: unknown;
+  isBlocked?: unknown;
+  /** How many proposals the account owns in the caller's organization. A number, never the proposals. */
+  totalProposals?: unknown;
+  totalEmailSent?: unknown;
+};
+
 export type AdminClientList = {
-  clients: Record<string, unknown>[];
+  clients: AdminClientRow[];
   total: number;
 };
 

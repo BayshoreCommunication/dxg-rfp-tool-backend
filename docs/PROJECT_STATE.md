@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-11-16 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
+**Last updated:** 2026-11-17 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -642,11 +642,23 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
 
 **6. Known follow-ups.**
 
-- `GET /api/admin/proposals`, `GET /api/admin/proposals/:id` and the per-account
-  RFP count on `GET /api/all-clients` are not grant-checked and write no audit
-  event. They read only the staff member's own organization, which is the shared
-  organization that holds legacy customers until the cutover. The admin app
-  no longer calls the two `proposals` routes (ORG-406). Gate or remove them.
+- ~~`GET /api/admin/proposals`, `GET /api/admin/proposals/:id` and the per-account
+  proposal count on `GET /api/all-clients` are not grant-checked and write no audit
+  event.~~ Done on 2026-11-17 (`DECISIONS.md`; on `main` when the PR merges, not
+  released): the two `proposals` routes are removed and answer 404, so staff reach
+  proposals only under a support grant. The count on `GET /api/all-clients` stays
+  as an account-level count under the owner's decision of the same date; it is a
+  number, counted inside the staff member's organization only, and the list writes
+  no audit event (`API.md`, "Staff client list"). The sent-email total on that
+  list and both per-account numbers on `GET /api/admin/overview` are counted the
+  same way, inside the staff member's organization. Rows with no `organizationId`
+  are no longer counted (an undercount, not checked against production data).
+  What remains, found and not changed: the tenant scope guard does not see
+  `$lookup` stages, calls written with a type argument (`Model.aggregate<T>(`) or
+  raw `Model.collection.*` calls, and `EmailCampaign` is not in its model list;
+  `/api/all-clients` and `/api/admin/overview` check the account role but not the
+  account type; and the staff guards do not require the caller's organization to
+  be RFPilot's own (MongoDB stores no platform marker).
 - ~~Template audit actions (`proposal_template.*`) are not in the customer audit
   catalog.~~ Resolved by decision (2026-11-16, `DECISIONS.md`): customers do not see
   template actions in their audit log. The events are still written for staff and
