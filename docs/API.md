@@ -272,13 +272,13 @@ Mounted at `/api/v1/admin/organization-plans`. RFPilot staff only: the caller ne
 
 ### Organization account detail for RFPilot staff
 
-`GET /api/v1/admin/organizations/:organizationId` (`routes/adminOrganizationPlansRoute.ts`, `src/modules/entitlements/application/organizationAccountDetail.ts`). Read-only. RFPilot staff may see account-level information about any organization **without a support grant**, and nothing else (DECISIONS, 2026-11-17): the response is an allowlist of counts, settings and timestamps. It never carries a member list (no names, emails, roles or ids of members other than the Owner), and never customer content (proposal titles or bodies, vendor companies or contacts, template titles, ticket subjects or messages, invitation emails, team names, grant reasons, plan-change notes) or secrets (SSO issuer, client id or secret, domain verification tokens, hashes). Those still need a grant ("Support access grants").
+`GET /api/v1/admin/organizations/:organizationId` (`routes/adminOrganizationPlansRoute.ts`, `src/modules/entitlements/application/organizationAccountDetail.ts`). Read-only. RFPilot staff may see account-level information about any organization **without a support grant**, and nothing else (DECISIONS, 2026-11-17): the response is an allowlist of counts, settings and timestamps. It never carries a member list (no names, emails, roles or ids of members other than the Owner), and never customer content (proposal titles or bodies, vendor companies or contacts, template titles, ticket subjects or messages, invitation emails, team names, grant reasons, plan-change notes; the vendor list and templates are not read at all, not even counted) or secrets (SSO issuer, client id or secret, domain verification tokens, hashes). Those still need a grant ("Support access grants").
 
 - Who: the same guard as plan management, a staff membership role **and** an `admins` account with role `admin` or `super_admin`. Every customer role gets the route guard's plain 403; a `users` account holding a staff role gets 403 `PLAN_MANAGEMENT_FORBIDDEN`; no session 401. Rate-limited to 300 reads per 15 minutes per staff account.
 - Unlike the plan routes it also answers for a legacy holding tenant and for RFPilot's own organization, and says which it is (`organization.standing`).
 - Errors: 400 `INVALID_ORGANIZATION_ID` for an id that is not 24 hex characters; 404 `ORGANIZATION_NOT_FOUND` for an unknown organization.
 - Audit: each successful read writes one `platform.organization_account.read` event in the **staff** organization's audit trail (actor: the staff account; `targetType: "organization"`, `targetId`: the organization read; `metadata.agentAccountType: "admin"`) before anything is returned, and the read fails if the event can't be written. Nothing is written in the customer's organization, and the action is not in the customer audit catalog, so the customer's audit log never shows it. A refused, invalid or not-found request writes no event.
-- Cost: at most 16 MongoDB reads and 1 write per request, each read keyed on the organization id (13 run in parallel). Counts come from `countDocuments` or one `$group` per collection; the proposal figures are one `$group` over that organization's proposals.
+- Cost: at most 14 MongoDB reads and 1 write per request, each read keyed on the organization id (11 run in parallel). Counts come from `countDocuments` or one `$group` per collection; the proposal figures are one `$group` over that organization's proposals.
 
 `data` is `{ organization, owner, plan, counts, security, activity, supportAccess }`:
 
@@ -297,8 +297,6 @@ Mounted at `/api/v1/admin/organization-plans`. RFPilot staff only: the caller ne
 | `counts.members.byRole` | Active members per role: `owner`, `organization_admin`, `team_manager`, `planner`, `viewer`, and `other` for a member with none of those. A member holding two roles counts under each. |
 | `counts.teams { active, archived }` | Teams. |
 | `counts.proposals { total, archived }` | Proposals stored for the organization, and how many of them are archived. (`plan.proposals.created` is the lifetime counter the plan limit uses and never goes down.) |
-| `counts.organizationTemplates` | Published, unarchived organization templates. Personal templates are not counted. |
-| `counts.vendorListEntries { active, archived }` | Companies on the organization vendor list. |
 | `counts.openSupportTickets` | Helpdesk tickets with status `open` or `waiting_on_customer`. |
 | `security.signInMethods` | What the organization's members may use: `password` (absent when `PASSWORD_SIGN_IN_ENABLED=false`), `google`, `microsoft`, and `company_sso` when the organization's connection is active. Google and Microsoft are platform-wide options; this does not check that the provider is configured in the environment. |
 | `security.requireTwoFactor` | Whether the organization requires two-factor authentication. |

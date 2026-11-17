@@ -30,7 +30,7 @@ const row = (overrides) => ({
 });
 const emptyFacts = () => ({
   owner: null, memberGroups: [], pendingInvitations: 0, teams: { active: 0, archived: 0 },
-  proposals: { total: 0, archived: 0, lastUpdatedAt: null }, organizationTemplates: 0, vendors: { active: 0, archived: 0 },
+  proposals: { total: 0, archived: 0, lastUpdatedAt: null },
   openSupportTickets: 0, domains: [], ssoStatus: null, staffAccounts: 0, activeGrants: [],
 });
 
@@ -61,8 +61,6 @@ const setup = ({ env = {}, passwordSignInEnabled } = {}) => {
       pendingInvitations: 3,
       teams: { active: 2, archived: 1 },
       proposals: { total: 9, archived: 4, lastUpdatedAt: at("2026-11-15T12:00:00.000Z") },
-      organizationTemplates: 5,
-      vendors: { active: 12, archived: 2 },
       openSupportTickets: 1,
       domains: [{ domain: "acme.example", status: "verified", ...LEAKS }, { domain: "acme-events.example", status: "pending" }],
       ssoStatus: "active",
@@ -123,8 +121,6 @@ test("staff read an organization's account: identity, Owner, plan, counts, secur
       },
       teams: { active: 2, archived: 1 },
       proposals: { total: 9, archived: 4 },
-      organizationTemplates: 5,
-      vendorListEntries: { active: 12, archived: 2 },
       openSupportTickets: 1,
     },
     security: {
@@ -242,9 +238,9 @@ test("the read is not in the customer audit catalog, so it can never appear in a
 test("the Mongo source names the organization in every query and selects no customer content", () => {
   const source = fs.readFileSync(path.join(__dirname, "../src/modules/entitlements/infrastructure/mongoOrganizationAccountSource.ts"), "utf8");
   const calls = [...source.matchAll(/\b([A-Z]\w+)\.(find|findOne|countDocuments|aggregate)(?:<[^(]*>)?\(/g)];
-  // 14 queries: the organization row, then thirteen for the facts (the Owner takes two). With the
-  // last plan change (one, plus one for the staff name) a request runs at most 16 reads.
-  assert.equal(calls.length, 14);
+  // 12 queries: the organization row, then eleven for the facts (the Owner takes two). With the
+  // last plan change (one, plus one for the staff name) a request runs at most 14 reads.
+  assert.equal(calls.length, 12);
   for (const call of calls) {
     const rest = source.slice(call.index, call.index + 420);
     const scoped = /organizationId: id\b/.test(rest) || (call[1] === "Organization" && /_id: oid\(organizationId\)/.test(rest)) || (call[1] === "User" && /_id: membership\.userId/.test(rest));
@@ -256,9 +252,11 @@ test("the Mongo source names the organization in every query and selects no cust
   for (const forbidden of ["clientId", "clientSecretSealed", "issuer", "verificationToken", "tokenHash", "password", "contacts", "content", "subject", "eventName", "reason"]) {
     assert.ok(!new RegExp(`["\\s.]${forbidden}\\b`).test(source.replace(/\/\*[\s\S]*?\*\//g, "")), forbidden);
   }
-  for (const model of ["Proposal", "ProposalTemplate", "OrganizationVendor", "SupportTicket", "Team", "Invitation"]) {
+  for (const model of ["Proposal", "SupportTicket", "Team", "Invitation"]) {
     assert.ok(!new RegExp(`\\b${model}\\.(find|findOne)\\(`).test(source), `${model} is only counted`);
   }
+  // The vendor list and templates are outside the approved list: not read, not even counted.
+  assert.doesNotMatch(source, /organizationVendorModel|OrganizationVendor|proposalTemplateModel|ProposalTemplate/);
 });
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────────────────────

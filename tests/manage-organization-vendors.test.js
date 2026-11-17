@@ -278,9 +278,6 @@ test("the vendor list is reachable only through member-authenticated routes", ()
     "modal/organizationVendorModel.ts",
     "src/modules/organizationVendors/infrastructure/mongoOrganizationVendorRepository.ts",
     "scripts/purgeTestAccounts.ts",
-    // Staff account detail (owner decision 2026-11-17): counts the list's entries, never reads a
-    // row. tests/organization-account-detail.test.js fails if it starts selecting vendors.
-    "src/modules/entitlements/infrastructure/mongoOrganizationAccountSource.ts",
   ]);
   const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);

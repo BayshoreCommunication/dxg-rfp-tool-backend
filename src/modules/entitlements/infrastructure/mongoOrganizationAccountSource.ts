@@ -4,9 +4,7 @@ import Invitation from "../../../../modal/invitationModel";
 import Organization from "../../../../modal/organizationModel";
 import OrganizationDomain from "../../../../modal/organizationDomainModel";
 import OrganizationMembership from "../../../../modal/organizationMembershipModel";
-import OrganizationVendor from "../../../../modal/organizationVendorModel";
 import Proposal from "../../../../modal/proposalsModel";
-import ProposalTemplate from "../../../../modal/proposalTemplateModel";
 import SsoConnection from "../../../../modal/ssoConnectionModel";
 import SupportAccessGrant from "../../../../modal/supportAccessGrantModel";
 import SupportTicket from "../../../../modal/supportTicketModel";
@@ -21,8 +19,8 @@ import type {
 /* Organization account detail for RFPilot staff (owner decision, 2026-11-17). Only staff reach
    this (routes/adminOrganizationPlansRoute.ts), and every query names the one organization the
    request is about; nothing reads the caller's tenant context. Customer data is only counted:
-   no query here selects a proposal, vendor, template, ticket, invitation or member row to
-   return, and the Owner is the one person whose name and email are read. Each query uses an
+   no query here selects a proposal, ticket, invitation or member row to return, the vendor
+   list and templates are not read at all, and the Owner is the one person whose name and email are read. Each query uses an
    index that leads with organizationId, apart from the Owner's account, read by its _id. */
 
 const FIELDS = "name slug status kind plan proposalsCreated createdAt country requireTwoFactor requireSso allowManagerInvites autoApproveDomain";
@@ -72,7 +70,7 @@ export const mongoOrganizationAccountSource: OrganizationAccountSource = {
 
   async facts(organizationId, now) {
     const id = oid(organizationId);
-    const [owner, memberGroups, pendingInvitations, teams, proposals, organizationTemplates, vendors, openSupportTickets, domains, sso, staffAccounts, grants] =
+    const [owner, memberGroups, pendingInvitations, teams, proposals, openSupportTickets, domains, sso, staffAccounts, grants] =
       await Promise.all([
         ownerOf(id),
         OrganizationMembership.aggregate<{ _id: { status: string; roles: string[] }; count: number; lastSignedInAt: Date | null }>([
@@ -87,11 +85,6 @@ export const mongoOrganizationAccountSource: OrganizationAccountSource = {
         Proposal.aggregate<{ total: number; archived: number; lastUpdatedAt: Date | null }>([
           { $match: { organizationId: id } },
           { $group: { _id: null, total: { $sum: 1 }, archived: { $sum: { $cond: [{ $eq: ["$isArchived", true] }, 1, 0] } }, lastUpdatedAt: { $max: "$updatedAt" } } },
-        ]),
-        ProposalTemplate.countDocuments({ organizationId: id, scope: "organization", publishedAt: { $ne: null }, archived: false }),
-        OrganizationVendor.aggregate<{ _id: unknown; count: number }>([
-          { $match: { organizationId: id } },
-          { $group: { _id: "$archived", count: { $sum: 1 } } },
         ]),
         SupportTicket.countDocuments({ organizationId: id, status: { $in: ["open", "waiting_on_customer"] } }),
         OrganizationDomain.find({ organizationId: id }).select("domain status").sort({ domain: 1 }).limit(DOMAIN_LIMIT).lean<Row[]>(),
@@ -112,8 +105,6 @@ export const mongoOrganizationAccountSource: OrganizationAccountSource = {
       pendingInvitations,
       teams: splitByArchived(teams),
       proposals: { total: number(proposals[0]?.total), archived: number(proposals[0]?.archived), lastUpdatedAt: date(proposals[0]?.lastUpdatedAt) },
-      organizationTemplates,
-      vendors: splitByArchived(vendors),
       openSupportTickets,
       domains: domains.map((row) => ({ domain: String(row.domain ?? ""), status: String(row.status ?? "") })),
       ssoStatus: sso ? String(sso.status ?? "draft") : null,

@@ -247,8 +247,6 @@ test("staff read one organization's account and see only that organization's cou
     },
     teams: { active: 2, archived: 1 },
     proposals: { total: 3, archived: 1 },
-    organizationTemplates: 2,
-    vendorListEntries: { active: 2, archived: 1 },
     openSupportTickets: 2,
   });
   assert.deepEqual(data.security, {
@@ -290,8 +288,6 @@ test("the other organization answers its own numbers, with nothing of the first"
     members: { active: 5, deactivated: 0, pendingInvitations: 0, byRole: { owner: 1, organization_admin: 1, team_manager: 1, planner: 1, viewer: 1, other: 0 } },
     teams: { active: 1, archived: 0 },
     proposals: { total: 5, archived: 2 },
-    organizationTemplates: 0,
-    vendorListEntries: { active: 4, archived: 0 },
     openSupportTickets: 1,
   });
   assert.deepEqual(data.security, {

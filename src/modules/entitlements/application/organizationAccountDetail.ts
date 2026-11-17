@@ -9,10 +9,11 @@ import {
 
 /* Organization account detail for RFPilot staff (owner decision, 2026-11-17). Staff may see
    account-level information about any organization without a support grant, and nothing else:
-   no member list and no customer content (proposals, vendors, templates, ticket text). So this
-   view is an allowlist built field by field from counts, settings and timestamps. The one person
-   it names is the Owner, who is the account contact. Each read is recorded in the staff
-   organization's audit trail, never in the customer's. */
+   no member list and no customer content (proposals, vendors, templates, ticket text); the
+   vendor list and templates are not even counted. So this view is an allowlist built field by
+   field from counts, settings and timestamps. The one person it names is the Owner, who is the
+   account contact. Each read is recorded in the staff organization's audit trail, never in the
+   customer's. */
 
 export const ORGANIZATION_ACCOUNT_AUDIT = { read: "platform.organization_account.read" } as const;
 
@@ -36,8 +37,6 @@ export type OrganizationAccountFacts = {
   pendingInvitations: number;
   teams: { active: number; archived: number };
   proposals: { total: number; archived: number; lastUpdatedAt: Date | null };
-  organizationTemplates: number;
-  vendors: { active: number; archived: number };
   openSupportTickets: number;
   domains: Array<{ domain: string; status: string }>;
   /** The company SSO connection's status, or null when there is none. */
@@ -194,8 +193,6 @@ export const createOrganizationAccountDetail = (dependencies: Dependencies) => {
           },
           teams: { active: facts.teams.active, archived: facts.teams.archived },
           proposals: { total: facts.proposals.total, archived: facts.proposals.archived },
-          organizationTemplates: facts.organizationTemplates,
-          vendorListEntries: { active: facts.vendors.active, archived: facts.vendors.archived },
           openSupportTickets: facts.openSupportTickets,
         },
         security: {
