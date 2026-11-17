@@ -143,6 +143,10 @@ Every line must be "yes" or a recorded decision. Any "no" is a no-go.
    and knowledge grounding.
 6. **Placement list ready.** For every legacy customer: new organization or existing one, and
    the role. Customers are locked out until placed. Agree who places them and how fast.
+   Every staff member who will place customers through the admin API needs an unblocked
+   document in the `admins` collection with role `admin`, `super_admin` or `superadmin`, and
+   an active staff membership in the staff organization. Without both, the API answers 403
+   (`PLACEMENT_FORBIDDEN`) or the task refuses the request (`PLACEMENT_REQUEST_INVALID`).
 7. **Plans decided.** The list of organizations that get `full_access` (step 9.1).
 8. **Code deployed.** The production image contains the ORG-501 fixes (the verifier's Postgres
    check and rollback of membership status), and nobody will deploy during the window: a deploy
@@ -353,7 +357,11 @@ Stop condition: 4 or 5 fails → this is a rollback trigger while the window is 
    - the state machine shows one execution, named with a 64-character hex name, that ends
      `SUCCEEDED`; if it ends `FAILED`, its history carries ECS's stop reason (an image pull
      failure, a missing secret, `AccessDenied` on `ecs:RunTask` or `iam:PassRole` for the state
-     machine's role, a read-only filesystem error);
+     machine's role, a read-only filesystem error). If Step Functions cannot assume the state
+     machine's role at all (its trust policy names this account and this state machine's ARN;
+     a renamed machine or a wrong region or account in that ARN breaks it), the execution fails
+     at once, before any task exists, with an error saying the role could not be assumed; the
+     API then gives up on the run after 4 minutes with nothing moved;
    - `aws logs tail /rfpilot/$ENV/placement --since 15m` shows `"mode":"task"` with
      `"ok":true`;
    - `GET …/placements/:runId` reaches `succeeded` with `verification.passed: true`, and the
@@ -384,6 +392,9 @@ Stop condition: 4 or 5 fails → this is a rollback trigger while the window is 
    run_migrate_task "node dist/scripts/placeLegacyCustomer.js --email=<customer> --admin-email=<DXG admin> --new-org='<name>'"
    run_migrate_task "node dist/scripts/placeLegacyCustomer.js --email=<customer> --admin-email=<DXG admin> --org-slug=<slug> --role=planner"
    ```
+   Do not run `--rollback=<runId>` by hand while the API shows that run `running`: until the
+   placement task has finished its checks the run is refused (`PLACEMENT_IN_PROGRESS`), by
+   hand as through the API.
    A hand-run placement does not count toward the API's cap, so do not run one while the API
    shows a run `queued` or `running`. A second placement of a user who is already being placed
    is refused either way (`PLACEMENT_IN_PROGRESS`).
@@ -457,8 +468,17 @@ Stop condition: 4 or 5 fails → this is a rollback trigger while the window is 
      `verifyCustomerOrganizations.js` and compare the customer's Postgres rows with the
      holding tenant before touching the run again. Not rehearsed.
    - `succeeded` with `task.details.auditUnconfirmed: true`: the placement was made and its
-     checks passed, but the task did not report back. The placement stands. Check that the
-     `organization.legacy_customer.placed` audit event exists for that customer.
+     checks passed, but the task then failed (`task.code` `PLACEMENT_TASK_ERROR`, usually the
+     audit write) or did not report back. The placement stands. Check that the
+     `organization.legacy_customer.placed` audit event exists for that customer; if it does
+     not, record the placement in the change log by hand.
+   - `failed` with `task.code` `PLACEMENT_TASK_ERROR` and `rollbackRequired: true`: the move
+     committed and the task failed before its checks passed (the checks themselves failed to
+     run, or could not be recorded). The customer's records are in the target, unchecked. Read
+     the task's log, then roll the run back.
+   - The task's log says `PLACEMENT_TASK_SUPERSEDED` or `PLACEMENT_TASK_RESULT_NOT_RECORDED`
+     and the task exited non-zero: it found the API had already given up on it and stopped.
+     The run shows what the API recorded; act on that.
    - `running` for a while although `state` is `done`: the move has committed and the task is
      doing its Postgres commit, checks and audit events. A rollback is refused
      (`PLACEMENT_IN_PROGRESS`) until it finishes or is given up on.
