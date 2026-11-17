@@ -106,21 +106,33 @@ cd deploy/aws && npx cdk deploy Rfpilot-<env>-App -c imageTag=sha-<commit> --req
   singleton `cron` service, which deliberately replaces stop-then-start.
   WebSocket notification fan-out remains process-local, so horizontal
   steady-state API scaling still requires Redis pub/sub fan-out.
-- **The API may start exactly one kind of task: legacy-customer placement on
-  the migrate task definition** (decision 2026-11-17). Its task role holds
-  `ecs:RunTask` on this stack's migrate task definition revision (in this
-  cluster only) and `iam:PassRole` on that task definition's two roles (to
-  `ecs-tasks.amazonaws.com` only). It has no `POSTGRES_MIGRATION_URL`, no
-  `ecs:RegisterTaskDefinition` and no `ecs:DescribeTasks`; do not widen
-  either statement to a family wildcard or to other roles. The API is told
-  what to start through five plain `PLACEMENT_TASK_*` variables. The
-  revision is the one CloudFormation registers with each image, so a
-  placement always runs the API's own image. The deploy workflow's own
-  migrate revisions (registered before the services roll) are never run by
-  the API, and the workflow is unchanged. After a deploy that fails and
-  rolls back, the API keeps pointing at its own (old) revision.
-  Manual `run-task` on the migrate family keeps working as before.
-  Operating it: `docs/runbooks/ORG_TENANCY_CUTOVER.md`, section 9 step 2.
+- **The API cannot start ECS tasks. For legacy-customer placement it may
+  start executions of one Step Functions state machine**
+  (`rfpilot-<env>-placement`; decision 2026-11-17). Its task role holds
+  `states:StartExecution` on that machine and `states:DescribeExecution` on
+  its executions, and no `ecs:*` or `iam:PassRole`: IAM cannot restrict what
+  an `ecs:RunTask` call overrides, so permission to run a task that holds the
+  migration role would be the migration role. The state machine's definition
+  fixes the cluster, the task definition (`rfpilot-<env>-placement`, its own,
+  holding only `MONGODB_URL` and `POSTGRES_MIGRATION_URL`), the private
+  subnets, the migrate security group, the container and the command; the
+  only input it reads is the run id. Do not add a `.$` path to that
+  definition, do not give the API any ECS permission, and do not point the
+  machine at the migrate task definition (whose command can be anything).
+  The machine's role holds `ecs:RunTask` on that one task definition,
+  `iam:PassRole` on its two roles, and what the `.sync` integration needs
+  (`ecs:DescribeTasks`/`ecs:StopTask` on this cluster's tasks; three
+  `events:` actions on the rule Step Functions manages,
+  `StepFunctionsGetEventsForECSTaskRule`). CloudFormation re-registers the
+  placement task definition with every image and updates the machine in the
+  same deploy, so a placement runs the image the API runs. The deploy
+  workflow is unchanged and its migrate revisions are never used for
+  placement. The machine has no CloudWatch logging (that would need
+  wildcard log-delivery permissions on its role); each execution's history
+  is kept by Step Functions for 90 days and the task logs to
+  `/rfpilot/<env>/placement`. Manual `run-task` on the migrate family keeps
+  working as before. Operating it, switching it off, and "no placements
+  during a deploy": `docs/runbooks/ORG_TENANCY_CUTOVER.md`, section 9 step 2.
 - **ClamAV is fail-closed by design.** If the `clamav` service is down,
   vendor uploads 503 and planner sources sit in `scan_failed` (retryable) —
   that is intended behavior, not an outage to work around. First start
