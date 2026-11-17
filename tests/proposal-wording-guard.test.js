@@ -19,12 +19,41 @@ const proposalFormUi = require("../contracts/proposal/v1/proposal-form-ui.v1.jso
 // "RFP", "RFPs", "RFP's" as a word of its own: not RFPilot, not part of an identifier.
 const RFP_NOUN = /(?<![A-Za-z0-9_])RFP(?:s|'s|’s)?(?![A-Za-z0-9_])/;
 
-// Blanks out comments but keeps the line count, so a finding points at the right line.
-// "//" counts as a comment only at the start of a line or after a space (not in "https://").
-const withoutComments = (source) =>
-  source
-    .replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, " "))
-    .replace(/(^|\s)\/\/.*$/gm, "$1");
+// Blanks out comments but keeps the line count, so a finding points at the right line. It walks
+// the text and knows when it is inside a string, so "/*" in a JSON pointer ("/content/rooms/*/id")
+// or "//" in a URL is text, not a comment. Template literals are treated as strings from one
+// backtick to the next; code inside `${...}` is checked as text, which errs towards a finding.
+const withoutComments = (source) => {
+  let out = "";
+  let i = 0;
+  let quote = null;
+  const blank = (text) => text.replace(/[^\n]/g, " ");
+  while (i < source.length) {
+    const ch = source[i];
+    if (quote) {
+      if (ch === "\\" && i + 1 < source.length) { out += ch + source[i + 1]; i += 2; continue; }
+      // An unterminated ' or " ends at the line break (JSON and JS strings are single-line).
+      if (ch === quote || (ch === "\n" && quote !== "`")) quote = null;
+      out += ch; i += 1; continue;
+    }
+    if (ch === '"' || ch === "`") { quote = ch; out += ch; i += 1; continue; }
+    // An apostrophe after a letter is prose in JSX or HTML text ("isn't"), not a string opener.
+    if (ch === "'" && !/[A-Za-z0-9]/.test(source[i - 1] ?? "")) { quote = ch; out += ch; i += 1; continue; }
+    if (source.startsWith("/*", i) || source.startsWith("<!--", i)) {
+      const close = source.startsWith("/*", i) ? "*/" : "-->";
+      const end = source.indexOf(close, i + 2);
+      const stop = end === -1 ? source.length : end + close.length;
+      out += blank(source.slice(i, stop)); i = stop; continue;
+    }
+    if (source.startsWith("//", i)) {
+      const end = source.indexOf("\n", i);
+      const stop = end === -1 ? source.length : end;
+      out += blank(source.slice(i, stop)); i = stop; continue;
+    }
+    out += ch; i += 1;
+  }
+  return out;
+};
 
 const repoRoot = path.join(__dirname, "..");
 // Everything that can put text in front of a person. `contracts/generated` holds types only and
@@ -46,9 +75,6 @@ const ALLOWED = [
   ["src/modules/platformAssistant/platformKnowledge.ts", "Review the generated RFP for gaps or blocking guidance", "assistant knowledge text (retrieval)"],
   ["src/modules/platformAssistant/platformKnowledge.ts", "save a draft or generate/update the RFP at the end.", "assistant knowledge text (retrieval)"],
   ["src/modules/platformAssistant/platformKnowledge.ts", "save a draft or explicitly generate/update the RFP.", "assistant knowledge text (retrieval)"],
-  ["src/modules/platformAssistant/deterministicAssistantProvider.ts", "explicitly generate or update the RFP, then use its send action", "assistant answer, part of the evaluated answer set"],
-  ["src/modules/platformAssistant/deterministicAssistantProvider.ts", "Review the generated RFP for gaps, then use its send action", "assistant answer, part of the evaluated answer set"],
-  ["src/modules/platformAssistant/deterministicAssistantProvider.ts", "explicitly generate/update the RFP at the end.", "assistant answer, part of the evaluated answer set"],
   // Requirement titles are derived from field keys (rfpTimelineNotes), stored in Postgres
   // requirement sets and sent to models as requirement text.
   ["src/modules/requirementRegistry/generator.ts", 'rfp: "RFP"', "acronym table for derived requirement titles (AI input, stored)"],
@@ -113,7 +139,8 @@ test("the audit log's categories, action labels and CSV say proposal", () => {
   assert.equal(AUDIT_CATALOG["proposal.share_revoked"].label, "Proposal share removed");
   assert.equal(AUDIT_CATALOG["proposal.owner.reassigned"].label, "Proposal owner reassigned");
 
-  // The export carries those labels and the stored names (`proposal`, `proposalId`), never "rfp".
+  // The export carries those labels and exports names and values exactly as stored: target type
+  // `proposal`, detail key `proposalId`. Nothing in this row is stored with "rfp".
   const csv = auditCsv([{
     id: "e1", occurredAt: "2026-11-16T00:00:00.000Z", action: "proposal.share_granted", label: AUDIT_CATALOG["proposal.share_granted"].label,
     category: "sharing", decision: "created", reason: "shared", actor: { kind: "system", id: null, name: "System" },
@@ -123,6 +150,24 @@ test("the audit log's categories, action labels and CSV say proposal", () => {
   assert.match(csv, /"Proposal shared","Proposal sharing"/);
   assert.match(csv, /"proposal","f{24}"/);
   assert.match(csv, /"proposalId: f{24}"/);
+
+  // Stored codes keep their names (project rule), so a support-access row still carries
+  // `scope: rfp` and `operation: rfp.read` / `rfp.list` / `ticket.rfp.list` in its Details cell.
+  // What must hold: every label cell says Proposal or nothing, and "RFP" as a word never appears.
+  const supportCsv = auditCsv(["rfp.read", "rfp.list", "ticket.rfp.list"].map((operation, index) => ({
+    id: `s${index}`, occurredAt: "2026-11-16T00:00:00.000Z", action: "support_access.used", label: AUDIT_CATALOG["support_access.used"].label,
+    category: "support_access", decision: "allowed", reason: null, actor: { kind: "support", id: "agent-1", name: SUPPORT_ACTOR_LABEL },
+    target: { type: "proposal", id: "f".repeat(24), name: null }, details: { grantId: "g1", scope: "rfp", operation },
+  })));
+  const supportRows = supportCsv.trimEnd().split("\r\n").slice(1);
+  assert.equal(supportRows.length, 3);
+  for (const row of supportRows) {
+    assert.doesNotMatch(row, RFP_NOUN);
+    assert.match(row, /"Support access used","RFPilot Support access"/);
+    assert.match(row, /"grantId: g1; scope: rfp; operation: (ticket\.)?rfp\.(read|list)"/);
+    // Outside the Details cell (stored codes), no cell says rfp.
+    assert.doesNotMatch(row.replace(/"grantId: [^"]*"/, ""), /rfp(?!ilot)/i);
+  }
 });
 
 test("customers do not see template actions in their audit log (decision 2026-11-16)", () => {
@@ -162,5 +207,11 @@ test("the guard tells the noun from the product name and from identifiers", () =
   for (const text of ["New RFP", "your RFPs", "this RFP's owner", "RFP Timeline", '"RFP not found."']) assert.ok(RFP_NOUN.test(text), text);
   for (const text of ["RFPilot Support", "OWNER_HAS_RFPS INVALID_RFP_SELECTION rfpId RfpShare", "rfp.created"]) assert.equal(RFP_NOUN.test(text), false, text);
   assert.doesNotMatch(withoutComments('a // RFP\n"https://x" /* RFP\nRFP */ b'), RFP_NOUN);
+  // A "/*" inside a string is not a comment: the JSON-pointer keys in the guidance module used to
+  // open one and hide every string up to the next "*/".
+  assert.deepEqual(leftoversIn("x.ts", '"/a/*": "RFP Timeline",\n"/b/*/c": 1'), ['x.ts:1 "/a/*": "RFP Timeline",']);
+  assert.deepEqual(leftoversIn("x.ts", "const u = 'https://x/*'; const m = 'An RFP'; // RFP\n/* RFP */ const n = `RFP ${1}`;").length, 2);
+  assert.deepEqual(leftoversIn("x.ts", 'const ok = "it\'s fine"; /* RFP */ // RFP'), []);
+  assert.equal(withoutComments('a /* b\nc */ d\n"e" // f').split("\n").length, 3);
   assert.deepEqual(leftoversIn("x.ts", 'const m = "This RFP has been sent";\n// an RFP\n'), ['x.ts:1 const m = "This RFP has been sent";']);
 });

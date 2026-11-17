@@ -574,7 +574,7 @@ test("template copy says proposal, never RFP", () => {
     const source = fs.readFileSync(path.join(__dirname, "..", file), "utf8");
     const messages = [...source.matchAll(/"([A-Z][^"\n]*[.!?]|Validation failed)"/g)].map((match) => match[1]);
     assert.ok(messages.length > 0, file);
-    for (const message of messages) assert.doesNotMatch(message, /\bRFP/, `${file}: ${message}`);
+    for (const message of messages) assert.doesNotMatch(message, /(?<![A-Za-z0-9_])RFP(?:s|'s|’s)?(?![A-Za-z0-9_])/, `${file}: ${message}`);
     assert.ok(messages.some((message) => /proposal/i.test(message)), file);
   }
 });

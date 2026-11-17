@@ -84,7 +84,7 @@ test("plan errors say proposal, never RFP, and carry distinct codes", () => {
   for (const feature of ["vendorResponses", "proposalIntelligence"]) {
     const locked = new PlanFeatureLockedError("free_trial", feature);
     assert.equal(locked.code, "PLAN_FEATURE_LOCKED");
-    assert.doesNotMatch(`${locked.message}${limit.message}`, /\bRFP/);
+    assert.doesNotMatch(`${locked.message}${limit.message}`, /(?<![A-Za-z0-9_])RFP(?:s|'s|’s)?(?![A-Za-z0-9_])/);
   }
 });
 

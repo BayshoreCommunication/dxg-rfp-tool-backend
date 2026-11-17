@@ -325,7 +325,7 @@ test('a free-trial organization at its limit is refused when creating from a tem
     { code: 'PLAN_LIMIT_REACHED', plan: 'free_trial', limit: 2, created: 2, success: false },
   );
   assert.match(refused.body.message, /2 proposals/);
-  assert.doesNotMatch(refused.body.message, /RFP/);
+  assert.doesNotMatch(refused.body.message, /(?<![A-Za-z0-9_])RFP(?:s|'s|’s)?(?![A-Za-z0-9_])/);
   assert.equal(await Proposal.countDocuments({ organizationId: free }), 2);
   assert.equal((await Organization.findById(free).select('proposalsCreated').lean())!.proposalsCreated, 2);
   // Templates themselves stay available at the limit; only a new RFP needs a slot.

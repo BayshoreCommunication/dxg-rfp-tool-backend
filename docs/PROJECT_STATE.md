@@ -697,16 +697,21 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
   texts; the dashboard's generated copy is regenerated in its own pull request),
   refusal and error messages (`OWNER_HAS_RFPS` and the other member, template, plan,
   support-access and award refusals: codes unchanged), the headline "This proposal
-  has been sent to vendors", the dashboard list's "Untitled proposal" and the vendor
-  confirmation email's sign-off. `tests/proposal-wording-guard.test.js` fails on a
+  has been sent to vendors", the dashboard list's "Untitled proposal", the vendor
+  confirmation email's sign-off and the assistant's three fixed answers that said
+  "generate or update the RFP". The assistant's field guidance reads the form
+  contract, so its evidence for those three fields changed with it (guidance release
+  `proposal-form-guidance.v5`); "rfp timeline" is kept as an alias so a question that
+  uses the old name still finds the field. `tests/proposal-wording-guard.test.js` fails on a
   new standalone "RFP" in `src/`, the legacy top-level folders or `contracts/`, with
   a listed exception for each one that stays. Still saying "RFP":
-  - AI prompts, assistant knowledge and assistant answers
-    (`platformAssistant/platformKnowledge.ts`, `deterministicAssistantProvider.ts`,
-    `liveAi/operations.ts`, the vendor fact-mapping instruction, the legacy
+  - AI prompts and assistant knowledge text, which a model reads
+    (`platformAssistant/platformKnowledge.ts`, `liveAi/operations.ts`, the vendor fact-mapping instruction, the legacy
     extraction prompt) and requirement titles derived from field keys
     (`requirementRegistry/generator.ts`, "RFP Timeline Notes"). Changing these
     changes model input and needs its own evaluation run.
+  - Stored codes shown as stored: support-access audit rows export `scope: rfp`
+    and `operation: rfp.read` in the CSV's Details column. Codes keep their names.
   - Rows already stored: notifications, helpdesk messages, canned replies, saved
     requirement sets and audit rows keep the text they were written with. No
     backfill is planned.

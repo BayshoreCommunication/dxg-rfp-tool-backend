@@ -348,7 +348,8 @@ test("the export applies the list's filters and tenant, and escapes member-contr
   assert.equal(auditCsv([]).trimEnd().split("\r\n").length, 1);
 
   // Customer-facing wording is "Proposal" (2026-11-12): the label says so, and the file no longer
-  // rewords internal names to "rfp". Target type, detail keys and values are exported as stored.
+  // rewords internal names to "rfp". Target type, detail keys and values are exported as stored,
+  // so a stored code that contains "rfp" (support access `scope: rfp`, `operation: rfp.read`) stays.
   const shared = createAuditLog({ events: fakeEvents([event({ action: "proposal.share_granted", targetType: "proposal", targetId: "f".repeat(24), decision: "created", reason: "shared", metadata: { proposalId: "f".repeat(24), domain: "proposals.example.test" } })]) });
   const sharedCsv = (await shared.exportCsv(actor("owner"), {})).csv.split("\r\n")[1];
   assert.ok(sharedCsv.includes('"Proposal shared"'));
@@ -356,5 +357,5 @@ test("the export applies the list's filters and tenant, and escapes member-contr
   assert.ok(sharedCsv.includes('"proposal"'));
   assert.ok(sharedCsv.includes("proposalId: " + "f".repeat(24)));
   assert.ok(sharedCsv.includes("domain: proposals.example.test"));
-  assert.equal(/rfp/i.test(sharedCsv), false);
+  assert.equal(/rfp/i.test(sharedCsv), false, "nothing in a sharing row is stored with rfp");
 });
