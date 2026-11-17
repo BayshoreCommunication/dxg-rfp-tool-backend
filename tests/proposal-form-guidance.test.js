@@ -35,7 +35,7 @@ test("proposal field guidance covers the canonical form contract", () => {
 });
 
 test("proposal field registry has complete stable metadata", () => {
-  assert.equal(PROPOSAL_FORM_GUIDANCE_VERSION, "proposal-form-guidance.v4");
+  assert.equal(PROPOSAL_FORM_GUIDANCE_VERSION, "proposal-form-guidance.v5");
   assert.equal(PROPOSAL_FORM_SECTIONS.length, 9);
   assert.equal(ALL_PROPOSAL_FORM_SECTIONS.length, 10);
   assert.ok(!PROPOSAL_FORM_SECTIONS.some((section) => section.id === "video_recording"));
@@ -212,4 +212,39 @@ test("conditional field guidance retains machine-readable dependencies", () => {
     proposalFormGuidanceForField("/content/videoRecording/cameraCount"),
     undefined,
   );
+});
+
+// The timeline field's label is "Proposal Timeline" (wording rule, 2026-11-12). Planners who
+// learned it as "RFP Timeline" still ask for it by that name, so the old name stays an alias.
+test("the timeline field is found by its label and by its former name", () => {
+  const { classifyAssistantIntent } = require("../src/modules/platformAssistant/intentRouter");
+  for (const query of [
+    "What goes in the proposal timeline field?",
+    "what goes in the rfp timeline field?",
+    "RFP Timeline",
+    "Which milestones belong in the proposal timeline?",
+    "what information should the rfp timeline include",
+  ]) {
+    const evidence = proposalFormGuidanceEvidenceForQuery(query, 3);
+    assert.equal(evidence[0]?.title, "Event Overview: Proposal Timeline", query);
+    assert.equal(evidence[0]?.releaseId, PROPOSAL_FORM_GUIDANCE_VERSION);
+  }
+  // The alias names the field for intent routing exactly as the label does.
+  const byLabel = classifyAssistantIntent({ query: "what should I enter in the proposal timeline?", uiContext: null });
+  const byAlias = classifyAssistantIntent({ query: "what should I enter in the rfp timeline?", uiContext: null });
+  assert.deepEqual(byAlias, byLabel);
+  // The alias is for matching only: what the planner reads says "Proposal Timeline".
+  const field = proposalFormGuidanceForField("/content/event/rfpTimelineNotes");
+  assert.equal(field.label, "Proposal Timeline");
+  assert.doesNotMatch(JSON.stringify(proposalFormGuidanceEvidenceForField("/content/event/rfpTimelineNotes")), /RFP Timeline/i);
+});
+
+test("a load-in question still ranks the load-in time field first", () => {
+  const loadIn = PROPOSAL_FORM_FIELD_GUIDANCE.find((field) => field.label === "Load In At");
+  assert.ok(loadIn, "the Load In At field exists");
+  for (const query of ["What do I enter in the Load In At field?", "what should I fill in for load in at"]) {
+    const evidence = proposalFormGuidanceEvidenceForQuery(query, 3);
+    assert.equal(evidence[0]?.title, `${loadIn.sectionLabel}: Load In At`, query);
+  }
+  assert.ok(!proposalFormGuidanceEvidenceForQuery("What do I enter in the Load In At field?", 5).some((item) => /Proposal Timeline/.test(item.title)));
 });

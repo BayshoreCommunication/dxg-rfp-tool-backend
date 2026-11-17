@@ -5,7 +5,7 @@
       "label": "Event Name",
       "requirement": "required",
       "controlType": "text",
-      "helperText": "Enter the full official event name exactly as it should appear on the RFP cover and running headers.",
+      "helperText": "Enter the full official event name exactly as it should appear on the proposal cover and running headers.",
       "example": "Apex Dynamics Global Summit 2026"
     },
     "/content/event/edition": {
@@ -194,7 +194,7 @@
       "example": "A three-day annual customer conference with one general session and six breakout rooms."
     },
     "/content/event/rfpTimelineNotes": {
-      "label": "RFP Timeline",
+      "label": "Proposal Timeline",
       "requirement": "optional",
       "controlType": "long_text",
       "helperText": "Add useful procurement milestones or timing notes; exact submission and selection dates are collected later in Investment & Evaluation.",
@@ -204,7 +204,7 @@
       "label": "Video Recording Required",
       "requirement": "required",
       "controlType": "radio",
-      "helperText": "Choose whether any sessions must be recorded. Selecting Yes opens the camera, recording-format, and deliverable fields; selecting No omits the recording scope from the RFP.",
+      "helperText": "Choose whether any sessions must be recorded. Selecting Yes opens the camera, recording-format, and deliverable fields; selecting No omits the recording scope from the proposal.",
       "example": "Yes — Record sessions during the event",
       "options": [
         { "value": "true", "label": "Yes — Record sessions during the event" },

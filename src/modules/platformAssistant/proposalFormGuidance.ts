@@ -6,7 +6,7 @@ import {
 } from "../proposals/domain/workflowSections";
 import type { AssistantPromptEvidence } from "./domain";
 
-export const PROPOSAL_FORM_GUIDANCE_VERSION = "proposal-form-guidance.v4";
+export const PROPOSAL_FORM_GUIDANCE_VERSION = "proposal-form-guidance.v5";
 export const PROPOSAL_FORM_SCHEMA_VERSION = "proposal.v1";
 export const PROPOSAL_FORM_GUIDANCE_OWNER = "Product Operations";
 export const PROPOSAL_FORM_GUIDANCE_REVIEW_DATE = "2026-10-29";
@@ -267,7 +267,7 @@ const LABEL_OVERRIDES: Readonly<Record<string, string>> = Object.freeze({
   "/content/event/primaryAudiences/*": "Primary Audience",
   "/content/event/sacredConstraints": "Sacred Constraints",
   "/content/event/organizationBackground": "About the Organization",
-  "/content/event/rfpTimelineNotes": "RFP Timeline",
+  "/content/event/rfpTimelineNotes": "Proposal Timeline",
   "/content/venueSchedule/unionVenue": "Is This a Union Venue?",
   "/content/venueSchedule/roomCount": "Number of Event Rooms",
   "/content/rooms/*/function": "Room / Function Name",
@@ -384,6 +384,13 @@ const sectionForPath = (path: string): ProposalFormSection | undefined =>
       (root) => path === root || path.startsWith(`${root}/`) || path.startsWith(`${root}/*/`),
     ),
   );
+
+// Names planners still type for a field whose label changed. The label a planner reads is
+// "Proposal Timeline" (wording rule, 2026-11-12), but "what goes in the rfp timeline field?"
+// has to keep finding it. Lower case; matched like the label itself. Not shown anywhere.
+const LABEL_ALIASES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "/content/event/rfpTimelineNotes": Object.freeze(["rfp timeline"]),
+});
 
 const humanize = (value: string): string =>
   value
@@ -713,6 +720,18 @@ export const proposalFormGuidanceEvidenceForField = (
   return field ? evidenceForField(field) : undefined;
 };
 
+// The label and any alias, lower case: every phrase that names this field in a question.
+const fieldNames = (field: ProposalFormFieldGuidance): readonly string[] => [
+  field.label.toLocaleLowerCase("en-US"),
+  ...(LABEL_ALIASES[field.canonicalPath] ?? []),
+];
+
+// Whether a lower-cased question names the field, by its label or an alias.
+export const proposalFormFieldNamedIn = (
+  field: ProposalFormFieldGuidance,
+  normalizedQuery: string,
+): boolean => fieldNames(field).some((name) => normalizedQuery.includes(name));
+
 export const proposalFormGuidanceEvidenceForQuery = (
   query: string,
   limit = 3,
@@ -723,7 +742,7 @@ export const proposalFormGuidanceEvidenceForQuery = (
       query,
     ) ||
     PROPOSAL_FORM_FIELD_GUIDANCE.some((field) =>
-      normalized.includes(field.label.toLocaleLowerCase("en-US")),
+      proposalFormFieldNamedIn(field, normalized),
     );
   if (!requestsFieldGuidance) return [];
   const terms = new Set(normalizedTerms(query));
@@ -735,10 +754,13 @@ export const proposalFormGuidanceEvidenceForQuery = (
       field.purpose,
     ].join(" ");
     const fieldTerms = normalizedTerms(searchable);
-    const labelTerms = normalizedTerms(field.label);
-    const exactLabel =
-      normalized.includes(field.label.toLocaleLowerCase("en-US")) ||
-      (labelTerms.length > 0 && labelTerms.every((term) => terms.has(term)));
+    const exactLabel = fieldNames(field).some((name) => {
+      const nameTerms = normalizedTerms(name);
+      return (
+        normalized.includes(name) ||
+        (nameTerms.length > 0 && nameTerms.every((term) => terms.has(term)))
+      );
+    });
     const score =
       (exactLabel ? 20 : 0) +
       fieldTerms.filter((term) => terms.has(term)).length;

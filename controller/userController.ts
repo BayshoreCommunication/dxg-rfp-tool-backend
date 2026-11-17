@@ -214,7 +214,7 @@ export const deleteUser = async (req: AuthRequest, res: Response): Promise<void>
       res.status(409).json({
         success: false,
         code: "OWNER_HAS_RFPS",
-        message: `This user still owns ${count} RFP${count === 1 ? "" : "s"}. Reassign them first.`,
+        message: `This user still owns ${count} proposal${count === 1 ? "" : "s"}. Reassign them first.`,
         ownedRfpCount: count,
       });
       return;

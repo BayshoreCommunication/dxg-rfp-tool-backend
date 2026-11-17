@@ -55,7 +55,7 @@ const ownerOnly = () => refuse(403, "OWNER_ONLY", "Only the organization's Owner
 const lastOwner = () =>
   refuse(409, "LAST_OWNER", "The Owner can't be demoted or deactivated. Transfer ownership to another member first.");
 export const ownerHasRfps = (count: number) =>
-  refuse(409, "OWNER_HAS_RFPS", `This member still owns ${count} RFP${count === 1 ? "" : "s"}. Reassign them first.`, { ownedRfpCount: count });
+  refuse(409, "OWNER_HAS_RFPS", `This member still owns ${count} proposal${count === 1 ? "" : "s"}. Reassign them first.`, { ownedRfpCount: count });
 
 export const decideManage = (actor: ManagerFacts): Decision =>
   canManageMembers(actor.roles) ? allow : refuse(403, "FORBIDDEN", "Only Owners and Admins can manage members.");
@@ -107,10 +107,10 @@ export const MAX_SELECTED_RFPS = 1000;
 
 export const decideReassignment = (input: { from: MemberFacts | null; to: MemberFacts | null }): Decision => {
   if (!input.from) return refuse(404, "MEMBER_NOT_FOUND", "Member not found.");
-  if (!input.to) return refuse(404, "REASSIGN_TARGET_NOT_FOUND", "The member receiving the RFPs was not found.");
-  if (input.from.userId === input.to.userId) return refuse(400, "REASSIGN_TO_SELF", "Choose a different member to receive the RFPs.");
+  if (!input.to) return refuse(404, "REASSIGN_TARGET_NOT_FOUND", "The member receiving the proposals was not found.");
+  if (input.from.userId === input.to.userId) return refuse(400, "REASSIGN_TO_SELF", "Choose a different member to receive the proposals.");
   if (input.to.status !== "active" || !canOwnRfps(input.to.roles)) {
-    return refuse(409, "REASSIGN_TARGET_INELIGIBLE", "RFPs can only go to an active member who isn't a Viewer.");
+    return refuse(409, "REASSIGN_TARGET_INELIGIBLE", "Proposals can only go to an active member who isn't a Viewer.");
   }
   return allow;
 };

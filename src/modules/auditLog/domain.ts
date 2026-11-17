@@ -17,7 +17,7 @@ export const AUDIT_CATEGORIES = [
   { key: "invitations", label: "Invitations" },
   { key: "members", label: "Members and roles" },
   { key: "teams", label: "Teams" },
-  { key: "sharing", label: "RFP sharing" },
+  { key: "sharing", label: "Proposal sharing" },
   { key: "support_access", label: "RFPilot Support access" },
   { key: "settings", label: "Organization settings" },
   { key: "vendor_list", label: "Vendor list" },
@@ -57,7 +57,7 @@ export const AUDIT_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   "organization.member.reactivated": { category: "members", label: "Member reactivated" },
   "organization.member.sso_joined": { category: "members", label: "Member joined through company sign-in" },
   "organization.ownership.transferred": { category: "members", label: "Ownership transferred" },
-  "proposal.owner.reassigned": { category: "members", label: "RFP owner reassigned" },
+  "proposal.owner.reassigned": { category: "members", label: "Proposal owner reassigned" },
   "organization.legacy_customer.placed": { category: "members", label: "Member placed by RFPilot Support", staffActor: true },
   "organization.legacy_customer.placement_rolled_back": { category: "members", label: "Member placement undone by RFPilot Support", staffActor: true },
 
@@ -68,8 +68,8 @@ export const AUDIT_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   "team.member_added": { category: "teams", label: "Team member added" },
   "team.member_removed": { category: "teams", label: "Team member removed" },
 
-  "proposal.share_granted": { category: "sharing", label: "RFP shared" },
-  "proposal.share_revoked": { category: "sharing", label: "RFP share removed" },
+  "proposal.share_granted": { category: "sharing", label: "Proposal shared" },
+  "proposal.share_revoked": { category: "sharing", label: "Proposal share removed" },
 
   "support_access.granted": { category: "support_access", label: "Support access granted" },
   "support_access.revoked": { category: "support_access", label: "Support access revoked" },
@@ -93,6 +93,10 @@ export const AUDIT_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   "organization_vendor.updated": { category: "vendor_list", label: "Vendor updated" },
   "organization_vendor.archived": { category: "vendor_list", label: "Vendor archived" },
   "organization_vendor.restored": { category: "vendor_list", label: "Vendor restored" },
+
+  // Deliberately absent: proposal_template.* (ORG-604). Owner decision, 2026-11-16: customers do
+  // not see template actions in their audit log. The events are still written, for staff and
+  // forensics. Do not add them here without a new decision (docs/DECISIONS.md).
 };
 
 // Own entries only: "constructor" or "__proto__" as an action name is not in the catalog.
@@ -197,10 +201,6 @@ export const AUDIT_CSV_HEADER = [
 
 const categoryLabel = (key: AuditCategory) => AUDIT_CATEGORIES.find((category) => category.key === key)?.label ?? key;
 
-// The file is read by customers, who know an RFP as an "RFP": internal names (target type
-// `proposal`, key `proposalId`) are reworded. Recorded values are left exactly as stored.
-const rfpWording = (name: string) => name.replace(/proposal/g, "rfp").replace(/Proposal/g, "Rfp");
-
 export const auditCsv = (events: readonly AuditEventView[]): string => {
   const rows = events.map((event) => [
     event.occurredAt,
@@ -210,10 +210,10 @@ export const auditCsv = (events: readonly AuditEventView[]): string => {
     event.actor.name,
     event.actor.kind === "member" ? event.actor.email : "",
     event.actor.kind,
-    rfpWording(event.target.type),
+    event.target.type,
     event.target.name ?? event.target.id ?? "",
     event.reason ?? "",
-    Object.entries(event.details).map(([key, value]) => `${rfpWording(key)}: ${value}`).join("; "),
+    Object.entries(event.details).map(([key, value]) => `${key}: ${value}`).join("; "),
     event.id,
   ]);
   return [AUDIT_CSV_HEADER, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";

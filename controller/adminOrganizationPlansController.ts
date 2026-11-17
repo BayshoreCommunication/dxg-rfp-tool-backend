@@ -6,9 +6,14 @@ import {
   type OrganizationPlanManagement,
   type PlanStaff,
 } from "../src/modules/entitlements/application/manageOrganizationPlans";
-import { organizationPlanManagement as defaultManagement } from "../src/modules/entitlements/composition";
+import type { OrganizationAccountDetail } from "../src/modules/entitlements/application/organizationAccountDetail";
+import {
+  organizationAccountDetail as defaultAccountDetail,
+  organizationPlanManagement as defaultManagement,
+} from "../src/modules/entitlements/composition";
 
-// ORG-603: plan management for RFPilot staff (admin app).
+// ORG-603: plan management for RFPilot staff (admin app), and the organization account detail
+// staff read without a support grant (owner decision, 2026-11-17).
 
 // Role and account type come from the stored account (set by authenticate), never the token.
 const staffFrom = (req: AuthRequest): PlanStaff => {
@@ -35,7 +40,10 @@ const fail = (res: Response, error: unknown): void => {
   res.status(500).json({ success: false, code: "PLAN_MANAGEMENT_INTERNAL_ERROR", message: "The plan request could not be completed." });
 };
 
-export const createAdminOrganizationPlansController = (management: OrganizationPlanManagement = defaultManagement) => {
+export const createAdminOrganizationPlansController = (
+  management: OrganizationPlanManagement = defaultManagement,
+  accountDetail: OrganizationAccountDetail = defaultAccountDetail,
+) => {
   const handle = (run: (req: AuthRequest) => Promise<unknown>) => async (req: AuthRequest, res: Response) => {
     try {
       res.status(200).json({ success: true, data: await run(req) });
@@ -46,6 +54,7 @@ export const createAdminOrganizationPlansController = (management: OrganizationP
   return {
     list: handle((req) => management.list(staffFrom(req), { page: req.query.page, search: req.query.search })),
     get: handle((req) => management.get(staffFrom(req), req.params.organizationId)),
+    account: handle((req) => accountDetail.get(staffFrom(req), req.params.organizationId)),
     change: handle((req) => {
       const input = body(req);
       return management.change(staffFrom(req), req.params.organizationId, { plan: input.plan, note: input.note });

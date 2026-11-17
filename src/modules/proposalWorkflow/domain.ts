@@ -33,7 +33,7 @@ export const deriveWorkflowState=(facts:WorkflowFacts):WorkflowState=>{
   // Once the RFP has gone out to vendors the assistant has nothing left to ask
   // for. Without this the phase type carried a `published` variant nothing ever
   // returned, so the Publish step could never read as done.
-  if(facts.publishStatus&&facts.publishStatus!=="unsubmitted")return{phase:"published",headline:"This RFP has been sent to vendors",nextAction:"none",nextActionLabel:"View responses"};
+  if(facts.publishStatus&&facts.publishStatus!=="unsubmitted")return{phase:"published",headline:"This proposal has been sent to vendors",nextAction:"none",nextActionLabel:"View responses"};
   if(facts.openQuestionCount>0)return{phase:"intake",headline:`${facts.openQuestionCount} important ${facts.openQuestionCount===1?"question":"questions"} left`,nextAction:"answer_questions",nextActionLabel:"Answer the next question"};
   if(facts.draftStatus==="queued"||facts.draftStatus==="running")return{phase:"drafting",headline:"Creating your first proposal draft",nextAction:"wait_for_draft",nextActionLabel:"Draft in progress"};
   if(facts.draftStatus!=="succeeded")return{phase:"minimum_context",headline:facts.answeredQuestionCount>0||facts.appliedCount>0?"Enough information for a useful first draft":"Tell us about your event",nextAction:"generate_draft",nextActionLabel:"Create my first draft"};
