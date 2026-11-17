@@ -50,10 +50,16 @@ export const mongoPlacementTaskStore: PlacementTaskStore = {
   },
   async queuePlacement(entry, maxConcurrent) {
     const journal = await placementJournal();
-    return inAFreeSlot(maxConcurrent, async (slot) => {
+    const result = await inAFreeSlot(maxConcurrent, async (slot) => {
       await journal.insertOne({ ...entry, taskSlot: slot });
       return true;
     });
+    // An insert that breaks two unique indexes reports one of them. A user who is already being
+    // placed is "in progress" whether or not a slot was also free.
+    if (!result.queued && result.refusal === "capacity" && await journal.findOne({ userId: entry.userId, inFlight: true }, { projection: { _id: 1 } })) {
+      return { queued: false, refusal: "user_busy" };
+    }
+    return result;
   },
   async queueRollback(runId, task: PlacementTaskRecord, maxConcurrent) {
     const journal = await placementJournal();

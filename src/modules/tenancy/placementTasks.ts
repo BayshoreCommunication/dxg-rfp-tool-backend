@@ -98,8 +98,9 @@ const statusOf = (entry: PlacementJournalEntry): PlacementRunStatus => {
 };
 export const placementRunView = (entry: PlacementJournalEntry) => {
   // The request, the idempotency key and the slot are the API's own bookkeeping.
-  const { request: _request, idempotencyKey: _key, taskSlot: _slot, inFlight: _inFlight, task, ...journal } = entry as PlacementJournalEntry & { _id?: unknown };
-  delete (journal as { _id?: unknown })._id;
+  const journal: Partial<PlacementJournalEntry> & { _id?: unknown } = { ...entry };
+  for (const key of ["_id", "request", "idempotencyKey", "taskSlot", "inFlight", "task"] as const) delete journal[key];
+  const task = entry.task;
   return {
     ...journal,
     status: statusOf(entry),
@@ -262,10 +263,10 @@ export const createPlacementTaskService = (deps: {
       };
       const queued = await deps.store.queuePlacement(entry, policy.maxConcurrent);
       if (!queued.queued) {
-        if (queued.refusal === "idempotency_key") {
-          const existing = keyHash ? await deps.store.findByIdempotencyKey(keyHash) : null;
-          if (existing) return replay(existing, fingerprint);
-        }
+        // A twin request with the same key won the insert. It also holds the user's lock, and the
+        // journal reports only one of the two violated indexes, so look the key up either way.
+        const existing = keyHash ? await deps.store.findByIdempotencyKey(keyHash) : null;
+        if (existing) return replay(existing, fingerprint);
         if (queued.refusal === "capacity") throw capacityReached();
         throw new PlacementError("PLACEMENT_IN_PROGRESS", "This user is already being placed.", 409);
       }
