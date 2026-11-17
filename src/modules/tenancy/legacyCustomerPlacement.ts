@@ -56,7 +56,7 @@ export type PlacementState = "queued" | "started" | "done" | "failed" | "aborted
 export type PlacementTaskRecord = {
   operation: "placement" | "rollback"; status: "queued" | "running" | "succeeded" | "failed";
   requestedAt: Date; adminUserId: string; adminOrganizationId: string; correlationId: string;
-  idempotencyKey?: string; taskArn?: string; launchedAt?: Date; startedAt?: Date; heartbeatAt?: Date; finishedAt?: Date;
+  idempotencyKey?: string; launchedAt?: Date; startedAt?: Date; heartbeatAt?: Date; finishedAt?: Date;
   code?: string; message?: string; details?: Record<string, unknown>;
 };
 export type PlacementJournalEntry = {
@@ -79,7 +79,7 @@ export type PlacementVerification = {
 };
 
 export class PlacementError extends Error {
-  constructor(readonly code: string, message: string, readonly status: 400 | 404 | 409 | 429 | 503 = 409, readonly details?: Record<string, unknown>) { super(message); }
+  constructor(readonly code: string, message: string, readonly status: 400 | 403 | 404 | 409 | 429 | 503 = 409, readonly details?: Record<string, unknown>) { super(message); }
 }
 
 export type PlacementActor = { adminUserId: string; adminOrganizationId: string; correlationId: string };
@@ -303,25 +303,30 @@ export const validatePlacementRequest = async (userId: string, placementTarget: 
 
 export const placeLegacyCustomer = async (input: {
   userId: string; target: PlacementTarget; actor: PlacementActor; pool: Pool | null; runId?: string;
-  // The one-off task's path: take over the run the API queued under this id instead of opening one.
-  adoptQueuedRunId?: string;
+  // The one-off task's path: take over the run the API queued under this id instead of opening
+  // one. `taskRequestedAt` names the task attempt that claimed it, so only that attempt can
+  // adopt the run and, later, commit it.
+  adoptQueuedRun?: { runId: string; taskRequestedAt: Date };
 }) => {
-  const runId = input.adoptQueuedRunId ?? input.runId ?? newPlacementRunId();
+  const adopt = input.adoptQueuedRun;
+  const runId = adopt?.runId ?? input.runId ?? newPlacementRunId();
   const finishRun = (set: Partial<JournalEntry>, session?: ClientSession) =>
     journal().updateOne({ runId }, { $set: { ...set, updatedAt: new Date() }, $unset: { inFlight: "" } }, { session });
   await ensureIndexes();
 
   let validated: Awaited<ReturnType<typeof validatePlacement>>;
-  if (input.adoptQueuedRunId) {
+  if (adopt) {
     // Only the task that claimed the request (task.status running) may adopt it, once.
     const queued = await journal().findOneAndUpdate(
-      { runId, userId: input.userId, state: "queued", "task.operation": "placement", "task.status": "running" },
+      { runId, userId: input.userId, state: "queued", "task.operation": "placement", "task.status": "running", "task.requestedAt": adopt.taskRequestedAt },
       { $set: { state: "started", updatedAt: new Date() } },
       { returnDocument: "before" },
     );
     if (!queued) throw new PlacementError("PLACEMENT_NOT_QUEUED", "This placement isn't waiting to run.", 409);
     try {
-      // The data may have changed since the request was queued; refuse exactly as the API would.
+      // The journal entry is not trusted: the customer, their holding tenant, the target and the
+      // role are all worked out again from the database, and refused exactly as the API would.
+      if (queued.createdOrganization && !isObjectId(queued.targetOrganizationId)) throw new PlacementError("PLACEMENT_REQUEST_INVALID", "The queued request is malformed.", 400);
       validated = await validatePlacement(input.userId, input.target, queued.createdOrganization ? queued.targetOrganizationId : undefined);
       await journal().updateOne({ runId }, { $set: {
         holdingOrganizationId: validated.holding.organizationId, previousVersion: validated.holding.version,
@@ -339,7 +344,7 @@ export const placeLegacyCustomer = async (input: {
   const { organizationId: targetOrganizationId, role } = target;
   const createdOrganization = target.created !== null;
 
-  if (!input.adoptQueuedRunId) {
+  if (!adopt) {
     const now = new Date();
     try {
       await journal().insertOne({
@@ -399,7 +404,7 @@ export const placeLegacyCustomer = async (input: {
         // The run must still be this process's: a one-off task the API gave up on (no heartbeat)
         // has had its entry settled, and must not commit a move after that.
         const finished = await journal().updateOne(
-          { runId, state: "started" },
+          { runId, state: "started", ...(adopt ? { "task.requestedAt": adopt.taskRequestedAt } : {}) },
           { $set: { state: "done", mongo, postgres: postgres === "skipped" ? {} : postgres, updatedAt: new Date() }, $unset: { inFlight: "" } },
           { session },
         );
@@ -429,6 +434,12 @@ export const placeLegacyCustomer = async (input: {
       await rollbackRun({ runId, actor: input.actor, pool: input.pool, reason: "verification_failed" });
     } catch {
       rolledBack = false;
+      // The move stands with failed checks. That is not a placement that succeeded: mark it as
+      // one that has to be rolled back, so it never reads as done.
+      await journal().updateOne(
+        { runId, state: "done" },
+        { $set: { state: "failed", error: "The placement's checks failed and the automatic rollback did not complete.", updatedAt: new Date() } },
+      );
     }
     throw new PlacementError(
       "PLACEMENT_VERIFICATION_FAILED",
@@ -467,17 +478,45 @@ const claimRollback = async (runId: string) => {
 
 // The one-off task's path: the API already claimed the run (done | failed → rolling_back) when it
 // queued the rollback, so the task takes that claim over instead of making one.
-const adoptRollback = async (runId: string): Promise<JournalEntry> => {
-  const claimed = await journal().findOne({ runId, state: "rolling_back", "task.operation": "rollback", "task.status": "running" });
+const adoptRollback = async (runId: string, taskRequestedAt: Date): Promise<JournalEntry> => {
+  const claimed = await journal().findOne({ runId, state: "rolling_back", "task.operation": "rollback", "task.status": "running", "task.requestedAt": taskRequestedAt });
   if (!claimed) throw new PlacementError("ROLLBACK_NOT_QUEUED", "This rollback isn't waiting to run.", 409);
-  return { ...claimed, state: claimed.rollbackFrom ?? "done" };
+  return { ...claimed, state: claimed.rollbackFrom === "failed" ? "failed" : "done" };
 };
 
-const rollbackRun = async (input: { runId: string; actor: PlacementActor; pool: Pool | null; reason: string; adoptQueued?: boolean }) => {
-  const entry = input.adoptQueued ? await adoptRollback(input.runId) : await claimRollback(input.runId);
+// The task holds the migration role and the API does not, so the task does not take the journal
+// entry's word for where records should go. A rollback only ever returns a customer's records
+// from a customer organization they are a member of to that same customer's own retired holding
+// tenant, and only deletes an organization the run can have created.
+const invalidRun = (why: string) => new PlacementError("PLACEMENT_REQUEST_INVALID", `The queued rollback doesn't match the organizations it names (${why}); nothing was moved.`, 409);
+const CLOCK_SKEW_MS = 5 * 60_000;
+const assertRollbackEntryConsistent = async (entry: JournalEntry) => {
+  if (!isObjectId(entry.userId) || !isObjectId(entry.holdingOrganizationId) || !isObjectId(entry.targetOrganizationId)) throw invalidRun("ids");
+  if (entry.holdingOrganizationId === entry.targetOrganizationId) throw invalidRun("same organization");
+  if ([entry.adminOrganizationId, entry.task?.adminOrganizationId].includes(entry.targetOrganizationId)) throw invalidRun("staff organization");
+  const holding = await Organization.findOne({ _id: objectId(entry.holdingOrganizationId) }).select("kind slug").lean();
+  // ORG-107 names each holding tenant after the one customer it was made for.
+  if (!holding || holding.kind !== "legacy_holding" || holding.slug !== `legacy-${entry.userId}`) throw invalidRun("holding tenant");
+  const target = await Organization.findOne({ _id: objectId(entry.targetOrganizationId) }).select("kind status createdAt").lean();
+  if (!target || target.kind !== "customer" || target.status !== "active") throw invalidRun("target organization");
+  if (!(await OrganizationMembership.exists({ organizationId: target._id, userId: objectId(entry.userId) }))) throw invalidRun("membership");
+  const requested = entry.request?.target;
+  if (entry.createdOrganization) {
+    // Deleting an organization: it must be one this run can have created.
+    if (requested && requested.kind !== "new") throw invalidRun("created organization");
+    const createdAt = (target as { createdAt?: Date }).createdAt;
+    if (!createdAt || !entry.createdAt || createdAt.getTime() < new Date(entry.createdAt).getTime() - CLOCK_SKEW_MS) throw invalidRun("created organization");
+  } else if (requested && (requested.kind !== "existing" || requested.organizationId !== entry.targetOrganizationId)) {
+    throw invalidRun("target organization");
+  }
+};
+
+const rollbackRun = async (input: { runId: string; actor: PlacementActor; pool: Pool | null; reason: string; adoptQueued?: { taskRequestedAt: Date } }) => {
+  const entry = input.adoptQueued ? await adoptRollback(input.runId, input.adoptQueued.taskRequestedAt) : await claimRollback(input.runId);
   const release = () => journal().updateOne({ runId: entry.runId, state: "rolling_back" }, { $set: { state: entry.state, updatedAt: new Date() }, $unset: { rollbackFrom: "" } });
   let result: { mongo: MongoMoveCounts; postgres: MoveCounts | "skipped"; leftInTarget: { proposals: number } };
   try {
+    if (input.adoptQueued) await assertRollbackEntryConsistent(entry);
     result = await performRollback(entry, input.pool);
   } catch (error) {
     await release().catch(() => undefined);
@@ -492,7 +531,7 @@ const rollbackRun = async (input: { runId: string; actor: PlacementActor; pool: 
 
 // Moves the customer's records back to their holding tenant and reactivates it. A new
 // organization the placement created is deleted when nobody else has joined it.
-export const rollbackPlacement = (input: { runId: string; actor: PlacementActor; pool: Pool | null; adoptQueued?: boolean }) =>
+export const rollbackPlacement = (input: { runId: string; actor: PlacementActor; pool: Pool | null; adoptQueued?: { taskRequestedAt: Date } }) =>
   rollbackRun({ ...input, reason: "placement_rolled_back" });
 
 // What makes a rollback impossible whatever moves: checked by the API before it queues a one-off
@@ -555,7 +594,7 @@ const performRollback = async (entry: JournalEntry, pool: Pool | null) => {
       // Admin reassigns them (ORG-109 reports them as orphaned until then).
       leftInTarget = { proposals: entry.createdOrganization ? 0 : await Proposal.collection.countDocuments({ organizationId: target, userId }, { session }) };
       // Still this process's claim: see the same check in placeLegacyCustomer.
-      const finished = await journal().updateOne({ runId: entry.runId, state: "rolling_back" }, { $set: { state: "rolled_back", leftInTarget, updatedAt: new Date() }, $unset: { inFlight: "" } }, { session });
+      const finished = await journal().updateOne({ runId: entry.runId, state: "rolling_back", ...(entry.task ? { "task.requestedAt": entry.task.requestedAt } : {}) }, { $set: { state: "rolled_back", leftInTarget, updatedAt: new Date() }, $unset: { inFlight: "" } }, { session });
       if (finished.matchedCount !== 1) throw new PlacementError("ROLLBACK_FAILED", `The rollback was given up on before it finished (run ${entry.runId}); nothing was moved.`, 409);
     });
   } catch (error) {

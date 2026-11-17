@@ -9,7 +9,9 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
+import { NagSuppressions } from 'cdk-nag';
 import { Construct } from 'constructs';
 import { EnvironmentConfig } from './config';
 import { DataStack } from './data-stack';
@@ -699,73 +701,221 @@ export class AppStack extends cdk.Stack {
         .subnetIds.join(','),
     });
 
-    /* ── The API starts legacy-customer placement as a one-off task ───── */
-    // Owner's decision, 2026-11-17 (docs/DECISIONS.md): placing a legacy
+    /* ── Legacy-customer placement: API → Step Functions → one task ──── */
+    // Owner's decision, 2026-11-17 (docs/DECISIONS.md). Placing a legacy
     // customer moves Postgres rows between organizations, which needs the
-    // table-owner role. The API never gets POSTGRES_MIGRATION_URL; it starts
-    // scripts/placeLegacyCustomer.js on the migrate task definition instead.
+    // table-owner role. The API never gets POSTGRES_MIGRATION_URL, and it
+    // does not get ecs:RunTask either: IAM cannot restrict RunTask's
+    // overrides (command, environment, task role, network), so permission to
+    // run a task that holds the migration role is the migration role.
     //
-    // The API task role gets exactly two statements and no others for this:
-    //   - ecs:RunTask on this stack's migrate task definition revision only,
-    //     and only in this cluster;
-    //   - iam:PassRole on that task definition's two roles, only to ECS tasks.
-    // It cannot register or change a task definition, read the app secret's
-    // POSTGRES_MIGRATION_URL, or describe/stop tasks (the run's state comes
-    // from the placement journal, which the task writes).
+    // Instead the API may start executions of ONE state machine. Everything
+    // about the task is fixed in the state machine's definition below; the
+    // only thing taken from the execution input is `$.runId`, placed as one
+    // argv element. The task definition is dedicated to placement: its entry
+    // point is a script that accepts only that argument, and it holds only
+    // the two secrets the move needs.
     //
-    // The subnet and security-group ids below are the Network stack exports
-    // the outputs above already import; no export is added or changed.
-    //
-    // The revision is pinned on purpose. CloudFormation registers a new
-    // migrate revision with every image, in the same update that rolls the
-    // API, so the API always starts the revision built from its own image.
-    // The deploy workflow also registers migrate revisions (new image, before
-    // the services roll); the API never runs those, so a placement cannot
-    // run code newer than the API that validated it, or code from a deploy
-    // that later failed.
-    const migrateExecutionRole = migrateTaskDef.obtainExecutionRole();
-    apiTaskDef.taskRole.addToPrincipalPolicy(
+    // What is left to trust is the placement journal in MongoDB, which the
+    // API writes and the task reads: see the decision row.
+    const placementTaskDef = makeTaskDefinition('Placement', {
+      cpu: 512,
+      memoryMiB: 1024,
+    });
+    placementTaskDef.addContainer('placement', {
+      image: appImage,
+      // tini as in the image's own ENTRYPOINT (signal forwarding), then the
+      // one script. The command is only ever the run-id argument; with none
+      // the script prints its usage and exits non-zero.
+      entryPoint: [
+        '/usr/bin/tini',
+        '--',
+        'node',
+        'dist/scripts/runPlacementTask.js',
+      ],
+      command: [],
+      // Only what the script reads. No observability flag, so nothing on
+      // its import path needs the telemetry key (see the migrate task).
+      environment: {
+        NODE_ENV: 'production',
+        MONGODB_DB_NAME: config.mongoDbName,
+        POSTGRES_FOUNDATION_ENABLED: 'true',
+        POSTGRES_SSL: 'true',
+        NODE_EXTRA_CA_CERTS: '/app/rds-global-bundle.pem',
+        // The cutover runbook's lock timeout for work on a live product:
+        // wait 15 s for a lock, then fail with nothing moved.
+        PGOPTIONS: '-c lock_timeout=15000',
+      },
+      secrets: {
+        MONGODB_URL: secret('MONGODB_URL'),
+        POSTGRES_MIGRATION_URL: secret('POSTGRES_MIGRATION_URL'),
+      },
+      // The script writes nothing to disk.
+      readonlyRootFilesystem: true,
+      logging: ecs.LogDrivers.awsLogs({
+        logGroup: logGroup('Placement'),
+        streamPrefix: 'placement',
+      }),
+    });
+
+    const placementMachineName = `rfpilot-${config.envName}-placement`;
+    const placementMachineRole = new iam.Role(this, 'PlacementMachineRole', {
+      assumedBy: new iam.ServicePrincipal('states.amazonaws.com', {
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': this.account },
+        },
+      }),
+      description:
+        'Runs the legacy-customer placement task; nothing else',
+    });
+    placementMachineRole.addToPolicy(
       new iam.PolicyStatement({
-        sid: 'RunPlacementTaskOnMigrateDefinition',
+        sid: 'RunThePlacementTask',
         actions: ['ecs:RunTask'],
-        resources: [migrateTaskDef.taskDefinitionArn],
+        resources: [placementTaskDef.taskDefinitionArn],
         conditions: {
           ArnEquals: { 'ecs:cluster': this.cluster.clusterArn },
         },
       }),
     );
-    apiTaskDef.taskRole.addToPrincipalPolicy(
+    placementMachineRole.addToPolicy(
       new iam.PolicyStatement({
-        sid: 'PassMigrateTaskRolesToEcsTasks',
+        sid: 'PassThePlacementTaskRoles',
         actions: ['iam:PassRole'],
         resources: [
-          migrateTaskDef.taskRole.roleArn,
-          migrateExecutionRole.roleArn,
+          placementTaskDef.taskRole.roleArn,
+          placementTaskDef.obtainExecutionRole().roleArn,
         ],
         conditions: {
           StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' },
         },
       }),
     );
-    // Plain, non-secret identifiers: which task to start and where.
-    apiContainer.addEnvironment(
-      'PLACEMENT_TASK_CLUSTER',
-      this.cluster.clusterName,
+    // The `.sync` integration: Step Functions watches the task it started
+    // (through one managed EventBridge rule) and stops it on timeout. These
+    // are the permissions AWS documents for it, scoped to this cluster's
+    // tasks and to that one rule.
+    placementMachineRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'WatchAndStopTasksInThisCluster',
+        actions: ['ecs:DescribeTasks', 'ecs:StopTask'],
+        resources: [
+          this.formatArn({
+            service: 'ecs',
+            resource: 'task',
+            resourceName: `${this.cluster.clusterName}/*`,
+          }),
+        ],
+        conditions: {
+          ArnEquals: { 'ecs:cluster': this.cluster.clusterArn },
+        },
+      }),
     );
-    apiContainer.addEnvironment(
-      'PLACEMENT_TASK_DEFINITION',
-      migrateTaskDef.taskDefinitionArn,
+    placementMachineRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'ManagedRuleForEcsTaskEvents',
+        actions: ['events:PutTargets', 'events:PutRule', 'events:DescribeRule'],
+        resources: [
+          this.formatArn({
+            service: 'events',
+            resource: 'rule',
+            resourceName: 'StepFunctionsGetEventsForECSTaskRule',
+          }),
+        ],
+      }),
     );
-    apiContainer.addEnvironment(
-      'PLACEMENT_TASK_SUBNETS',
-      network.vpc
-        .selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS })
-        .subnetIds.join(','),
+
+    // Written out as Amazon States Language so that exactly what reaches the
+    // task is visible here. Do not add a `.$` path anywhere but the command.
+    const runPlacementTask = new sfn.CustomState(this, 'RunPlacementTask', {
+      stateJson: {
+        Type: 'Task',
+        Resource: `arn:${this.partition}:states:::ecs:runTask.sync`,
+        Parameters: {
+          Cluster: this.cluster.clusterArn,
+          TaskDefinition: placementTaskDef.taskDefinitionArn,
+          LaunchType: 'FARGATE',
+          NetworkConfiguration: {
+            AwsvpcConfiguration: {
+              Subnets: network.vpc.selectSubnets({
+                subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+              }).subnetIds,
+              SecurityGroups: [network.migrateSg.securityGroupId],
+              AssignPublicIp: 'DISABLED',
+            },
+          },
+          Overrides: {
+            ContainerOverrides: [
+              {
+                Name: 'placement',
+                'Command.$':
+                  "States.Array(States.Format('--task-run={}', $.runId))",
+              },
+            ],
+          },
+        },
+        // Above the task's own 30-minute ceiling; on timeout Step Functions
+        // stops the task. No Retry: the placement journal is the source of
+        // truth, and a failed run is retried by a person, as a new run.
+        TimeoutSeconds: 2400,
+        End: true,
+      },
+    });
+    const placementMachine = new sfn.StateMachine(this, 'PlacementMachine', {
+      stateMachineName: placementMachineName,
+      stateMachineType: sfn.StateMachineType.STANDARD,
+      definitionBody: sfn.DefinitionBody.fromChainable(runPlacementTask),
+      role: placementMachineRole,
+      timeout: cdk.Duration.minutes(45),
+    });
+    /* No CloudWatch logging or X-Ray on the state machine: delivering its
+       log needs logs:*LogDelivery* and logs:PutResourcePolicy on "*" on the
+       role, which would be the widest statement it holds. A Standard
+       machine keeps each execution's history (including ECS's stop reason)
+       for 90 days, the API logs it when it gives up on a run, and the task
+       logs to /rfpilot/<env>/placement. */
+    NagSuppressions.addResourceSuppressions(placementMachine, [
+      {
+        id: 'AwsSolutions-SF1',
+        reason:
+          'Logging ALL events needs wildcard log-delivery permissions on the state machine role, which is otherwise scoped to one task definition. Execution history is retained by Step Functions and the task has its own log group.',
+      },
+      {
+        id: 'AwsSolutions-SF2',
+        reason:
+          'A single-state machine that runs one ECS task; X-Ray adds wildcard xray permissions to the role for no tracing value.',
+      },
+    ]);
+
+    // The API: start an execution of that one machine, and read what became
+    // of an execution it started (to log why a task never reported). No
+    // ecs:* and no iam:PassRole.
+    apiTaskDef.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'StartPlacementExecutions',
+        actions: ['states:StartExecution'],
+        resources: [placementMachine.stateMachineArn],
+      }),
     );
-    apiContainer.addEnvironment(
-      'PLACEMENT_TASK_SECURITY_GROUP',
-      network.migrateSg.securityGroupId,
+    apiTaskDef.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'DescribePlacementExecutions',
+        actions: ['states:DescribeExecution'],
+        resources: [
+          this.formatArn({
+            service: 'states',
+            resource: 'execution',
+            resourceName: `${placementMachineName}:*`,
+            arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+          }),
+        ],
+      }),
     );
-    apiContainer.addEnvironment('PLACEMENT_TASK_CONTAINER', 'migrate');
+    // A plain identifier. Removing it switches the feature off: the
+    // placement endpoints then answer 503 PLACEMENT_REQUIRES_MIGRATION_ROLE.
+    apiContainer.addEnvironment(
+      'PLACEMENT_STATE_MACHINE_ARN',
+      placementMachine.stateMachineArn,
+    );
   }
 }

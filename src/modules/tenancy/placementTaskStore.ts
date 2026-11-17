@@ -79,6 +79,7 @@ export const mongoPlacementTaskStore: PlacementTaskStore = {
     const unset: Record<string, ""> = {};
     if (change.release) Object.assign(unset, { inFlight: "", taskSlot: "" });
     if (change.clearRollbackFrom) unset.rollbackFrom = "";
+    if (change.releaseIdempotencyKey) unset.idempotencyKey = "";
     const result = await (await placementJournal()).updateOne(filterFor(runId, expect), { $set: set, ...(Object.keys(unset).length ? { $unset: unset } : {}) });
     return result.matchedCount === 1;
   },

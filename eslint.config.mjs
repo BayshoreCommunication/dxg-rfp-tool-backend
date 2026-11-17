@@ -35,6 +35,7 @@ export default tseslint.config(
       "controller/adminLegacyCustomersController.ts",
       "routes/adminLegacyCustomersRoute.ts",
       "scripts/placeLegacyCustomer.ts",
+      "scripts/runPlacementTask.ts",
       "controller/invitationController.ts",
       "routes/invitationRoute.ts",
       "controller/organizationVendorsController.ts",

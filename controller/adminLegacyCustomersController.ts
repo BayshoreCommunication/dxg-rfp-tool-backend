@@ -15,7 +15,7 @@ import {
   type PlacementActor,
   type PlacementTarget,
 } from "../src/modules/tenancy/legacyCustomerPlacement";
-import { createEcsPlacementTaskLauncher, placementTaskConfigFromEnv, PlacementTaskConfigError } from "../src/modules/tenancy/placementTaskLauncher";
+import { createPlacementTaskLauncher, placementTaskConfigFromEnv, PlacementTaskConfigError } from "../src/modules/tenancy/placementTaskLauncher";
 import { mongoPlacementTaskStore } from "../src/modules/tenancy/placementTaskStore";
 import { createPlacementTaskService, placementRunView, placementTaskPolicyFromEnv, type PlacementTaskLauncher, type PlacementTaskService } from "../src/modules/tenancy/placementTasks";
 
@@ -24,12 +24,18 @@ import { createPlacementTaskService, placementRunView, placementTaskPolicyFromEn
 //
 // - "direct": this process holds POSTGRES_MIGRATION_URL (local stack, rehearsal, integration
 //   suite) or the Postgres foundation is off. The placement runs inside the request, as before.
-// - "task": production. This process has no migration role but is told which one-off task to
-//   start (PLACEMENT_TASK_*). The request is validated and journaled here, the move runs in a
-//   task on the migrate task definition, and the client polls GET /placements/:runId
-//   (owner's decision, 2026-11-17; src/modules/tenancy/placementTasks.ts).
+// - "task": production. This process has no migration role and no permission to start ECS tasks;
+//   it is told which Step Functions state machine to start (PLACEMENT_STATE_MACHINE_ARN). The
+//   request is validated and journaled here, the state machine runs the move in a task on the
+//   placement task definition, and the client polls GET /placements/:runId (owner's decision,
+//   2026-11-17; src/modules/tenancy/placementTasks.ts).
 //
-// With neither, placement is refused with 503 rather than moving MongoDB alone.
+// With neither, placement is refused with 503 rather than moving MongoDB alone. Unsetting
+// PLACEMENT_STATE_MACHINE_ARN is how the task path is switched off.
+//
+// Read when the API starts: a timeout below its floor stops the process with the reason, rather
+// than giving up on healthy tasks later.
+const taskPolicy = placementTaskPolicyFromEnv();
 let migrationPool: Pool | null | undefined;
 let taskService: PlacementTaskService | null | undefined;
 let launcherOverride: PlacementTaskLauncher | undefined;
@@ -37,7 +43,7 @@ let launcherOverride: PlacementTaskLauncher | undefined;
 type PlacementMode = { kind: "direct"; pool: Pool | null } | { kind: "task"; tasks: PlacementTaskService };
 const taskServiceWith = (launcher: PlacementTaskLauncher) => createPlacementTaskService({
   store: mongoPlacementTaskStore, launcher, validatePlacement: validatePlacementRequest, assertRollbackAllowed,
-  newRunId: newPlacementRunId, policy: placementTaskPolicyFromEnv(),
+  newRunId: newPlacementRunId, policy: taskPolicy,
   log: (event, fields) => console.log(JSON.stringify({ event, ...fields })),
 });
 const placementMode = (): PlacementMode => {
@@ -50,11 +56,11 @@ const placementMode = (): PlacementMode => {
   if (taskService === undefined) {
     try {
       const config = placementTaskConfigFromEnv();
-      taskService = launcherOverride ? taskServiceWith(launcherOverride) : config ? taskServiceWith(createEcsPlacementTaskLauncher(config)) : null;
+      taskService = launcherOverride ? taskServiceWith(launcherOverride) : config ? taskServiceWith(createPlacementTaskLauncher(config)) : null;
     } catch (error) {
       if (!(error instanceof PlacementTaskConfigError)) throw error;
       console.error("Legacy customer placement:", error.message);
-      throw new PlacementError("PLACEMENT_TASK_MISCONFIGURED", "This server's placement task settings are wrong, so placement is unavailable.", 503);
+      throw new PlacementError("PLACEMENT_TASK_MISCONFIGURED", "This server's placement settings are wrong, so placement is unavailable.", 503);
     }
   }
   if (!taskService) {
@@ -66,17 +72,22 @@ export const closePlacementPool = async () => {
   await migrationPool?.end();
   migrationPool = undefined;
 };
-// Tests only: replaces the ECS launcher (and forgets the service built from the environment).
+// Tests only: replaces the Step Functions launcher (and forgets the service built from the environment).
 export const setPlacementTaskLauncherForTests = (launcher: PlacementTaskLauncher | undefined) => {
   launcherOverride = launcher;
   taskService = undefined;
 };
 
-const actorFrom = (req: AuthRequest): PlacementActor => ({
-  adminUserId: req.user!.userId,
-  adminOrganizationId: req.user!.organizationId!,
-  correlationId: (req as AuthRequest & { correlationId?: string }).correlationId ?? randomUUID(),
-});
+// The audit trail records the staff member under their own organization, so one without an
+// organization can't place anyone (in either mode).
+const actorFrom = (req: AuthRequest): PlacementActor => {
+  const adminUserId = req.user?.userId;
+  const adminOrganizationId = req.user?.organizationId;
+  if (!adminUserId || !adminOrganizationId) {
+    throw new PlacementError("STAFF_ORGANIZATION_REQUIRED", "This staff account has no organization, so it can't place customers.", 403);
+  }
+  return { adminUserId, adminOrganizationId, correlationId: (req as AuthRequest & { correlationId?: string }).correlationId ?? randomUUID() };
+};
 const idempotencyKey = (req: AuthRequest) => {
   const header = req.headers["idempotency-key"];
   return typeof header === "string" ? header.trim() : undefined;
