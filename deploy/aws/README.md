@@ -106,6 +106,21 @@ cd deploy/aws && npx cdk deploy Rfpilot-<env>-App -c imageTag=sha-<commit> --req
   singleton `cron` service, which deliberately replaces stop-then-start.
   WebSocket notification fan-out remains process-local, so horizontal
   steady-state API scaling still requires Redis pub/sub fan-out.
+- **The API may start exactly one kind of task: legacy-customer placement on
+  the migrate task definition** (decision 2026-11-17). Its task role holds
+  `ecs:RunTask` on this stack's migrate task definition revision (in this
+  cluster only) and `iam:PassRole` on that task definition's two roles (to
+  `ecs-tasks.amazonaws.com` only). It has no `POSTGRES_MIGRATION_URL`, no
+  `ecs:RegisterTaskDefinition` and no `ecs:DescribeTasks`; do not widen
+  either statement to a family wildcard or to other roles. The API is told
+  what to start through five plain `PLACEMENT_TASK_*` variables. The
+  revision is the one CloudFormation registers with each image, so a
+  placement always runs the API's own image. The deploy workflow's own
+  migrate revisions (registered before the services roll) are never run by
+  the API, and the workflow is unchanged. After a deploy that fails and
+  rolls back, the API keeps pointing at its own (old) revision.
+  Manual `run-task` on the migrate family keeps working as before.
+  Operating it: `docs/runbooks/ORG_TENANCY_CUTOVER.md`, section 9 step 2.
 - **ClamAV is fail-closed by design.** If the `clamav` service is down,
   vendor uploads 503 and planner sources sit in `scan_failed` (retryable) —
   that is intended behavior, not an outage to work around. First start

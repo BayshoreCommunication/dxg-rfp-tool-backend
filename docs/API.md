@@ -362,13 +362,39 @@ A template is `{ id, title, description, scope: "personal"|"organization", prese
 
 ## Legacy customer placement
 
-ORG-110, DXG admins only, at `/api/admin/legacy-customers` (`routes/adminLegacyCustomersRoute.ts`, `src/modules/tenancy/legacyCustomerPlacement.ts`).
+ORG-110, DXG admins only, at `/api/admin/legacy-customers` (`routes/adminLegacyCustomersRoute.ts`, `src/modules/tenancy/legacyCustomerPlacement.ts`; the one-off task path is `placementTasks.ts`, `placementTaskLauncher.ts` and `placementTaskRunner.ts` beside it).
 
-- `GET /` lists the legacy customers not yet placed, with each one's RFP count. `GET /target-organizations?q=` searches the organizations a customer can be placed in. `GET /placements/:runId` returns one placement run (404 `PLACEMENT_NOT_FOUND`).
-- `POST /:userId/placements` `{ target: "new", organization }` or `{ target: "existing", organizationId, role, teamId? }`. `teamId` must be an active team of that organization (400 `UNKNOWN_TEAM`). A second placement of the same user while one runs is 409 `PLACEMENT_IN_PROGRESS`. A failure leaves nothing moved (409 `PLACEMENT_FAILED`); a run whose ORG-109 checks fail is rolled back at once and answers 409 `PLACEMENT_VERIFICATION_FAILED` with `details.verification`.
-- `POST /placements/:runId/rollback` moves back exactly the records the run moved (journaled ids); RFPs given to the user afterwards stay and are counted in `leftInTarget`. One rollback runs at a time (409 `ROLLBACK_IN_PROGRESS`, `ALREADY_ROLLED_BACK`); 409 `ROLLBACK_CONFLICT` when Postgres rows created since still depend on the user's rows.
+- `GET /` lists the legacy customers not yet placed, with each one's RFP count. `GET /target-organizations?q=` searches the organizations a customer can be placed in.
+- `POST /:userId/placements` `{ target: "new", organization }` or `{ target: "existing", organizationId, role, teamId? }`. `teamId` must be an active team of that organization (400 `UNKNOWN_TEAM`). A second placement of the same user while one runs is 409 `PLACEMENT_IN_PROGRESS`.
+- `POST /placements/:runId/rollback` moves back exactly the records the run moved (journaled ids); RFPs given to the user afterwards stay and are counted in `leftInTarget`. One rollback runs at a time (409 `ROLLBACK_IN_PROGRESS`, `ALREADY_ROLLED_BACK`); 409 `NOTHING_TO_ROLL_BACK` for a run that moved nothing, `ORGANIZATION_IN_USE` and `USER_IS_OWNER` when the organization has moved on.
 - Until placed, the account can't use RFPilot: every sign-in method answers 403 `ORGANIZATION_SETUP_REQUIRED` (after the password or identity check, before 2FA), and any request on an existing session answers 401 `ORGANIZATION_SETUP_REQUIRED` and revokes all of that account's sessions.
-- The API refuses placement with 503 `PLACEMENT_REQUIRES_MIGRATION_ROLE` when it has no `POSTGRES_MIGRATION_URL`, which is the case in production. There, run `node dist/scripts/placeLegacyCustomer.js` (`--list`; `--email --admin-email --new-org` or `--org-slug --role`; `--rollback=<runId>`; dry run unless `--apply`) as a one-off task on the migrate task definition, which holds both MongoDB and the migration role.
+
+**How a placement runs depends on the server (decision 2026-11-17).** Moving Postgres rows between organizations needs the table-owner role (`POSTGRES_MIGRATION_URL`), which the public API never holds in production.
+
+- **Production: as a one-off task, asynchronously.** The API validates the request exactly as below (same refusals, same codes), records it as a queued run and starts `scripts/placeLegacyCustomer.js` as a one-off ECS task on the migrate task definition, passing only the run id. Both `POST`s answer **202** `{ placement, replayed }` and the client polls `GET /placements/:runId`. Nothing moves inside the API process.
+- **Local stack, rehearsal, integration suite** (the process has `POSTGRES_MIGRATION_URL`, or the Postgres foundation is off): synchronously, inside the request. `POST /:userId/placements` answers 201 `{ placement }` with the result; a failure leaves nothing moved (409 `PLACEMENT_FAILED`), and a run whose ORG-109 checks fail is rolled back at once and answers 409 `PLACEMENT_VERIFICATION_FAILED` with `details.verification`. Rollback answers 200 `{ rollback }`, or 409 `ROLLBACK_CONFLICT` when Postgres rows created since still depend on the user's rows.
+- **Neither** (no migration role and no `PLACEMENT_TASK_*` settings): 503 `PLACEMENT_REQUIRES_MIGRATION_ROLE`. Malformed or partial settings: 503 `PLACEMENT_TASK_MISCONFIGURED`.
+
+`GET /placements/:runId` (404 `PLACEMENT_NOT_FOUND`) returns the run in both modes: the journal fields (`runId`, `userId`, `holdingOrganizationId`, `targetOrganizationId`, `createdOrganization`, `role`, `teamId`, `state`, `mongo`, `postgres`, `verification`, `leftInTarget`, `error`) plus:
+
+| Field | Meaning |
+|---|---|
+| `status` | `queued` (task not started yet), `running`, `succeeded` (placed, checks passed), `failed`, `rolled_back`. While a rollback is queued or running, `status` is `queued` or `running` and `operation` is `rollback`. |
+| `operation` | `placement` or `rollback`: what `status` describes. |
+| `rollbackRequired` | `true` when the run moved MongoDB but not Postgres, or stopped before its checks ran. Roll it back before doing anything else with that customer. |
+| `task` | The latest one-off task for the run, or `null` for a run made synchronously: `{ operation, status: queued\|running\|succeeded\|failed, requestedAt, startedAt, heartbeatAt, finishedAt, taskArn, code, message, details }`. `code` is the failure code. A rollback that fails leaves `status: "succeeded"` (the placement stands) with `task.operation: "rollback"`, `task.status: "failed"`. |
+
+Failure codes a task reports in `task.code` (the synchronous path returns the same codes as HTTP errors): the request-time refusals again if the data changed before the task ran (`NOT_A_LEGACY_CUSTOMER`, `ORGANIZATION_NOT_FOUND`, `ALREADY_A_MEMBER`, `UNKNOWN_TEAM`), `PLACEMENT_FAILED` (nothing moved, or `rollbackRequired`), `PLACEMENT_VERIFICATION_FAILED` (`details.verification`, `details.rolledBack`; `status` is then `rolled_back`), `ROLLBACK_CONFLICT`, `ORGANIZATION_IN_USE`, `USER_IS_OWNER`, and `PLACEMENT_TASK_ERROR` / `ROLLBACK_TASK_ERROR` for anything unexpected (see the task's log).
+
+Task-mode rules:
+
+- **One at a time.** One placement or rollback per user (409 `PLACEMENT_IN_PROGRESS` / `ROLLBACK_IN_PROGRESS`), and `PLACEMENT_TASK_MAX_CONCURRENT` tasks in total (default 1, because a placement takes exclusive Postgres locks on a live product): past that, 429 `PLACEMENT_CAPACITY_REACHED` with `Retry-After: 30`. Both are unique indexes on the placement journal, so they hold across API instances.
+- **`Idempotency-Key`** (optional header, 1 to 200 printable characters; else 400 `INVALID_IDEMPOTENCY_KEY`). Repeating a request with the same key returns the same run with `replayed: true` and starts no second task, also after the run has finished. The same key on a different request is 409 `IDEMPOTENCY_KEY_REUSED`. Without a key, a repeat while the run is active is the 409 above.
+- **A task that can't be started** answers 503 `PLACEMENT_TASK_START_FAILED` / `ROLLBACK_TASK_START_FAILED` with `details.runId`; nothing moved and the request can be made again.
+- **A stuck task is given up on when a run is read or a new request arrives.** A task that hasn't started 10 minutes after the request fails with `PLACEMENT_TASK_NOT_STARTED` / `ROLLBACK_TASK_NOT_STARTED`. A running task writes a heartbeat every 15 seconds; one silent for 3 minutes fails with `PLACEMENT_TASK_LOST` / `ROLLBACK_TASK_LOST`. Nothing moved unless `rollbackRequired` is true; `task.details.needsOperatorCheck` marks the one case an operator must look at (a rollback that stopped after its MongoDB half). A task given up on cannot commit afterwards: its commit checks the journal, and it stops itself after a minute without a heartbeat. Runbook: [runbooks/ORG_TENANCY_CUTOVER.md](runbooks/ORG_TENANCY_CUTOVER.md), "Place legacy customers".
+- The audit events are the same as the synchronous path's (`organization.legacy_customer.placed` / `.placement_rolled_back` in the target organization and `admin.…` in the staff organization), written by the task and naming the staff member who made the request.
+
+Operators can still run the script by hand as a one-off task on the migrate task definition (`--list`; `--email --admin-email --new-org` or `--org-slug --role`; `--rollback=<runId>`; dry run unless `--apply`). `--task-run=<runId>` is what the API starts.
 
 ## Launch metrics (ORG-505)
 

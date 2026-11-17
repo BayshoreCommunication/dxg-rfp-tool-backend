@@ -46,6 +46,20 @@ from AWS on 2026-08-18 (see "Staging removal" below).
 - IAM role `rfpilot-staging-github-deploy` still exists (remove with
   `npx cdk deploy Rfpilot-Cicd --exclusively`).
 
+**Pending, not deployed (2026-11-17): the API starts placement tasks.** The
+App stack change gives the API task role `ecs:RunTask` on the migrate task
+definition revision (this cluster only) and `iam:PassRole` on its task and
+execution roles (to ECS tasks only), and gives the API container five
+`PLACEMENT_TASK_*` variables. App stack only: Network, Data, Observability
+and `deploy-aws.yml` are unchanged, and the ordinary `production` deploy
+carries it. Nothing has run on AWS: no task was started this way and the
+policy was not exercised. After the deploy, before relying on it: (1) the
+API task definition shows the five variables and the role's policy shows the
+two statements and nothing wider; (2) place one test legacy customer through
+`POST /api/admin/legacy-customers/:userId/placements` and follow
+`docs/runbooks/ORG_TENANCY_CUTOVER.md` section 9 step 2a; (3) roll it back
+the same way. If it does not work, placement by hand (step 2b) is unaffected.
+
 **Deploys since the 2026-09-01 entry below** (all green, ~20 min each):
 2026-11-04 run 41813249552 (SSO, password sign-up, onboarding, Users and
 Teams), 2026-11-08 run 42456189678 (ORG-306 domain-match access requests),

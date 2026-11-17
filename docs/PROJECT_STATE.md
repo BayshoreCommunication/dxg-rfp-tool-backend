@@ -476,6 +476,14 @@ Operational notes:
   the API and cron tasks.
 - Accounts not yet placed in an organization cannot sign in by any method and
   see `ORGANIZATION_SETUP_REQUIRED`; place them with the ORG-110 script.
+- Placement from the admin API on production (decision 2026-11-17): the backend
+  and infrastructure half is done. The API validates and journals the request,
+  starts the ORG-110 script as a one-off task on the migrate task definition and
+  reports the run at `GET /api/admin/legacy-customers/placements/:runId`; the API
+  still never holds the Postgres migration role. Not yet deployed, and never
+  exercised on production: no task has been started this way and the new IAM
+  statements are untested there. The admin app screen that calls it is a
+  separate ticket, still pending; until then operators place by hand as before.
 - A user who still owns RFPs cannot be deleted; reassign first.
 - `scripts/purgeTestAccounts` removes test sign-ups (2026-11-08).
 - M5, ORG-606 (2026-11-10): the organization vendor list backend is merged: `OrganizationVendor` in Mongo and `/api/v1/vendor-list` (list, search, categories, add, edit, archive, restore) with audit events; Owner, Admin and Team Manager edit, Planners read, Viewers have no access; covered by the cross-tenant isolation suite. The settings page and the picker when sending an RFP are ORG-607 (merged 2026-11-11).
