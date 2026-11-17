@@ -106,6 +106,39 @@ cd deploy/aws && npx cdk deploy Rfpilot-<env>-App -c imageTag=sha-<commit> --req
   singleton `cron` service, which deliberately replaces stop-then-start.
   WebSocket notification fan-out remains process-local, so horizontal
   steady-state API scaling still requires Redis pub/sub fan-out.
+- **The API cannot start ECS tasks. For legacy-customer placement it may
+  start executions of one Step Functions state machine**
+  (`rfpilot-<env>-placement`; decision 2026-11-17). Its task role holds
+  `states:StartExecution` on that machine and `states:DescribeExecution` on
+  its executions, and no `ecs:*` or `iam:PassRole`: IAM cannot restrict what
+  an `ecs:RunTask` call overrides, so permission to run a task that holds the
+  migration role would be the migration role. The state machine's definition
+  fixes the cluster, the task definition (`rfpilot-<env>-placement`, its own,
+  holding only `MONGODB_URL` and `POSTGRES_MIGRATION_URL`), the private
+  subnets, the migrate security group, the container and the command; the
+  only input it reads is the run id. Do not add a `.$` path to that
+  definition, do not give the API any ECS permission, and do not point the
+  machine at the migrate task definition (whose command can be anything).
+  The machine's role holds `ecs:RunTask` on that one task definition,
+  `iam:PassRole` on its two roles, and what the `.sync` integration needs
+  (`ecs:DescribeTasks`/`ecs:StopTask` on this cluster's tasks; three
+  `events:` actions on the rule Step Functions manages,
+  `StepFunctionsGetEventsForECSTaskRule`); only Step Functions can assume
+  it, for this account and this state machine (`aws:SourceAccount`,
+  `aws:SourceArn`). What remains trusted is MongoDB: the task acts on what
+  the placement journal and the organization records say, and the API can
+  write those (see `docs/DECISIONS.md`, 2026-11-17). An alarm on the
+  machine's `ExecutionsStarted` is recommended and not built (it belongs in
+  the Observability stack). CloudFormation re-registers the
+  placement task definition with every image and updates the machine in the
+  same deploy, so a placement runs the image the API runs. The deploy
+  workflow is unchanged and its migrate revisions are never used for
+  placement. The machine has no CloudWatch logging (that would need
+  wildcard log-delivery permissions on its role); each execution's history
+  is kept by Step Functions for 90 days and the task logs to
+  `/rfpilot/<env>/placement`. Manual `run-task` on the migrate family keeps
+  working as before. Operating it, switching it off, and "no placements
+  during a deploy": `docs/runbooks/ORG_TENANCY_CUTOVER.md`, section 9 step 2.
 - **ClamAV is fail-closed by design.** If the `clamav` service is down,
   vendor uploads 503 and planner sources sit in `scan_failed` (retryable) —
   that is intended behavior, not an outage to work around. First start
