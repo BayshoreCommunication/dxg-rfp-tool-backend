@@ -17,9 +17,20 @@ const planWrites = securityRateLimit({
   identity: (req: Request) => (req as AuthRequest).user?.userId || req.ip || "unknown",
 });
 
+const accountReads = securityRateLimit({
+  name: "organization-account-read",
+  limit: 300,
+  windowMs: 15 * 60_000,
+  identity: (req: Request) => (req as AuthRequest).user?.userId || req.ip || "unknown",
+});
+
 router.get("/admin/organization-plans", ...staff, controller.list);
 router.get("/admin/organization-plans/:organizationId", ...staff, controller.get);
 // Body: { plan: "free_trial" | "full_access", note?: string }
 router.put("/admin/organization-plans/:organizationId", ...staff, planWrites, controller.change);
+
+// Account-level facts about one organization (counts, settings, the Owner as account contact).
+// No support grant is needed, and no member list or customer content is returned.
+router.get("/admin/organizations/:organizationId", ...staff, accountReads, controller.account);
 
 export default router;
