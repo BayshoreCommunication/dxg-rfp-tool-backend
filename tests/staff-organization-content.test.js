@@ -24,6 +24,11 @@ const OTHER_PROPOSAL = hex("f");
 const TEMPLATE = hex("3");
 const OTHER_TEMPLATE = hex("4");
 const TICKET = hex("5");
+// Tickets in Acme with no usable requester: missing, empty, and what String() makes of a missing id.
+const ORPHAN_TICKETS = Object.fromEntries([undefined, null, "", "undefined", "null", "not-an-id"].map((requesterUserId, index) => {
+  const id = `${index}f`.repeat(12);
+  return [id, { id, organizationId: "a".repeat(24), requesterUserId }];
+}));
 const at = (iso) => new Date(iso);
 const DAY_ONE = at("2026-10-01T00:00:00.000Z");
 
@@ -126,7 +131,7 @@ const setup = () => {
   const content = createStaffOrganizationContent({
     organizations, proposals,
     directory: { async findRfp(id, proposalId) { return (proposalsBy[id] ?? []).some((proposal) => proposal.id === proposalId) ? { id: proposalId } : null; } },
-    tickets: { async find(ticketId) { return ticketId === TICKET ? { id: TICKET, organizationId: ACME, requesterUserId: PLANNER } : null; } },
+    tickets: { async find(ticketId) { return ticketId === TICKET ? { id: TICKET, organizationId: ACME, requesterUserId: PLANNER } : ORPHAN_TICKETS[ticketId] ?? null; } },
     audit: { async append(event) { if (state.failAudit) throw new Error("audit store down"); audit.push(event); } },
     isValidId: (value) => typeof value === "string" && /^[0-9a-f]{24}$/.test(value),
   });
@@ -235,6 +240,28 @@ test("every reader call is given the organization from the path, never the staff
   const organizationsRead = new Set(calls.map((call) => call[1]));
   assert.deepEqual([...organizationsRead], [ACME]);
   assert.equal(calls.some((call) => call.includes(STAFF_ORG)), false);
+});
+
+test("the proposals behind a ticket are the requester's only; a ticket with no requester lists nothing, never the whole organization", async () => {
+  const { content, audit, calls } = setup();
+  const behind = await content.ticketProposals(staff(), TICKET, {});
+  assert.deepEqual(behind.rfps.map((row) => row.id), [PROPOSAL]);
+  assert.equal(calls.find(([method]) => method === "proposals.list")[2].ownerUserId, PLANNER);
+  calls.length = 0;
+  audit.length = 0;
+
+  for (const ticketId of Object.keys(ORPHAN_TICKETS)) {
+    const empty = await content.ticketProposals(staff(), ticketId, { search: "summit" });
+    assert.deepEqual(empty, { organizationId: ACME, rfps: [], pagination: { page: 1, perPage: 20, total: 0, totalPages: 1 } }, JSON.stringify(ORPHAN_TICKETS[ticketId].requesterUserId));
+  }
+  // The organization's proposals were never listed, with or without an owner filter.
+  assert.deepEqual(calls.filter(([method]) => method.startsWith("proposals.")), []);
+  // Each is still one read on the staff side, naming the ticket.
+  assert.deepEqual(audit.map((event) => [event.organizationId, event.action, event.targetId, event.metadata.resource, event.metadata.ticketId]),
+    Object.keys(ORPHAN_TICKETS).map((ticketId) => [STAFF_ORG, "platform.organization_content.read", ACME, "ticket_proposals", ticketId]));
+  // The organization-wide list is unchanged: it passes no owner at all.
+  await content.proposals(staff(), ACME, {});
+  assert.equal("ownerUserId" in calls.find(([method]) => method === "proposals.list")[2], false);
 });
 
 // ── Shapes and allowlists ────────────────────────────────────────────────────────────────────

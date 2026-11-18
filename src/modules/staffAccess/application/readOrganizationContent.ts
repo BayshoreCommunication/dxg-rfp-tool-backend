@@ -138,15 +138,19 @@ export const createStaffOrganizationContent = (dependencies: Dependencies) => {
     staff: PlanStaff,
     organizationId: string,
     query: { page?: unknown; search?: unknown },
-    options: { resource: "proposals" | "ticket_proposals"; ownerUserId?: string; extra?: Record<string, unknown> },
+    // `owner: null` is "this owner's proposals, and there is no such owner": an empty list. Only
+    // a caller that leaves `owner` out lists the whole organization.
+    options: { resource: "proposals" | "ticket_proposals"; owner?: string | null; extra?: Record<string, unknown> },
   ) => {
     const page = pageOf(query.page);
-    const result = await proposals.list(organizationId, {
-      ...(options.ownerUserId ? { ownerUserId: options.ownerUserId } : {}),
-      search: searchOf(query.search),
-      skip: (page - 1) * STAFF_PER_PAGE,
-      limit: STAFF_PER_PAGE,
-    });
+    const result = options.owner === null
+      ? { rfps: [], total: 0 }
+      : await proposals.list(organizationId, {
+        ...(options.owner !== undefined ? { ownerUserId: options.owner } : {}),
+        search: searchOf(query.search),
+        skip: (page - 1) * STAFF_PER_PAGE,
+        limit: STAFF_PER_PAGE,
+      });
     await recordRead(staff, organizationId, options.resource, options.extra);
     return { organizationId, rfps: result.rfps, pagination: pagination(page, STAFF_PER_PAGE, result.total) };
   };
@@ -196,7 +200,9 @@ export const createStaffOrganizationContent = (dependencies: Dependencies) => {
       if (!ticket) return refuse(staff, ticketNotFound(), "ticket_proposals", { extra: { ticketId: asTyped(ticketId) } });
       return listProposals(staff, ticket.organizationId, query, {
         resource: "ticket_proposals",
-        ownerUserId: ticket.requesterUserId,
+        // A ticket with no requester (or an unusable one) has no proposals behind it. It must
+        // never fall back to the whole organization under the `ticket_proposals` label.
+        owner: typeof ticket.requesterUserId === "string" && dependencies.isValidId(ticket.requesterUserId) ? ticket.requesterUserId : null,
         extra: { ticketId: ticket.id },
       });
     },
