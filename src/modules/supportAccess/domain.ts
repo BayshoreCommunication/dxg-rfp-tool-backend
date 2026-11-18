@@ -103,14 +103,6 @@ export const isSupportAgent = (agent: Pick<SupportAgent, "role" | "accountType">
 
 export type GrantedRfp = RfpRef & { id: string; title: string };
 
-export type SupportActivityEvent = {
-  at: Date;
-  agentId: string | null;
-  operation: string;
-  targetType: string;
-  targetId: string | null;
-};
-
 export type SupportActivitySummary = { useCount: number; lastUsedAt: Date | null };
 
 export interface SupportGrantRepository {
@@ -129,11 +121,6 @@ export interface SupportAccessDirectory {
   rfpTitles(organizationId: string, proposalIds: readonly string[]): Promise<Map<string, string>>;
   memberNames(organizationId: string, userIds: readonly string[]): Promise<Map<string, string>>;
   organizationNames(organizationIds: readonly string[]): Promise<Map<string, string>>;
-}
-
-export interface SupportActivityLog {
-  summarize(organizationId: string, grantIds: readonly string[]): Promise<Map<string, SupportActivitySummary>>;
-  listForGrant(organizationId: string, grantId: string, limit: number): Promise<SupportActivityEvent[]>;
 }
 
 export type GrantedRfpListItem = {

@@ -346,3 +346,42 @@ test("ticket content and the proposals behind the ticket are both readable by st
   // support-desk-cross-organization.test.ts.)
   assert.equal((await call(agentToken, "GET", `/api/v1/admin/support/tickets/${randomMongoId()}/rfps`)).status, 404);
 });
+
+// Rows written before the decision of 2026-11-17 stay in the customer organization's trail. The
+// customer's grant list and detail must not show them. Last in the file, and the seeded rows are
+// removed again, so the `staffWrites(...) === 0` checks above never see them.
+test("stored support_access.used rows are kept but never shown on the customer's grant list or detail", async () => {
+  const grant = await SupportAccessGrant.findOne({ organizationId: acme.organizationId, proposalId: null }).lean();
+  assert.ok(grant, "the organization-wide grant created above");
+  const grantId = String(grant!._id);
+  const stored = (operation: string, targetId: string) => ({
+    organizationId: oid(acme.organizationId), actorUserId: dxg.agent, action: "support_access.used", targetType: "proposal", targetId,
+    decision: "allowed", reason: operation, correlationId: `stored-${tag}`,
+    metadata: { grantId, operation, agentAccountType: "admin" }, createdAt: new Date(Date.now() - DAY), updatedAt: new Date(Date.now() - DAY),
+  });
+  await SecurityAuditEvent.collection.insertMany([stored("rfp.read", acmeRfps[0]), stored("rfp.vendor_responses", acmeRfps[0]), stored("rfp.read", acmeRfps[1])]);
+  try {
+    assert.equal((await events(acme.organizationId, "support_access.used")).length, 3, "the rows are stored");
+
+    for (const role of ["owner", "organization_admin"] as const) {
+      const listed = await call(acme.members[role].accessToken, "GET", GRANTS);
+      assert.equal(listed.status, 200, JSON.stringify(listed.body));
+      const mine = listed.body.data.grants.find((g: any) => g.id === grantId);
+      assert.deepEqual(mine.activity, { useCount: 0, lastUsedAt: null }, role);
+      for (const g of listed.body.data.grants) assert.deepEqual(g.activity, { useCount: 0, lastUsedAt: null }, role);
+
+      const view = await call(acme.members[role].accessToken, "GET", `${GRANTS}/${grantId}`);
+      assert.equal(view.status, 200, JSON.stringify(view.body));
+      assert.deepEqual(view.body.data.activity, { useCount: 0, lastUsedAt: null }, role);
+      assert.deepEqual(view.body.data.events, [], role);
+      for (const body of [listed.body, view.body]) {
+        const json = JSON.stringify(body);
+        for (const hidden of [String(dxg.agent), "RFPilot Support", "Staff Agent", "rfp.read", "rfp.vendor_responses"]) assert.equal(json.includes(hidden), false, `${role}: ${hidden}`);
+      }
+    }
+    // Hidden, not deleted.
+    assert.equal((await events(acme.organizationId, "support_access.used")).length, 3);
+  } finally {
+    await SecurityAuditEvent.collection.deleteMany({ correlationId: `stored-${tag}` });
+  }
+});

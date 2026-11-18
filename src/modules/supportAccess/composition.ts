@@ -5,14 +5,12 @@ import { staffOrganizationContent } from "../staffAccess/composition";
 import {
   isValidSupportAccessId,
   mongoSupportAccessDirectory,
-  mongoSupportActivityLog,
   mongoSupportGrantRepository,
 } from "./infrastructure/mongoSupportAccessRepository";
 
 export const supportGrantManagement = createSupportGrantManagement({
   grants: mongoSupportGrantRepository,
   directory: mongoSupportAccessDirectory,
-  activity: mongoSupportActivityLog,
   audit: mongoSecurityAuditWriter,
   isValidId: isValidSupportAccessId,
 });

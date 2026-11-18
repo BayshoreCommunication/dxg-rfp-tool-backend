@@ -1,17 +1,14 @@
 import mongoose from "mongoose";
 import Organization from "../../../../modal/organizationModel";
 import Proposal from "../../../../modal/proposalsModel";
-import SecurityAuditEvent from "../../../../modal/securityAuditEventModel";
 import SupportAccessGrant from "../../../../modal/supportAccessGrantModel";
 import User from "../../../../modal/userModel";
 import VendorResponse from "../../../../modal/vendorResponseModel";
 import { mongoSupportDeskRepository } from "../../supportDesk/infrastructure/mongo/mongoSupportDeskRepository";
 import {
-  SUPPORT_AUDIT,
   type GrantedRfpListItem,
   type GrantedRfpReader,
   type SupportAccessDirectory,
-  type SupportActivityLog,
   type SupportGrantRecord,
   type SupportGrantRepository,
   type SupportTicketLookup,
@@ -125,30 +122,6 @@ export const mongoSupportAccessDirectory: SupportAccessDirectory = {
     if (ids.length === 0) return new Map();
     const docs = await Organization.find({ _id: { $in: ids.map(oid) } }).select("name").lean();
     return new Map(docs.map((doc) => [String(doc._id), String(doc.name ?? "")]));
-  },
-};
-
-// SecurityAuditEvent rows written by createSupportAccess, read back for the organization that owns them.
-export const mongoSupportActivityLog: SupportActivityLog = {
-  async summarize(organizationId, grantIds) {
-    if (grantIds.length === 0) return new Map();
-    const rows = await SecurityAuditEvent.aggregate<{ _id: string; useCount: number; lastUsedAt: Date }>([
-      { $match: { organizationId: oid(organizationId), action: SUPPORT_AUDIT.used, "metadata.grantId": { $in: [...grantIds] } } },
-      { $group: { _id: "$metadata.grantId", useCount: { $sum: 1 }, lastUsedAt: { $max: "$createdAt" } } },
-    ]);
-    return new Map(rows.map((row) => [String(row._id), { useCount: row.useCount, lastUsedAt: row.lastUsedAt }]));
-  },
-
-  async listForGrant(organizationId, grantId, limit) {
-    const docs = await SecurityAuditEvent.find({ organizationId: oid(organizationId), action: SUPPORT_AUDIT.used, "metadata.grantId": grantId })
-      .sort({ createdAt: -1 }).limit(limit).lean();
-    return docs.map((doc) => ({
-      at: doc.createdAt,
-      agentId: doc.actorUserId ? String(doc.actorUserId) : null,
-      operation: String((doc.metadata as Record<string, unknown> | undefined)?.operation ?? doc.reason),
-      targetType: doc.targetType,
-      targetId: doc.targetId ?? null,
-    }));
   },
 };
 

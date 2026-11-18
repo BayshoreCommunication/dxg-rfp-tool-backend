@@ -53,7 +53,7 @@ const setup = () => {
     [OTHER_RFP]: { id: OTHER_RFP, organizationId: OTHER_ORG, ownerUserId: OTHER_OWNER, teamId: null, title: "Foreign gala" },
   };
   const tickets = { [TICKET]: { id: TICKET, organizationId: ORG, requesterUserId: PLANNER } };
-  const state = { failAudit: false };
+  const state = { failAudit: false, activityCalls: 0 };
   const grants = {
     async create(input) {
       const row = { id: String(++sequence).padStart(24, "0"), ...input, createdAt: new Date(now), revokedAt: null, revokedBy: null };
@@ -90,11 +90,13 @@ const setup = () => {
   };
   const activity = {
     async summarize(organizationId, ids) {
+      state.activityCalls += 1;
       const uses = audit.filter((e) => e.organizationId === organizationId && e.action === "support_access.used");
       return new Map(ids.map((id) => [id, { useCount: uses.filter((e) => e.metadata.grantId === id).length, lastUsedAt: uses.some((e) => e.metadata.grantId === id) ? now : null }])
         .filter(([, summary]) => summary.useCount > 0));
     },
     async listForGrant(organizationId, grantId) {
+      state.activityCalls += 1;
       return audit.filter((e) => e.organizationId === organizationId && e.action === "support_access.used" && e.metadata.grantId === grantId)
         .map((e) => ({ at: now, agentId: e.actorUserId, operation: e.metadata.operation, targetType: e.targetType, targetId: e.targetId }));
     },
@@ -289,6 +291,35 @@ test("every read writes one event in the staff organization naming the staff mem
   const view = await management.get(member(ADMIN), grant.id);
   assert.equal(view.activity.useCount, 0);
   assert.deepEqual(view.events, []);
+});
+
+// Rows written before the decision of 2026-11-17 are kept, and are never shown to the customer.
+test("stored support_access.used rows are not returned by the customer grant list or detail, and are never read", async () => {
+  const { management, audit, state } = setup();
+  const grant = await management.create(member(OWNER), { proposalId: RFP_ONE });
+  const stored = (operation) => ({
+    organizationId: ORG, actorUserId: AGENT, action: "support_access.used", targetType: "proposal", targetId: RFP_ONE,
+    decision: "allowed", reason: operation, correlationId: "corr-old", metadata: { grantId: grant.id, operation, agentAccountType: "admin" },
+  });
+  audit.push(stored("rfp.read"), stored("rfp.vendor_responses"));
+
+  const listed = await management.list(member(ADMIN), {});
+  assert.deepEqual(listed.grants.map((g) => [g.id, g.activity]), [[grant.id, { useCount: 0, lastUsedAt: null }]]);
+  const view = await management.get(member(OWNER), grant.id);
+  assert.deepEqual(view.activity, { useCount: 0, lastUsedAt: null });
+  assert.deepEqual(view.events, []);
+  // The shape of the answer is unchanged.
+  assert.deepEqual(Object.keys(view).sort(), ["activity", "createdAt", "events", "expiresAt", "grantedBy", "id", "reason", "revokedAt", "revokedBy", "rfp", "scope", "status"]);
+  const revoked = await management.revoke(member(OWNER), grant.id);
+  assert.deepEqual(revoked.activity, { useCount: 0, lastUsedAt: null });
+  for (const answer of [listed, view, revoked]) {
+    const json = JSON.stringify(answer);
+    for (const hidden of [AGENT, "RFPilot Support", "rfp.read", "rfp.vendor_responses"]) assert.equal(json.includes(hidden), false, hidden);
+  }
+  assert.equal(state.activityCalls, 0, "the stored rows are never read");
+  assert.equal(uses(audit).length, 2, "and they are kept");
+  const service = require("node:fs").readFileSync(require("node:path").join(__dirname, "../src/modules/supportAccess/application/manageSupportGrants.ts"), "utf8");
+  assert.doesNotMatch(service, /activity\.(summarize|listForGrant)|SupportActivityLog/);
 });
 
 // The answers keep the shape the deployed admin app parses: where they carried the grant, they
