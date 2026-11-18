@@ -115,3 +115,36 @@ export interface StaffOrganizationReader {
 
 export type StaffProposalListItem = GrantedRfpListItem;
 export type StaffVendorResponse = GrantedVendorResponse;
+
+/* Staff member management (owner decision, 2026-11-18; docs/DECISIONS.md). RFPilot staff change
+   a member's role, deactivate and reactivate a member, reassign a member's proposals and
+   transfer ownership, in any customer organization, under the same rules its own Owner and
+   Admins work under. Every request that reaches the service as staff leaves exactly one event in
+   the STAFF organization's audit trail (allowed or denied, under the same action name); nothing
+   is written to the customer organization's. `platform.*` is never shown in a customer audit log. */
+export const STAFF_MEMBER_AUDIT = {
+  read: "platform.organization_member.read",
+  roleChanged: "platform.organization_member.role_changed",
+  deactivated: "platform.organization_member.deactivated",
+  reactivated: "platform.organization_member.reactivated",
+  proposalsReassigned: "platform.organization_member.proposals_reassigned",
+  ownershipTransferred: "platform.organization_member.ownership_transferred",
+} as const;
+
+/** A refusal of a staff member request. `details` are sent with the answer, beside code and message. */
+export class StaffMemberError extends StaffAccessError {
+  constructor(code: string, message: string, status: number, readonly details?: Record<string, unknown>) {
+    super(code, message, status);
+    this.name = "StaffMemberError";
+  }
+}
+
+/** What decides whether staff may manage an organization's members. */
+export type StaffManagedOrganization = { id: string; kind: string; staffAccountCount: number };
+
+/* One member of the organization the path names, and that organization's standing. Both
+   queries name the organization; a member of another organization is not found. */
+export interface StaffMemberDirectory {
+  organization(organizationId: string): Promise<StaffManagedOrganization | null>;
+  member(organizationId: string, userId: string): Promise<{ member: StaffMemberView; version: number } | null>;
+}
