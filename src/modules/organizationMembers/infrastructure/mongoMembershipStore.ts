@@ -1,9 +1,11 @@
 import mongoose, { type ClientSession } from "mongoose";
 import OrganizationMembership from "../../../../modal/organizationMembershipModel";
 import Proposal from "../../../../modal/proposalsModel";
+import SecurityAuditEvent from "../../../../modal/securityAuditEventModel";
 import User from "../../../../modal/userModel";
+import { safeAuditMetadata } from "../../auth/infrastructure/audit/mongoSecurityAuditWriter";
 import { canOwnRfps, withCustomerRole, type MemberStatus } from "../domain/memberPolicy";
-import type { MemberRecord, MembershipStore, RfpReassignmentStore } from "../domain/ports";
+import type { MemberChangeAudit, MemberRecord, MembershipStore, RfpReassignmentStore } from "../domain/ports";
 
 const RFP_OWNER_ROLES = ["owner", "organization_admin", "team_manager", "planner"];
 
@@ -43,6 +45,25 @@ class Abort extends Error {
   constructor(readonly outcome: "stale" | "not_owner") { super(outcome); }
 }
 
+/* The audit event of a staff change, inserted in the transaction that makes the change: both
+   commit or neither does. It goes to `audit.organizationId` (the STAFF organization), which is
+   not the organization of the membership being changed; nothing is written to that one. */
+const MAX_AUDITED_RFP_IDS = 1000;
+const appendAudit = async (audit: MemberChangeAudit | undefined, session: ClientSession, extra: Record<string, unknown> = {}) => {
+  if (!audit) return;
+  await SecurityAuditEvent.create([{
+    organizationId: objectId(audit.organizationId),
+    actorUserId: objectId(audit.actorUserId),
+    action: audit.action,
+    targetType: audit.targetType,
+    targetId: audit.targetId,
+    decision: "allowed",
+    reason: audit.reason,
+    correlationId: audit.correlationId,
+    metadata: safeAuditMetadata({ ...audit.metadata, ...extra }),
+  }], { session });
+};
+
 // Proposal.userId is the owner (modal/proposalsModel.ts).
 export const countOwnedRfps = (organizationId: string, userId: string, session?: ClientSession) =>
   Proposal.countDocuments({ organizationId: objectId(organizationId), userId: objectId(userId) }).session(session ?? null);
@@ -81,7 +102,8 @@ export const mongoMembershipStore: MembershipStore = {
   // count commit together, so a concurrent reassignment to this member (which writes the same
   // membership in its transaction) either sees the Viewer and refuses or is counted here.
   async setRoles(input) {
-    if (canOwnRfps(input.roles)) {
+    const mayOwnRfps = canOwnRfps(input.roles);
+    if (mayOwnRfps && !input.audit) {
       const row = await updateVersioned(input, {}, { $set: { roles: input.roles } });
       return row ? ((await withUser(row)) as MemberRecord) : "stale";
     }
@@ -91,8 +113,11 @@ export const mongoMembershipStore: MembershipStore = {
       await session.withTransaction(async () => {
         row = await updateVersioned(input, {}, { $set: { roles: input.roles } }, session);
         if (!row) return;
-        const owned = await countOwnedRfps(input.organizationId, input.userId, session);
-        if (owned > 0) throw new OwnedRfps(owned);
+        if (!mayOwnRfps) {
+          const owned = await countOwnedRfps(input.organizationId, input.userId, session);
+          if (owned > 0) throw new OwnedRfps(owned);
+        }
+        await appendAudit(input.audit, session);
       });
     } catch (error) {
       if (error instanceof OwnedRfps) return { ownedRfpCount: error.count };
@@ -115,6 +140,7 @@ export const mongoMembershipStore: MembershipStore = {
         if (!row) return;
         const owned = await countOwnedRfps(input.organizationId, input.userId, session);
         if (owned > 0) throw new OwnedRfps(owned);
+        await appendAudit(input.audit, session);
       });
     } catch (error) {
       if (error instanceof OwnedRfps) return { ownedRfpCount: error.count };
@@ -130,13 +156,27 @@ export const mongoMembershipStore: MembershipStore = {
         { organizationId: objectId(input.organizationId), userId: objectId(input.userId), status: "suspended" },
         { $set: { status: "active", suspendedAt: null }, $inc: { version: 1 } },
       );
-      return { ownedRfpCount: owned };
+      return { ownedRfpCount: owned, reverted: true };
     }
     return (await withUser(row)) as MemberRecord;
   },
 
   async reactivate(input) {
-    const row = await updateVersioned(input, { status: "suspended" }, { $set: { status: "active", suspendedAt: null, activatedAt: new Date() } });
+    const update = { $set: { status: "active", suspendedAt: null, activatedAt: new Date() } };
+    if (!input.audit) {
+      const row = await updateVersioned(input, { status: "suspended" }, update);
+      return row ? ((await withUser(row)) as MemberRecord) : "stale";
+    }
+    const session = await mongoose.startSession();
+    let row = null as MembershipRow | null;
+    try {
+      await session.withTransaction(async () => {
+        row = await updateVersioned(input, { status: "suspended" }, update, session);
+        if (row) await appendAudit(input.audit, session);
+      });
+    } finally {
+      await session.endSession();
+    }
     return row ? ((await withUser(row)) as MemberRecord) : "stale";
   },
 
@@ -169,6 +209,7 @@ export const mongoMembershipStore: MembershipStore = {
           { status: "active" }, { $set: { roles: withCustomerRole(target.roles ?? [], "owner") } }, session,
         );
         if (!to) throw new Abort("stale");
+        await appendAudit(input.audit, session);
         rows = { from, to };
       });
     } catch (error) {
@@ -179,6 +220,11 @@ export const mongoMembershipStore: MembershipStore = {
     }
     const { from, to } = rows!;
     return { from: (await withUser(from))!, to: (await withUser(to))! };
+  },
+
+  async activeOwner(organizationId) {
+    return withUser(await OrganizationMembership.findOne({ organizationId: objectId(organizationId), status: "active", roles: "owner" })
+      .select(MEMBER_FIELDS).lean<MembershipRow | null>());
   },
 };
 
@@ -214,6 +260,11 @@ export const mongoRfpReassignmentStore: RfpReassignmentStore = {
         // tenant-scoped: filter is built from organizationId above
         if (ids.length) await Proposal.updateMany({ organizationId, _id: { $in: ids }, userId: objectId(input.fromUserId) }, { $set: { userId: objectId(input.toUserId) } }, { session });
         moved = ids.map(String);
+        await appendAudit(input.audit, session, {
+          reassignedCount: moved.length,
+          rfpIds: moved.slice(0, MAX_AUDITED_RFP_IDS),
+          ...(moved.length > MAX_AUDITED_RFP_IDS ? { rfpIdsTruncated: true } : {}),
+        });
       });
     } catch (error) {
       if (error instanceof NotOwned) return { notOwnedCount: error.count };

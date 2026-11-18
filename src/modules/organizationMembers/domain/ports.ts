@@ -14,6 +14,22 @@ export type MemberRecord = {
 
 export type TeamRef = { id: string; name: string };
 
+/* An audit event a write commits together with the change (RFPilot staff changes; owner decision
+   2026-11-18). When a write is given one, the event is inserted in the SAME transaction as the
+   change, so the change is never applied without its record and never recorded without being
+   applied. `organizationId` is the organization whose audit trail receives the event: for a staff
+   change that is the STAFF organization, never the member's own. */
+export type MemberChangeAudit = {
+  organizationId: string;
+  actorUserId: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  reason: string;
+  correlationId: string;
+  metadata: Record<string, unknown>;
+};
+
 // Optimistic writes take the version the caller last read and return "stale" when it moved.
 export interface MembershipStore {
   list(organizationId: string): Promise<MemberRecord[]>;
@@ -21,23 +37,31 @@ export interface MembershipStore {
   countOwnedRfps(organizationId: string, userId: string): Promise<number>;
   // When the new roles can't own RFPs, refuses with ownedRfpCount if the member owns one when
   // the change commits.
-  setRoles(input: { organizationId: string; userId: string; expectedVersion: number; roles: string[] }): Promise<MemberRecord | "stale" | { ownedRfpCount: number }>;
-  // Refuses with owns_rfps when the member owns an RFP when the change commits.
-  deactivate(input: { organizationId: string; userId: string; expectedVersion: number; now: Date }): Promise<MemberRecord | "stale" | { ownedRfpCount: number }>;
-  reactivate(input: { organizationId: string; userId: string; expectedVersion: number }): Promise<MemberRecord | "stale">;
+  setRoles(input: { organizationId: string; userId: string; expectedVersion: number; roles: string[]; audit?: MemberChangeAudit }): Promise<MemberRecord | "stale" | { ownedRfpCount: number }>;
+  // Refuses with owns_rfps when the member owns an RFP when the change commits. `reverted` marks
+  // the rare refusal that came after the commit (an RFP created while it committed): the member
+  // was put back, and an `audit` event given with the change was already written.
+  deactivate(input: { organizationId: string; userId: string; expectedVersion: number; now: Date; audit?: MemberChangeAudit }): Promise<MemberRecord | "stale" | { ownedRfpCount: number; reverted?: boolean }>;
+  reactivate(input: { organizationId: string; userId: string; expectedVersion: number; audit?: MemberChangeAudit }): Promise<MemberRecord | "stale">;
   // Bumps the version for a change stored elsewhere (team memberships).
   bumpVersion(input: { organizationId: string; userId: string; expectedVersion: number }): Promise<MemberRecord | "stale">;
   // One transaction: the current Owner becomes organization_admin and the target becomes Owner.
   // not_owner when the actor is no longer the active Owner when it commits.
   transferOwnership(input: {
-    organizationId: string; fromUserId: string; toUserId: string; expectedTargetVersion: number;
+    organizationId: string; fromUserId: string; toUserId: string; expectedTargetVersion: number; audit?: MemberChangeAudit;
   }): Promise<{ from: MemberRecord; to: MemberRecord } | "stale" | "not_owner">;
+  // The organization's one active Owner, for a transfer started by someone who is not the Owner
+  // (RFPilot staff). Null when there is none.
+  activeOwner(organizationId: string): Promise<MemberRecord | null>;
 }
 
 // ORG-207: moves RFPs owned by one member to another in one transaction. rfpIds null = all.
 export interface RfpReassignmentStore {
+  // `audit`, when given, is written in the same transaction with `reassignedCount` and the moved
+  // `rfpIds` (the first 1,000) added to its metadata. Nothing is written when nothing is moved
+  // because the target is ineligible or a selected RFP isn't the member's.
   reassign(input: {
-    organizationId: string; fromUserId: string; toUserId: string; rfpIds: string[] | null;
+    organizationId: string; fromUserId: string; toUserId: string; rfpIds: string[] | null; audit?: MemberChangeAudit;
   }): Promise<{ rfpIds: string[] } | "target_ineligible" | { notOwnedCount: number }>;
 }
 // Mirrors the new owner into secondary stores (the Postgres proposal reference). Best effort:

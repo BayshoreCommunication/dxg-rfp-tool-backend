@@ -199,8 +199,7 @@ export const beginAuthenticatedSession = async (input: {
 // A claim is a lease: a request that died mid-revocation frees it after REVOCATION_LEASE_MS.
 const REVOCATION_LEASE_MS = 30_000;
 const membershipFilter = (organizationId: string, userId: string) => ({ organizationId, userId });
-export const membershipSessions = createMembershipSessionHardening({
-  revokeOtherSessions: (input) => authenticationSessions.revokeOtherSessions(input),
+const membershipRevocationFlags: Omit<Parameters<typeof createMembershipSessionHardening>[0], "revokeOtherSessions"> = {
   // Re-flagging drops any lease, so a revocation already running can't clear the newer flag.
   markRevocationPending: async ({ organizationId, userId }) => {
     await OrganizationMembership.updateOne(membershipFilter(organizationId, userId), { $set: { sessionRevocationPending: true, sessionRevocationClaim: null } });
@@ -227,4 +226,21 @@ export const membershipSessions = createMembershipSessionHardening({
       { $set: { sessionRevocationClaim: null } },
     );
   },
+};
+export const membershipSessions = createMembershipSessionHardening({
+  revokeOtherSessions: (input) => authenticationSessions.revokeOtherSessions(input),
+  ...membershipRevocationFlags,
+});
+
+/* The same ORG-307 rules for a membership change made by RFPILOT STAFF (owner decision,
+   2026-11-18; docs/DECISIONS.md). The member's sessions end exactly as they do when a member of
+   the organization makes the change. The one difference: the revocation is NOT written to the
+   member's organization's audit trail, because `auth.sessions.revoked_others` there would carry
+   the staff account as its actor and customers see no staff activity. The staff-side event of
+   the change itself is the record. Use only from the staff member routes. */
+export const staffMembershipSessions = createMembershipSessionHardening({
+  revokeOtherSessions: (input) => mongoRefreshSessionRepository.revokeAll({
+    userId: input.userId, organizationId: input.organizationId, reason: input.reason, now: new Date(), exceptSessionId: input.exceptSessionId,
+  }),
+  ...membershipRevocationFlags,
 });
