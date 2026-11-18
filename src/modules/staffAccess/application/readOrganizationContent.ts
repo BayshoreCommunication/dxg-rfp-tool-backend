@@ -4,6 +4,7 @@ import {
   STAFF_CONTENT_AUDIT,
   StaffAccessError,
   type StaffContentResource,
+  type StaffMemberView,
   type StaffOrganizationReader,
   type StaffOrganizationRef,
 } from "../domain";
@@ -219,16 +220,7 @@ export const createStaffOrganizationContent = (dependencies: Dependencies) => {
       await recordRead(staff, organization.id, "members");
       return {
         organizationId: organization.id,
-        members: members.members.map((member) => ({
-          userId: member.userId,
-          name: member.name,
-          email: member.email,
-          roles: [...member.roles],
-          status: member.status,
-          teams: member.teams.map((team) => ({ id: team.id, name: team.name, archived: team.archived, isManager: team.isManager })),
-          joinedAt: member.joinedAt,
-          lastSignedInAt: member.lastSignedInAt,
-        })),
+        members: members.members.map(staffMemberView),
         pagination: pagination(page, STAFF_MEMBERS_PER_PAGE, members.total),
         pendingInvitations: invitations.invitations.map((invitation) => ({
           id: invitation.id,
@@ -320,6 +312,19 @@ export const createStaffOrganizationContent = (dependencies: Dependencies) => {
     },
   };
 };
+
+// The member allowlist: the only shape in which a member reaches a staff response, from the
+// members read above and from the staff member management routes (manageOrganizationMembers.ts).
+export const staffMemberView = (member: StaffMemberView): StaffMemberView => ({
+  userId: member.userId,
+  name: member.name,
+  email: member.email,
+  roles: [...member.roles],
+  status: member.status,
+  teams: member.teams.map((team) => ({ id: team.id, name: team.name, archived: team.archived, isManager: team.isManager })),
+  joinedAt: member.joinedAt,
+  lastSignedInAt: member.lastSignedInAt,
+});
 
 // Field by field, so nothing else a reader hands back reaches the response.
 const summaryOf = (template: {

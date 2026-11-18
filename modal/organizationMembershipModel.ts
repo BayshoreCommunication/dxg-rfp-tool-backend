@@ -39,6 +39,15 @@ export interface IOrganizationMembership extends Document {
   sessionRevocationPending?: boolean;
   // The request currently revoking for the pending flag; the flag clears only after it succeeds.
   sessionRevocationClaim?: { sessionId: string; at: Date } | null;
+  // Staff member management (owner decision, 2026-11-18). Internal markers, never returned by an
+  // API: both name the RFPilot staff organization and account whose change caused a session
+  // revocation, so the revocation is recorded there and not in this organization's audit trail.
+  // sessionRevocationStaff: set with the pending flag by a staff role change; cleared when the
+  // flag is completed or a member of the organization sets it again.
+  sessionRevocationStaff?: { organizationId?: string | null; actorUserId?: string | null } | null;
+  // suspendedByStaff: set in the transaction of a staff deactivation; cleared by any later
+  // deactivation or reactivation.
+  suspendedByStaff?: { organizationId?: string | null; actorUserId?: string | null } | null;
   migrationRunId?: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -64,6 +73,8 @@ const organizationMembershipSchema = new Schema<IOrganizationMembership>(
     firstRfpOpenedAt: { type: Date, default: null },
     sessionRevocationPending: { type: Boolean, default: false },
     sessionRevocationClaim: { type: new Schema({ sessionId: String, at: Date }, { _id: false }), default: null },
+    sessionRevocationStaff: { type: new Schema({ organizationId: String, actorUserId: String }, { _id: false }) },
+    suspendedByStaff: { type: new Schema({ organizationId: String, actorUserId: String }, { _id: false }) },
     migrationRunId: { type: String, trim: true, default: null },
   },
   { timestamps: true },

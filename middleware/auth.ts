@@ -10,7 +10,7 @@ import { hasOrganizationAction, legacyAuthorizationRoles, OrganizationAction } f
 import type { RfpActor } from "../src/modules/identity/domain/rfpAccessPolicy";
 import { ActorLookups, resolveRfpActor } from "../src/modules/identity/application/resolveRfpActor";
 import { mongoActorLookups } from "../src/modules/identity/application/mongoActorLookups";
-import { authenticationSessions, membershipSessions } from "../src/modules/auth/composition";
+import { revokeInactiveMembershipSessions, revokeOtherSessionsAfterMembershipChange } from "../src/modules/auth/composition";
 import { ORGANIZATION_SETUP_REQUIRED } from "../src/modules/auth/infrastructure/mongo/organizationSetup";
 
 // Extend Express Request to include user
@@ -28,8 +28,8 @@ type AuthenticateDependencies = {
 };
 
 const defaultDependencies: AuthenticateDependencies = {
-  revokeInactiveMembership: (input) => authenticationSessions.revokeInactiveMembership(input),
-  revokeOtherSessionsAfterRoleChange: (input) => membershipSessions.onRequestWithPendingRevocation(input),
+  revokeInactiveMembership: (input) => revokeInactiveMembershipSessions(input),
+  revokeOtherSessionsAfterRoleChange: (input) => revokeOtherSessionsAfterMembershipChange(input),
   actorLookups: mongoActorLookups,
 };
 

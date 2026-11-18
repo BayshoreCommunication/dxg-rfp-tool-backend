@@ -33,6 +33,7 @@ export const mongoRefreshSessionRepository: RefreshSessionRepository = {
       rotationCount: token.rotationCount ?? 0,
       lastRotation: token.lastRotation,
       status: token.status,
+      revokeReason: token.revokeReason ?? null,
       expiresAt: token.expiresAt,
       idleExpiresAt: token.idleExpiresAt,
     } : null;

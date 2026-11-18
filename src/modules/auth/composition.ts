@@ -20,9 +20,11 @@ import { cryptoSecretGenerator } from "./infrastructure/security/cryptoSecretGen
 import { googleIdTokenVerifier } from "./infrastructure/identity/googleIdTokenVerifier";
 import { createSessionManager } from "./application/manageSessions";
 import { createMembershipSessionHardening } from "./application/membershipSessionHardening";
+import { createStaffCausedSessionRevocation, type StaffCause } from "./application/staffCausedSessionRevocation";
 import { mongoRefreshSessionRepository } from "./infrastructure/mongo/mongoRefreshSessionRepository";
 import { mongoSessionAccountLoader } from "./infrastructure/mongo/mongoSessionAccountLoader";
 import { jwtSessionAccessTokenIssuer } from "./infrastructure/security/jwtSessionAccessTokenIssuer";
+import { STAFF_MEMBERSHIP_REVOKE_REASON } from "./domain/ports/sessionPorts";
 import { mongoSecurityAuditWriter } from "./infrastructure/audit/mongoSecurityAuditWriter";
 import { hmacOtpCodeHasher } from "./infrastructure/security/hmacOtpCodeHasher";
 import {
@@ -116,12 +118,28 @@ export const authenticateGoogleIdentity = createAuthenticateGoogleIdentity({
   domainOrganizationFor: organizationForEmailDomain,
 });
 
+/* Markers of a membership change made by RFPILOT STAFF (owner decision, 2026-11-18;
+   docs/DECISIONS.md "Staff member management"). Customers see no staff activity, so a session
+   revocation a staff change causes is not written to the member's organization's audit trail.
+   The cause is data the staff flow stores, never a guess:
+   - `suspendedByStaff` on the membership: written in the transaction of a staff deactivation.
+   - `sessionRevocationStaff` on the membership: written with the pending-revocation flag.
+   - revoke reason STAFF_MEMBERSHIP_REVOKE_REASON on every refresh session ended for either.
+   Each names the staff organization and account, which is where the revocation is recorded. */
+const suspendedByStaff = async (member: { organizationId: string; userId: string }): Promise<StaffCause | null> => {
+  const row = await OrganizationMembership.findOne({ organizationId: member.organizationId, userId: member.userId, status: "suspended" })
+    .select("suspendedByStaff").lean<{ suspendedByStaff?: StaffCause | null } | null>();
+  return row?.suspendedByStaff ?? null;
+};
+
 export const authenticationSessions = createSessionManager({
   sessions: mongoRefreshSessionRepository,
   accounts: mongoSessionAccountLoader,
   accessTokens: jwtSessionAccessTokenIssuer,
   audit: mongoSecurityAuditWriter,
   refreshTokenTtlMs: REFRESH_TOKEN_EXPIRY_MS,
+  // A refresh by a member whom staff deactivated ends the session for the staff reason.
+  inactiveMembershipReason: async (member) => ((await suspendedByStaff(member)) ? STAFF_MEMBERSHIP_REVOKE_REASON : "membership_inactive"),
   deriveRefreshToken: (previous, operationKey) => {
     const secret = process.env.BFF_SHARED_SECRET?.trim();
     if (!secret) throw new Error('BFF_SHARED_SECRET is required for refresh handoff');
@@ -199,17 +217,16 @@ export const beginAuthenticatedSession = async (input: {
 // A claim is a lease: a request that died mid-revocation frees it after REVOCATION_LEASE_MS.
 const REVOCATION_LEASE_MS = 30_000;
 const membershipFilter = (organizationId: string, userId: string) => ({ organizationId, userId });
-export const membershipSessions = createMembershipSessionHardening({
-  revokeOtherSessions: (input) => authenticationSessions.revokeOtherSessions(input),
-  // Re-flagging drops any lease, so a revocation already running can't clear the newer flag.
-  markRevocationPending: async ({ organizationId, userId }) => {
-    await OrganizationMembership.updateOne(membershipFilter(organizationId, userId), { $set: { sessionRevocationPending: true, sessionRevocationClaim: null } });
-  },
+type RevocationFlags = Omit<Parameters<typeof createMembershipSessionHardening>[0], "revokeOtherSessions">;
+// `byStaff` picks whose pending flag a request may claim: a flag carrying `sessionRevocationStaff`
+// was set by a staff change, one without it by a member of the organization.
+const revocationClaims = (byStaff: boolean): Omit<RevocationFlags, "markRevocationPending"> => ({
   claimRevocationPending: async ({ organizationId, userId, sessionId }) => {
     const now = new Date();
     return (await OrganizationMembership.updateOne(
       {
         ...membershipFilter(organizationId, userId), sessionRevocationPending: true,
+        sessionRevocationStaff: byStaff ? { $ne: null } : null,
         $or: [{ sessionRevocationClaim: null }, { "sessionRevocationClaim.at": { $lt: new Date(now.getTime() - REVOCATION_LEASE_MS) } }],
       },
       { $set: { sessionRevocationClaim: { sessionId, at: now } } },
@@ -218,7 +235,7 @@ export const membershipSessions = createMembershipSessionHardening({
   completeRevocationPending: async ({ organizationId, userId, sessionId }) => {
     await OrganizationMembership.updateOne(
       { ...membershipFilter(organizationId, userId), "sessionRevocationClaim.sessionId": sessionId },
-      { $set: { sessionRevocationPending: false, sessionRevocationClaim: null } },
+      { $set: { sessionRevocationPending: false, sessionRevocationClaim: null, sessionRevocationStaff: null } },
     );
   },
   releaseRevocationClaim: async ({ organizationId, userId, sessionId }) => {
@@ -227,4 +244,63 @@ export const membershipSessions = createMembershipSessionHardening({
       { $set: { sessionRevocationClaim: null } },
     );
   },
+});
+const membershipRevocationFlags: RevocationFlags = {
+  // Re-flagging drops any lease, so a revocation already running can't clear the newer flag. A
+  // change by a member of the organization takes the flag over from an earlier staff change.
+  markRevocationPending: async ({ organizationId, userId }) => {
+    await OrganizationMembership.updateOne(membershipFilter(organizationId, userId), { $set: { sessionRevocationPending: true, sessionRevocationClaim: null, sessionRevocationStaff: null } });
+  },
+  ...revocationClaims(false),
+};
+export const membershipSessions = createMembershipSessionHardening({
+  revokeOtherSessions: (input) => authenticationSessions.revokeOtherSessions(input),
+  ...membershipRevocationFlags,
+});
+
+// Ends sessions for a staff-made change: straight through the repository (the session manager
+// would record it in the member's organization), always for the staff reason.
+const revokeForStaffChange = (input: { userId: string; organizationId: string; exceptSessionId?: string }) =>
+  mongoRefreshSessionRepository.revokeAll({
+    userId: input.userId, organizationId: input.organizationId, reason: STAFF_MEMBERSHIP_REVOKE_REASON, now: new Date(), exceptSessionId: input.exceptSessionId,
+  });
+
+/* The access path (middleware/auth.ts). With no staff cause stored on the membership both calls
+   go to the customer flow unchanged; with one, the same sessions are revoked for the staff reason
+   and recorded in the staff organization (application/staffCausedSessionRevocation.ts). */
+export const { revokeOtherSessionsAfterMembershipChange, revokeInactiveMembershipSessions } = createStaffCausedSessionRevocation({
+  pendingCause: async ({ organizationId, userId }) =>
+    (await OrganizationMembership.findOne(membershipFilter(organizationId, userId))
+      .select("sessionRevocationStaff").lean<{ sessionRevocationStaff?: StaffCause | null } | null>())?.sessionRevocationStaff ?? null,
+  suspensionCause: suspendedByStaff,
+  customer: {
+    onRequestWithPendingRevocation: (input) => membershipSessions.onRequestWithPendingRevocation(input),
+    revokeInactiveMembership: (input) => authenticationSessions.revokeInactiveMembership(input),
+  },
+  revokeSessions: revokeForStaffChange,
+  staffClaims: revocationClaims(true),
+  audit: mongoSecurityAuditWriter,
+  isValidId: (value) => /^[a-f0-9]{24}$/i.test(value),
+});
+
+/* The same ORG-307 rules for a membership change made by RFPILOT STAFF (owner decision,
+   2026-11-18; docs/DECISIONS.md). The member's sessions end exactly as they do when a member of
+   the organization makes the change. The differences: nothing is written to the member's
+   organization's trail (customers see no staff activity; the staff-side event of the change
+   itself is the record), every session it ends carries STAFF_MEMBERSHIP_REVOKE_REASON, and the
+   pending flag it sets carries `sessionRevocationStaff`. A flag a member of the organization
+   already set is left as theirs. Use only from the staff member routes. */
+export const staffMembershipSessions = createMembershipSessionHardening({
+  revokeOtherSessions: (input) => mongoRefreshSessionRepository.revokeAll({
+    userId: input.userId, organizationId: input.organizationId, reason: STAFF_MEMBERSHIP_REVOKE_REASON, now: new Date(), exceptSessionId: input.exceptSessionId,
+  }),
+  markRevocationPending: async ({ organizationId, userId, actorUserId, staffOrganizationId }) => {
+    const filter = membershipFilter(organizationId, userId);
+    await OrganizationMembership.updateOne(
+      { ...filter, $or: [{ sessionRevocationPending: { $ne: true } }, { sessionRevocationStaff: { $ne: null } }] },
+      { $set: { sessionRevocationStaff: { organizationId: staffOrganizationId ?? null, actorUserId: actorUserId ?? null } } },
+    );
+    await OrganizationMembership.updateOne(filter, { $set: { sessionRevocationPending: true, sessionRevocationClaim: null } });
+  },
+  ...revocationClaims(true),
 });
