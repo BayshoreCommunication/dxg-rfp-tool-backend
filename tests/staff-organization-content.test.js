@@ -511,18 +511,122 @@ test("the proposal detail gives staff the filename of each private upload, never
   for (const forbidden of ["proposal-files-private", "amazonaws", "digitaloceanspaces", "user-1", "://"]) assert.equal(json.includes(forbidden), false, forbidden);
   // The rest of the section, and of the proposal, is as stored; the stored document is not changed.
   assert.equal(view.uploads.ndaRequired, "YES");
-  assert.equal(view.uploads.notes, "See the brand guide");
+  // `notes` is not a key the proposal form writes into `uploads`: dropped (was: passed through as stored).
+  assert.equal("notes" in view.uploads, false);
   assert.deepEqual(view.event, { eventName: "Spring summit" });
   assert.deepEqual(Object.keys(view).sort(), ["event", "uploads"]);
   assert.equal(stored.brandGuideFiles[0].startsWith("https://"), true);
   // A proposal with no uploads section, or an odd one, does not break the read.
   assert.deepEqual(staffProposalFields({ event: {} }), { event: {} });
-  assert.deepEqual(staffProposalFields({ uploads: null }), { uploads: null });
+  // Was `{ uploads: null }`: an `uploads` that is not a plain object is now an empty section.
+  assert.deepEqual(staffProposalFields({ uploads: null }), { uploads: {} });
 
   // The Mongo reader builds the detail through this function and nothing else.
   const source = fs.readFileSync(path.join(__dirname, "../src/modules/supportAccess/infrastructure/mongoSupportAccessRepository.ts"), "utf8");
   assert.match(source, /const rfp = staffProposalFields\(doc\);/);
-  assert.match(source, /if \(rfp\.uploads !== undefined\) rfp\.uploads = redactPrivateUploadUrls\(rfp\.uploads\);/);
+  assert.match(source, /if \(rfp\.uploads !== undefined\) rfp\.uploads = staffUploadsView\(rfp\.uploads\);/);
+  // The public view's pass-through redaction is not what staff get.
+  assert.doesNotMatch(source, /redactPrivateUploadUrls/);
+});
+
+const PRIVATE_UPLOAD_FIELDS = ["brandGuideFiles", "eventLogoFiles", "referenceFiles", "venueDocs", "ndaDocumentFiles", "scenicInspirationFiles", "venueCoiFiles"];
+const staffUploads = (uploads) => require("../src/modules/supportAccess/infrastructure/mongoSupportAccessRepository").staffProposalFields({ uploads }).uploads;
+// No staff answer may carry any of these, whatever shape `uploads` was stored in.
+const noStoredReference = (view, label) => {
+  const json = JSON.stringify(view);
+  for (const forbidden of ["proposal-files-private", "amazonaws", "X-Amz", "Signature", "user-1", "://", "s3:"]) assert.equal(json.includes(forbidden), false, `${label}: ${forbidden}`);
+  for (const field of PRIVATE_UPLOAD_FIELDS) {
+    if (!(field in view)) continue;
+    assert.equal(Array.isArray(view[field]), true, `${label}: ${field} is an array`);
+    for (const name of view[field]) {
+      assert.equal(typeof name, "string", `${label}: ${field}`);
+      assert.equal(name.length > 0, true, `${label}: ${field} empty`);
+      assert.doesNotMatch(name, /[\/\\?#]|^[a-z][a-z0-9+.-]*:/i, `${label}: ${field} ${name}`);
+    }
+  }
+};
+const PRESIGNED = "https://dxg-files.s3.amazonaws.com/DXG/proposal-files-private/user-1/1731800000000-0-brand_guide.pdf?X-Amz-Signature=abc123&X-Amz-Credential=AKIA%2Fus-east-1#page=2";
+
+test("staff uploads: an `uploads` that is not a plain object is an empty section", () => {
+  for (const [label, stored] of [
+    ["string", PRESIGNED],
+    ["array", [PRESIGNED, { brandGuideFiles: [PRESIGNED] }]],
+    ["null", null],
+    ["number", 7],
+    ["date", new Date(0)],
+  ]) assert.deepEqual(staffUploads(stored), {}, label);
+});
+
+test("staff uploads: a private field holding one string is one filename", () => {
+  const view = staffUploads({ brandGuideFiles: PRESIGNED, venueDocs: "DXG/proposal-files-private/user-1/1731800000004-0-floor_plan.pdf", referenceFiles: 42, eventLogoFiles: { url: PRESIGNED } });
+  assert.deepEqual(view, { brandGuideFiles: ["brand_guide.pdf"], venueDocs: ["floor_plan.pdf"], referenceFiles: [], eventLogoFiles: [] });
+  noStoredReference(view, "single string");
+});
+
+test("staff uploads: the query string and fragment of a stored URL never reach the filename", () => {
+  const view = staffUploads({
+    brandGuideFiles: [PRESIGNED],
+    referenceFiles: ["a.pdf?X-Amz-Signature=abc123", "DXG/proposal-files-private/user-1/1731800000003-0-run.xlsx#X-Amz-Signature=abc123", "https://dxg-files.s3.amazonaws.com/k/?X-Amz-Signature=abc123"],
+    // An encoded separator must not come back when the name is decoded.
+    venueDocs: ["https://cdn.example.test/p/1731800000004-0-plan%3FX-Amz-Signature%3Dabc123.pdf", "https://cdn.example.test/p/user-1%2Fsecret%2Fmap.pdf"],
+  });
+  assert.deepEqual(view, { brandGuideFiles: ["brand_guide.pdf"], referenceFiles: ["a.pdf", "run.xlsx"], venueDocs: ["plan", "map.pdf"] });
+  noStoredReference(view, "query string");
+});
+
+test("staff uploads: a stored value with no \"/\" is still cut down to a filename, or dropped", () => {
+  const view = staffUploads({
+    referenceFiles: ["1731800000009-0-plan.pdf?X-Amz-Signature=abc123#frag", "legacy-reference.pdf", "s3:dxg-files:secret-key.pdf", "?X-Amz-Signature=abc123", "#frag", "", "   "],
+    venueCoiFiles: ["C:\\\\exports\\\\user-1\\\\coi.pdf"],
+  });
+  assert.deepEqual(view, { referenceFiles: ["plan.pdf", "legacy-reference.pdf"], venueCoiFiles: ["coi.pdf"] });
+  noStoredReference(view, "no slash");
+});
+
+test("staff uploads: a key the proposal form does not write is dropped, whatever it holds", () => {
+  const view = staffUploads({
+    floorPlanFiles: [PRESIGNED], attachmentUrl: PRESIGNED, files: { brandGuideFiles: [PRESIGNED] }, notes: "See the brand guide",
+    ndaRequired: "NO",
+  });
+  assert.deepEqual(view, { ndaRequired: "NO" });
+  // Nothing is read off a prototype: an object that is not a plain one is an empty section.
+  assert.deepEqual(staffUploads(Object.create({ brandGuideFiles: [PRESIGNED], attachmentUrl: PRESIGNED })), {});
+  noStoredReference(view, "unknown key");
+});
+
+test("staff uploads: an element of a file array that is not a string is dropped", () => {
+  const view = staffUploads({
+    brandGuideFiles: [{ url: PRESIGNED, key: "DXG/proposal-files-private/user-1/k.pdf" }, [PRESIGNED], null, 5, true, PRESIGNED],
+    eventLogoFiles: [{ name: "logo.png" }],
+  });
+  assert.deepEqual(view, { brandGuideFiles: ["brand_guide.pdf"], eventLogoFiles: [] });
+  noStoredReference(view, "object elements");
+});
+
+test("staff uploads: what the planner typed (links, NDA answer, co-vendors) is kept, in the form's shape only", () => {
+  const { STAFF_UPLOAD_TYPED_FIELDS } = require("../src/modules/supportAccess/infrastructure/mongoSupportAccessRepository");
+  assert.deepEqual(Object.keys(STAFF_UPLOAD_TYPED_FIELDS).sort(), ["brandGuideUrl", "coVendors", "ndaRequired", "ndaType", "referenceUrls"]);
+  const coVendor = { companyName: "Stage Audio", contactName: "Vera", contactEmail: "vera@stage.example", contactPhone: "555-0100", status: "Confirmed", notes: "Load in at 6" };
+  const typed = {
+    brandGuideUrl: "https://brand.example.test/guide",
+    referenceUrls: [{ url: "https://vimeo.com/123", label: "Last year" }],
+    ndaRequired: "YES",
+    ndaType: "mutual",
+    coVendors: { inHouseVenueAv: coVendor, photographer: { ...coVendor, companyName: "Lens Co" } },
+  };
+  assert.deepEqual(staffUploads({ ...typed, brandGuideFiles: [] }), { brandGuideFiles: [], ...typed });
+  // A typed key holding some other shape is narrowed to the form's shape, or left out.
+  assert.deepEqual(staffUploads({
+    brandGuideUrl: [PRESIGNED],
+    referenceUrls: [{ url: "https://vimeo.com/123", label: "Last year", file: PRESIGNED, id: 9 }, PRESIGNED, null, { url: { href: PRESIGNED } }],
+    ndaRequired: { file: PRESIGNED },
+    ndaType: [PRESIGNED],
+    coVendors: { inHouseVenueAv: { ...coVendor, contractFiles: [PRESIGNED], notes: { file: PRESIGNED } }, caterer: coVendor, photographer: PRESIGNED },
+  }), {
+    referenceUrls: [{ url: "https://vimeo.com/123", label: "Last year" }, {}],
+    coVendors: { inHouseVenueAv: { companyName: "Stage Audio", contactName: "Vera", contactEmail: "vera@stage.example", contactPhone: "555-0100", status: "Confirmed" } },
+  });
+  assert.deepEqual(staffUploads({ coVendors: PRESIGNED, referenceUrls: PRESIGNED }), {});
 });
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import Proposal from "../../../../modal/proposalsModel";
 import SupportAccessGrant from "../../../../modal/supportAccessGrantModel";
 import User from "../../../../modal/userModel";
 import VendorResponse from "../../../../modal/vendorResponseModel";
-import { redactPrivateUploadUrls } from "../../proposals/infrastructure/mongo/mongoPublicProposalAccessRepository";
+import { attachmentFilename, PRIVATE_UPLOAD_FIELDS } from "../../proposals/infrastructure/mongo/mongoPublicProposalAccessRepository";
 import { mongoSupportDeskRepository } from "../../supportDesk/infrastructure/mongo/mongoSupportDeskRepository";
 import {
   type GrantedRfpListItem,
@@ -136,13 +136,79 @@ export const STAFF_PROPOSAL_FIELDS = [
   "contentCreative", "videoRecordingStep", "venue", "uploads", "budget", "contact", "createdAt", "updatedAt",
 ] as const;
 
-/* The allowlisted fields of one stored proposal, as staff are given them. `uploads` holds the
-   stored URL (or object key) of each private file; staff get the filename only, as the public
-   proposal view does, so a staff answer never carries a link to a customer's file. */
+const plainObject = (value: unknown): value is Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
+/* The bare filename of one stored file, or "" when there is none to show. A stored value may be
+   a URL (possibly presigned), an object key, or a filename. The query string and fragment go
+   first (a signature lives there), then everything up to the last path separator, then the
+   numeric upload prefix (the shared helper). A result that still carries "/", "\", "?", "#" or
+   a scheme is not a filename and is dropped. */
+const staffUploadFilename = (value: unknown): string => {
+  if (typeof value !== "string") return "";
+  const lastSegment = (text: string) => text.split(/[?#]/)[0].split(/[\\/]/).pop() ?? "";
+  // Cut again after the helper decodes: an encoded "/", "?" or "#" must not come back.
+  const name = lastSegment(attachmentFilename(lastSegment(value))).trim();
+  return /^[a-z][a-z0-9+.-]*:/i.test(name) ? "" : name;
+};
+
+const COVENDOR_FIELDS = ["companyName", "contactName", "contactEmail", "contactPhone", "status", "notes"] as const;
+const strings = (value: unknown, fields: readonly string[]): Record<string, string> | null => {
+  if (!plainObject(value)) return null;
+  return Object.fromEntries(fields.flatMap((field) => (typeof value[field] === "string" ? [[field, value[field] as string]] : [])));
+};
+
+/* The keys of `uploads` that hold what a planner typed into the proposal form, not a stored
+   file. Each is narrowed to the shape the form writes, so a file reference parked under one of
+   these keys in some other shape does not ride through. Any key that is neither here nor in
+   PRIVATE_UPLOAD_FIELDS is dropped. */
+export const STAFF_UPLOAD_TYPED_FIELDS: Record<string, (value: unknown) => unknown> = {
+  // A link the planner typed (form field "brand guide URL"); the public proposal page shows it as typed.
+  brandGuideUrl: (value) => (typeof value === "string" ? value : undefined),
+  // Up to five typed reference links, each `{ url, label }` (Vimeo, YouTube, Behance and so on).
+  referenceUrls: (value) => (Array.isArray(value) ? value.flatMap((item) => { const link = strings(item, ["url", "label"]); return link ? [link] : []; }) : undefined),
+  // The NDA answer ("YES"/"NO") and the NDA type the planner chose.
+  ndaRequired: (value) => (typeof value === "string" || typeof value === "boolean" ? value : undefined),
+  ndaType: (value) => (typeof value === "string" ? value : undefined),
+  // Typed company and contact details of the five co-vendor kinds; text only.
+  coVendors: (value) => {
+    if (!plainObject(value)) return undefined;
+    return Object.fromEntries(["inHouseVenueAv", "eventDecorator", "registrationTech", "agencyOfRecord", "photographer"].flatMap((kind) => {
+      const entry = strings(value[kind], COVENDOR_FIELDS);
+      return entry ? [[kind, entry]] : [];
+    }));
+  },
+};
+
+/* `uploads` as staff are given it: an allowlist. `uploads` is stored as Mixed with no shape check
+   on write, so nothing is passed through as stored. The seven private file fields come back as
+   arrays of bare filenames (a single string counts as one file); the typed fields above come
+   back in their form shape; every other key, and an `uploads` that is not a plain object, is
+   dropped. A staff answer never carries a link to, or the object key of, a customer's file. */
+export const staffUploadsView = (uploads: unknown): Record<string, unknown> => {
+  const view: Record<string, unknown> = {};
+  if (!plainObject(uploads)) return view;
+  for (const field of PRIVATE_UPLOAD_FIELDS) {
+    const stored = uploads[field];
+    if (stored === undefined || stored === null) continue;
+    view[field] = (Array.isArray(stored) ? stored : [stored]).map(staffUploadFilename).filter(Boolean);
+  }
+  for (const [field, narrow] of Object.entries(STAFF_UPLOAD_TYPED_FIELDS)) {
+    const value = narrow(uploads[field]);
+    if (value !== undefined) view[field] = value;
+  }
+  return view;
+};
+
+/* The allowlisted fields of one stored proposal, as staff are given them. `uploads` goes
+   through `staffUploadsView`, which is stricter than the public proposal view's redaction. */
 export const staffProposalFields = (doc: Record<string, unknown>): Record<string, unknown> => {
   const rfp: Record<string, unknown> = {};
   for (const field of STAFF_PROPOSAL_FIELDS) if (doc[field] !== undefined) rfp[field] = doc[field];
-  if (rfp.uploads !== undefined) rfp.uploads = redactPrivateUploadUrls(rfp.uploads);
+  if (rfp.uploads !== undefined) rfp.uploads = staffUploadsView(rfp.uploads);
   return rfp;
 };
 

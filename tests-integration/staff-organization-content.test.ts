@@ -53,6 +53,20 @@ const STORED_UPLOADS: Record<string, unknown> = {
   venueCoiFiles: [`/uploads/proposal-files-private/owner-${tag}/1731800000006-0-venue_coi.pdf`],
   ndaRequired: "YES",
 };
+// Shapes the Mixed `uploads` field accepts on write that a filename-per-array-element redaction
+// lets through: one string in place of an array, a presigned URL, a key the form never writes.
+const ODD_UPLOADS: Record<string, unknown> = {
+  brandGuideFiles: `https://dxg-files.s3.amazonaws.com/DXG/proposal-files-private/owner-${tag}/1731800000010-0-odd_brand.pdf`,
+  referenceFiles: [
+    `https://dxg-files.s3.amazonaws.com/DXG/proposal-files-private/owner-${tag}/1731800000011-0-odd_reference.pdf?X-Amz-Signature=sig-${tag}&X-Amz-Credential=cred-${tag}#page=2`,
+    `1731800000012-0-odd_plain.pdf?X-Amz-Signature=sig-${tag}`,
+    { url: `https://dxg-files.s3.amazonaws.com/DXG/proposal-files-private/owner-${tag}/object.pdf` },
+  ],
+  attachmentUrl: `https://dxg-files.s3.amazonaws.com/DXG/proposal-files-private/owner-${tag}/1731800000013-0-odd_unknown.pdf`,
+  brandGuideUrl: "https://brand.example.test/guide",
+  referenceUrls: [{ url: "https://vimeo.com/123", label: "Last year" }],
+  ndaRequired: "NO",
+};
 
 let server: http.Server;
 let baseUrl: string;
@@ -130,7 +144,7 @@ before(async () => {
     { _id: ids.aProposal, organizationId: aId, userId: oid(a.members.planner.userId), status: "unsubmitted", isDraft: true, isArchived: false, event: { eventName: `A Gala ${tag}` },
       uploads: STORED_UPLOADS,
       proposalSettings: { internal: `internal-setting-${tag}` }, candidateApplicationIds: [`candidate-${tag}`], aiRawResponse: { provider: `stray-ai-payload-${tag}` }, createdAt: at, updatedAt: new Date(NOW - 1000) },
-    { _id: ids.aProposalTwo, organizationId: aId, userId: oid(a.members.team_manager.userId), status: "unsubmitted", isDraft: true, isArchived: false, event: { eventName: `A Summit ${tag}` }, createdAt: at, updatedAt: new Date(NOW - 2000) },
+    { _id: ids.aProposalTwo, organizationId: aId, userId: oid(a.members.team_manager.userId), status: "unsubmitted", isDraft: true, isArchived: false, event: { eventName: `A Summit ${tag}` }, uploads: ODD_UPLOADS, createdAt: at, updatedAt: new Date(NOW - 2000) },
     { _id: ids.bProposal, organizationId: bId, userId: oid(b.members.planner.userId), status: "unsubmitted", isDraft: true, isArchived: false, event: { eventName: `B Retreat ${tag}` }, createdAt: at, updatedAt: at },
   ]);
   await VendorResponse.collection.insertMany([
@@ -308,6 +322,30 @@ test("staff reading A see A's content for every resource, with no grant, and not
   const bProposals = await call(staffToken, "GET", `${BASE}/${b.organizationId}/proposals`);
   assert.deepEqual(bProposals.body.data.rfps.map((row: any) => row.id), [String(ids.bProposal)]);
   for (const mine of A_STRINGS) assert.equal(bProposals.text.includes(mine), false, mine);
+});
+
+test("uploads stored in an odd shape reach staff as filenames and typed fields only, on the new route and the older one", async () => {
+  const expected = {
+    brandGuideFiles: ["odd_brand.pdf"],
+    referenceFiles: ["odd_reference.pdf", "odd_plain.pdf"],
+    brandGuideUrl: "https://brand.example.test/guide",
+    referenceUrls: [{ url: "https://vimeo.com/123", label: "Last year" }],
+    ndaRequired: "NO",
+  };
+  for (const path of [
+    `${BASE}/${a.organizationId}/proposals/${ids.aProposalTwo}`,
+    `/api/v1/admin/support-access/organizations/${a.organizationId}/rfps/${ids.aProposalTwo}`,
+  ]) {
+    const res = await call(staffToken, "GET", path);
+    assert.equal(res.status, 200, `${path}: ${res.text}`);
+    assert.deepEqual(res.body.data.rfp.uploads, expected, path);
+    for (const forbidden of ["proposal-files-private", "amazonaws", "X-Amz", `sig-${tag}`, `cred-${tag}`, `owner-${tag}`, "attachmentUrl", "odd_unknown", "object.pdf"]) {
+      assert.equal(res.text.includes(forbidden), false, `${path} returned ${forbidden}`);
+    }
+  }
+  // Redacted on the way out; the stored document keeps what was written.
+  const kept = await Proposal.collection.findOne({ _id: ids.aProposalTwo });
+  assert.deepEqual(kept!.uploads, ODD_UPLOADS);
 });
 
 test("a record is never served through another organization's path; ids are validated; an unknown organization is a 404", async () => {
