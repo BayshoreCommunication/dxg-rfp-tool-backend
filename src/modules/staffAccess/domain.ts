@@ -148,3 +148,42 @@ export interface StaffMemberDirectory {
   organization(organizationId: string): Promise<StaffManagedOrganization | null>;
   member(organizationId: string, userId: string): Promise<{ member: StaffMemberView; version: number } | null>;
 }
+
+/** Why staff can't manage this organization's members or teams (`platform`: RFPilot's own
+    organization, the caller's or any that `admins` accounts belong to; otherwise its kind, such
+    as `legacy_holding`), or null when they can. One rule for the member and the team routes. */
+export const unmanageableStanding = (organization: StaffManagedOrganization, staffOrganizationId: string): string | null => {
+  if (organization.id === staffOrganizationId || organization.staffAccountCount > 0) return "platform";
+  if (organization.kind !== "customer") return organization.kind;
+  return null;
+};
+
+/* Staff team management (owner decision, 2026-11-18; docs/DECISIONS.md). RFPilot staff create,
+   rename and archive a customer organization's teams, add and remove team members, set and unset
+   a team manager, and set which teams a member is on, under the rules its own Owner and Admins
+   work under. As for members: every request that reaches the service as staff leaves exactly one
+   event in the STAFF organization's audit trail (allowed or denied, under the same action name);
+   nothing is written to the customer organization's. `platform.*` is never shown in a customer
+   audit log. `memberTeamsChanged` is a change of a member, so it is named with the member actions. */
+export const STAFF_TEAM_AUDIT = {
+  read: "platform.organization_team.read",
+  created: "platform.organization_team.created",
+  renamed: "platform.organization_team.renamed",
+  archived: "platform.organization_team.archived",
+  memberAdded: "platform.organization_team.member_added",
+  memberRemoved: "platform.organization_team.member_removed",
+  managerChanged: "platform.organization_team.manager_changed",
+  memberTeamsChanged: "platform.organization_member.teams_changed",
+} as const;
+
+/** One team with its members: the staff teams read's team and the staff members read's member. */
+export type StaffTeamDetail = {
+  team: StaffTeamView;
+  members: Array<{ member: StaffMemberView; version: number; isManager: boolean }>;
+};
+
+/* One team of the organization the path names. Every query names the organization; a team of
+   another organization is not found. */
+export interface StaffTeamDirectory {
+  team(organizationId: string, teamId: string): Promise<StaffTeamDetail | null>;
+}

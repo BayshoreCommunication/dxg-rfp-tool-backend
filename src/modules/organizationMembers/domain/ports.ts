@@ -92,6 +92,18 @@ export interface TeamDirectory {
   setMemberTeams(input: { organizationId: string; userId: string; teamIds: string[] }): Promise<{ previousTeamIds: string[] } | { unknownTeamIds: string[] }>;
 }
 
+/* "Change a member's teams" by RFPilot staff (owner decision 2026-11-18): what `bumpVersion` and
+   `setMemberTeams` do for a member of the organization, in ONE transaction together with the
+   staff-side `audit` event, so nothing is applied without its record (not even the version).
+   The store adds `before.teamIds`, `changed` and the new `version` to the event's metadata.
+   "stale" when the membership's version moved or the member is removed; `unknownTeamIds`, and
+   nothing changed, when a team stopped being active meanwhile. */
+export interface StaffMemberTeamsStore {
+  setMemberTeams(input: {
+    organizationId: string; userId: string; teamIds: string[]; expectedVersion: number; audit: MemberChangeAudit;
+  }): Promise<{ previousTeamIds: string[]; version: number } | { unknownTeamIds: string[] } | "stale">;
+}
+
 export interface MemberAuditWriter {
   append(input: {
     organizationId?: string;

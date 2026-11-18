@@ -81,6 +81,14 @@ const updateVersioned = (
     { new: true, runValidators: true, session },
   ).select(MEMBER_FIELDS).lean<MembershipRow | null>();
 
+// `bumpVersion` inside a caller's transaction (a staff change of a member's teams, which commits
+// the version, the team rows and its audit event together). Null when the version moved or the
+// member is removed.
+export const bumpVersionInTransaction = async (input: { organizationId: string; userId: string; expectedVersion: number }, session: ClientSession): Promise<number | null> => {
+  const row = await updateVersioned(input, { status: { $ne: "removed" } }, { $set: { updatedAt: new Date() } }, session);
+  return row ? Number(row.version ?? 1) : null;
+};
+
 export const mongoMembershipStore: MembershipStore = {
   async list(organizationId) {
     const rows = await OrganizationMembership.find({ organizationId: objectId(organizationId) })
