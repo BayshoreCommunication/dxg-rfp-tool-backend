@@ -1308,3 +1308,25 @@ test("invalid provider output marks the pending assistant row failed", async () 
   );
   assert.deepEqual(statuses, [["failed", "ASSISTANT_RESPONSE_INVALID"]]);
 });
+
+test("Proposal Intelligence questions reach the comparison fact, not the assistant's own scope", () => {
+  // With no fact of its own, "what does Proposal Intelligence do" matched the
+  // assistant-scope fact on the word "assistant" and the assistant answered
+  // that Proposal Intelligence is the AI assistant.
+  const facts = Object.fromEntries(PLATFORM_FACTS.map((fact) => [fact.id, fact]));
+  const intelligence = facts["platform:intelligence:overview"];
+  assert.ok(intelligence, "Proposal Intelligence fact exists");
+  assert.match(intelligence.content, /not the AI Assistant/);
+  assert.ok(intelligence.keywords.includes("proposal intelligence"));
+
+  for (const id of [
+    "platform:intelligence:requirement-checklist",
+    "platform:intelligence:coverage-words",
+    "platform:intelligence:scoring",
+    "platform:intelligence:evidence",
+    "platform:intelligence:decision",
+  ]) assert.ok(facts[id], `${id} exists`);
+
+  // The scope fact must not claim the words the comparison feature owns.
+  assert.ok(!facts["platform:assistant:scope"].keywords.includes("proposal intelligence"));
+});
