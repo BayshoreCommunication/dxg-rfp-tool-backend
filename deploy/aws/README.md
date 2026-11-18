@@ -48,6 +48,14 @@ running the bootstrap below with its name. Sizing lives in
      credential as part of cutover).
    - Remaining keys: JWT/OTP/BFF/admin secrets (fresh long random values),
      `OPENAI_API_KEY`, `GOOGLE_CLIENT_ID`, SMTP settings.
+   - **Add** `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET` (Microsoft
+     sign-in; the Entra app in [`docs/SSO_SETUP.md`](../../docs/SSO_SETUP.md)).
+     They are not in the secret's template, so there is no `REPLACE_ME` to
+     find: add both keys by hand. The API task definition maps them, so the
+     API tasks cannot start until both exist
+     (`compose-app-secrets.sh` lists them while they are missing). They are
+     kept out of the template on purpose: editing the template resets a live
+     secret (see `lib/data-stack.ts`).
 7. Push a commit to `main` (or re-run the workflow): CI builds the image,
    scans it, pushes `sha-<commit>`, runs migrations, deploys the App and
    Observability stacks, and smoke-checks `GET /` and `GET /health`.
@@ -165,6 +173,16 @@ Secrets Manager, then force a new deployment
 — ECS injects secrets at task start. Rotate `JWT_SECRET` with care (it
 invalidates sessions); Redis AUTH and RDS password rotation require updating
 both the source secret and the composed URL keys.
+
+`MICROSOFT_CLIENT_SECRET` **expires** (Entra sets the date when the client
+secret is created; record it). Before it lapses: create a new client secret on
+the same Entra app registration, put its value in `MICROSOFT_CLIENT_SECRET`,
+force a new deployment of the `api` service, check "Continue with Microsoft",
+then delete the old client secret in Entra. If it lapses, Microsoft sign-in
+fails for everyone until this is done; Google and company SSO are unaffected.
+Never delete either Microsoft key from the secret while the API task
+definition maps it: the next API task cannot start. To turn Microsoft sign-in
+off, remove the two keys from `lib/app-stack.ts` and release.
 
 ## Backups and restore
 

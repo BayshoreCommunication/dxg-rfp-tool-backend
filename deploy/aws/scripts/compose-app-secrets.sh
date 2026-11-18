@@ -13,7 +13,10 @@
 #
 # Keys that reference external services (MONGODB_URL, OPENAI_API_KEY,
 # GOOGLE_CLIENT_ID, SMTP_*) are left alone and listed at the end for the
-# operator to fill in the Secrets Manager console.
+# operator to fill in the Secrets Manager console. So are MICROSOFT_CLIENT_ID
+# and MICROSOFT_CLIENT_SECRET (Microsoft sign-in, docs/SSO_SETUP.md): the Data
+# stack's template does not seed them, the API task maps them, so they are
+# listed while they are absent or empty. This script never writes them.
 #
 # Usage:
 #   AWS_PROFILE=rfpilot ./compose-app-secrets.sh [production]
@@ -73,7 +76,14 @@ for key in ("JWT_SECRET", "OTP_PEPPER", "BFF_SHARED_SECRET",
         app[key] = secrets.token_hex(32)
         generated.append(key)
 
-remaining = sorted(k for k, v in app.items() if v == "REPLACE_ME")
+remaining = {k for k, v in app.items() if v == "REPLACE_ME"}
+# Operator-supplied keys the API task maps that the secret template does not
+# seed: report them while absent or empty (the API tasks can't start without
+# them), but never write them.
+for key in ("MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET"):
+    if not app.get(key):
+        remaining.add(key)
+remaining = sorted(remaining)
 print(json.dumps({"secret": app, "generated": generated, "remaining": remaining}))
 PY
 )
@@ -84,4 +94,4 @@ python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])["secret"])
 
 echo "Updated $APP_SECRET_ARN (no values displayed)."
 echo "Composed: POSTGRES_URL, POSTGRES_MIGRATION_URL, REDIS_URL"
-python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print("Generated:", ", ".join(d["generated"]) or "(none — already set)"); print("Still REPLACE_ME (fill in the console):", ", ".join(d["remaining"]) or "(none)")' "$NEW_JSON"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print("Generated:", ", ".join(d["generated"]) or "(none — already set)"); print("Still REPLACE_ME or missing (fill in the console):", ", ".join(d["remaining"]) or "(none)")' "$NEW_JSON"

@@ -42,6 +42,11 @@ sit in `scan_failed` if ClamAV is down.
   Never change it in place: put the old key in `TWO_FACTOR_ENCRYPTION_PREVIOUS_KEYS` first, or every
   enrolled member is locked out until an Admin resets their 2FA. `TWO_FACTOR_SSO_POLICY` stays
   `challenge` until DXG answers Q8.
+- Microsoft sign-in: `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET` (API only). On AWS the
+  API task definition maps both from `rfpilot/<env>/app`, so both keys must be in the secret
+  before a release or the API tasks cannot start; never remove them while they are mapped. The
+  client secret expires: rotate it before it lapses (`deploy/aws/README.md`, "Secret rotation").
+  Setup and the redirect URI: `docs/SSO_SETUP.md`.
 - Domain verification: the cron worker verifies domains and re-checks them weekly
   (`[Cron] Domain verification: ...`), so it needs outbound DNS. `DOMAIN_VERIFICATION_METHODS`
   stays `dns_txt` until DXG answers Q7.
