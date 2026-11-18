@@ -93,6 +93,8 @@ const call = async (token: string, method: string, path: string, body?: unknown)
 const sessionFor = async (userId: mongoose.Types.ObjectId, organizationId: mongoose.Types.ObjectId) =>
   (await beginAuthenticatedSession({ userId: String(userId), organizationId: String(organizationId), correlationId: randomMongoId() })).accessToken;
 const eventCount = (organizationId: mongoose.Types.ObjectId) => SecurityAuditEvent.countDocuments({ organizationId });
+const denials = (organizationId: mongoose.Types.ObjectId) =>
+  SecurityAuditEvent.find({ organizationId, action: "platform.organization_content.denied" }).sort({ createdAt: 1, _id: 1 }).lean();
 const reads = (organizationId: mongoose.Types.ObjectId) => SecurityAuditEvent.find({ organizationId, action: READ }).sort({ createdAt: 1, _id: 1 }).lean();
 
 // Every staff read route for one organization, with the resource it records.
@@ -310,6 +312,7 @@ test("staff reading A see A's content for every resource, with no grant, and not
 
 test("a record is never served through another organization's path; ids are validated; an unknown organization is a 404", async () => {
   const before = (await reads(dxg.org)).length;
+  const [aBefore, bBefore, deniedBefore] = [await eventCount(aId), await eventCount(bId), (await denials(dxg.org)).length];
   // B's records asked for through A, and A's through B: the same answer as an id that doesn't exist.
   for (const [organizationId, proposalId, templateId] of [[a.organizationId, ids.bProposal, ids.bTemplate], [b.organizationId, ids.aProposal, ids.aTemplate]] as const) {
     const proposal = await call(staffToken, "GET", `${BASE}/${organizationId}/proposals/${proposalId}`);
@@ -341,6 +344,29 @@ test("a record is never served through another organization's path; ids are vali
   assert.deepEqual(pinned.body.data.vendors.map((vendor: any) => vendor.id), [String(ids.aVendor)]);
   // Only the one successful read was recorded.
   assert.equal((await reads(dxg.org)).length, before + 1);
+  // Every 404 above left one denied event in the STAFF organization: 2 organizations x (their
+  // neighbour's proposal, a missing proposal, vendor responses, template) and the 8 routes of an
+  // unknown organization. The 400s left nothing.
+  const refused = (await denials(dxg.org)).slice(deniedBefore);
+  assert.equal(refused.length, 16);
+  for (const event of refused) {
+    assert.deepEqual([String(event.actorUserId), event.decision, event.targetType, event.metadata.agentAccountType], [String(dxg.staff), "denied", "organization", "admin"]);
+    assert.equal(event.metadata.organizationId, event.targetId);
+  }
+  const crossed = refused.filter((event) => event.targetId === a.organizationId || event.targetId === b.organizationId);
+  assert.deepEqual(crossed.map((event) => [event.targetId, event.reason, event.metadata.resource]).slice(0, 4), [
+    [a.organizationId, "proposal_not_found", "proposal"],
+    [a.organizationId, "proposal_not_found", "proposal"],
+    [a.organizationId, "proposal_not_found", "vendor_responses"],
+    [a.organizationId, "template_not_found", "template"],
+  ]);
+  assert.equal(crossed.length, 8);
+  assert.deepEqual([crossed[0].metadata.recordId, crossed[3].metadata.recordId], [String(ids.bProposal), String(ids.bTemplate)]);
+  assert.deepEqual([...new Set(refused.filter((event) => !crossed.includes(event)).map((event) => event.reason))], ["organization_not_found"]);
+  // Nothing at all was written in either customer organization.
+  assert.equal(await eventCount(aId), aBefore, "no new row in A's audit trail");
+  assert.equal(await eventCount(bId), bBefore, "no new row in B's audit trail");
+  assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: { $in: [aId, bId] }, action: /^platform\./ }), 0);
 });
 
 test("audit: one event per read in the staff organization; zero events in A or B", async () => {

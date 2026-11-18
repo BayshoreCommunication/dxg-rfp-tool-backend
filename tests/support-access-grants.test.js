@@ -138,6 +138,9 @@ const reads = (audit) => audit.filter((e) => e.action === "platform.organization
 const rejects = (promise, code, status) =>
   assert.rejects(promise, (error) => error instanceof SupportAccessError && error.code === code && error.status === status);
 const uses = (audit) => audit.filter((e) => e.action === "support_access.used");
+// A read that ended in "not found": recorded on the staff side only.
+const denied = (audit) => audit.filter((e) => e.action === "platform.organization_content.denied");
+const deniedRows = (audit) => denied(audit).map((e) => [e.organizationId, e.decision, e.reason, e.targetId ?? null, e.metadata.resource, e.metadata.recordId ?? e.metadata.ticketId ?? null]);
 
 test("expiry defaults to 7 days, takes 1 to 30 days or an instant, and never passes 30 days", () => {
   assert.equal(resolveGrantExpiry({}, START).getTime(), START.getTime() + 7 * DAY);
@@ -260,10 +263,14 @@ test("without a grant every read of customer proposal data succeeds, and nothing
   assert.equal(audit.some((e) => e.action.startsWith("support_access.")), false, "used / denied are no longer written");
   assert.equal(reads(audit).length, 4);
 
-  // An organization that doesn't exist is a 404, a malformed id a 400; neither leaves a row.
+  // An organization that doesn't exist is a 404, recorded as denied on the staff side; a
+  // malformed id is a 400 and leaves no row. (Was: "neither leaves a row".)
   await rejects(access.getRfp(agent(), hex("0"), RFP_ONE), "ORGANIZATION_NOT_FOUND", 404);
   await rejects(access.listRfps(agent(), "not-an-id", {}), "INVALID_ORGANIZATION_ID", 400);
-  assert.equal(audit.length, 4);
+  assert.equal(reads(audit).length, 4);
+  assert.deepEqual(deniedRows(audit), [[STAFF_ORG, "denied", "organization_not_found", hex("0"), "proposal", null]]);
+  assert.equal(audit.length, 5);
+  assert.deepEqual(inCustomerOrganizations(audit), []);
 });
 
 // Was: "every use writes an audit event naming the agent, the grant and the object" (in the
@@ -402,8 +409,16 @@ test("a grant for one proposal does not narrow what staff read; a proposal is ne
   // Through its own organization it is found.
   assert.equal((await access.getRfp(agent(), OTHER_ORG, OTHER_RFP)).rfp.id, OTHER_RFP);
 
-  // A refused lookup records nothing; nothing at all is written in a customer organization.
-  assert.deepEqual(audit.map((e) => [e.organizationId, e.targetId, e.metadata.resource, e.metadata.recordId ?? null]), [
+  // A refused lookup is recorded as denied on the staff side (was: "records nothing"); nothing
+  // at all is written in a customer organization.
+  assert.deepEqual(deniedRows(audit), [
+    [STAFF_ORG, "denied", "proposal_not_found", ORG, "proposal", OTHER_RFP],
+    [STAFF_ORG, "denied", "proposal_not_found", ORG, "vendor_responses", OTHER_RFP],
+    [STAFF_ORG, "denied", "proposal_not_found", OTHER_ORG, "proposal", RFP_ONE],
+    [STAFF_ORG, "denied", "proposal_not_found", OTHER_ORG, "vendor_responses", RFP_ONE],
+  ]);
+  assert.deepEqual(inCustomerOrganizations(audit), []);
+  assert.deepEqual(reads(audit).map((e) => [e.organizationId, e.targetId, e.metadata.resource, e.metadata.recordId ?? null]), [
     [STAFF_ORG, ORG, "proposals", null],
     [STAFF_ORG, ORG, "proposal", RFP_TWO],
     [STAFF_ORG, OTHER_ORG, "proposal", OTHER_RFP],
@@ -417,7 +432,13 @@ test("a proposal that isn't in the organization is not found, and a malformed pr
   await rejects(access.getRfp(agent(), ORG, hex("0")), "PROPOSAL_NOT_FOUND", 404);
   await rejects(access.getRfp(agent(), ORG, "not-an-id"), "INVALID_PROPOSAL_ID", 400);
   await rejects(access.listVendorResponses(agent(), ORG, "not-an-id"), "INVALID_PROPOSAL_ID", 400);
-  assert.equal(audit.length, 0);
+  // Was: nothing recorded. The three 404s are denied events on the staff side; the 400s leave nothing.
+  assert.deepEqual(deniedRows(audit), [
+    [STAFF_ORG, "denied", "proposal_not_found", ORG, "proposal", OTHER_RFP],
+    [STAFF_ORG, "denied", "proposal_not_found", ORG, "vendor_responses", OTHER_RFP],
+    [STAFF_ORG, "denied", "proposal_not_found", ORG, "proposal", hex("0")],
+  ]);
+  assert.equal(audit.length, 3);
 });
 
 // Was: "AC: the RFPs behind a ticket need a grant from the ticket's organization".
@@ -427,7 +448,13 @@ test("the proposals behind a ticket are the requester's, in the ticket's organiz
   await rejects(access.listTicketRfps(agent(), hex("9"), {}), "SUPPORT_TICKET_NOT_FOUND", 404);
   // A member holding a staff role is not RFPilot Support.
   await rejects(access.listTicketRfps(agent({ accountType: "planner" }), TICKET, {}), "SUPPORT_ACCESS_FORBIDDEN", 403);
-  assert.equal(audit.length, 0);
+  // Was: nothing recorded. The two missing tickets are denied events on the staff side; the 403 leaves nothing.
+  assert.deepEqual(deniedRows(audit), [
+    [STAFF_ORG, "denied", "support_ticket_not_found", null, "ticket_proposals", "not-an-id"],
+    [STAFF_ORG, "denied", "support_ticket_not_found", null, "ticket_proposals", hex("9")],
+  ]);
+  assert.equal(audit.length, 2);
+  audit.length = 0;
 
   assert.equal(rows.length, 0, "no grant exists");
   // The staff member's own organization decides nothing: the ticket's organization is read.

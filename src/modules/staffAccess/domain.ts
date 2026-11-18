@@ -7,7 +7,8 @@ import type { GrantedRfpListItem, GrantedVendorResponse } from "../supportAccess
    customer content, and account management is a later ticket.
 
    Every read is recorded on the RFPilot side only: one `platform.organization_content.read`
-   event in the STAFF organization's audit trail. Nothing is written to the customer
+   event in the STAFF organization's audit trail (`platform.organization_content.denied` for a
+   read that ended in "not found"). Nothing is written to the customer
    organization, and the customer's audit log never shows it. */
 
 export class StaffAccessError extends Error {
@@ -17,7 +18,13 @@ export class StaffAccessError extends Error {
   }
 }
 
-export const STAFF_CONTENT_AUDIT = { read: "platform.organization_content.read" } as const;
+// `read`: a read that returned data. `denied`: one that ended in "not found" (an organization,
+// record or ticket that isn't there, or a record that belongs to another organization). Both are
+// written in the staff organization only; `platform.*` is never shown in a customer audit log.
+export const STAFF_CONTENT_AUDIT = {
+  read: "platform.organization_content.read",
+  denied: "platform.organization_content.denied",
+} as const;
 
 export const STAFF_CONTENT_RESOURCES = [
   "proposals", "proposal", "vendor_responses", "ticket_proposals",

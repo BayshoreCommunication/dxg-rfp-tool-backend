@@ -145,6 +145,10 @@ const READS = [
   ["vendors", (c, who, org = ACME) => c.vendors(who, org, {}), "vendors", null],
 ];
 
+const DENIED = "platform.organization_content.denied";
+// A denied event as [organization written to, actor, action, decision, reason, target, metadata].
+const deniedShape = (event) => [event.organizationId, event.actorUserId, event.action, event.decision, event.reason, event.targetType, event.targetId ?? null, event.metadata];
+
 const rejects = (promise, code, status) =>
   assert.rejects(promise, (error) => error instanceof StaffAccessError && error.code === code && error.status === status, `${code} ${status}`);
 
@@ -176,13 +180,19 @@ test("every `admins` account with an admin role passes: the accounts isPlanStaff
 
 // ── Ids and organizations ────────────────────────────────────────────────────────────────────
 
-test("a malformed organization id is a 400 and an unknown organization a 404, on every read; neither is recorded", async () => {
+// Was: "...; neither is recorded". A 400 still leaves nothing; a 404 now leaves a staff-side trace.
+test("a malformed organization id is a 400 and records nothing; an unknown organization is a 404 recorded as denied in the staff organization", async () => {
   const { content, audit, calls } = setup();
-  for (const [name, read] of READS) {
+  for (const [name, read, resource] of READS) {
     for (const bad of ["nope", "", hex("A"), `${ACME}0`, "../members"]) await rejects(read(content, staff(), bad), "INVALID_ORGANIZATION_ID", 400).catch((error) => { throw new Error(`${name}: ${error.message}`); });
+    assert.deepEqual(audit, [], `${name}: a malformed id is not recorded`);
     await rejects(read(content, staff(), hex("e")), "ORGANIZATION_NOT_FOUND", 404).catch((error) => { throw new Error(`${name}: ${error.message}`); });
+    assert.deepEqual(audit.map(deniedShape), [
+      [STAFF_ORG, STAFF, DENIED, "denied", "organization_not_found", "organization", hex("e"), { agentAccountType: "admin", resource, organizationId: hex("e") }],
+    ], name);
+    assert.equal(audit[0].correlationId, "corr-staff");
+    audit.length = 0;
   }
-  assert.deepEqual(audit, []);
   assert.deepEqual(calls.filter(([method]) => method !== "organization"), [], "no content was read");
 });
 
@@ -202,7 +212,18 @@ test("a malformed record id is a 400; a record that belongs to another organizat
   await rejects(content.proposal(staff(), ACME, hex("0")), "PROPOSAL_NOT_FOUND", 404);
   await rejects(content.templates(staff(), ACME, { scope: "everyone" }), "INVALID_FILTER", 400);
   await rejects(content.vendors(staff(), ACME, { status: { $ne: "x" } }), "INVALID_FILTER", 400);
-  assert.deepEqual(audit, [], "a refused read records nothing");
+  // 400s record nothing. Each 404 is one denied event in the staff organization, naming the
+  // organization the path asked for, the kind of resource and the record id; none anywhere else.
+  assert.deepEqual(audit.map(deniedShape), [
+    [ACME, "proposal", OTHER_PROPOSAL], [ACME, "vendor_responses", OTHER_PROPOSAL], [ACME, "template", OTHER_TEMPLATE],
+    [OTHER, "proposal", PROPOSAL], [OTHER, "vendor_responses", PROPOSAL], [OTHER, "template", TEMPLATE],
+    [ACME, "proposal", hex("0")],
+  ].map(([organizationId, resource, recordId]) => [
+    STAFF_ORG, STAFF, DENIED, "denied", resource === "template" ? "template_not_found" : "proposal_not_found", "organization", organizationId,
+    { agentAccountType: "admin", resource, organizationId, recordId },
+  ]));
+  assert.equal(audit.some((event) => event.organizationId !== STAFF_ORG), false, "never in the customer organization");
+  audit.length = 0;
   // Each is found through its own organization.
   assert.equal((await content.proposal(staff(), OTHER, OTHER_PROPOSAL)).rfp.id, OTHER_PROPOSAL);
   assert.equal((await content.template(staff(), OTHER, OTHER_TEMPLATE)).template.id, OTHER_TEMPLATE);
@@ -307,6 +328,41 @@ test("audit: each read writes exactly one event in the staff organization, and n
   await content.ticketProposals(staff(), TICKET, {});
   assert.deepEqual(audit.map((event) => [event.organizationId, event.targetId, event.metadata]), [[STAFF_ORG, ACME, { agentAccountType: "admin", resource: "ticket_proposals", ticketId: TICKET }]]);
   assert.equal(STAFF_CONTENT_AUDIT.read, "platform.organization_content.read");
+});
+
+test("audit: a ticket that isn't there, or a malformed ticket id, is a 404 recorded as denied in the staff organization", async () => {
+  const { content, audit } = setup();
+  await rejects(content.ticketProposals(staff(), hex("9"), {}), "SUPPORT_TICKET_NOT_FOUND", 404);
+  await rejects(content.ticketProposals(staff(), "not-an-id", {}), "SUPPORT_TICKET_NOT_FOUND", 404);
+  await rejects(content.ticketProposals(staff(), "x".repeat(500), {}), "SUPPORT_TICKET_NOT_FOUND", 404);
+  // No organization is known for a missing ticket: no target, and the id asked for (cut to 64).
+  assert.deepEqual(audit.map(deniedShape), [hex("9"), "not-an-id", "x".repeat(64)].map((ticketId) => [
+    STAFF_ORG, STAFF, DENIED, "denied", "support_ticket_not_found", "organization", null, { agentAccountType: "admin", resource: "ticket_proposals", ticketId },
+  ]));
+  assert.equal(STAFF_CONTENT_AUDIT.denied, DENIED);
+});
+
+test("audit: a 404 stays a 404 when its denied event cannot be written, and the failure is logged", async () => {
+  const NOT_FOUND = [
+    ["organization", (c) => c.members(staff(), hex("e"), {}), "ORGANIZATION_NOT_FOUND"],
+    ["proposal", (c) => c.proposal(staff(), ACME, OTHER_PROPOSAL), "PROPOSAL_NOT_FOUND"],
+    ["vendor responses", (c) => c.vendorResponses(staff(), ACME, OTHER_PROPOSAL), "PROPOSAL_NOT_FOUND"],
+    ["template", (c) => c.template(staff(), ACME, OTHER_TEMPLATE), "TEMPLATE_NOT_FOUND"],
+    ["ticket", (c) => c.ticketProposals(staff(), hex("9"), {}), "SUPPORT_TICKET_NOT_FOUND"],
+  ];
+  const logged = [];
+  const originalError = console.error;
+  console.error = (...args) => { logged.push(args.join(" ")); };
+  try {
+    for (const [name, read, code] of NOT_FOUND) {
+      const { content, audit, state } = setup();
+      state.failAudit = true;
+      await rejects(read(content), code, 404).catch((error) => { throw new Error(`${name}: ${error.message}`); });
+      assert.deepEqual(audit, [], name);
+    }
+  } finally { console.error = originalError; }
+  assert.equal(logged.length, NOT_FOUND.length, "each failure is logged, not swallowed");
+  for (const line of logged) assert.match(line, /^Staff access error: a refused read could not be recorded: audit store down$/);
 });
 
 test("audit: the read fails, and returns nothing, when the event cannot be written", async () => {
@@ -488,6 +544,9 @@ test("controller: customer → 403, `users` account with a staff role → 403, s
     const missing = fakeResponse();
     await controller[handler](request({ params: { organizationId: hex("e"), proposalId: PROPOSAL, templateId: TEMPLATE } }), missing);
     assert.deepEqual([missing.statusCode, missing.body], [404, { success: false, code: "ORGANIZATION_NOT_FOUND", message: "Organization not found." }], handler);
+    // The malformed id left nothing; the 404 left one denied event, in the staff organization.
+    assert.deepEqual(audit.map((event) => [event.organizationId, event.actorUserId, event.action, event.decision, event.targetId, event.correlationId]), [[STAFF_ORG, STAFF, DENIED, "denied", hex("e"), "corr-http"]], handler);
+    audit.length = 0;
   }
 
   const broken = createAdminOrganizationContentController({ members: async () => { throw new Error("mongo exploded: secret detail"); } });
