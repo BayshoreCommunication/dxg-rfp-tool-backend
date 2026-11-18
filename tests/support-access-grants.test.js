@@ -423,6 +423,8 @@ test("a grant for one proposal does not narrow what staff read; a proposal is ne
     [STAFF_ORG, ORG, "proposal", RFP_TWO],
     [STAFF_ORG, OTHER_ORG, "proposal", OTHER_RFP],
   ]);
+  // Three reads and four refusals, and nothing else: a row with any other action fails here.
+  assert.equal(audit.length, 3 + 4);
 });
 
 test("a proposal that isn't in the organization is not found, and a malformed proposal id is refused", async () => {

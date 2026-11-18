@@ -20,7 +20,8 @@ import {
    A read that ends in "not found" (the organization, the record or the ticket isn't there, or the
    record belongs to another organization) leaves a `denied` event in the STAFF organization too,
    naming the organization the path asked for and the kind of resource. The 404 is returned whether
-   or not that event could be written; a failure to write it is logged. A malformed id (400) and a
+   or not that event could be written; a failure to write it is logged. A malformed ticket id is
+   one of these: a 404, recorded as denied. A malformed organization or record id (400) and a
    caller who is not staff (403) are not recorded. */
 
 export type StaffContentAudit = {
