@@ -1,8 +1,12 @@
 import type { RfpActor, RfpRef } from "../identity/domain/rfpAccessPolicy";
 
 // ORG-404 (PRD P0-9). RFPilot Support is DXG staff signed in to the admin app with an `admins`
-// account. They sit outside every customer organization and read its RFP data only under an
-// active grant issued by that organization's Owner or Admin.
+// account, outside every customer organization.
+//
+// Owner decision, 2026-11-17 (docs/DECISIONS.md): staff read every organization's content with
+// no grant (src/modules/staffAccess). The grants below still exist because the customer grant
+// endpoints still answer for the dashboard released before that decision; a grant no longer
+// gates anything, and `used` / `denied` are no longer written.
 
 export class SupportAccessError extends Error {
   constructor(readonly code: string, message: string, readonly status: number) {
@@ -99,14 +103,6 @@ export const isSupportAgent = (agent: Pick<SupportAgent, "role" | "accountType">
 
 export type GrantedRfp = RfpRef & { id: string; title: string };
 
-export type SupportActivityEvent = {
-  at: Date;
-  agentId: string | null;
-  operation: string;
-  targetType: string;
-  targetId: string | null;
-};
-
 export type SupportActivitySummary = { useCount: number; lastUsedAt: Date | null };
 
 export interface SupportGrantRepository {
@@ -125,11 +121,6 @@ export interface SupportAccessDirectory {
   rfpTitles(organizationId: string, proposalIds: readonly string[]): Promise<Map<string, string>>;
   memberNames(organizationId: string, userIds: readonly string[]): Promise<Map<string, string>>;
   organizationNames(organizationIds: readonly string[]): Promise<Map<string, string>>;
-}
-
-export interface SupportActivityLog {
-  summarize(organizationId: string, grantIds: readonly string[]): Promise<Map<string, SupportActivitySummary>>;
-  listForGrant(organizationId: string, grantId: string, limit: number): Promise<SupportActivityEvent[]>;
 }
 
 export type GrantedRfpListItem = {

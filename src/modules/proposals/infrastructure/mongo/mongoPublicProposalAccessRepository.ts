@@ -34,7 +34,7 @@ const PUBLIC_REDACTED_FIELDS = [
   "lifecycle", // ORG-403: award state, competing-vendor counts and the planner's user id
 ] as const;
 
-const PRIVATE_UPLOAD_FIELDS = [
+export const PRIVATE_UPLOAD_FIELDS = [
   "brandGuideFiles",
   "eventLogoFiles",
   "referenceFiles",
@@ -44,7 +44,7 @@ const PRIVATE_UPLOAD_FIELDS = [
   "venueCoiFiles",
 ] as const;
 
-const attachmentFilename = (value: unknown): string => {
+export const attachmentFilename = (value: unknown): string => {
   if (typeof value !== "string") return "";
   const segment = value.split("/").pop() || value;
   try {

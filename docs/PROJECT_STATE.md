@@ -641,12 +641,14 @@ production data).
 
 **4. ORG-503, external pen test: open.** It closes on an internal security review
 plus a booked external test date. Neither has happened yet. Any high finding from
-the external test blocks launch.
+the external test blocks launch. The testers must be told that staff access changed
+on 2026-11-17 (no grant; staff reads are not visible to customers): see "Known
+follow-ups".
 
 **5. Browser verification: mostly done on production, some owed.** The checks
 that were skipped on 11 Nov were run on production on 11, 12 and 16 Nov as an
 Owner; see "After the release" for what passed and what was not checked. Still
-owed: every non-Owner role, an RFP-scope support grant, Duplicate and Archive from
+owed: every non-Owner role, Duplicate and Archive from
 the dashboard row menu, the role guide on a phone, and company single sign-on.
 
 **6. Known follow-ups.**
@@ -654,8 +656,9 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
 - ~~`GET /api/admin/proposals`, `GET /api/admin/proposals/:id` and the per-account
   proposal count on `GET /api/all-clients` are not grant-checked and write no audit
   event.~~ Done on 2026-11-17 (`DECISIONS.md`; on `main` when the PR merges, not
-  released): the two `proposals` routes are removed and answer 404, so staff reach
-  proposals only under a support grant. The count on `GET /api/all-clients` stays
+  released): the two `proposals` routes are removed and answer 404. ("So staff reach
+  proposals only under a support grant" was true for a few hours: see the staff
+  access entry below.) The count on `GET /api/all-clients` stays
   as an account-level count under the owner's decision of the same date; it is a
   number, counted inside the staff member's organization only, and the list writes
   no audit event (`API.md`, "Staff client list"). The sent-email total on that
@@ -673,10 +676,53 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
   template actions in their audit log. The events are still written for staff and
   forensics; `AUDIT_CATALOG` carries a comment and the wording guard test fails if
   one is added.
-- Decided on 2026-11-17 (`DECISIONS.md`): the admin organization detail page shows
+- **Decided on 2026-11-17, later than the two entries around this one
+  (`DECISIONS.md`, "RFPilot staff see everything in every organization with no
+  grant"): staff access without a grant. It supersedes the support-grant model.**
+  RFPilot staff (an `admins` account with an admin role) may view all customer
+  content with no action from the organization, may manage accounts, may not edit
+  or delete proposals, templates or vendor data; what staff do is recorded on the
+  RFPilot side only and is not shown to customers; support access leaves the
+  customer's settings. Customers can no longer tell when staff read their
+  content, and one staff account reaches every organization's content.
+  - Done in the backend (the VIEW half; on `main` when the PR merges, not
+    released): read-only routes under
+    `/api/v1/admin/organizations/:organizationId/` for proposals, a proposal, its
+    vendor responses, members (with pending invitations), teams, templates and
+    the vendor list (`API.md`, "Staff access to an organization's content"). Each
+    read writes one `platform.organization_content.read` event in the staff
+    organization and nothing in the customer's. The older staff routes
+    (`/api/v1/admin/support-access/...`, `/api/v1/admin/support/tickets/:ticketId/rfps`)
+    read without a grant and keep their shapes, and "granted to me" lists every
+    organization, so the deployed admin app shows every organization's proposals
+    through its existing Support access screens as soon as this is released. The
+    customer audit log (list, filter options, CSV) no longer returns any
+    support-access event, `organization.plan_changed`, or either legacy-customer
+    placement event; stored rows are kept.
+  - Follows, not built: (a) the admin app's organization browser on the new
+    routes (members, teams, templates, vendor list, proposals), replacing the
+    Support access screens, whose wording ("granted", "time left", "recorded in
+    this organization's audit log") is now wrong; (b) staff account management
+    (members and roles, teams, block and reactivate; plan and placement exist),
+    recorded on the staff side only, which must not write a customer-visible
+    action with a staff actor; (c) removal of the customer grant endpoints
+    (`/api/v1/organization/support-grants*`), the `SupportAccessGrant` model and
+    `supportAccess.active` on the organization account detail, once the dashboard
+    PR that removes the Support access screen is released; (d) two-factor
+    authentication required on staff accounts (recommended, not decided);
+    (e) **the ORG-503 external security test has to be told the model changed**:
+    its brief describes grant-gated staff access and a customer-visible record of
+    staff reads, neither of which exists now; (f) the launch metric
+    `supportAccessUnderGrant` no longer measures anything and should be removed
+    or replaced; (g) a staff-side view of the staff audit trail
+    (`platform.organization_content.read` is written but only readable in the
+    database).
+- Decided on 2026-11-17 (`DECISIONS.md`), **superseded the same day by the entry
+  above**: the admin organization detail page shows
   account information only (owner, plan, counts of members, teams and proposals,
   domains, sign-in method, created and last-active dates) and no member list
-  without a support grant. The backend route exists
+  without a support grant. The account detail route is unchanged; the member
+  list and content now come from the routes above. The backend route exists
   (`GET /api/v1/admin/organizations/:organizationId`, `API.md` "Organization account
   detail for RFPilot staff"; not released). The admin page is not built and must
   not merge before the route is in production.

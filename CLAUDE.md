@@ -45,10 +45,13 @@ AI features need all three processes running. A partial restart gives misleading
 
 ## Project skills
 
-`/ticket ORG-xxx` (implement a ticket end to end), `/contract-change` (schema + both generated
-copies), `/migration <name>` (numbered SQL with RLS, proven on the integration DB). See `.claude/skills/`.
-`/rfp-review` runs the reviewer agents in `.claude/agents/` (`tenant-isolation-reviewer`,
-`ai-safety-reviewer`, plus the dashboard and admin reviewers) in parallel on the current change.
+`/migration <name>` (numbered SQL with RLS, proven on the integration DB). See `.claude/skills/`.
+
+The cross-repo skills live in the workspace Home Repo (the parent folder, `../.claude/skills/`) and
+are available when the agent runs from there: `/ticket ORG-xxx` (implement a ticket end to end),
+`/contract-change` (schema + both generated copies) and `/rfp-review`, which runs the reviewer
+agents in `.claude/agents/` (`tenant-isolation-reviewer`, `ai-safety-reviewer`, plus the dashboard
+and admin reviewers) in parallel on the current change.
 
 ## Rules
 

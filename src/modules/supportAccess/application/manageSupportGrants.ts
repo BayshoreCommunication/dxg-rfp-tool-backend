@@ -8,7 +8,6 @@ import {
   resolveGrantExpiry,
   type GrantManager,
   type SupportAccessDirectory,
-  type SupportActivityLog,
   type SupportActivitySummary,
   type SupportGrantRecord,
   type SupportGrantRepository,
@@ -17,7 +16,6 @@ import {
 type Dependencies = {
   grants: SupportGrantRepository;
   directory: SupportAccessDirectory;
-  activity: SupportActivityLog;
   audit: SecurityAuditWriter;
   isValidId(value: string): boolean;
   clock?: () => Date;
@@ -26,17 +24,26 @@ type Dependencies = {
 // Only an Owner or Admin decides who outside the organization reads its RFPs.
 const GRANTING_ROLES = ["owner", "organization_admin"];
 const PER_PAGE = 50;
-const ACTIVITY_LIMIT = 200;
+// Staff activity is not shown to customers (owner decision, 2026-11-17), including the
+// `support_access.used` rows stored before it. Those rows are kept and never read here: every
+// grant answers with no uses and no events, in the shape the contract always had.
 const NO_ACTIVITY: SupportActivitySummary = { useCount: 0, lastUsedAt: null };
+type GrantEvent = {
+  at: Date;
+  agent: { id: string | null; label: string };
+  operation: string;
+  rfp: { id: string; title: string | null } | null;
+};
+const NO_EVENTS: readonly GrantEvent[] = [];
 
 const grantNotFound = () => new SupportAccessError("SUPPORT_GRANT_NOT_FOUND", "Support access grant not found.", 404);
 const rfpNotFound = () => new SupportAccessError("PROPOSAL_NOT_FOUND", "Proposal not found.", 404);
 
 // The customer side of support access (ORG-404): an Owner or Admin grants RFPilot Support
-// read access to one RFP or the whole organization, sees every grant with what Support did
-// under it, and revokes at any time. Everything is bounded to the caller's organization.
+// read access to one RFP or the whole organization, sees every grant, and revokes at any time.
+// Everything is bounded to the caller's organization.
 export const createSupportGrantManagement = (dependencies: Dependencies) => {
-  const { grants, directory, activity, audit } = dependencies;
+  const { grants, directory, audit } = dependencies;
   const clock = dependencies.clock ?? (() => new Date());
 
   const organizationOf = (actor: GrantManager) => String(actor.rfpActor.organizationId);
@@ -54,10 +61,9 @@ export const createSupportGrantManagement = (dependencies: Dependencies) => {
   const present = async (actor: GrantManager, records: readonly SupportGrantRecord[]) => {
     const organizationId = organizationOf(actor);
     const now = clock();
-    const [titles, names, uses] = await Promise.all([
+    const [titles, names] = await Promise.all([
       directory.rfpTitles(organizationId, records.flatMap((grant) => (grant.proposalId ? [grant.proposalId] : []))),
       directory.memberNames(organizationId, records.flatMap((grant) => [grant.grantedBy, ...(grant.revokedBy ? [grant.revokedBy] : [])])),
-      activity.summarize(organizationId, records.map((grant) => grant.id)),
     ]);
     const person = (userId: string | null) => (userId ? { id: userId, name: names.get(userId) ?? null } : null);
     return records.map((grant) => ({
@@ -72,7 +78,7 @@ export const createSupportGrantManagement = (dependencies: Dependencies) => {
       expiresAt: grant.expiresAt,
       revokedAt: grant.revokedAt,
       revokedBy: person(grant.revokedBy),
-      activity: uses.get(grant.id) ?? NO_ACTIVITY,
+      activity: { ...NO_ACTIVITY },
     }));
   };
 
@@ -133,21 +139,7 @@ export const createSupportGrantManagement = (dependencies: Dependencies) => {
       assertManager(actor);
       const grant = await load(actor, grantId);
       const [view] = await present(actor, [grant]);
-      const events = await activity.listForGrant(organizationOf(actor), grant.id, ACTIVITY_LIMIT);
-      const titles = await directory.rfpTitles(
-        organizationOf(actor),
-        [...new Set(events.flatMap((event) => (event.targetType === "proposal" && event.targetId ? [event.targetId] : [])))],
-      );
-      return {
-        ...view,
-        // Staff are shown as "RFPilot Support" with a stable reference, never by name, like the helpdesk.
-        events: events.map((event) => ({
-          at: event.at,
-          agent: { id: event.agentId, label: "RFPilot Support" },
-          operation: event.operation,
-          rfp: event.targetType === "proposal" && event.targetId ? { id: event.targetId, title: titles.get(event.targetId) ?? null } : null,
-        })),
-      };
+      return { ...view, events: [...NO_EVENTS] };
     },
 
     async revoke(actor: GrantManager, grantId: string) {

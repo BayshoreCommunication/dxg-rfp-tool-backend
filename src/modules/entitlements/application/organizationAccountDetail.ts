@@ -7,10 +7,11 @@ import {
   type PlanStaff,
 } from "./manageOrganizationPlans";
 
-/* Organization account detail for RFPilot staff (owner decision, 2026-11-17). Staff may see
-   account-level information about any organization without a support grant, and nothing else:
-   no member list and no customer content (proposals, vendors, templates, ticket text); the
-   vendor list and templates are not even counted. So this view is an allowlist built field by
+/* Organization account detail for RFPilot staff (owner decision, 2026-11-17). This view carries
+   account-level information only: no member list and no customer content (proposals, vendors,
+   templates, ticket text); the vendor list and templates are not even counted. (A later decision
+   of the same day lets staff read the member list and content with no grant; that is a separate
+   set of read routes, src/modules/staffAccess, and this view is unchanged.) It is an allowlist built field by
    field from counts, settings and timestamps. The one person it names is the Owner, who is the
    account contact. Each read is recorded in the staff organization's audit trail, never in the
    customer's. */

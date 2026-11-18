@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { AUDIT_CATALOG, AUDIT_CATEGORIES, AUDIT_CSV_HEADER, SUPPORT_ACTOR_LABEL, auditCsv } = require("../src/modules/auditLog/domain");
+const { AUDIT_CATALOG, AUDIT_CATEGORIES, AUDIT_CSV_HEADER, auditCsv } = require("../src/modules/auditLog/domain");
 const { PlanFeatureLockedError, PlanLimitReachedError } = require("../src/modules/entitlements/domain/plans");
 const { renderInvitationEmail } = require("../src/modules/invitations/infrastructure/invitationEmailTemplate");
 const proposalFormUi = require("../contracts/proposal/v1/proposal-form-ui.v1.json");
@@ -130,7 +130,8 @@ test("the audit log's categories, action labels and CSV say proposal", () => {
     ...AUDIT_CATEGORIES.map((category) => [`category ${category.key}`, category.label]),
     ...Object.entries(AUDIT_CATALOG).map(([action, entry]) => [`action ${action}`, entry.label]),
     ...AUDIT_CSV_HEADER.map((cell) => ["csv header", cell]),
-    ["support actor", SUPPORT_ACTOR_LABEL],
+    // The "RFPilot Support" actor label was listed here until 2026-11-17: staff activity is no
+    // longer shown to customers (docs/DECISIONS.md), so the label no longer exists.
   ];
   assert.deepEqual(labels.filter(([, label]) => RFP_NOUN.test(label)), []);
   // Keys are identifiers and stay; the labels a customer reads are worded for them.
@@ -151,23 +152,27 @@ test("the audit log's categories, action labels and CSV say proposal", () => {
   assert.match(csv, /"proposal","f{24}"/);
   assert.match(csv, /"proposalId: f{24}"/);
 
-  // Stored codes keep their names (project rule), so a support-access row still carries
-  // `scope: rfp` and `operation: rfp.read` / `rfp.list` / `ticket.rfp.list` in its Details cell.
-  // What must hold: every label cell says Proposal or nothing, and "RFP" as a word never appears.
-  const supportCsv = auditCsv(["rfp.read", "rfp.list", "ticket.rfp.list"].map((operation, index) => ({
-    id: `s${index}`, occurredAt: "2026-11-16T00:00:00.000Z", action: "support_access.used", label: AUDIT_CATALOG["support_access.used"].label,
-    category: "support_access", decision: "allowed", reason: null, actor: { kind: "support", id: "agent-1", name: SUPPORT_ACTOR_LABEL },
+  // Stored codes keep their names (project rule), so a row may still carry `scope: rfp` or
+  // `operation: rfp.read` / `rfp.list` / `ticket.rfp.list` in its Details cell. What must hold:
+  // every label cell says Proposal or nothing, and "RFP" as a word never appears. (Until
+  // 2026-11-17 this was checked on support-access rows; those are no longer shown to customers,
+  // so the same check now runs on a row a customer can still read.)
+  const codedCsv = auditCsv(["rfp.read", "rfp.list", "ticket.rfp.list"].map((operation, index) => ({
+    id: `s${index}`, occurredAt: "2026-11-16T00:00:00.000Z", action: "proposal.share_granted", label: AUDIT_CATALOG["proposal.share_granted"].label,
+    category: "sharing", decision: "allowed", reason: null, actor: { kind: "system", id: null, name: "System" },
     target: { type: "proposal", id: "f".repeat(24), name: null }, details: { grantId: "g1", scope: "rfp", operation },
   })));
-  const supportRows = supportCsv.trimEnd().split("\r\n").slice(1);
-  assert.equal(supportRows.length, 3);
-  for (const row of supportRows) {
+  const codedRows = codedCsv.trimEnd().split("\r\n").slice(1);
+  assert.equal(codedRows.length, 3);
+  for (const row of codedRows) {
     assert.doesNotMatch(row, RFP_NOUN);
-    assert.match(row, /"Support access used","RFPilot Support access"/);
+    assert.match(row, /"Proposal shared","Proposal sharing"/);
     assert.match(row, /"grantId: g1; scope: rfp; operation: (ticket\.)?rfp\.(read|list)"/);
     // Outside the Details cell (stored codes), no cell says rfp.
     assert.doesNotMatch(row.replace(/"grantId: [^"]*"/, ""), /rfp(?!ilot)/i);
   }
+  // No audit label a customer reads mentions support access or RFPilot staff any more.
+  assert.deepEqual(labels.filter(([, label]) => /RFPilot|Support access/i.test(label)), []);
 });
 
 test("customers do not see template actions in their audit log (decision 2026-11-16)", () => {
