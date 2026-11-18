@@ -1,6 +1,7 @@
 // ORG-407: the organization audit log through the real app (routes, authenticate middleware,
-// controller, Mongo reader): who may read it, cross-tenant isolation, RFPilot Support attribution,
-// the filters, and the CSV export.
+// controller, Mongo reader): who may read it, cross-tenant isolation, the filters, and the CSV
+// export. Owner decision, 2026-11-17: staff activity and support access are stored but never
+// returned to a customer, by list, filter options or CSV.
 import { TEST_MONGODB_DB_NAME } from './env';
 import { connectMongo, disconnectMongo, randomMongoId } from './setup';
 import assert from 'node:assert/strict';
@@ -90,6 +91,12 @@ before(async () => {
     { ...base, organizationId: orgA, action: 'support_access.used', targetType: 'organization', targetId: String(orgA), decision: 'allowed', reason: 'rfp.list', metadata: { grantId: 'grant-a', operation: 'rfp.list', agentAccountType: 'admin' } },
     { ...base, organizationId: orgA, action: 'support_access.denied', targetType: 'organization', targetId: String(orgA), decision: 'denied', reason: 'no_active_grant', metadata: { operation: 'rfp.read', agentAccountType: 'admin' } },
     { ...base, organizationId: orgB, action: 'support_access.used', targetType: 'organization', targetId: String(orgB), decision: 'allowed', reason: 'rfp.list', metadata: { grantId: `${MARKER}-grant-b`, operation: 'rfp.list', agentAccountType: 'admin' } },
+    // The other staff-attributed rows a customer organization can hold (plan change, placement),
+    // and a staff-side read written into the customer organization by mistake.
+    { ...base, organizationId: orgA, action: 'organization.plan_changed', targetType: 'organization', targetId: String(orgA), decision: 'allowed', reason: 'staff_plan_change', metadata: { fromPlan: 'free_trial', toPlan: 'full_access', note: `${MARKER} plan note` } },
+    { ...base, organizationId: orgA, action: 'organization.legacy_customer.placed', targetType: 'user', targetId: users.planner.id, decision: 'allowed', reason: 'legacy_customer_placed', metadata: { role: 'planner' } },
+    { ...base, organizationId: orgA, action: 'organization.legacy_customer.placement_rolled_back', targetType: 'user', targetId: users.planner.id, decision: 'allowed', reason: 'placement_rolled_back', metadata: {} },
+    { ...base, organizationId: orgA, action: 'platform.organization_content.read', targetType: 'organization', targetId: String(orgA), decision: 'allowed', reason: 'proposals', metadata: { resource: 'proposals' } },
     // Not part of the customer's view.
     { ...base, actorUserId: new mongoose.Types.ObjectId(users.owner.id), organizationId: orgA, action: 'auth.refresh.rotated', targetType: 'refresh_session', targetId: 's1', decision: 'allowed', reason: 'rotated', metadata: {} },
   ]);
@@ -175,22 +182,45 @@ test("an organization's events never reach another organization", async () => {
   assert.equal((await events('foreignOwner')).some((event) => event.actor.id === users.owner.id || event.target.id === String(orgA)), false);
 });
 
-test('RFPilot Support activity is attributed to RFPilot Support, never to a staff name', async () => {
-  const support = await events('owner', '?actor=support');
-  assert.deepEqual(support.map((event) => event.action).sort(), ['support_access.denied', 'support_access.used']);
-  for (const event of support) assert.deepEqual(event.actor, { kind: 'support', id: String(staffId), name: 'RFPilot Support' });
-  assert.deepEqual(support.find((event) => event.action === 'support_access.used')!.details, { grantId: 'grant-a', operation: 'rfp.list' });
-  // The staff id used as a "user" filter matches nothing, and the name is nowhere in JSON or CSV.
-  assert.deepEqual(await events('owner', `?actor=${staffId}`), []);
-  for (const route of [ROUTES[0], ROUTES[2]]) {
-    const res = await get('owner', route);
-    assert.equal(res.text.includes(STAFF_NAME), false);
-    assert.equal(res.text.includes(`staff-${MARKER.toLowerCase()}`), false);
+// Was: 'RFPilot Support activity is attributed to RFPilot Support, never to a staff name'.
+const HIDDEN_ACTIONS = [
+  'support_access.granted', 'support_access.revoked', 'support_access.used', 'support_access.denied',
+  'organization.plan_changed', 'organization.legacy_customer.placed', 'organization.legacy_customer.placement_rolled_back',
+  'platform.organization_content.read',
+];
+
+test('stored staff and support-access events are never returned to the customer: list, filter parameters and CSV', async () => {
+  // The rows exist in organization A.
+  const stored = await SecurityAuditEvent.find({ organizationId: orgA, action: { $in: HIDDEN_ACTIONS } }).select('_id action').lean();
+  assert.deepEqual([...new Set(stored.map((doc) => doc.action))].sort(), HIDDEN_ACTIONS.filter((action) => action !== 'support_access.revoked').sort());
+  const hiddenIds = stored.map((doc) => String(doc._id));
+
+  for (const who of ['owner', 'admin']) {
+    for (const query of ['?limit=100', '?actor=support', `?actor=${staffId}`, '?category=settings&limit=100', '?category=members&limit=100', `?from=${new Date(Date.now() - 3600_000).toISOString()}&limit=100`]) {
+      for (const route of [ROUTES[0], ROUTES[2]]) {
+        const res = await get(who, `${route}${query}`);
+        assert.equal(res.status, 200, `${route}${query}`);
+        for (const id of hiddenIds) assert.equal(res.text.includes(id), false, `${who} ${route}${query} returned a hidden event`);
+        for (const hidden of ['support_access', 'Support access', 'RFPilot Support', 'plan_changed', 'legacy_customer', 'platform.', 'grant-a', `${MARKER} plan note`, STAFF_NAME, `staff-${MARKER.toLowerCase()}`, String(staffId)]) {
+          assert.equal(res.text.includes(hidden), false, `${who} ${route}${query}: ${hidden}`);
+        }
+      }
+    }
+    // Asking for a hidden action or the old category by name is refused, on the list and the export.
+    for (const query of [...HIDDEN_ACTIONS.map((action) => `?action=${action}`), '?category=support_access']) {
+      for (const route of [ROUTES[0], ROUTES[2]]) {
+        const res = await get(who, `${route}${query}`);
+        assert.equal(res.status, 400, `${route}${query}`);
+        assert.equal(res.body.code, 'AUDIT_FILTER_INVALID');
+      }
+    }
   }
-  const granted = await events('owner', '?action=support_access.granted');
-  assert.equal(granted.length, 1);
-  assert.equal(granted[0].actor.id, users.admin.id);
-  assert.equal(granted[0].details.scope, 'organization');
+  // The old staff actor option and the staff member's id select nothing.
+  assert.deepEqual(await events('owner', '?actor=support'), []);
+  assert.deepEqual(await events('owner', `?actor=${staffId}`), []);
+  assert.equal((await events('owner', '?limit=100')).some((event) => event.actor.kind === 'support'), false);
+  // The Admin who created the grant still sees their other events, but not the grant.
+  assert.equal((await events('owner', `?actor=${users.admin.id}&limit=100`)).some((event) => String(event.action).startsWith('support_access')), false);
 });
 
 test('filters by user, action, category and date; uncatalogued actions are hidden; paging has no gaps', async () => {
@@ -218,9 +248,13 @@ test('filters by user, action, category and date; uncatalogued actions are hidde
 
   const filters = await get('admin', ROUTES[1]);
   const actions = filters.body.data.categories.flatMap((category: { actions: Array<{ value: string }> }) => category.actions.map((action) => action.value));
-  assert.ok(actions.includes('auth.login.failed') && actions.includes('support_access.used'));
+  assert.ok(actions.includes('auth.login.failed'));
   assert.equal(actions.includes('auth.refresh.rotated'), false);
-  assert.deepEqual(filters.body.data.supportActor, { value: 'support', label: 'RFPilot Support' });
+  // No support-access category, no staff-attributed action and no staff actor option (decision 2026-11-17).
+  assert.deepEqual(actions.filter((action: string) => HIDDEN_ACTIONS.includes(action) || action.startsWith('support_access') || action.startsWith('platform.')), []);
+  assert.equal(filters.body.data.categories.some((category: { key: string }) => category.key === 'support_access'), false);
+  assert.equal(filters.body.data.supportActor, undefined);
+  assert.equal(JSON.stringify(filters.body).includes('RFPilot'), false);
 });
 
 test('the CSV export carries the same rows as the list and neutralizes formula cells', async () => {
