@@ -535,3 +535,276 @@ test("middleware, the deactivation-cause read throws: the request is answered 40
     for (const [target, name, value] of originals) target[name] = value;
   }
 });
+
+// ── Interleavings of staff and customer changes, over the real session code ──────────────────
+
+const ADMIN = hex("2");
+const noMarkers = { sessionRevocationPending: false, sessionRevocationClaim: null, sessionRevocationStaff: null, suspendedByStaff: null };
+/* One membership document and the writes auth/composition.ts makes on it, filter for filter:
+   the customer's and the staff flow's markRevocationPending, and revocationClaims(byStaff).
+   The session manager, both hardenings and the access path are the real ones. */
+const world = (options = {}) => {
+  const store = sessionStore();
+  const doc = { status: "active", ...noMarkers };
+  const claims = (byStaff) => ({
+    claimRevocationPending: async ({ sessionId }) => {
+      if (doc.sessionRevocationPending !== true || (doc.sessionRevocationStaff != null) !== byStaff || doc.sessionRevocationClaim) return false;
+      doc.sessionRevocationClaim = { sessionId };
+      return true;
+    },
+    completeRevocationPending: async ({ sessionId }) => {
+      if (doc.sessionRevocationClaim?.sessionId === sessionId) Object.assign(doc, { sessionRevocationPending: false, sessionRevocationClaim: null, sessionRevocationStaff: null });
+    },
+    releaseRevocationClaim: async ({ sessionId }) => { if (doc.sessionRevocationClaim?.sessionId === sessionId) doc.sessionRevocationClaim = null; },
+  });
+  const revokeForStaff = (input) => store.sessions.revokeAll({ userId: input.userId, organizationId: input.organizationId, reason: STAFF_MEMBERSHIP_REVOKE_REASON, now: NOW, exceptSessionId: input.exceptSessionId });
+  const customerSessions = createMembershipSessionHardening({
+    revokeOtherSessions: (input) => store.manager.revokeOtherSessions(input),
+    markRevocationPending: async () => { Object.assign(doc, { sessionRevocationPending: true, sessionRevocationClaim: null, sessionRevocationStaff: null }); },
+    ...claims(false),
+  });
+  const staffSessions = createMembershipSessionHardening({
+    revokeOtherSessions: revokeForStaff,
+    markRevocationPending: async ({ actorUserId, staffOrganizationId }) => {
+      // First write: the marker, unless a member of the organization already holds the flag.
+      if (doc.sessionRevocationPending !== true || doc.sessionRevocationStaff != null) doc.sessionRevocationStaff = { organizationId: staffOrganizationId ?? null, actorUserId: actorUserId ?? null };
+      if (options.failSecondWrite) throw new Error("membership write down");
+      // Second write: the flag.
+      Object.assign(doc, { sessionRevocationPending: true, sessionRevocationClaim: null });
+    },
+    ...claims(true),
+  });
+  const staffEvents = [];
+  const access = createStaffCausedSessionRevocation({
+    pendingCause: async () => doc.sessionRevocationStaff,
+    suspensionCause: async () => (doc.status === "suspended" ? doc.suspendedByStaff : null),
+    customer: {
+      onRequestWithPendingRevocation: (input) => customerSessions.onRequestWithPendingRevocation(input),
+      revokeInactiveMembership: (input) => store.manager.revokeInactiveMembership(input),
+    },
+    revokeSessions: revokeForStaff,
+    staffClaims: claims(true),
+    audit: { append: async (event) => { staffEvents.push(event); } },
+    isValidId: (value) => /^[a-f0-9]{24}$/i.test(value),
+  });
+  // The member's request, as middleware/auth.ts makes it.
+  const request = async (sessionId, correlationId) => {
+    const input = { userId: MEMBER, organizationId: ORG, correlationId };
+    if (doc.status !== "active") return access.revokeInactiveMembershipSessions(input);
+    return doc.sessionRevocationPending ? access.revokeOtherSessionsAfterMembershipChange({ ...input, sessionId }) : 0;
+  };
+  const customerRows = () => store.audit.filter((e) => e.action !== "auth.session.created");
+  return { store, doc, customerSessions, staffSessions, access, staffEvents, request, customerRows };
+};
+const staffChange = { organizationId: ORG, userId: MEMBER, actorUserId: STAFF, correlationId: "c-staff", staffOrganizationId: STAFF_ORG };
+const adminChange = { organizationId: ORG, userId: MEMBER, actorUserId: ADMIN, actorSessionId: "admin-session", correlationId: "c-admin" };
+// What origin/main does: the same customer steps in a world staff never touched.
+const onMain = async (sessions, customerSteps) => {
+  const main = world();
+  const begun = [];
+  for (let i = 0; i < sessions; i += 1) begun.push(await begin(main.store));
+  await customerSteps(main, begun);
+  return { rows: main.customerRows(), statuses: statuses(main.store), doc: main.doc };
+};
+
+test("staff marker written, pending flag write fails: nothing is revoked or suppressed afterwards, and a later change by the organization behaves exactly as on main", async () => {
+  for (const demoted of [false, true]) {
+    const customerSteps = async (w, [kept]) => {
+      await w.customerSessions.afterRoleChange({ ...adminChange, demoted });
+      return w.request(kept.sessionId, "c-req");
+    };
+    const w = world({ failSecondWrite: true });
+    const begun = [await begin(w.store), await begin(w.store), await begin(w.store)];
+    await assert.rejects(w.staffSessions.afterRoleChange(staffChange), /membership write down/);
+    // The marker is stored without the flag.
+    assert.deepEqual(w.doc, { status: "active", ...noMarkers, sessionRevocationStaff: STAFF_CAUSE });
+    // The member's requests do nothing; nor would the access path if it were called.
+    assert.equal(await w.request(begun[0].sessionId, "c-1"), 0);
+    assert.equal(await w.access.revokeOtherSessionsAfterMembershipChange({ userId: MEMBER, organizationId: ORG, sessionId: begun[0].sessionId, correlationId: "c-2" }), 0);
+    assert.deepEqual(statuses(w.store), [["active", null], ["active", null], ["active", null]]);
+    assert.deepEqual([w.customerRows(), w.staffEvents], [[], []]);
+    // A refresh still rotates and is recorded as on main.
+    assert.equal((await w.store.manager.rotate({ refreshToken: begun[2].refreshToken, correlationId: "c-rotate" })).kind, "rotated");
+    assert.deepEqual(w.customerRows().map((e) => e.action), ["auth.refresh.rotated"]);
+    w.store.audit.pop();
+
+    assert.equal(await customerSteps(w, begun), demoted ? 0 : 2);
+    const main = await onMain(3, customerSteps);
+    assert.equal(main.rows.length, 1);
+    assert.deepEqual(main.rows[0].reason, demoted ? "membership_role_demoted" : "membership_role_changed");
+    assert.deepEqual(w.customerRows(), main.rows);
+    assert.deepEqual(statuses(w.store), main.statuses);
+    assert.deepEqual(w.staffEvents, []);
+    // A lateral change takes the flag over and clears the stale marker; a demotion never reads it.
+    if (!demoted) assert.deepEqual(w.doc, main.doc);
+  }
+});
+
+test("the organization sets the pending flag, then staff change the role before the member's next request: the flag stays the organization's and auth.sessions.revoked_others is still written", async () => {
+  const customerSteps = async (w) => { await w.customerSessions.afterRoleChange(adminChange); };
+  const w = world();
+  const [kept] = [await begin(w.store), await begin(w.store)];
+  await customerSteps(w);
+  assert.equal(await w.staffSessions.afterRoleChange(staffChange), 0);
+  // Not taken over: no staff cause on the flag.
+  assert.deepEqual(w.doc, { status: "active", ...noMarkers, sessionRevocationPending: true });
+  assert.equal(await w.request(kept.sessionId, "c-req"), 1);
+  assert.deepEqual(w.customerRows(), [{
+    organizationId: ORG, actorUserId: MEMBER, action: "auth.sessions.revoked_others", targetType: "user", targetId: MEMBER,
+    decision: "revoked", reason: "membership_role_changed", correlationId: "c-req", metadata: { revokedCount: 1, keptSession: true },
+  }]);
+  assert.deepEqual(statuses(w.store), [["active", null], ["revoked", "membership_role_changed"]]);
+  assert.deepEqual(w.staffEvents, []);
+  assert.deepEqual(w.doc, { status: "active", ...noMarkers });
+  const main = await onMain(2, async (m, [mine]) => { await customerSteps(m); await m.request(mine.sessionId, "c-req"); });
+  assert.deepEqual([w.customerRows(), statuses(w.store), w.doc], [main.rows, main.statuses, main.doc]);
+});
+
+test("staff set the marker, the member makes no request, then an Admin of the organization demotes or deactivates the member: the organization's rows are written as on main and the stale marker suppresses nothing", async () => {
+  const demote = async (w, [first]) => {
+    assert.equal(await w.customerSessions.afterRoleChange({ ...adminChange, demoted: true }), 2);
+    // The member's browser then presents its token: a session the organization ended reports the reuse.
+    assert.deepEqual(await w.store.manager.rotate({ refreshToken: first.refreshToken, correlationId: "c-replay" }), { kind: "reuse_detected" });
+  };
+  const deactivate = async (w, [first]) => {
+    // What the customer store writes for the organization's own deactivation: no staff cause.
+    Object.assign(w.doc, { status: "suspended", suspendedByStaff: null });
+    assert.equal(await w.customerSessions.afterDeactivation(adminChange), 2);
+    assert.equal(await w.request(first.sessionId, "c-req"), 0);
+    assert.deepEqual(await w.store.manager.rotate({ refreshToken: first.refreshToken, correlationId: "c-replay" }), { kind: "reuse_detected" });
+  };
+  for (const [reason, customerSteps] of [["membership_role_demoted", demote], ["membership_deactivated", deactivate]]) {
+    const w = world();
+    const begun = [await begin(w.store), await begin(w.store)];
+    assert.equal(await w.staffSessions.afterRoleChange(staffChange), 0);
+    assert.deepEqual(w.doc, { status: "active", ...noMarkers, sessionRevocationPending: true, sessionRevocationStaff: STAFF_CAUSE });
+    await customerSteps(w, begun);
+    assert.deepEqual(w.customerRows(), [
+      { organizationId: ORG, actorUserId: ADMIN, action: "auth.sessions.revoked_others", targetType: "user", targetId: MEMBER,
+        decision: "revoked", reason, correlationId: "c-admin", metadata: { revokedCount: 2, keptSession: false } },
+      reuseEvent(begun[0].sessionId, "c-replay"),
+    ], reason);
+    assert.deepEqual(statuses(w.store), [["revoked", reason], ["revoked", reason]], reason);
+    assert.deepEqual(w.staffEvents, [], reason);
+    const main = await onMain(2, customerSteps);
+    assert.deepEqual([w.customerRows(), statuses(w.store)], [main.rows, main.statuses], reason);
+  }
+});
+
+test("handoff retry on a session staff ended: T1 rotated to T2, the response lost, staff end the session, T1 retried inside the window; the reuse event IS written and the family is revoked (intended)", async () => {
+  const store = sessionStore();
+  const session = await begin(store);
+  assert.equal((await store.manager.rotate({ refreshToken: session.refreshToken, rotationKey: KEY, correlationId: "c-rotate" })).kind, "rotated");
+  assert.equal(await store.staffRevoke(), 1);
+  // Same token, same key, same instant: inside the handoff window.
+  assert.deepEqual(await store.manager.rotate({ refreshToken: session.refreshToken, rotationKey: KEY, correlationId: "c-retry" }), { kind: "reuse_detected" });
+  assert.deepEqual(store.events(REUSE), [reuseEvent(session.sessionId, "c-retry")]);
+  assert.deepEqual(store.calls.filter(([name]) => name === "revokeFamily"), [["revokeFamily", store.records[0].familyId, "refresh_reuse"]]);
+  assert.equal(store.records[0].status, "revoked");
+  // Exactly what a session the organization ended does.
+  const customer = sessionStore();
+  const own = await begin(customer);
+  await customer.manager.rotate({ refreshToken: own.refreshToken, rotationKey: KEY, correlationId: "c-rotate" });
+  await customer.sessions.revokeAll({ userId: MEMBER, organizationId: ORG, reason: "membership_role_demoted", now: NOW });
+  assert.deepEqual(await customer.manager.rotate({ refreshToken: own.refreshToken, rotationKey: KEY, correlationId: "c-retry" }), { kind: "reuse_detected" });
+  assert.deepEqual(customer.events(REUSE), store.events(REUSE));
+});
+
+test("every already-rotated token of a session staff later ended writes the reuse event; only the session's last token is silent", async () => {
+  const store = sessionStore();
+  const one = await begin(store);
+  const two = await store.manager.rotate({ refreshToken: one.refreshToken, correlationId: "c-r1" });
+  const three = await store.manager.rotate({ refreshToken: two.refreshToken, correlationId: "c-r2" });
+  assert.equal(three.kind, "rotated");
+  await store.staffRevoke();
+  assert.deepEqual(await store.manager.rotate({ refreshToken: one.refreshToken, correlationId: "c-old-1" }), { kind: "reuse_detected" });
+  assert.deepEqual(await store.manager.rotate({ refreshToken: two.refreshToken, rotationKey: KEY, correlationId: "c-old-2" }), { kind: "reuse_detected" });
+  assert.deepEqual(await store.manager.rotate({ refreshToken: three.refreshToken, correlationId: "c-last" }), { kind: "reuse_detected" });
+  assert.deepEqual(store.events(REUSE), [reuseEvent(one.sessionId, "c-old-1"), reuseEvent(one.sessionId, "c-old-2")]);
+  assert.deepEqual([store.records[0].status, store.records[0].revokeReason], ["revoked", STAFF_MEMBERSHIP_REVOKE_REASON]);
+});
+
+test("a crafted body on the customer member routes cannot set a marker: role change, teams, deactivate and reactivate store none", async () => {
+  const { createOrganizationMembersController } = require("../controller/organizationMembersController");
+  const { createMemberManagement } = require("../src/modules/organizationMembers/application/manageMembers");
+  const w = world();
+  const first = await begin(w.store);
+  await begin(w.store);
+  const record = { membershipId: "m-1", userId: MEMBER, name: "Member", email: "m@example.test", roles: ["planner"], version: 1, lastSignedInAt: null, createdAt: null };
+  const received = [];
+  // A store that would persist anything it is handed, and marks a deactivation as the Mongo store does (from `audit`).
+  const write = (name, patch) => async (input) => {
+    received.push([name, input]);
+    if (input.expectedVersion !== record.version) return "stale";
+    const { organizationId: _o, userId: _u, expectedVersion: _v, now: _n, roles, audit, ...rest } = input;
+    Object.assign(w.doc, rest, patch(audit));
+    Object.assign(record, roles ? { roles } : {}, { version: record.version + 1 });
+    return { ...record, status: w.doc.status };
+  };
+  const hook = (name) => async (change) => { received.push([name, change]); return w.customerSessions[name](change); };
+  const members = createMemberManagement({
+    store: {
+      find: async () => ({ ...record, status: w.doc.status }),
+      countOwnedRfps: async () => 0,
+      setRoles: write("setRoles", () => ({})),
+      bumpVersion: write("bumpVersion", () => ({})),
+      deactivate: write("deactivate", (audit) => ({ status: "suspended", suspendedByStaff: audit ? { organizationId: audit.organizationId, actorUserId: audit.actorUserId } : null })),
+      reactivate: write("reactivate", () => ({ status: "active", suspendedByStaff: null })),
+    },
+    teams: {
+      teamsFor: async () => new Map(),
+      activeTeamIds: async (_org, teamIds) => teamIds,
+      setMemberTeams: async (input) => { received.push(["setMemberTeams", input]); return { previousTeamIds: [] }; },
+    },
+    audit: { append: async (event) => { w.store.audit.push(event); } },
+    sessions: { afterRoleChange: hook("afterRoleChange"), afterDeactivation: hook("afterDeactivation") },
+    reassignments: { reassign: async () => { throw new Error("not used"); } },
+    ownershipMirror: { afterReassign: async () => undefined },
+  });
+  const controller = createOrganizationMembersController(members);
+  const crafted = {
+    sessionRevocationStaff: STAFF_CAUSE, suspendedByStaff: STAFF_CAUSE, revokeReason: STAFF_MEMBERSHIP_REVOKE_REASON, reason: STAFF_MEMBERSHIP_REVOKE_REASON,
+    sessionRevocationPending: true, staffOrganizationId: STAFF_ORG, actorUserId: STAFF,
+    audit: { organizationId: STAFF_ORG, actorUserId: STAFF, action: "platform.organization_member.deactivated", targetType: "organization_membership", targetId: MEMBER, reason: "x", correlationId: "x", metadata: {} },
+    revertAudit: { organizationId: STAFF_ORG, actorUserId: STAFF },
+  };
+  const call = async (handler, body) => {
+    const res = { statusCode: 200, body: null, status(code) { this.statusCode = code; return this; }, json(payload) { this.body = payload; return this; } };
+    await handler({ user: { userId: ADMIN, organizationId: ORG, roles: ["organization_admin"], sessionId: "admin-session" }, params: { userId: MEMBER }, query: {}, body: { ...crafted, ...body }, correlationId: "c-admin" }, res);
+    assert.deepEqual([res.statusCode, res.body.success], [200, true], JSON.stringify(res.body));
+    return res.body.data;
+  };
+  const stored = () => ({ sessionRevocationStaff: w.doc.sessionRevocationStaff, suspendedByStaff: w.doc.suspendedByStaff });
+  const clean = { sessionRevocationStaff: null, suspendedByStaff: null };
+
+  await call(controller.changeRole, { role: "team_manager", version: 1 });
+  assert.deepEqual(stored(), clean);
+  assert.equal(w.doc.sessionRevocationPending, true);
+  await call(controller.changeTeams, { teamIds: [hex("7")], version: 2 });
+  assert.deepEqual(stored(), clean);
+  await call(controller.deactivate, { version: 3 });
+  assert.deepEqual([w.doc.status, stored()], ["suspended", clean]);
+  // The sessions end for the organization's reason, never the crafted one, and are reported as the organization's.
+  assert.deepEqual(statuses(w.store), [["revoked", "membership_deactivated"], ["revoked", "membership_deactivated"]]);
+  assert.deepEqual(w.customerRows().map((e) => [e.organizationId, e.actorUserId, e.action, e.reason]), [
+    [ORG, ADMIN, "organization.member.role_changed", "role_changed"],
+    [ORG, ADMIN, "organization.member.teams_changed", "teams_changed"],
+    [ORG, ADMIN, "organization.member.deactivated", "member_deactivated"],
+    [ORG, ADMIN, "auth.sessions.revoked_others", "membership_deactivated"],
+  ]);
+  assert.equal(await w.request(first.sessionId, "c-req"), 0);
+  assert.deepEqual(await w.store.manager.rotate({ refreshToken: first.refreshToken, correlationId: "c-replay" }), { kind: "reuse_detected" });
+  assert.equal(w.store.events(REUSE).length, 1);
+  await call(controller.reactivate, { version: 4 });
+  assert.deepEqual([w.doc.status, stored()], ["active", clean]);
+  assert.deepEqual(w.staffEvents, []);
+
+  // Nothing from the body reached the store, the team directory or the session hooks.
+  assert.deepEqual(received.map(([name]) => name), ["setRoles", "afterRoleChange", "bumpVersion", "setMemberTeams", "deactivate", "afterDeactivation", "reactivate"]);
+  const forbidden = ["sessionRevocationStaff", "suspendedByStaff", "revokeReason", "reason", "sessionRevocationPending", "staffOrganizationId", "audit", "revertAudit"];
+  for (const [name, input] of received) {
+    assert.deepEqual(Object.keys(input).filter((key) => forbidden.includes(key)), [], name);
+    if ("actorUserId" in input) assert.equal(input.actorUserId, ADMIN, name);
+  }
+  assert.deepEqual(Object.keys(w.doc).sort(), ["sessionRevocationClaim", "sessionRevocationPending", "sessionRevocationStaff", "status", "suspendedByStaff"]);
+});
