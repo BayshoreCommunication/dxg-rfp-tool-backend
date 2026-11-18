@@ -709,10 +709,12 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
     are refused. Every request leaves one event in the staff organization
     (`platform.organization_member.*`), written in the same transaction as the
     change, and nothing in the customer's audit trail. No email or notification
-    is sent (the customer flow sends none). Open for the owner: one indirect
-    customer-side trace remains (a member's own "other sessions signed out"
-    entry on their next request after a staff role change), and whether a
-    member should be told when staff change their role or deactivate them.
+    is sent (the customer flow sends none). The session events a member's own
+    later requests would write after a staff change ("Session reuse detected",
+    "Other sessions signed out", "All sessions signed out") are not written in
+    the customer organization either; the revocations are recorded on the
+    staff side (`DECISIONS.md`). Open for the owner: whether a member should
+    be told when staff change their role or deactivate them.
     The admin app has no screen for any of this yet.
   - Follows, not built: (a) the admin app's organization browser on the new
     routes (members, teams, templates, vendor list, proposals), replacing the
