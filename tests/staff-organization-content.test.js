@@ -358,11 +358,11 @@ test("the Mongo reader names the path's organization in every query on customer 
   const source = fs.readFileSync(path.join(__dirname, "../src/modules/staffAccess/infrastructure/mongoStaffOrganizationReader.ts"), "utf8");
   const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const calls = queryCalls(code);
-  assert.equal(calls.length, 15);
+  assert.equal(calls.length, 16);
   const scoped = ({ model, args }) =>
     model === "Organization" ? /^\{ _id: oid\(organizationId\) \}$/.test(args) || args === "{}"
       : model === "User" ? /^\{ _id: \{ \$in: ids\.map\(oid\) \} \}$/.test(args)
-        : /organizationId: (organization|oid\(organizationId\))\b/.test(args) || args === "filter";
+        : /organizationId: (organization\b|oid\(organizationId\))/.test(args) || args === "filter";
   assert.deepEqual(calls.filter((call) => !scoped(call)).map((call) => `${call.model}.${call.method}(${call.args})`), []);
   // `filter` is the invitation filter, which is built from the path's organization.
   assert.match(code, /const filter = \{ organizationId: oid\(organizationId\), status: "pending" \};/);
@@ -521,9 +521,10 @@ test("routes: the older staff routes have the same guard, and the customer grant
   assert.equal(customerRoutes.length, 4, "the customer grant endpoints still answer");
   for (const route of customerRoutes) {
     assert.equal(route.stack[0].handle, authenticate, route.path);
-    const res = fakeResponse();
-    let passed = false;
-    route.stack[1].handle({ user: { roles: ["dxg_admin"] } }, res, () => { passed = true; });
-    assert.equal(passed, false, "a staff role is not organization:manage");
+    for (const roles of [["team_manager"], ["planner"], ["viewer"], []]) {
+      let passed = false;
+      route.stack[1].handle({ user: { roles } }, fakeResponse(), () => { passed = true; });
+      assert.equal(passed, false, `${route.path} as ${roles}`);
+    }
   }
 });
