@@ -136,7 +136,10 @@ export const mongoMembershipStore: MembershipStore = {
     let row = null as MembershipRow | null;
     try {
       await session.withTransaction(async () => {
-        row = await updateVersioned(input, { status: { $ne: "removed" } }, { $set: { status: "suspended", suspendedAt: input.now } }, session);
+        // suspendedByStaff: who the deactivation is recorded for when RFPilot staff made it (the
+        // event's organization and actor); null when a member of the organization made it.
+        const suspendedByStaff = input.audit ? { organizationId: input.audit.organizationId, actorUserId: input.audit.actorUserId } : null;
+        row = await updateVersioned(input, { status: { $ne: "removed" } }, { $set: { status: "suspended", suspendedAt: input.now, suspendedByStaff } }, session);
         if (!row) return;
         const owned = await countOwnedRfps(input.organizationId, input.userId, session);
         if (owned > 0) throw new OwnedRfps(owned);
@@ -152,17 +155,33 @@ export const mongoMembershipStore: MembershipStore = {
     // An RFP the member created while this committed would be orphaned; put the member back.
     const owned = await countOwnedRfps(input.organizationId, input.userId);
     if (owned > 0) {
-      await OrganizationMembership.updateOne(
+      const putBack = (transaction?: ClientSession) => OrganizationMembership.updateOne(
         { organizationId: objectId(input.organizationId), userId: objectId(input.userId), status: "suspended" },
-        { $set: { status: "active", suspendedAt: null }, $inc: { version: 1 } },
+        { $set: { status: "active", suspendedAt: null, suspendedByStaff: null }, $inc: { version: 1 } },
+        { session: transaction },
       );
+      if (!input.revertAudit) {
+        await putBack();
+        return { ownedRfpCount: owned, reverted: true };
+      }
+      // A staff deactivation's event is already committed: the put-back and the event that
+      // corrects it commit together.
+      const revert = await mongoose.startSession();
+      try {
+        await revert.withTransaction(async () => {
+          const result = await putBack(revert);
+          if (result.modifiedCount === 1) await appendAudit(input.revertAudit, revert, { ownedRfpCount: owned });
+        });
+      } finally {
+        await revert.endSession();
+      }
       return { ownedRfpCount: owned, reverted: true };
     }
     return (await withUser(row)) as MemberRecord;
   },
 
   async reactivate(input) {
-    const update = { $set: { status: "active", suspendedAt: null, activatedAt: new Date() } };
+    const update = { $set: { status: "active", suspendedAt: null, activatedAt: new Date(), suspendedByStaff: null } };
     if (!input.audit) {
       const row = await updateVersioned(input, { status: "suspended" }, update);
       return row ? ((await withUser(row)) as MemberRecord) : "stale";

@@ -40,8 +40,11 @@ export interface MembershipStore {
   setRoles(input: { organizationId: string; userId: string; expectedVersion: number; roles: string[]; audit?: MemberChangeAudit }): Promise<MemberRecord | "stale" | { ownedRfpCount: number }>;
   // Refuses with owns_rfps when the member owns an RFP when the change commits. `reverted` marks
   // the rare refusal that came after the commit (an RFP created while it committed): the member
-  // was put back, and an `audit` event given with the change was already written.
-  deactivate(input: { organizationId: string; userId: string; expectedVersion: number; now: Date; audit?: MemberChangeAudit }): Promise<MemberRecord | "stale" | { ownedRfpCount: number; reverted?: boolean }>;
+  // was put back. An `audit` event given with the change was already written by then, so the
+  // put-back and `revertAudit` (with `ownedRfpCount` added) commit together in one transaction:
+  // the trail never says "deactivated" for a member who is active without saying it was undone.
+  // A deactivation given an `audit` event is a staff one and is marked as such on the membership.
+  deactivate(input: { organizationId: string; userId: string; expectedVersion: number; now: Date; audit?: MemberChangeAudit; revertAudit?: MemberChangeAudit }): Promise<MemberRecord | "stale" | { ownedRfpCount: number; reverted?: boolean }>;
   reactivate(input: { organizationId: string; userId: string; expectedVersion: number; audit?: MemberChangeAudit }): Promise<MemberRecord | "stale">;
   // Bumps the version for a change stored elsewhere (team memberships).
   bumpVersion(input: { organizationId: string; userId: string; expectedVersion: number }): Promise<MemberRecord | "stale">;
@@ -71,7 +74,8 @@ export interface RfpOwnershipMirror {
 }
 
 // ORG-307: what a membership change does to the member's sessions.
-export type SessionChange = { organizationId: string; userId: string; actorUserId: string; actorSessionId?: string; correlationId: string; demoted?: boolean };
+// `staffOrganizationId` is given only by RFPilot staff member management (the organization that records it).
+export type SessionChange = { organizationId: string; userId: string; actorUserId: string; actorSessionId?: string; correlationId: string; demoted?: boolean; staffOrganizationId?: string };
 export interface MemberSessionHooks {
   afterRoleChange(change: SessionChange): Promise<unknown>;
   afterDeactivation(change: SessionChange): Promise<unknown>;

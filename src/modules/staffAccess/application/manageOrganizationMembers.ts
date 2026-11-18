@@ -53,7 +53,15 @@ import { staffMemberView, type StaffContentAudit } from "./readOrganizationConte
    the change, so a change is never applied without its record. Nothing is written to the
    customer organization's audit trail: none of `organization.member.*`,
    `organization.ownership.transferred`, `proposal.owner.reassigned` or
-   `auth.sessions.revoked_others` is written when the actor is staff. */
+   `auth.sessions.revoked_others` is written when the actor is staff.
+
+   Sessions: the event of a change is written BEFORE the member's sessions are revoked, so it says
+   what is true then: `revocation_requested` (every session ends now) or
+   `next_request_revocation_requested` (the member's next request ends the other ones). If the
+   revocation then fails the request fails; repeating it finds nothing to change and asks for the
+   revocation again, so a retry repairs it. The revocation itself, and what the member's later
+   requests do because of it, is never written to the customer organization either
+   (auth/composition.ts and auth/application/staffCausedSessionRevocation.ts). */
 
 const ID = /^[a-f0-9]{24}$/;
 export const STAFF_REASON_MIN = 10;
@@ -199,7 +207,7 @@ export const createStaffMemberManagement = (dependencies: Dependencies) => {
   };
 
   const sessionChange = (current: Attempt, organizationId: string, userId: string) =>
-    ({ organizationId, userId, actorUserId: current.staff.adminId, correlationId: current.staff.correlationId });
+    ({ organizationId, userId, actorUserId: current.staff.adminId, correlationId: current.staff.correlationId, staffOrganizationId: current.staff.organizationId });
 
   const facts = (member: MemberRecord) => ({ role: customerRole(member.roles), roles: [...member.roles], status: member.status });
 
@@ -231,7 +239,10 @@ export const createStaffMemberManagement = (dependencies: Dependencies) => {
         allow(decideRoleChange({ actor: STAFF_MANAGER, target, role, ownedRfpCount }));
         const before = facts(target);
         if (before.role === role) {
-          await recordAllowed(current, "role_unchanged", { changed: false, before, after: before });
+          // Nothing to change; the direction of the change that put the role in place isn't known
+          // here, so the member's next request ends their other sessions (a retry's repair).
+          await recordAllowed(current, "role_unchanged", { changed: false, before, after: before, sessions: "next_request_revocation_requested" });
+          await sessions.afterRoleChange(sessionChange(current, organization, target.userId));
           return { organizationId: organization, changed: false, ...(await viewOf(organization, target.userId)) };
         }
         const roles = withCustomerRole(target.roles, role);
@@ -240,7 +251,7 @@ export const createStaffMemberManagement = (dependencies: Dependencies) => {
           organizationId: organization, userId: target.userId, expectedVersion: version, roles,
           audit: eventOf(current, "role_changed", {
             changed: true, before, after: { role, roles, status: target.status },
-            sessions: demoted ? "revoked" : "revoked_on_next_request",
+            sessions: demoted ? "revocation_requested" : "next_request_revocation_requested",
           }),
         });
         if (updated === "stale") throw stale(await store.find(organization, target.userId));
@@ -259,7 +270,8 @@ export const createStaffMemberManagement = (dependencies: Dependencies) => {
         if (target.version !== version) throw stale(target);
         const before = facts(target);
         if (target.status === "suspended") {
-          await recordAllowed(current, "member_already_deactivated", { changed: false, before, after: before });
+          await recordAllowed(current, "member_already_deactivated", { changed: false, before, after: before, sessions: "revocation_requested" });
+          await sessions.afterDeactivation(sessionChange(current, organization, target.userId));
           return { organizationId: organization, changed: false, ...(await viewOf(organization, target.userId)) };
         }
         const ownedRfpCount = await store.countOwnedRfps(organization, target.userId);
@@ -267,12 +279,15 @@ export const createStaffMemberManagement = (dependencies: Dependencies) => {
         allow(decideDeactivation({ actor: STAFF_MANAGER, target, ownedRfpCount }));
         const updated = await store.deactivate({
           organizationId: organization, userId: target.userId, expectedVersion: version, now: new Date(),
-          audit: eventOf(current, "member_deactivated", { changed: true, before, after: { ...before, status: "suspended" }, sessions: "revoked" }),
+          audit: eventOf(current, "member_deactivated", { changed: true, before, after: { ...before, status: "suspended" }, sessions: "revocation_requested" }),
+          // Committed with the put-back if the member has to be put back after the commit.
+          revertAudit: eventOf(current, "member_deactivation_reverted", { changed: false, reverted: true, before: { ...before, status: "suspended" }, after: before }),
         });
         if (updated === "stale") throw stale(await store.find(organization, target.userId));
         if ("ownedRfpCount" in updated) {
           // `reverted`: the member created a proposal while the deactivation committed and was put
-          // back. The allowed event is already written; this refusal is recorded after it.
+          // back. The allowed event was already written, and the store committed the put-back
+          // together with the `member_deactivation_reverted` event; this refusal follows them.
           const refusal = ownerHasRfps(updated.ownedRfpCount);
           throw refused(refusal.status, refusal.code, refusal.message, { ...refusal.details, ...(updated.reverted ? { reverted: true } : {}) });
         }
@@ -323,7 +338,7 @@ export const createStaffMemberManagement = (dependencies: Dependencies) => {
             previousOwnerUserId: owner.userId,
             before: { ownerUserId: owner.userId, newOwnerRole: customerRole(target.roles), previousOwnerRole: "owner" },
             after: { ownerUserId: toUserId, newOwnerRole: "owner", previousOwnerRole: "organization_admin" },
-            sessions: { previousOwner: "revoked", newOwner: "revoked_on_next_request" },
+            sessions: { previousOwner: "revocation_requested", newOwner: "next_request_revocation_requested" },
           }),
         });
         // Someone else moved the ownership between the read above and the commit.

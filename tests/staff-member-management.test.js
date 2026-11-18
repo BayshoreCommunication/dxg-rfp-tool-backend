@@ -78,7 +78,12 @@ const setup = (options = {}) => {
       if (state.ownedAtCommit) return { ownedRfpCount: state.ownedAtCommit };
       const r = get(input.organizationId, input.userId);
       const result = commit(r, input.expectedVersion, { status: "suspended" }, input.audit);
-      if (result !== "stale" && state.revertAfterCommit) { Object.assign(r, { status: "active", version: r.version + 1 }); return { ownedRfpCount: state.revertAfterCommit, reverted: true }; }
+      if (result !== "stale" && state.revertAfterCommit) {
+        // As the Mongo store: the put-back and its correcting event commit together.
+        Object.assign(r, { status: "active", version: r.version + 1 });
+        if (input.revertAudit) audit.push({ ...input.revertAudit, decision: "allowed", metadata: { ...input.revertAudit.metadata, ownedRfpCount: state.revertAfterCommit } });
+        return { ownedRfpCount: state.revertAfterCommit, reverted: true };
+      }
       return result;
     },
     async reactivate(input) { calls.push(["reactivate", input]); return commit(get(input.organizationId, input.userId), input.expectedVersion, { status: "active" }, input.audit); },
@@ -138,7 +143,7 @@ const setup = (options = {}) => {
     audit: { async append(event) { if (state.failAudit) throw new Error("audit store down"); audit.push(event); } },
   });
   const writes = () => calls.filter(([name]) => ["setRoles", "deactivate", "reactivate", "transferOwnership", "reassign"].includes(name));
-  return { members, audit, state, calls, rows, get, sessionCalls, mirrorCalls, writes };
+  return { members, audit, state, calls, rows, get, sessionCalls, mirrorCalls, writes, store, reassignments, directory };
 };
 
 const refusedWith = (status, code) => (error) => {
@@ -331,7 +336,7 @@ test("role change: applies the customer's rule, records before and after once in
   oneStaffEvent(audit, {
     action: "platform.organization_member.role_changed", decision: "allowed", reason: "role_changed", targetId: ids.planner,
     metadata: {
-      organizationId: ACME, memberUserId: ids.planner, changed: true, staffReason: REASON, sessions: "revoked_on_next_request",
+      organizationId: ACME, memberUserId: ids.planner, changed: true, staffReason: REASON, sessions: "next_request_revocation_requested",
       before: { role: "planner", roles: ["planner"], status: "active" }, after: { role: "team_manager", roles: ["team_manager"], status: "active" },
     },
   });
@@ -344,7 +349,8 @@ test("role change: applies the customer's rule, records before and after once in
   const demoted = await demotion.members.changeRole(staff(), ACME, ids.manager, { role: "viewer", version: 1, reason: REASON });
   assert.deepEqual(demoted.member.roles, ["viewer", "knowledge_editor"]);
   assert.deepEqual(demotion.sessionCalls, [["role", ids.manager, ACME, STAFF, "demoted"]]);
-  assert.equal(demotion.audit[0].metadata.sessions, "revoked");
+  // Written before the revocation runs, so it says "requested", not "revoked".
+  assert.equal(demotion.audit[0].metadata.sessions, "revocation_requested");
 });
 
 test("role change never moves a member to or from Owner: `owner` as the new role and the Owner as the member are both refused, for every role", async () => {
@@ -430,20 +436,22 @@ test("a version that moves between the read and the write is 409 STALE_VERSION w
   }
 });
 
-test("a request that finds nothing to change writes nothing to the member and still leaves one allowed event (changed: false)", async () => {
+test("a request that finds nothing to change writes nothing to the member and still leaves one allowed event (changed: false); a role or deactivation retry asks for the session revocation again", async () => {
+  // The 4th element: the session hook a retry runs again, so a revocation that failed after the change committed is repaired.
   const cases = [
-    ["role_unchanged", (m) => m.changeRole(staff(), ACME, ids.planner, { role: "planner", version: 1, reason: REASON }), ids.planner],
-    ["member_already_deactivated", (m) => m.deactivate(staff(), ACME, ids.suspended, { version: 1, reason: REASON }), ids.suspended],
-    ["member_already_active", (m) => m.reactivate(staff(), ACME, ids.planner, { version: 1, reason: REASON }), ids.planner],
+    ["role_unchanged", (m) => m.changeRole(staff(), ACME, ids.planner, { role: "planner", version: 1, reason: REASON }), ids.planner, [["role", ids.planner, ACME, STAFF]], "next_request_revocation_requested"],
+    ["member_already_deactivated", (m) => m.deactivate(staff(), ACME, ids.suspended, { version: 1, reason: REASON }), ids.suspended, [["deactivated", ids.suspended, ACME, STAFF]], "revocation_requested"],
+    ["member_already_active", (m) => m.reactivate(staff(), ACME, ids.planner, { version: 1, reason: REASON }), ids.planner, [], undefined],
   ];
-  for (const [reason, run, user] of cases) {
+  for (const [reason, run, user, expectedSessionCalls, expectedSessions] of cases) {
     const { members, audit, writes, sessionCalls, get } = setup();
     const answer = await run(members);
     assert.deepEqual([answer.changed, answer.version], [false, 1], reason);
     assert.deepEqual(writes(), []);
-    assert.deepEqual(sessionCalls, []);
+    assert.deepEqual(sessionCalls, expectedSessionCalls, reason);
     assert.equal(get(ACME, user).version, 1);
     oneStaffEvent(audit, { decision: "allowed", reason, targetId: user, metadata: { changed: false, staffReason: REASON } });
+    assert.equal(audit[0].metadata.sessions, expectedSessions, reason);
     // That event is awaited: if it can't be written the request fails.
     const failing = setup();
     failing.state.failAudit = true;
@@ -461,7 +469,7 @@ test("deactivate: suspends the member, ends every session, one event; the Owner 
   assert.deepEqual(sessionCalls, [["deactivated", ids.planner, ACME, STAFF]]);
   oneStaffEvent(audit, {
     action: "platform.organization_member.deactivated", decision: "allowed", reason: "member_deactivated", targetId: ids.planner,
-    metadata: { changed: true, sessions: "revoked", before: { role: "planner", roles: ["planner"], status: "active" }, after: { role: "planner", roles: ["planner"], status: "suspended" } },
+    metadata: { changed: true, sessions: "revocation_requested", before: { role: "planner", roles: ["planner"], status: "active" }, after: { role: "planner", roles: ["planner"], status: "suspended" } },
   });
 
   const owner = setup();
@@ -489,7 +497,7 @@ test("deactivate: suspends the member, ends every session, one event; the Owner 
   oneStaffEvent(removed.audit, { decision: "denied", reason: "member_removed" });
 });
 
-test("deactivate put back after it committed (a proposal created meanwhile): refused, sessions kept, and the staff trail holds the allowed event followed by a denied one marked reverted", async () => {
+test("deactivate put back after it committed (a proposal created meanwhile): refused, sessions kept, and the staff trail holds the allowed event, the reverted event committed with the put-back, and the refusal", async () => {
   const { members, audit, state, get, sessionCalls } = setup();
   state.revertAfterCommit = 1;
   await assert.rejects(members.deactivate(staff(), ACME, ids.planner, { version: 1, reason: REASON }), (error) => refusedWith(409, "OWNER_HAS_RFPS")(error) && error.details.reverted === true);
@@ -497,8 +505,68 @@ test("deactivate put back after it committed (a proposal created meanwhile): ref
   assert.deepEqual(sessionCalls, []);
   assert.deepEqual(audit.map((e) => [e.organizationId, e.action, e.decision, e.reason, e.metadata.reverted]), [
     [STAFF_ORG, "platform.organization_member.deactivated", "allowed", "member_deactivated", undefined],
+    // Written by the store in the transaction that put the member back: it does not depend on the best-effort refusal below.
+    [STAFF_ORG, "platform.organization_member.deactivated", "allowed", "member_deactivation_reverted", true],
     [STAFF_ORG, "platform.organization_member.deactivated", "denied", "owner_has_rfps", true],
   ]);
+  const reverted = audit[1];
+  assert.deepEqual([reverted.targetId, reverted.metadata.changed, reverted.metadata.ownedRfpCount, reverted.metadata.before.status, reverted.metadata.after.status, reverted.metadata.staffReason],
+    [ids.planner, false, 1, "suspended", "active", REASON]);
+
+  // The refusal is best effort; the correction is not: with the refusal unrecordable the trail still says the deactivation was undone.
+  const failing = setup();
+  failing.state.revertAfterCommit = 1;
+  failing.state.failAudit = true;
+  const logged = [];
+  const original = console.error;
+  console.error = (...args) => logged.push(args.join(" "));
+  try {
+    await assert.rejects(failing.members.deactivate(staff(), ACME, ids.planner, { version: 1, reason: REASON }), refusedWith(409, "OWNER_HAS_RFPS"));
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(failing.audit.map((e) => [e.decision, e.reason]), [["allowed", "member_deactivated"], ["allowed", "member_deactivation_reverted"]]);
+  assert.equal(failing.get(ACME, ids.planner).status, "active");
+});
+
+test("a session revocation that fails after the change committed fails the request, and repeating the request (changed: false) runs it again", async () => {
+  const run = async (first, retry, expectedCalls) => {
+    const context = setup();
+    let fail = true;
+    const attempts = [];
+    const hook = (name) => async (change) => {
+      attempts.push([name, change.userId, change.organizationId, change.actorUserId, change.staffOrganizationId, ...(change.demoted ? ["demoted"] : [])]);
+      if (fail) throw new Error("session store down");
+    };
+    const members = createStaffMemberManagement({
+      directory: context.directory, store: context.store, reassignments: context.reassignments,
+      ownershipMirror: { async afterReassign() {} },
+      sessions: { afterRoleChange: hook("role"), afterDeactivation: hook("deactivated") },
+      audit: { async append(event) { context.audit.push(event); } },
+    });
+    await assert.rejects(first(members), /session store down/);
+    // The change and its event are committed; the event says what was true when it was written.
+    assert.equal(context.audit.length, 1);
+    assert.deepEqual([context.audit[0].decision, context.audit[0].metadata.changed], ["allowed", true]);
+    assert.doesNotMatch(JSON.stringify(context.audit[0].metadata.sessions), /"revoked"|revoked_on/);
+    fail = false;
+    const answer = await retry(members);
+    assert.equal(answer.changed, false);
+    assert.deepEqual(attempts, expectedCalls);
+    assert.deepEqual(context.audit.map((e) => [e.decision, e.metadata.changed]), [["allowed", true], ["allowed", false]]);
+    assert.match(context.audit[1].metadata.sessions, /revocation_requested$/);
+  };
+  await run(
+    (m) => m.deactivate(staff(), ACME, ids.planner, { version: 1, reason: REASON }),
+    (m) => m.deactivate(staff(), ACME, ids.planner, { version: 2, reason: REASON }),
+    [["deactivated", ids.planner, ACME, STAFF, STAFF_ORG], ["deactivated", ids.planner, ACME, STAFF, STAFF_ORG]],
+  );
+  // A demotion's retry cannot tell which way the role moved, so it asks for the next-request revocation.
+  await run(
+    (m) => m.changeRole(staff(), ACME, ids.manager, { role: "viewer", version: 1, reason: REASON }),
+    (m) => m.changeRole(staff(), ACME, ids.manager, { role: "viewer", version: 2, reason: REASON }),
+    [["role", ids.manager, ACME, STAFF, STAFF_ORG, "demoted"], ["role", ids.manager, ACME, STAFF, STAFF_ORG]],
+  );
 });
 
 test("reactivate: a deactivated member becomes active, one event; an invited or removed member is refused", async () => {
@@ -715,11 +783,16 @@ test("the Mongo store writes a change's audit event inside the transaction of th
   // Every use passes the transaction's session, and each sits inside a withTransaction callback.
   const uses = [...source.matchAll(/await appendAudit\(input\.audit, session[,)]/g)];
   assert.equal(uses.length, 5, "setRoles, deactivate, reactivate, transferOwnership, reassign");
+  // The sixth: a deactivation put back after its commit writes its correcting event in the transaction of the put-back.
+  const revert = source.slice(source.indexOf("const revert = await mongoose.startSession();"));
+  assert.match(revert, /await revert\.withTransaction\(async \(\) => \{\s+const result = await putBack\(revert\);\s+if \(result\.modifiedCount === 1\) await appendAudit\(input\.revertAudit, revert, \{ ownedRfpCount: owned \}\);\s+\}\);/);
+  // A deactivation by a member of the organization carries no event and is put back as before, outside a transaction.
+  assert.match(source, /if \(!input\.revertAudit\) \{\s+await putBack\(\);/);
   for (const use of uses) {
     const before = source.slice(0, use.index);
     assert.ok(before.lastIndexOf("session.withTransaction(async () => {") > before.lastIndexOf("} finally {"), "inside the transaction");
   }
-  assert.equal((source.match(/appendAudit\(/g) ?? []).length, 5, "no use outside those five");
+  assert.equal((source.match(/appendAudit\(/g) ?? []).length, 6, "no use outside those six");
   // Without an event the customer's fast paths are unchanged.
   assert.match(source, /if \(mayOwnRfps && !input\.audit\) \{/);
   assert.match(source, /if \(!input\.audit\) \{\s+const row = await updateVersioned\(input, \{ status: "suspended" \}, update\);/);
