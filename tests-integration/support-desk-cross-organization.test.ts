@@ -335,37 +335,35 @@ test("customers stay isolated: another organization's ticket is a 404, and no cu
   }
 });
 
-test("the proposals behind a customer organization's ticket need an active grant from that organization", async () => {
+// Was: "the proposals behind a customer organization's ticket need an active grant from that
+// organization". Owner decision, 2026-11-17 (docs/DECISIONS.md): RFPilot staff read every
+// organization's content with no grant, and the read is recorded on the RFPilot side only. What
+// this test still holds: the proposals are the requester's own, in the ticket's organization, and
+// nothing is written into the customer organization. Who may call the route is unchanged and is
+// asserted by the two tests above (customers 403, a `users` account holding a staff role 403).
+test("the proposals behind a customer organization's ticket are read by staff with no grant, and recorded in the staff organization only", async () => {
   const path = `${AGENT}/tickets/${bayshoreTicketId}/rfps`;
-  // The ticket resolves for staff now; its proposals still do not without a grant.
-  const refused = await call(staffToken, "GET", path);
-  assert.equal(refused.status, 403, JSON.stringify(refused.body));
-  assert.equal(refused.body.code, "SUPPORT_GRANT_REQUIRED");
-  assert.ok(!JSON.stringify(refused.body).includes("Fixture event"));
-  const denied = await SecurityAuditEvent.find({ organizationId: oid(bayshore.organizationId), action: "support_access.denied" }).lean();
-  assert.equal(denied.length, 1);
-  assert.equal(String(denied[0].actorUserId), String(dxg.staff));
-
-  // A grant from another organization, or from the staff organization, opens nothing here.
-  assert.equal((await call(acme.members.owner.accessToken, "POST", GRANTS, { expiresInDays: 2 })).status, 201);
-  assert.equal((await call(staffToken, "GET", path)).body.code, "SUPPORT_GRANT_REQUIRED");
-
-  const granted = await call(bayshore.members.owner.accessToken, "POST", GRANTS, { expiresInDays: 2 });
-  assert.equal(granted.status, 201, JSON.stringify(granted.body));
+  assert.equal(await mongoose.connection.collection("supportaccessgrants").countDocuments({ organizationId: oid(bayshore.organizationId) }), 0, "no grant exists");
   const behind = await call(staffToken, "GET", path);
   assert.equal(behind.status, 200, JSON.stringify(behind.body));
   assert.equal(behind.body.data.organizationId, bayshore.organizationId);
   // The requester's proposals only: not a colleague's, not another organization's.
   assert.deepEqual((behind.body.data.rfps as any[]).map((r) => r.id).sort(), [...bayshoreOwnerRfps].sort());
-  const used = await SecurityAuditEvent.find({ organizationId: oid(bayshore.organizationId), action: "support_access.used" }).lean();
-  assert.deepEqual(used.map((e) => [String(e.actorUserId), e.metadata.grantId, e.metadata.operation, e.metadata.ticketId]), [
-    [String(dxg.staff), granted.body.data.id, "ticket.rfp.list", bayshoreTicketId],
+
+  // Nothing staff did is in the customer organization's trail; the read is in the staff organization's.
+  assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: oid(bayshore.organizationId), actorUserId: dxg.staff }), 0);
+  assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: oid(bayshore.organizationId), action: /^(support_access\.(used|denied)|platform\.)/ }), 0);
+  const recorded = await SecurityAuditEvent.find({ organizationId: dxg.org, action: "platform.organization_content.read", "metadata.ticketId": bayshoreTicketId }).lean();
+  assert.deepEqual(recorded.map((e) => [String(e.actorUserId), e.targetType, e.targetId, e.metadata.resource]), [
+    [String(dxg.staff), "organization", bayshore.organizationId, "ticket_proposals"],
   ]);
 
-  // Revoked: closed again on the next request, while the ticket itself stays readable.
+  // A grant, and revoking it, change nothing for staff; the customer endpoints still answer.
+  const granted = await call(bayshore.members.owner.accessToken, "POST", GRANTS, { expiresInDays: 2 });
+  assert.equal(granted.status, 201, JSON.stringify(granted.body));
   assert.equal((await call(bayshore.members.owner.accessToken, "POST", `${GRANTS}/${granted.body.data.id}/revoke`)).status, 200);
-  assert.equal((await call(staffToken, "GET", path)).status, 403);
+  assert.equal((await call(staffToken, "GET", path)).status, 200);
   assert.equal((await call(staffToken, "GET", `${AGENT}/tickets/${bayshoreTicketId}`)).status, 200);
-  // The other organization's ticket never borrowed Bayshore's grant either.
+  // A ticket that does not exist is missing.
   assert.equal((await call(staffToken, "GET", `${AGENT}/tickets/${randomMongoId()}/rfps`)).status, 404);
 });

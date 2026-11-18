@@ -3,9 +3,6 @@ import {
   AUDIT_CATALOG,
   AUDIT_CATEGORIES,
   AuditLogError,
-  MEMBER_ACTIONS,
-  STAFF_ACTIONS,
-  SUPPORT_ACTOR_LABEL,
   catalogEntry,
   VISIBLE_ACTIONS,
   auditCsv,
@@ -79,15 +76,15 @@ export const createAuditLog = (deps: { events: AuditEventReader }) => {
       if (!AUDIT_CATEGORIES.some((entry) => entry.key === category)) throw invalid("That category isn't part of the audit log.");
       actions = actions.filter((name) => AUDIT_CATALOG[name].category === category);
     }
-    // "support" selects RFPilot Support activity as a whole. A member id never matches a staff event:
-    // those carry an `admins` id, which customers can't name.
+    // "support" used to select RFPilot Support activity. Staff activity is no longer shown to
+    // customers (owner decision, 2026-11-17), so it selects nothing; it is still accepted because
+    // the dashboard released before that decision offers it.
     const actor = text(query.actor);
     let actorUserId: string | undefined;
-    if (actor === "support") actions = actions.filter((name) => STAFF_ACTIONS.includes(name));
+    if (actor === "support") actions = [];
     else if (actor) {
       if (!deps.events.isValidId(actor)) throw invalid("That user isn't valid.");
       actorUserId = actor;
-      actions = actions.filter((name) => MEMBER_ACTIONS.includes(name));
     }
     const from = parseDate(query.from, "from");
     const to = parseDate(query.to, "to");
@@ -102,14 +99,12 @@ export const createAuditLog = (deps: { events: AuditEventReader }) => {
         : null;
     const ids = new Set<string>();
     for (const event of events) {
-      if (event.actorUserId && !catalogEntry(event.action)?.staffActor) ids.add(event.actorUserId);
+      if (event.actorUserId) ids.add(event.actorUserId);
       const target = memberTargets(event);
       if (target) ids.add(target);
     }
     const names = await deps.events.memberNames(organizationId, [...ids]);
     const actorOf = (event: StoredAuditEvent): AuditEventActor => {
-      // Staff are shown as RFPilot Support with a stable reference, never by name (ORG-404).
-      if (catalogEntry(event.action)?.staffActor) return { kind: "support", id: event.actorUserId, name: SUPPORT_ACTOR_LABEL };
       if (!event.actorUserId) return { kind: "system", id: null, name: "System" };
       const member = names.get(event.actorUserId);
       return member
@@ -139,7 +134,7 @@ export const createAuditLog = (deps: { events: AuditEventReader }) => {
   const read = async (organizationId: string, filter: AuditEventFilter, limit: number) => {
     if (filter.actions.length === 0) return { stored: [] as StoredAuditEvent[], more: false };
     const rows = await deps.events.list(organizationId, filter, limit + 1);
-    // Belt and braces: a reader bug can't surface an uncatalogued action.
+    // Belt and braces: a reader bug can't surface an uncatalogued or staff-only action.
     const stored = rows.filter((row) => catalogEntry(row.action)).slice(0, limit);
     return { stored, more: rows.length > limit };
   };
@@ -153,7 +148,6 @@ export const createAuditLog = (deps: { events: AuditEventReader }) => {
           actions: VISIBLE_ACTIONS.filter((action) => AUDIT_CATALOG[action].category === category.key)
             .map((action) => ({ value: action, label: AUDIT_CATALOG[action].label })),
         })),
-        supportActor: { value: "support", label: SUPPORT_ACTOR_LABEL },
       };
     },
 

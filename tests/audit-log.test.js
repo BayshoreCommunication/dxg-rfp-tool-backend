@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { createAuditLog, AUDIT_EXPORT_MAX, AUDIT_PAGE_MAX } = require("../src/modules/auditLog/application/readAuditLog");
-const { AUDIT_CATALOG, AUDIT_CATEGORIES, AuditLogError, STAFF_ACTIONS, auditCsv, csvCell, visibleDetails, visibleReason } = require("../src/modules/auditLog/domain");
+const { AUDIT_CATALOG, AUDIT_CATEGORIES, AuditLogError, STAFF_ONLY_ACTIONS, VISIBLE_ACTIONS, catalogEntry, isStaffOnlyAction, auditCsv, csvCell, visibleDetails, visibleReason } = require("../src/modules/auditLog/domain");
 const { hasOrganizationAction } = require("../src/modules/identity/domain/authorizationPolicy");
 
 // ORG-407: the organization audit log view (PRD P0-10).
@@ -88,11 +88,9 @@ const P0_10 = {
     ["proposal.share_granted", "src/modules/rfpSharing/application/manageRfpShares.ts"],
     ["proposal.share_revoked", "src/modules/rfpSharing/application/manageRfpShares.ts"],
   ],
-  "support grant/use/revoke": [
-    ["support_access.granted", "src/modules/supportAccess/domain.ts"],
-    ["support_access.used", "src/modules/supportAccess/domain.ts"],
-    ["support_access.revoked", "src/modules/supportAccess/domain.ts"],
-  ],
+  // "support grant/use/revoke" was listed here until 2026-11-17. The owner then decided that staff
+  // activity and support access are not shown to customers (docs/DECISIONS.md), so those actions
+  // left the catalog: see "staff activity and support access are never shown to a customer" below.
   "org settings change": [["organization.settings.updated", "src/modules/organizationProfile/application/manageOrganizationProfile.ts"]],
 };
 
@@ -108,11 +106,31 @@ test("every action in PRD P0-10 is in the audit view's catalog and still has its
 });
 
 test("token rotation and staff-side bookkeeping are not part of the customer's view", () => {
-  for (const hidden of ["auth.refresh.rotated", "admin.organization.legacy_customer.placed", "job.create"]) assert.equal(AUDIT_CATALOG[hidden], undefined);
-  assert.deepEqual([...STAFF_ACTIONS].sort(), [
+  for (const hidden of ["auth.refresh.rotated", "admin.organization.legacy_customer.placed", "job.create", "platform.organization_account.read", "platform.organization_content.read"]) {
+    assert.equal(AUDIT_CATALOG[hidden], undefined);
+    assert.equal(catalogEntry(hidden), undefined);
+  }
+});
+
+// Owner decision, 2026-11-17: what RFPilot staff do is recorded on the RFPilot side only.
+test("no staff-attributed or support-access action is in the customer catalog (decision 2026-11-17)", () => {
+  assert.deepEqual([...STAFF_ONLY_ACTIONS].sort(), [
     "organization.legacy_customer.placed", "organization.legacy_customer.placement_rolled_back", "organization.plan_changed",
-    "support_access.denied", "support_access.used",
+    "support_access.denied", "support_access.granted", "support_access.revoked", "support_access.used",
   ]);
+  for (const action of STAFF_ONLY_ACTIONS) {
+    assert.equal(AUDIT_CATALOG[action], undefined, action);
+    assert.equal(catalogEntry(action), undefined, action);
+    assert.equal(VISIBLE_ACTIONS.includes(action), false, action);
+  }
+  assert.deepEqual(Object.keys(AUDIT_CATALOG).filter(isStaffOnlyAction), []);
+  assert.equal(AUDIT_CATEGORIES.some((category) => category.key === "support_access"), false);
+  // No label a customer reads names RFPilot staff, and no entry carries a staff-actor marker.
+  for (const [action, entry] of Object.entries(AUDIT_CATALOG)) {
+    assert.doesNotMatch(entry.label, /RFPilot|Support access/i, action);
+    assert.deepEqual(Object.keys(entry).sort(), ["category", "label"], action);
+  }
+  for (const category of AUDIT_CATEGORIES) assert.doesNotMatch(category.label, /RFPilot|Support access/i);
 });
 
 // ── Who may read ────────────────────────────────────────────────────────────────────────────
@@ -175,47 +193,74 @@ test("a name is shown only for a member of the reader's organization", async () 
   assert.deepEqual(system.actor, { kind: "system", id: null, name: "System" });
 });
 
-// ── RFPilot Support activity (ORG-404) ──────────────────────────────────────────────────────
+// ── RFPilot staff activity is not shown (owner decision, 2026-11-17) ────────────────────────────
 
-test("support activity is attributed to RFPilot Support and the staff id is never looked up", async () => {
-  const used = event({ action: "support_access.used", actorUserId: STAFF, targetType: "proposal", targetId: "f".repeat(24), decision: "allowed", reason: "rfp.read", metadata: { grantId: "g1", operation: "rfp.read", agentAccountType: "admin", ticketId: "t1" } });
-  const denied = event({ action: "support_access.denied", actorUserId: STAFF, targetType: "organization", targetId: ORG, decision: "denied", reason: "no_active_grant", metadata: { operation: "rfp.list", agentAccountType: "admin" } });
-  const granted = event({ action: "support_access.granted", targetType: "support_access_grant", targetId: "g1", decision: "created", reason: "customer_granted", metadata: { grantId: "g1", scope: "rfp" } });
-  // Even if a staff id happened to be a member's, a staff event still reads "RFPilot Support".
-  const events = fakeEvents([used, denied, granted], { [ORG]: { [OWNER]: { name: "Olive Owner", email: "olive@example.test" }, [STAFF]: { name: "Staff Name", email: "staff@example.test" } } });
-  const log = createAuditLog({ events });
-  const page = await log.list(actor("organization_admin"), {});
-  const byAction = Object.fromEntries(page.events.map((e) => [e.action, e]));
-  assert.deepEqual(byAction["support_access.used"].actor, { kind: "support", id: STAFF, name: "RFPilot Support" });
-  assert.deepEqual(byAction["support_access.used"].details, { grantId: "g1", operation: "rfp.read", ticketId: "t1" });
-  assert.deepEqual(byAction["support_access.denied"].actor, { kind: "support", id: STAFF, name: "RFPilot Support" });
-  assert.equal(byAction["support_access.denied"].reason, "no_active_grant");
-  assert.equal(byAction["support_access.granted"].actor.kind, "member");
-  assert.equal(events.nameLookups.includes(STAFF), false);
-  assert.equal(JSON.stringify(page).includes("Staff Name"), false);
-  assert.equal((await log.exportCsv(actor("owner"), {})).csv.includes("Staff Name"), false);
+const staffRows = () => [
+  event({ action: "support_access.used", actorUserId: STAFF, targetType: "proposal", targetId: "f".repeat(24), decision: "allowed", reason: "rfp.read", metadata: { grantId: "g1", operation: "rfp.read", agentAccountType: "admin", ticketId: "t1" } }),
+  event({ action: "support_access.denied", actorUserId: STAFF, targetType: "organization", targetId: ORG, decision: "denied", reason: "no_active_grant", metadata: { operation: "rfp.list", agentAccountType: "admin" } }),
+  event({ action: "support_access.granted", targetType: "support_access_grant", targetId: "g1", decision: "created", reason: "customer_granted", metadata: { grantId: "g1", scope: "rfp" } }),
+  event({ action: "support_access.revoked", targetType: "support_access_grant", targetId: "g1", decision: "revoked", reason: "customer_revoked", metadata: { grantId: "g1" } }),
+  event({ action: "organization.plan_changed", actorUserId: STAFF, targetType: "organization", targetId: ORG, decision: "allowed", reason: "staff_plan_change", metadata: { fromPlan: "free_trial", toPlan: "full_access", note: "Agreed with Jane on the phone" } }),
+  event({ action: "organization.legacy_customer.placed", actorUserId: STAFF, targetType: "user", targetId: PLANNER, decision: "allowed", reason: "legacy_customer_placed", metadata: { role: "planner" } }),
+  event({ action: "organization.legacy_customer.placement_rolled_back", actorUserId: STAFF, targetType: "user", targetId: PLANNER, decision: "allowed", reason: "placement_rolled_back", metadata: {} }),
+  event({ action: "platform.organization_content.read", actorUserId: STAFF, targetType: "organization", targetId: ORG, decision: "allowed", reason: "proposals", metadata: { resource: "proposals" } }),
+  event({ action: "platform.organization_content.denied", actorUserId: STAFF, targetType: "organization", targetId: ORG, decision: "denied", reason: "proposal_not_found", metadata: { resource: "proposal", organizationId: ORG } }),
+  event({ action: "platform.organization_account.read", actorUserId: STAFF, targetType: "organization", targetId: ORG, decision: "allowed", reason: "organization_account_detail", metadata: {} }),
+];
 
-  // The user filter: "support" selects staff activity; an id selects member activity only.
-  assert.deepEqual((await log.list(actor("owner"), { actor: "support" })).events.map((e) => e.action).sort(), ["support_access.denied", "support_access.used"]);
-  assert.deepEqual((await log.list(actor("owner"), { actor: STAFF })).events, []);
-  assert.deepEqual((await log.list(actor("owner"), { actor: OWNER })).events.map((e) => e.action), ["support_access.granted"]);
-  assert.deepEqual((await log.list(actor("owner"), { actor: "support", action: "support_access.granted" })).events, []);
+test("staff activity and support access are never shown to a customer: list, filters and CSV", async () => {
+  const visible = event();
+  const rows = [...staffRows(), visible];
+  // Even a reader that ignores the action filter (a bug) cannot surface a hidden row.
+  const leaky = { ...fakeEvents(rows), async list(organizationId) { return rows.filter((row) => row.organizationId === organizationId).map(({ organizationId: _o, ...row }) => row); } };
+  for (const events of [fakeEvents(rows, { [ORG]: { [OWNER]: { name: "Olive Owner", email: "olive@example.test" }, [STAFF]: { name: "Staff Name", email: "staff@example.test" } } }), leaky]) {
+    const log = createAuditLog({ events });
+    for (const role of ["owner", "organization_admin"]) {
+      const page = await log.list(actor(role), {});
+      assert.deepEqual(page.events.map((e) => e.id), [visible.id]);
+      assert.equal(page.events.some((e) => e.actor.kind === "support"), false);
+      const exported = await log.exportCsv(actor(role), {});
+      assert.equal(exported.rows, 1);
+      for (const hidden of ["Support", "support_access", "plan_changed", "legacy_customer", "platform.", "Staff Name", "Jane", STAFF]) {
+        assert.equal(JSON.stringify(page).includes(hidden), false, hidden);
+        assert.equal(exported.csv.includes(hidden), false, hidden);
+      }
+    }
+    // The reader never looks up a staff id's name, even when that id happens to be a member's
+    // and even when the store hands hidden rows back. (Restores the pin the removed
+    // "the staff id is never looked up" tests held.)
+    assert.equal(events.nameLookups.includes(STAFF), false);
+    assert.ok(events.nameLookups.includes(OWNER), "the visible row's member is looked up, so the pin is not vacuous");
+  }
 });
 
-test("a plan change by RFPilot staff (ORG-603) shows the plans, not the staff member or their note", async () => {
-  const changed = event({
-    action: "organization.plan_changed", actorUserId: STAFF, targetType: "organization", targetId: ORG, decision: "allowed", reason: "staff_plan_change",
-    metadata: { fromPlan: "free_trial", toPlan: "full_access", proposalsCreated: 2, actorAccountType: "admin", actorOrganizationId: OTHER_ORG, note: "Agreed with Jane on the phone" },
-  });
-  const events = fakeEvents([changed]);
+test("a hidden event cannot be asked for by action, category or actor filter", async () => {
+  const events = fakeEvents(staffRows());
   const log = createAuditLog({ events });
-  const [shown] = (await log.list(actor("owner"), { actor: "support" })).events;
-  assert.deepEqual(shown.actor, { kind: "support", id: STAFF, name: "RFPilot Support" });
-  assert.deepEqual(shown.details, { fromPlan: "free_trial", toPlan: "full_access" });
-  assert.equal(shown.category, "settings");
-  assert.equal(JSON.stringify(shown).includes("Jane"), false);
-  assert.equal(JSON.stringify(shown).includes(OTHER_ORG), false);
-  assert.equal(events.nameLookups.includes(STAFF), false);
+  const refused = (query) => assert.rejects(() => log.list(actor("owner"), query), (error) => error instanceof AuditLogError && error.status === 400 && error.code === "AUDIT_FILTER_INVALID");
+  for (const action of [...STAFF_ONLY_ACTIONS, "platform.organization_content.read", "platform.organization_account.read", "admin.organization.legacy_customer.placed"]) {
+    await refused({ action });
+    await assert.rejects(() => log.exportCsv(actor("owner"), { action }), (error) => error.status === 400);
+  }
+  await refused({ category: "support_access" });
+  // "support" was the staff actor option. It is still accepted (the dashboard released before the
+  // decision sends it) and selects nothing; the staff member's id selects nothing either.
+  for (const query of [{ actor: "support" }, { actor: STAFF }, { actor: "support", category: "settings" }, { actor: "support", category: "members" }]) {
+    assert.deepEqual((await log.list(actor("owner"), query)).events, [], JSON.stringify(query));
+    assert.equal((await log.exportCsv(actor("owner"), query)).rows, 0, JSON.stringify(query));
+  }
+  // The reader is never asked for a hidden action.
+  for (const call of events.calls) for (const action of call.filter.actions) assert.equal(isStaffOnlyAction(action), false, action);
+});
+
+test("the filter options offer no support-access category, no staff action and no staff actor", () => {
+  const filters = createAuditLog({ events: fakeEvents([]) }).filters(actor("owner"));
+  assert.deepEqual(Object.keys(filters), ["categories"]);
+  assert.equal(filters.categories.some((category) => category.key === "support_access"), false);
+  const offered = filters.categories.flatMap((category) => category.actions.map((action) => action.value));
+  assert.deepEqual(offered.filter(isStaffOnlyAction), []);
+  assert.deepEqual([...offered].sort(), [...VISIBLE_ACTIONS].sort());
+  assert.doesNotMatch(JSON.stringify(filters), /RFPilot|support/i);
 });
 
 // ── Filters and paging ──────────────────────────────────────────────────────────────────────

@@ -262,9 +262,16 @@ test("every edit is audited once, with no contact details in the trail", async (
   assert.deepEqual(audit[1].metadata, { changed: ["company", "contacts"], company: "Acme AV", previousCompany: "Acme Audio", contactCount: 2, previousContactCount: 1 });
 });
 
-// "Vendors never see it through the submission link": the list has one HTTP surface, every
-// route on it requires a signed-in member, and no vendor-portal or public-grant code reads the model.
-test("the vendor list is reachable only through member-authenticated routes", () => {
+// "Vendors never see it through the submission link": every route on the member surface requires
+// a signed-in member, and no vendor-portal or public-grant code reads the model.
+//
+// Owner decision, 2026-11-17 (docs/DECISIONS.md, "RFPilot staff see everything in every
+// organization with no grant"): staff may VIEW the vendor list. That adds exactly one reader of the
+// model, the staff read file below, which is reached only through the staff-guarded read route
+// (routes/adminOrganizationContentRoute.ts; guard and read-only shape are asserted in
+// tests/staff-organization-content.test.js). Nothing else changed: the member surface, the
+// repository's users, and the ban on vendor-portal and public-grant readers are as before.
+test("the vendor list is reachable only through member-authenticated routes and the staff read route", () => {
   const root = path.join(__dirname, "..");
   const routeSource = fs.readFileSync(path.join(root, "routes/organizationVendorsRoute.ts"), "utf8");
   const routes = routeSource.split("\n").filter((line) => /^router\.(get|post|patch|put|delete)\(/.test(line));
@@ -278,6 +285,8 @@ test("the vendor list is reachable only through member-authenticated routes", ()
     "modal/organizationVendorModel.ts",
     "src/modules/organizationVendors/infrastructure/mongoOrganizationVendorRepository.ts",
     "scripts/purgeTestAccounts.ts",
+    // Decision 2026-11-17: the staff read of the vendor list (GET only, staff-account guarded).
+    "src/modules/staffAccess/infrastructure/mongoStaffOrganizationReader.ts",
   ]);
   const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);

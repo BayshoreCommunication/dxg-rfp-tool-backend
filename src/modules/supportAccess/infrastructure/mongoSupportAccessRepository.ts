@@ -1,17 +1,15 @@
 import mongoose from "mongoose";
 import Organization from "../../../../modal/organizationModel";
 import Proposal from "../../../../modal/proposalsModel";
-import SecurityAuditEvent from "../../../../modal/securityAuditEventModel";
 import SupportAccessGrant from "../../../../modal/supportAccessGrantModel";
 import User from "../../../../modal/userModel";
 import VendorResponse from "../../../../modal/vendorResponseModel";
+import { attachmentFilename, PRIVATE_UPLOAD_FIELDS } from "../../proposals/infrastructure/mongo/mongoPublicProposalAccessRepository";
 import { mongoSupportDeskRepository } from "../../supportDesk/infrastructure/mongo/mongoSupportDeskRepository";
 import {
-  SUPPORT_AUDIT,
   type GrantedRfpListItem,
   type GrantedRfpReader,
   type SupportAccessDirectory,
-  type SupportActivityLog,
   type SupportGrantRecord,
   type SupportGrantRepository,
   type SupportTicketLookup,
@@ -128,32 +126,91 @@ export const mongoSupportAccessDirectory: SupportAccessDirectory = {
   },
 };
 
-// SecurityAuditEvent rows written by createSupportAccess, read back for the organization that owns them.
-export const mongoSupportActivityLog: SupportActivityLog = {
-  async summarize(organizationId, grantIds) {
-    if (grantIds.length === 0) return new Map();
-    const rows = await SecurityAuditEvent.aggregate<{ _id: string; useCount: number; lastUsedAt: Date }>([
-      { $match: { organizationId: oid(organizationId), action: SUPPORT_AUDIT.used, "metadata.grantId": { $in: [...grantIds] } } },
-      { $group: { _id: "$metadata.grantId", useCount: { $sum: 1 }, lastUsedAt: { $max: "$createdAt" } } },
-    ]);
-    return new Map(rows.map((row) => [String(row._id), { useCount: row.useCount, lastUsedAt: row.lastUsedAt }]));
-  },
+/* The proposal fields a staff reader is given: the content a planner wrote, its state and its
+   dates. An allowlist, so a field added to the model later (or a stray one on an old document)
+   is not returned until it is listed here. Not listed: `organizationId`, `__v`,
+   `candidateApplicationIds` and `proposalSettings` (internal bookkeeping, as before). */
+export const STAFF_PROPOSAL_FIELDS = [
+  "userId", "teamId", "status", "isDraft", "isActive", "isFavorite", "isAccepted", "isOpen", "isArchived", "archivedAt",
+  "isCopy", "viewsCount", "version", "lifecycle", "event", "venueSchedule", "roomByRoom", "production", "hybridVirtual",
+  "contentCreative", "videoRecordingStep", "venue", "uploads", "budget", "contact", "createdAt", "updatedAt",
+] as const;
 
-  async listForGrant(organizationId, grantId, limit) {
-    const docs = await SecurityAuditEvent.find({ organizationId: oid(organizationId), action: SUPPORT_AUDIT.used, "metadata.grantId": grantId })
-      .sort({ createdAt: -1 }).limit(limit).lean();
-    return docs.map((doc) => ({
-      at: doc.createdAt,
-      agentId: doc.actorUserId ? String(doc.actorUserId) : null,
-      operation: String((doc.metadata as Record<string, unknown> | undefined)?.operation ?? doc.reason),
-      targetType: doc.targetType,
-      targetId: doc.targetId ?? null,
+const plainObject = (value: unknown): value is Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
+/* The bare filename of one stored file, or "" when there is none to show. A stored value may be
+   a URL (possibly presigned), an object key, or a filename. The query string and fragment go
+   first (a signature lives there), then everything up to the last path separator, then the
+   numeric upload prefix (the shared helper). A result that still carries "/", "\", "?", "#" or
+   a scheme is not a filename and is dropped. */
+const staffUploadFilename = (value: unknown): string => {
+  if (typeof value !== "string") return "";
+  const lastSegment = (text: string) => text.split(/[?#]/)[0].split(/[\\/]/).pop() ?? "";
+  // Cut again after the helper decodes: an encoded "/", "?" or "#" must not come back.
+  const name = lastSegment(attachmentFilename(lastSegment(value))).trim();
+  return /^[a-z][a-z0-9+.-]*:/i.test(name) ? "" : name;
+};
+
+const COVENDOR_FIELDS = ["companyName", "contactName", "contactEmail", "contactPhone", "status", "notes"] as const;
+const strings = (value: unknown, fields: readonly string[]): Record<string, string> | null => {
+  if (!plainObject(value)) return null;
+  return Object.fromEntries(fields.flatMap((field) => (typeof value[field] === "string" ? [[field, value[field] as string]] : [])));
+};
+
+/* The keys of `uploads` that hold what a planner typed into the proposal form, not a stored
+   file. Each is narrowed to the shape the form writes, so a file reference parked under one of
+   these keys in some other shape does not ride through. Any key that is neither here nor in
+   PRIVATE_UPLOAD_FIELDS is dropped. */
+export const STAFF_UPLOAD_TYPED_FIELDS: Record<string, (value: unknown) => unknown> = {
+  // A link the planner typed (form field "brand guide URL"); the public proposal page shows it as typed.
+  brandGuideUrl: (value) => (typeof value === "string" ? value : undefined),
+  // Up to five typed reference links, each `{ url, label }` (Vimeo, YouTube, Behance and so on).
+  referenceUrls: (value) => (Array.isArray(value) ? value.flatMap((item) => { const link = strings(item, ["url", "label"]); return link ? [link] : []; }) : undefined),
+  // The NDA answer ("YES"/"NO") and the NDA type the planner chose.
+  ndaRequired: (value) => (typeof value === "string" || typeof value === "boolean" ? value : undefined),
+  ndaType: (value) => (typeof value === "string" ? value : undefined),
+  // Typed company and contact details of the five co-vendor kinds; text only.
+  coVendors: (value) => {
+    if (!plainObject(value)) return undefined;
+    return Object.fromEntries(["inHouseVenueAv", "eventDecorator", "registrationTech", "agencyOfRecord", "photographer"].flatMap((kind) => {
+      const entry = strings(value[kind], COVENDOR_FIELDS);
+      return entry ? [[kind, entry]] : [];
     }));
   },
 };
 
-// Internal bookkeeping a reader never needs (the same fields the admin RFP view hides).
-const HIDDEN_FIELDS = ["__v", "organizationId", "candidateApplicationIds", "proposalSettings"];
+/* `uploads` as staff are given it: an allowlist. `uploads` is stored as Mixed with no shape check
+   on write, so nothing is passed through as stored. The seven private file fields come back as
+   arrays of bare filenames (a single string counts as one file); the typed fields above come
+   back in their form shape; every other key, and an `uploads` that is not a plain object, is
+   dropped. A staff answer never carries a link to, or the object key of, a customer's file. */
+export const staffUploadsView = (uploads: unknown): Record<string, unknown> => {
+  const view: Record<string, unknown> = {};
+  if (!plainObject(uploads)) return view;
+  for (const field of PRIVATE_UPLOAD_FIELDS) {
+    const stored = uploads[field];
+    if (stored === undefined || stored === null) continue;
+    view[field] = (Array.isArray(stored) ? stored : [stored]).map(staffUploadFilename).filter(Boolean);
+  }
+  for (const [field, narrow] of Object.entries(STAFF_UPLOAD_TYPED_FIELDS)) {
+    const value = narrow(uploads[field]);
+    if (value !== undefined) view[field] = value;
+  }
+  return view;
+};
+
+/* The allowlisted fields of one stored proposal, as staff are given them. `uploads` goes
+   through `staffUploadsView`, which is stricter than the public proposal view's redaction. */
+export const staffProposalFields = (doc: Record<string, unknown>): Record<string, unknown> => {
+  const rfp: Record<string, unknown> = {};
+  for (const field of STAFF_PROPOSAL_FIELDS) if (doc[field] !== undefined) rfp[field] = doc[field];
+  if (rfp.uploads !== undefined) rfp.uploads = staffUploadsView(rfp.uploads);
+  return rfp;
+};
 
 const owners = async (organizationId: string, userIds: readonly string[]) => {
   if (userIds.length === 0) return new Map<string, GrantedRfpListItem["owner"]>();
@@ -198,13 +255,13 @@ export const mongoGrantedRfpReader: GrantedRfpReader = {
   },
 
   async find(organizationId, proposalId) {
-    const doc = await Proposal.findOne({ _id: oid(proposalId), organizationId: oid(organizationId) }).lean<Record<string, unknown>>();
+    const doc = await Proposal.findOne({ _id: oid(proposalId), organizationId: oid(organizationId) })
+      .select(STAFF_PROPOSAL_FIELDS.join(" ")).lean<Record<string, unknown>>();
     if (!doc) return null;
-    const { _id, ...rest } = doc;
-    for (const field of HIDDEN_FIELDS) delete rest[field];
+    const rfp = staffProposalFields(doc);
     const ownerId = doc.userId ? String(doc.userId) : null;
     return {
-      rfp: { ...rest, id: String(_id), userId: ownerId },
+      rfp: { ...rfp, id: String(doc._id), userId: ownerId, teamId: doc.teamId ? String(doc.teamId) : null },
       owner: ownerId ? (await owners(organizationId, [ownerId])).get(ownerId) ?? null : null,
     };
   },

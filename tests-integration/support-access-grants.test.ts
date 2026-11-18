@@ -1,7 +1,11 @@
-// ORG-404: support access grants through the real API on real MongoDB. An organization's
-// Owner/Admin grants RFPilot Support time-limited read access; a DXG admin-app account reads
-// that organization's RFP data only under an active grant, every read is audited in the
-// customer's organization, and nothing crosses to another organization.
+// ORG-404: support access grants through the real API on real MongoDB.
+//
+// Owner decision, 2026-11-17 (docs/DECISIONS.md): RFPilot staff read every organization's
+// content with NO grant, and each read is recorded in the staff organization only. So here:
+// the customer grant endpoints still answer (create, list, revoke, isolation between
+// organizations: unchanged tests), a grant gates nothing, the older staff routes the deployed
+// admin app calls keep their shapes, a record is never served through another organization's
+// path, and nothing staff do is written into a customer organization.
 import { TEST_MONGODB_DB_NAME } from "./env";
 import { connectMongo, disconnectMongo, ensureMigrated, ensureServices, randomMongoId } from "./setup";
 import assert from "node:assert/strict";
@@ -51,6 +55,10 @@ const call = async (token: string, method: string, path: string, body?: unknown)
   });
   return { status: res.status, body: (await res.json()) as Record<string, any> };
 };
+const READ = "platform.organization_content.read";
+// Everything in an organization's trail that a staff read could have written.
+const staffWrites = (organizationId: string | mongoose.Types.ObjectId) =>
+  SecurityAuditEvent.countDocuments({ organizationId, $or: [{ actorUserId: dxg.agent }, { action: /^(support_access\.(used|denied)|platform\.)/ }] });
 const events = (organizationId: string | mongoose.Types.ObjectId, action: string) =>
   SecurityAuditEvent.find({ organizationId, action }).sort({ createdAt: 1, _id: 1 }).lean();
 const sessionFor = async (userId: mongoose.Types.ObjectId, organizationId: mongoose.Types.ObjectId) =>
@@ -96,6 +104,7 @@ after(async () => {
   if (mongoose.connection.readyState === 1) {
     const orgIds = [dxg.org, oid(acme.organizationId), oid(other.organizationId)];
     const db = mongoose.connection.db!;
+    await db.collection("securityauditevents").deleteMany({ organizationId: dxg.org });
     for (const name of ["supportaccessgrants", "vendorresponses", "supporttickets", "supportmessages", "supportticketcounters", "notifications"]) {
       await db.collection(name).deleteMany({ organizationId: { $in: orgIds } });
     }
@@ -112,21 +121,48 @@ after(async () => {
   await closeSupportRedis();
 });
 
-test("without a grant RFPilot Support reads no customer RFP data, and the attempt is on the customer's record", async () => {
-  for (const path of [
-    `/organizations/${acme.organizationId}/rfps`,
-    `/organizations/${acme.organizationId}/rfps/${acmeRfps[0]}`,
-    `/organizations/${acme.organizationId}/rfps/${acmeRfps[0]}/vendor-responses`,
-  ]) {
-    const res = await call(agentToken, "GET", `${ACCESS}${path}`);
-    assert.equal(res.status, 403, path);
-    assert.equal(res.body.code, "SUPPORT_GRANT_REQUIRED");
-    assert.ok(!JSON.stringify(res.body).includes("Acme spring summit"));
+// Was: "without a grant RFPilot Support reads no customer RFP data, and the attempt is on the customer's record".
+test("without a grant RFPilot staff read a customer organization's proposal data, and nothing is written in that organization", async () => {
+  assert.equal(await SupportAccessGrant.countDocuments({ organizationId: acme.organizationId }), 0, "no grant exists");
+  const list = await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps`);
+  assert.equal(list.status, 200, JSON.stringify(list.body));
+  assert.deepEqual(list.body.data.rfps.map((r: any) => r.id).sort(), [...acmeRfps].sort());
+  assert.equal(list.body.data.rfps.find((r: any) => r.id === acmeRfps[0]).owner.id, acme.members.planner.userId);
+  // The shape the deployed admin app parses: one standing organization-wide entry in place of a grant.
+  assert.deepEqual(list.body.data.grants.map((g: any) => [g.id, g.scope, g.proposalId]), [[acme.organizationId, "organization", null]]);
+  assert.ok(list.body.data.grants[0].secondsRemaining > 29 * 24 * 60 * 60);
+
+  const detail = await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps/${acmeRfps[0]}`);
+  assert.equal(detail.status, 200, JSON.stringify(detail.body));
+  assert.equal(detail.body.data.rfp.event.eventName, "Acme spring summit");
+  assert.equal(detail.body.data.grant.id, acme.organizationId);
+  assert.equal(detail.body.data.rfp.organizationId, undefined);
+  assert.equal(detail.body.data.rfp.proposalSettings, undefined);
+  assert.equal(detail.body.data.rfp.__v, undefined);
+
+  const responses = await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps/${acmeRfps[0]}/vendor-responses`);
+  assert.equal(responses.status, 200);
+  assert.deepEqual(responses.body.data.vendorResponses.map((r: any) => r.vendorName), ["Stage Audio"]);
+  assert.equal(responses.body.data.grant.id, acme.organizationId);
+
+  // "Granted to me" now lists every organization as a standing entry, with or without a grant.
+  const granted = (await call(agentToken, "GET", `${ACCESS}/grants`)).body.data.grants;
+  for (const organizationId of [acme.organizationId, other.organizationId]) {
+    const mine = granted.filter((g: any) => g.organization.id === organizationId);
+    assert.equal(mine.length, 1, organizationId);
+    assert.deepEqual([mine[0].id, mine[0].scope, mine[0].rfp, mine[0].reason], [organizationId, "organization", null, null]);
   }
-  assert.deepEqual((await call(agentToken, "GET", `${ACCESS}/grants`)).body.data.grants.filter((g: any) => g.organization.id === acme.organizationId), []);
-  const denied = await events(acme.organizationId, "support_access.denied");
-  assert.equal(denied.length, 3);
-  assert.ok(denied.every((e) => String(e.actorUserId) === String(dxg.agent) && e.decision === "denied"));
+  assert.equal(granted.find((g: any) => g.organization.id === acme.organizationId).organization.name, "Acme Events");
+
+  // Recorded in the staff organization, one event per read; nothing in Acme or Other Co.
+  const recorded = await events(dxg.org, READ);
+  assert.deepEqual(recorded.map((e) => [String(e.actorUserId), e.targetType, e.targetId, e.metadata.resource, e.metadata.recordId ?? null, e.decision]), [
+    [String(dxg.agent), "organization", acme.organizationId, "proposals", null, "allowed"],
+    [String(dxg.agent), "organization", acme.organizationId, "proposal", acmeRfps[0], "allowed"],
+    [String(dxg.agent), "organization", acme.organizationId, "vendor_responses", acmeRfps[0], "allowed"],
+  ]);
+  assert.equal(await staffWrites(acme.organizationId), 0);
+  assert.equal(await staffWrites(other.organizationId), 0);
 });
 
 test("only an Owner or Admin grants; expiry defaults to 7 days and is capped at 30", async () => {
@@ -157,63 +193,56 @@ test("only an Owner or Admin grants; expiry defaults to 7 days and is capped at 
   assert.equal(granted.metadata.grantId, grant.id);
 });
 
-test("under a grant every read is audited with the agent, the grant and the object, and the organization sees it", async () => {
+// Was: "under a grant every read is audited with the agent, the grant and the object, and the organization sees it".
+test("a grant changes nothing for staff reads, and the organization's grant view shows no staff activity", async () => {
   const grantId = String((await SupportAccessGrant.findOne({ organizationId: acme.organizationId }).lean())!._id);
+  const before = (await events(dxg.org, READ)).length;
 
-  const granted = await call(agentToken, "GET", `${ACCESS}/grants`);
-  const mine = granted.body.data.grants.find((g: any) => g.id === grantId);
-  assert.equal(mine.organization.name, "Acme Events");
-  assert.equal(mine.scope, "organization");
-  assert.ok(mine.secondsRemaining > 6 * 24 * 60 * 60);
-
-  const list = await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps`);
-  assert.equal(list.status, 200, JSON.stringify(list.body));
-  assert.deepEqual(list.body.data.rfps.map((r: any) => r.id).sort(), [...acmeRfps].sort());
-  assert.equal(list.body.data.rfps.find((r: any) => r.id === acmeRfps[0]).owner.id, acme.members.planner.userId);
-
-  const detail = await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps/${acmeRfps[0]}`);
-  assert.equal(detail.status, 200);
-  assert.equal(detail.body.data.rfp.event.eventName, "Acme spring summit");
-  assert.equal(detail.body.data.grant.id, grantId);
-  assert.equal(detail.body.data.rfp.organizationId, undefined);
-
-  const responses = await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps/${acmeRfps[0]}/vendor-responses`);
-  assert.equal(responses.status, 200);
-  assert.deepEqual(responses.body.data.vendorResponses.map((r: any) => r.vendorName), ["Stage Audio"]);
-
-  const used = await events(acme.organizationId, "support_access.used");
-  assert.deepEqual(used.map((e) => [String(e.actorUserId), e.metadata.grantId, e.targetType, e.targetId, e.metadata.operation, e.decision]), [
-    [String(dxg.agent), grantId, "organization", acme.organizationId, "rfp.list", "allowed"],
-    [String(dxg.agent), grantId, "proposal", acmeRfps[0], "rfp.read", "allowed"],
-    [String(dxg.agent), grantId, "proposal", acmeRfps[0], "vendor_responses.list", "allowed"],
-  ]);
-  // Nothing about the use lands in another organization's trail.
-  assert.equal((await events(other.organizationId, "support_access.used")).length, 0);
+  const detail = await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps/${acmeRfps[1]}`);
+  assert.equal(detail.status, 200, JSON.stringify(detail.body));
+  // The entry is the standing one, not the grant.
+  assert.equal(detail.body.data.grant.id, acme.organizationId);
+  assert.notEqual(detail.body.data.grant.id, grantId);
+  assert.equal((await events(dxg.org, READ)).length, before + 1);
+  assert.equal((await events(acme.organizationId, "support_access.used")).length, 0);
+  assert.equal(await staffWrites(acme.organizationId), 0);
 
   const view = await call(acme.members.owner.accessToken, "GET", `${GRANTS}/${grantId}`);
   assert.equal(view.status, 200);
-  assert.equal(view.body.data.activity.useCount, 3);
-  assert.deepEqual(view.body.data.events.map((e: any) => e.operation).sort(), ["rfp.list", "rfp.read", "vendor_responses.list"]);
-  assert.ok(view.body.data.events.every((e: any) => e.agent.label === "RFPilot Support" && e.agent.id === String(dxg.agent)));
+  assert.equal(view.body.data.activity.useCount, 0);
+  assert.deepEqual(view.body.data.events, []);
   assert.ok(!JSON.stringify(view.body).includes("Staff Agent"), "staff names stay out of customer views");
   const listed = await call(acme.members.organization_admin.accessToken, "GET", GRANTS);
-  assert.equal(listed.body.data.grants.find((g: any) => g.id === grantId).activity.useCount, 3);
+  assert.equal(listed.body.data.grants.find((g: any) => g.id === grantId).activity.useCount, 0);
 });
 
-test("a grant never reaches another organization, and organizations can't see or revoke each other's grants", async () => {
+// Was: "a grant never reaches another organization, and organizations can't see or revoke each other's grants".
+// The second half is unchanged. The first half now states the rule that replaced it: staff read
+// Other Co directly, but a record is never served through another organization's path.
+test("a record is never served through another organization's path, and organizations can't see or revoke each other's grants", async () => {
   const grantId = String((await SupportAccessGrant.findOne({ organizationId: acme.organizationId }).lean())!._id);
 
-  // Acme's grant doesn't open Other Co, directly or by naming its RFP under Acme.
   const direct = await call(agentToken, "GET", `${ACCESS}/organizations/${other.organizationId}/rfps/${otherRfps[0]}`);
-  assert.equal(direct.status, 403);
-  assert.equal(direct.body.code, "SUPPORT_GRANT_REQUIRED");
-  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${other.organizationId}/rfps`)).status, 403);
+  assert.equal(direct.status, 200, JSON.stringify(direct.body));
+  assert.equal(direct.body.data.rfp.event.eventName, "Other Co secret gala");
+  const otherList = await call(agentToken, "GET", `${ACCESS}/organizations/${other.organizationId}/rfps`);
+  assert.deepEqual(otherList.body.data.rfps.map((r: any) => r.id), otherRfps);
+  // Other Co's proposal named under Acme, and Acme's under Other Co: exactly like an id that doesn't exist.
   const smuggled = await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps/${otherRfps[0]}`);
   const missing = await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps/${randomMongoId()}`);
   assert.equal(smuggled.status, 404);
+  assert.equal(smuggled.body.code, "PROPOSAL_NOT_FOUND");
   assert.deepEqual(smuggled.body, missing.body);
   assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps/${otherRfps[0]}/vendor-responses`)).status, 404);
-  for (const res of [direct, smuggled]) assert.ok(!JSON.stringify(res.body).includes("secret gala"));
+  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${other.organizationId}/rfps/${acmeRfps[0]}`)).status, 404);
+  const borrowed = await call(agentToken, "GET", `${ACCESS}/organizations/${other.organizationId}/rfps/${acmeRfps[0]}/vendor-responses`);
+  assert.equal(borrowed.status, 404);
+  for (const res of [smuggled, borrowed]) assert.ok(!JSON.stringify(res.body).includes("secret gala") && !JSON.stringify(res.body).includes("Stage Audio"));
+  // An organization that does not exist, and a malformed id.
+  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${randomMongoId()}/rfps`)).body.code, "ORGANIZATION_NOT_FOUND");
+  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/not-an-id/rfps`)).status, 400);
+  assert.equal(await staffWrites(acme.organizationId), 0);
+  assert.equal(await staffWrites(other.organizationId), 0);
 
   // Other Co's Owner: Acme's grant is missing, exactly like an id that doesn't exist.
   const foreignGet = await call(other.members.owner.accessToken, "GET", `${GRANTS}/${grantId}`);
@@ -247,7 +276,8 @@ test("customers, and members holding a staff role, can't use the RFPilot Support
   assert.equal(await SupportAccessGrant.countDocuments({ organizationId: dxg.org }), 0);
 });
 
-test("AC: a revoked grant is refused on the next request", async () => {
+// Was: "AC: a revoked grant is refused on the next request".
+test("revoking a grant still works for the customer and changes nothing for staff reads", async () => {
   const grantId = String((await SupportAccessGrant.findOne({ organizationId: acme.organizationId }).lean())!._id);
   const path = `${ACCESS}/organizations/${acme.organizationId}/rfps/${acmeRfps[0]}`;
   assert.equal((await call(agentToken, "GET", path)).status, 200);
@@ -257,75 +287,101 @@ test("AC: a revoked grant is refused on the next request", async () => {
   assert.equal(revoked.body.data.status, "revoked");
   assert.equal(revoked.body.data.revokedBy.id, acme.members.owner.userId);
 
-  for (const suffix of ["", "/vendor-responses"]) {
-    const res = await call(agentToken, "GET", `${path}${suffix}`);
-    assert.equal(res.status, 403);
-    assert.equal(res.body.code, "SUPPORT_GRANT_REQUIRED");
-  }
-  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps`)).status, 403);
-  assert.ok(!(await call(agentToken, "GET", `${ACCESS}/grants`)).body.data.grants.some((g: any) => g.id === grantId));
+  for (const suffix of ["", "/vendor-responses"]) assert.equal((await call(agentToken, "GET", `${path}${suffix}`)).status, 200, suffix);
+  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps`)).status, 200);
+  assert.ok((await call(agentToken, "GET", `${ACCESS}/grants`)).body.data.grants.some((g: any) => g.id === acme.organizationId));
   const [event] = await events(acme.organizationId, "support_access.revoked");
   assert.equal(String(event.actorUserId), acme.members.owner.userId);
   assert.equal(event.metadata.grantId, grantId);
-  // The past grant and what happened under it stay visible.
   const past = await call(acme.members.owner.accessToken, "GET", `${GRANTS}/${grantId}`);
   assert.equal(past.body.data.status, "revoked");
-  assert.equal(past.body.data.activity.useCount, 4);
+  assert.equal(past.body.data.activity.useCount, 0);
+  assert.equal(await staffWrites(acme.organizationId), 0);
 });
 
-test("AC: an expired grant is refused; a grant for one RFP opens that RFP only", async () => {
+// Was: "AC: an expired grant is refused; a grant for one RFP opens that RFP only".
+test("a grant for one proposal does not narrow staff reads, and its expiry changes nothing for them", async () => {
   const created = await call(acme.members.owner.accessToken, "POST", GRANTS, { proposalId: acmeRfps[0], expiresInDays: 1 });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const grantId = created.body.data.id;
   assert.equal(created.body.data.scope, "rfp");
   assert.equal(created.body.data.rfp.title, "Acme spring summit");
 
-  const granted = `${ACCESS}/organizations/${acme.organizationId}/rfps/${acmeRfps[0]}`;
-  assert.equal((await call(agentToken, "GET", granted)).status, 200);
-  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps/${acmeRfps[1]}`)).status, 404);
+  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps/${acmeRfps[1]}`)).status, 200);
   const list = await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps`);
-  assert.deepEqual(list.body.data.rfps.map((r: any) => r.id), [acmeRfps[0]]);
+  assert.deepEqual(list.body.data.rfps.map((r: any) => r.id).sort(), [...acmeRfps].sort());
 
   // Time passes: the stored expiry is now behind us.
   await SupportAccessGrant.collection.updateOne({ _id: oid(grantId) }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
-  const expired = await call(agentToken, "GET", granted);
-  assert.equal(expired.status, 403);
-  assert.equal(expired.body.code, "SUPPORT_GRANT_REQUIRED");
-  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps`)).status, 403);
-  assert.ok(!(await call(agentToken, "GET", `${ACCESS}/grants`)).body.data.grants.some((g: any) => g.id === grantId));
+  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps/${acmeRfps[0]}`)).status, 200);
+  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${acme.organizationId}/rfps`)).status, 200);
   const view = await call(acme.members.owner.accessToken, "GET", `${GRANTS}/${grantId}`);
   assert.equal(view.body.data.status, "expired");
   assert.equal((await call(acme.members.owner.accessToken, "POST", `${GRANTS}/${grantId}/revoke`)).body.code, "SUPPORT_GRANT_EXPIRED");
+  assert.equal(await staffWrites(acme.organizationId), 0);
 });
 
-test("AC: ticket content is readable without a grant; the RFP behind the ticket needs one", async () => {
+// Was: "AC: ticket content is readable without a grant; the RFP behind the ticket needs one".
+test("ticket content and the proposals behind the ticket are both readable by staff without a grant", async () => {
   const opened = await call(dxgCustomerToken, "POST", "/api/v1/support/tickets", { subject: "Budget table won't save", body: "It spins forever on my spring RFP.", category: "bug" });
   assert.equal(opened.status, 201, JSON.stringify(opened.body));
   const ticketId = opened.body.data.ticket.id;
 
-  // No grant: the helpdesk works as before.
   const ticket = await call(agentToken, "GET", `/api/v1/admin/support/tickets/${ticketId}`);
   assert.equal(ticket.status, 200, JSON.stringify(ticket.body));
   assert.ok(JSON.stringify(ticket.body).includes("It spins forever on my spring RFP."));
   assert.equal((await call(agentToken, "POST", `/api/v1/admin/support/tickets/${ticketId}/messages`, { body: "Looking into it." })).status, 201);
 
-  // ...but not the RFPs behind it.
-  const refused = await call(agentToken, "GET", `/api/v1/admin/support/tickets/${ticketId}/rfps`);
-  assert.equal(refused.status, 403);
-  assert.equal(refused.body.code, "SUPPORT_GRANT_REQUIRED");
-  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${dxg.org}/rfps/${dxgCustomerRfp}`)).status, 403);
-
-  const created = await call(dxgOwnerToken, "POST", GRANTS, { expiresInDays: 2 });
-  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(await SupportAccessGrant.countDocuments({ organizationId: dxg.org }), 0, "no grant exists");
   const behind = await call(agentToken, "GET", `/api/v1/admin/support/tickets/${ticketId}/rfps`);
   assert.equal(behind.status, 200, JSON.stringify(behind.body));
+  // The requester's proposals only.
   assert.deepEqual(behind.body.data.rfps.map((r: any) => r.id), [dxgCustomerRfp]);
-  const used = await events(dxg.org, "support_access.used");
-  assert.deepEqual(used.map((e) => [String(e.actorUserId), e.metadata.grantId, e.metadata.operation, e.metadata.ticketId]), [
-    [String(dxg.agent), created.body.data.id, "ticket.rfp.list", ticketId],
-  ]);
+  assert.equal((await call(agentToken, "GET", `${ACCESS}/organizations/${dxg.org}/rfps/${dxgCustomerRfp}`)).status, 200);
+  const recorded = await SecurityAuditEvent.find({ organizationId: dxg.org, action: READ, "metadata.ticketId": ticketId }).lean();
+  assert.deepEqual(recorded.map((e) => [String(e.actorUserId), e.targetId, e.metadata.resource]), [[String(dxg.agent), String(dxg.org), "ticket_proposals"]]);
+  assert.equal(await SecurityAuditEvent.countDocuments({ action: /^support_access\.(used|denied)$/, organizationId: { $in: [dxg.org, oid(acme.organizationId), oid(other.organizationId)] } }), 0);
 
   // A ticket that does not exist is missing. (A customer organization's ticket: see
   // support-desk-cross-organization.test.ts.)
   assert.equal((await call(agentToken, "GET", `/api/v1/admin/support/tickets/${randomMongoId()}/rfps`)).status, 404);
+});
+
+// Rows written before the decision of 2026-11-17 stay in the customer organization's trail. The
+// customer's grant list and detail must not show them. Last in the file, and the seeded rows are
+// removed again, so the `staffWrites(...) === 0` checks above never see them.
+test("stored support_access.used rows are kept but never shown on the customer's grant list or detail", async () => {
+  const grant = await SupportAccessGrant.findOne({ organizationId: acme.organizationId, proposalId: null }).lean();
+  assert.ok(grant, "the organization-wide grant created above");
+  const grantId = String(grant!._id);
+  const stored = (operation: string, targetId: string) => ({
+    organizationId: oid(acme.organizationId), actorUserId: dxg.agent, action: "support_access.used", targetType: "proposal", targetId,
+    decision: "allowed", reason: operation, correlationId: `stored-${tag}`,
+    metadata: { grantId, operation, agentAccountType: "admin" }, createdAt: new Date(Date.now() - DAY), updatedAt: new Date(Date.now() - DAY),
+  });
+  await SecurityAuditEvent.collection.insertMany([stored("rfp.read", acmeRfps[0]), stored("rfp.vendor_responses", acmeRfps[0]), stored("rfp.read", acmeRfps[1])]);
+  try {
+    assert.equal((await events(acme.organizationId, "support_access.used")).length, 3, "the rows are stored");
+
+    for (const role of ["owner", "organization_admin"] as const) {
+      const listed = await call(acme.members[role].accessToken, "GET", GRANTS);
+      assert.equal(listed.status, 200, JSON.stringify(listed.body));
+      const mine = listed.body.data.grants.find((g: any) => g.id === grantId);
+      assert.deepEqual(mine.activity, { useCount: 0, lastUsedAt: null }, role);
+      for (const g of listed.body.data.grants) assert.deepEqual(g.activity, { useCount: 0, lastUsedAt: null }, role);
+
+      const view = await call(acme.members[role].accessToken, "GET", `${GRANTS}/${grantId}`);
+      assert.equal(view.status, 200, JSON.stringify(view.body));
+      assert.deepEqual(view.body.data.activity, { useCount: 0, lastUsedAt: null }, role);
+      assert.deepEqual(view.body.data.events, [], role);
+      for (const body of [listed.body, view.body]) {
+        const json = JSON.stringify(body);
+        for (const hidden of [String(dxg.agent), "RFPilot Support", "Staff Agent", "rfp.read", "rfp.vendor_responses"]) assert.equal(json.includes(hidden), false, `${role}: ${hidden}`);
+      }
+    }
+    // Hidden, not deleted.
+    assert.equal((await events(acme.organizationId, "support_access.used")).length, 3);
+  } finally {
+    await SecurityAuditEvent.collection.deleteMany({ correlationId: `stored-${tag}` });
+  }
 });
