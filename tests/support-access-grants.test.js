@@ -2,12 +2,18 @@ require("ts-node/register/transpile-only");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createSupportGrantManagement } = require("../src/modules/supportAccess/application/manageSupportGrants");
-const { createSupportAccess } = require("../src/modules/supportAccess/application/supportAccess");
+const { createSupportAccess, STANDING_WINDOW_DAYS } = require("../src/modules/supportAccess/application/supportAccess");
+const { createStaffOrganizationContent } = require("../src/modules/staffAccess/application/readOrganizationContent");
 const { SupportAccessError, resolveGrantExpiry, coveringGrant, grantStatus } = require("../src/modules/supportAccess/domain");
 const { createSupportAccessController } = require("../controller/supportAccessController");
 
 // ORG-404: support access grants. In-memory ports; the real-database proof is
 // tests-integration/support-access-grants.test.ts.
+//
+// Owner decision, 2026-11-17 (docs/DECISIONS.md): RFPilot staff read every organization's content
+// with no grant, and what they do is recorded on the RFPilot side only. The customer grant
+// endpoints still answer (the tests for them are unchanged); the staff-side tests below state the
+// new rule: a grant gates nothing, and no read writes into the customer organization.
 
 const hex = (c) => c.repeat(24);
 const ORG = hex("a");
@@ -108,13 +114,24 @@ const setup = () => {
   return {
     management: createSupportGrantManagement({ grants, directory, activity, audit: auditWriter, isValidId, clock }),
     access: createSupportAccess({
-      grants, directory, reader, audit: auditWriter, isValidId, clock,
-      tickets: { async find(ticketId) { return tickets[ticketId] ?? null; } },
+      clock,
+      content: createStaffOrganizationContent({
+        organizations: {
+          async organization(id) { return ORGANIZATIONS[id] ? { id, name: ORGANIZATIONS[id], createdAt: START } : null; },
+          async organizations() { return Object.entries(ORGANIZATIONS).map(([id, name]) => ({ id, name, createdAt: START })); },
+        },
+        proposals: reader, directory, audit: auditWriter, isValidId,
+        tickets: { async find(ticketId) { return tickets[ticketId] ?? null; } },
+      }),
     }),
     rows, audit, state,
     advance(ms) { now = new Date(now.getTime() + ms); },
   };
 };
+
+const ORGANIZATIONS = { [ORG]: "Acme Events", [OTHER_ORG]: "Other Co", [STAFF_ORG]: "RFPilot" };
+const inCustomerOrganizations = (audit) => audit.filter((e) => e.organizationId !== STAFF_ORG);
+const reads = (audit) => audit.filter((e) => e.action === "platform.organization_content.read");
 
 const rejects = (promise, code, status) =>
   assert.rejects(promise, (error) => error instanceof SupportAccessError && error.code === code && error.status === status);
@@ -210,8 +227,7 @@ test("an invalid expiry or reason creates nothing", async () => {
 });
 
 test("only admin-app accounts with a staff role are RFPilot Support", async () => {
-  const { management, access } = setup();
-  await management.create(member(OWNER), {});
+  const { access, audit } = setup();
   const impostors = [
     agent({ accountType: "planner" }),              // a member who somehow holds a staff role
     agent({ accountType: undefined }),
@@ -224,69 +240,89 @@ test("only admin-app accounts with a staff role are RFPilot Support", async () =
     await rejects(access.listVendorResponses(who, ORG, RFP_ONE), "SUPPORT_ACCESS_FORBIDDEN", 403);
     await rejects(access.listTicketRfps(who, TICKET, {}), "SUPPORT_ACCESS_FORBIDDEN", 403);
   }
-  assert.equal((await access.listGranted(agent({ role: "super_admin" }))).grants.length, 1);
+  assert.equal(audit.length, 0);
+  for (const role of ["admin", "super_admin", "superadmin"]) {
+    assert.equal((await access.getRfp(agent({ role }), ORG, RFP_ONE)).rfp.id, RFP_ONE);
+  }
 });
 
-test("without a grant every read of customer RFP data is refused and recorded as denied", async () => {
-  const { access, audit } = setup();
-  await rejects(access.listRfps(agent(), ORG, {}), "SUPPORT_GRANT_REQUIRED", 403);
-  await rejects(access.getRfp(agent(), ORG, RFP_ONE), "SUPPORT_GRANT_REQUIRED", 403);
-  await rejects(access.listVendorResponses(agent(), ORG, RFP_ONE), "SUPPORT_GRANT_REQUIRED", 403);
-  assert.equal(uses(audit).length, 0);
-  assert.deepEqual(audit.map((e) => [e.action, e.decision, e.organizationId, e.actorUserId, e.metadata.operation]), [
-    ["support_access.denied", "denied", ORG, AGENT, "rfp.list"],
-    ["support_access.denied", "denied", ORG, AGENT, "rfp.read"],
-    ["support_access.denied", "denied", ORG, AGENT, "vendor_responses.list"],
-  ]);
-  // An organization that doesn't exist answers the same and leaves no audit row behind.
-  await rejects(access.getRfp(agent(), hex("0"), RFP_ONE), "SUPPORT_GRANT_REQUIRED", 403);
-  await rejects(access.listRfps(agent(), "not-an-id", {}), "SUPPORT_GRANT_REQUIRED", 403);
-  assert.equal(audit.length, 3);
-  assert.deepEqual((await access.listGranted(agent())).grants, []);
+// Was: "without a grant every read of customer RFP data is refused and recorded as denied".
+test("without a grant every read of customer proposal data succeeds, and nothing is written in the customer organization", async () => {
+  const { access, audit, rows } = setup();
+  assert.equal(rows.length, 0, "no grant exists");
+  assert.deepEqual((await access.listRfps(agent(), ORG, {})).rfps.map((r) => r.id).sort(), [RFP_ONE, RFP_TWO].sort());
+  assert.equal((await access.getRfp(agent(), ORG, RFP_ONE)).rfp.id, RFP_ONE);
+  assert.equal((await access.listVendorResponses(agent(), ORG, RFP_ONE)).vendorResponses.length, 1);
+  assert.deepEqual((await access.listRfps(agent(), OTHER_ORG, {})).rfps.map((r) => r.id), [OTHER_RFP]);
+  assert.deepEqual(inCustomerOrganizations(audit), []);
+  assert.equal(audit.some((e) => e.action.startsWith("support_access.")), false, "used / denied are no longer written");
+  assert.equal(reads(audit).length, 4);
+
+  // An organization that doesn't exist is a 404, a malformed id a 400; neither leaves a row.
+  await rejects(access.getRfp(agent(), hex("0"), RFP_ONE), "ORGANIZATION_NOT_FOUND", 404);
+  await rejects(access.listRfps(agent(), "not-an-id", {}), "INVALID_ORGANIZATION_ID", 400);
+  assert.equal(audit.length, 4);
 });
 
-test("every use writes an audit event naming the agent, the grant and the object", async () => {
+// Was: "every use writes an audit event naming the agent, the grant and the object" (in the
+// customer organization). The event is now written in the staff organization only.
+test("every read writes one event in the staff organization naming the staff member, the organization and the object", async () => {
   const { management, access, audit } = setup();
   const grant = await management.create(member(OWNER), {});
   audit.length = 0;
 
   const list = await access.listRfps(agent(), ORG, {});
   assert.deepEqual(list.rfps.map((r) => r.id).sort(), [RFP_ONE, RFP_TWO].sort());
-  assert.equal(list.grants[0].id, grant.id);
   const detail = await access.getRfp(agent(), ORG, RFP_ONE);
   assert.equal(detail.rfp.id, RFP_ONE);
-  assert.equal(detail.grant.scope, "organization");
-  assert.equal(detail.grant.secondsRemaining, 7 * 24 * 60 * 60);
   const responses = await access.listVendorResponses(agent(), ORG, RFP_ONE);
   assert.equal(responses.vendorResponses.length, 1);
 
-  assert.deepEqual(audit.map((e) => [e.action, e.decision, e.organizationId, e.actorUserId, e.metadata.grantId, e.targetType, e.targetId, e.metadata.operation]), [
-    ["support_access.used", "allowed", ORG, AGENT, grant.id, "organization", ORG, "rfp.list"],
-    ["support_access.used", "allowed", ORG, AGENT, grant.id, "proposal", RFP_ONE, "rfp.read"],
-    ["support_access.used", "allowed", ORG, AGENT, grant.id, "proposal", RFP_ONE, "vendor_responses.list"],
+  assert.deepEqual(audit.map((e) => [e.action, e.decision, e.organizationId, e.actorUserId, e.targetType, e.targetId, e.reason, e.metadata.resource, e.metadata.recordId ?? null, e.correlationId]), [
+    ["platform.organization_content.read", "allowed", STAFF_ORG, AGENT, "organization", ORG, "proposals", "proposals", null, "corr-agent"],
+    ["platform.organization_content.read", "allowed", STAFF_ORG, AGENT, "organization", ORG, "proposal", "proposal", RFP_ONE, "corr-agent"],
+    ["platform.organization_content.read", "allowed", STAFF_ORG, AGENT, "organization", ORG, "vendor_responses", "vendor_responses", RFP_ONE, "corr-agent"],
   ]);
+  assert.equal(audit.some((e) => "grantId" in e.metadata), false);
 
-  // The organization's Admin sees the activity under the grant; staff appear as RFPilot Support.
+  // The customer's own view of the grant shows no staff activity: nothing was written there.
   const view = await management.get(member(ADMIN), grant.id);
-  assert.equal(view.activity.useCount, 3);
-  assert.deepEqual(view.events.map((e) => [e.operation, e.agent.label, e.agent.id, e.rfp?.title ?? null]), [
-    ["rfp.list", "RFPilot Support", AGENT, null],
-    ["rfp.read", "RFPilot Support", AGENT, "Spring summit"],
-    ["vendor_responses.list", "RFPilot Support", AGENT, "Spring summit"],
-  ]);
-  assert.equal((await management.list(member(OWNER), {})).grants[0].activity.useCount, 3);
+  assert.equal(view.activity.useCount, 0);
+  assert.deepEqual(view.events, []);
+});
+
+// The answers keep the shape the deployed admin app parses: where they carried the grant, they
+// carry one standing organization-wide entry whose id is the organization's.
+test("the staff answers keep their shape, with a standing organization-wide entry in place of the grant", async () => {
+  const { management, access } = setup();
+  await management.create(member(OWNER), { proposalId: RFP_ONE, expiresInDays: 1 });
+  const standing = { id: ORG, scope: "organization", proposalId: null, expiresAt: new Date(START.getTime() + STANDING_WINDOW_DAYS * DAY), secondsRemaining: STANDING_WINDOW_DAYS * 24 * 60 * 60 };
+  const list = await access.listRfps(agent(), ORG, { page: "1" });
+  assert.deepEqual(Object.keys(list).sort(), ["grants", "organizationId", "pagination", "rfps"]);
+  assert.deepEqual(list.grants, [standing]);
+  assert.deepEqual(list.pagination, { page: 1, perPage: 20, total: 2, totalPages: 1 });
+  const detail = await access.getRfp(agent(), ORG, RFP_TWO);
+  assert.deepEqual(Object.keys(detail).sort(), ["grant", "organizationId", "owner", "rfp"]);
+  assert.deepEqual(detail.grant, standing);
+  const responses = await access.listVendorResponses(agent(), ORG, RFP_TWO);
+  assert.deepEqual(Object.keys(responses).sort(), ["grant", "organizationId", "proposalId", "vendorResponses"]);
+  assert.deepEqual(responses.grant, standing);
+  const behind = await access.listTicketRfps(agent(), TICKET, {});
+  assert.deepEqual(Object.keys(behind).sort(), ["grants", "organizationId", "pagination", "rfps"]);
+  assert.deepEqual(behind.grants, [standing]);
 });
 
 test("nothing is returned when the audit event can't be written", async () => {
-  const { management, access, state } = setup();
-  await management.create(member(OWNER), {});
+  const { access, state } = setup();
   state.failAudit = true;
   await assert.rejects(access.getRfp(agent(), ORG, RFP_ONE), /audit store down/);
   await assert.rejects(access.listRfps(agent(), ORG, {}), /audit store down/);
   await assert.rejects(access.listVendorResponses(agent(), ORG, RFP_ONE), /audit store down/);
+  await assert.rejects(access.listTicketRfps(agent(), TICKET, {}), /audit store down/);
 });
 
-test("AC: a revoked grant is refused on the very next request", async () => {
+// Was: "AC: a revoked grant is refused on the very next request".
+test("revoking a grant still works for the customer and changes nothing for staff reads", async () => {
   const { management, access, audit } = setup();
   const grant = await management.create(member(OWNER), {});
   assert.equal((await access.getRfp(agent(), ORG, RFP_ONE)).rfp.id, RFP_ONE);
@@ -294,101 +330,103 @@ test("AC: a revoked grant is refused on the very next request", async () => {
   const revoked = await management.revoke(member(ADMIN), grant.id);
   assert.equal(revoked.status, "revoked");
   assert.deepEqual(revoked.revokedBy, { id: ADMIN, name: "organization_admin person" });
-  await rejects(access.getRfp(agent(), ORG, RFP_ONE), "SUPPORT_GRANT_REQUIRED", 403);
-  await rejects(access.listRfps(agent(), ORG, {}), "SUPPORT_GRANT_REQUIRED", 403);
-  await rejects(access.listVendorResponses(agent(), ORG, RFP_ONE), "SUPPORT_GRANT_REQUIRED", 403);
-  await rejects(access.listTicketRfps(agent(), TICKET, {}), "SUPPORT_GRANT_REQUIRED", 403);
-  assert.deepEqual((await access.listGranted(agent())).grants, []);
-  assert.equal(uses(audit).length, 1);
+  assert.equal((await access.getRfp(agent(), ORG, RFP_ONE)).rfp.id, RFP_ONE);
+  assert.equal((await access.listRfps(agent(), ORG, {})).rfps.length, 2);
+  assert.equal((await access.listVendorResponses(agent(), ORG, RFP_ONE)).vendorResponses.length, 1);
+  assert.equal((await access.listTicketRfps(agent(), TICKET, {})).rfps.length, 1);
   assert.equal(audit.filter((e) => e.action === "support_access.revoked" && e.actorUserId === ADMIN && e.metadata.grantId === grant.id).length, 1);
+  // The customer organization holds the customer's own two events and nothing from staff.
+  assert.deepEqual(inCustomerOrganizations(audit).map((e) => e.action), ["support_access.granted", "support_access.revoked"]);
 
   // Revoking again changes nothing and writes no second event.
   assert.equal((await management.revoke(member(OWNER), grant.id)).status, "revoked");
   assert.equal(audit.filter((e) => e.action === "support_access.revoked").length, 1);
 });
 
-test("AC: an expired grant is refused the moment it expires", async () => {
+// Was: "AC: an expired grant is refused the moment it expires".
+test("an expired grant reads as expired for the customer and changes nothing for staff reads", async () => {
   const { management, access, advance } = setup();
   const grant = await management.create(member(OWNER), { expiresInDays: 1 });
-  advance(DAY - 1);
-  assert.equal((await access.getRfp(agent(), ORG, RFP_ONE)).grant.secondsRemaining, 0);
-  advance(1);
-  await rejects(access.getRfp(agent(), ORG, RFP_ONE), "SUPPORT_GRANT_REQUIRED", 403);
-  await rejects(access.listRfps(agent(), ORG, {}), "SUPPORT_GRANT_REQUIRED", 403);
-  await rejects(access.listVendorResponses(agent(), ORG, RFP_ONE), "SUPPORT_GRANT_REQUIRED", 403);
-  assert.deepEqual((await access.listGranted(agent())).grants, []);
+  advance(DAY);
+  assert.equal((await access.getRfp(agent(), ORG, RFP_ONE)).rfp.id, RFP_ONE);
+  assert.equal((await access.listRfps(agent(), ORG, {})).rfps.length, 2);
+  assert.equal((await access.listVendorResponses(agent(), ORG, RFP_ONE)).vendorResponses.length, 1);
   assert.equal((await management.get(member(OWNER), grant.id)).status, "expired");
   await rejects(management.revoke(member(OWNER), grant.id), "SUPPORT_GRANT_EXPIRED", 409);
 });
 
-test("a grant for one RFP reaches that RFP only; a grant never reaches another organization", async () => {
+// Was: "a grant for one RFP reaches that RFP only; a grant never reaches another organization".
+test("a grant for one proposal does not narrow what staff read; a proposal is never served through another organization", async () => {
   const { management, access, audit } = setup();
-  const grant = await management.create(member(OWNER), { proposalId: RFP_ONE });
+  await management.create(member(OWNER), { proposalId: RFP_ONE });
   audit.length = 0;
 
-  assert.equal((await access.getRfp(agent(), ORG, RFP_ONE)).grant.scope, "rfp");
-  const list = await access.listRfps(agent(), ORG, {});
-  assert.deepEqual(list.rfps.map((r) => r.id), [RFP_ONE]);
-  await rejects(access.getRfp(agent(), ORG, RFP_TWO), "PROPOSAL_NOT_FOUND", 404);
-  await rejects(access.listVendorResponses(agent(), ORG, RFP_TWO), "PROPOSAL_NOT_FOUND", 404);
-  // The other organization's RFP through this organization's grant, and that organization itself.
-  await rejects(access.getRfp(agent(), ORG, OTHER_RFP), "PROPOSAL_NOT_FOUND", 404);
-  await rejects(access.getRfp(agent(), OTHER_ORG, OTHER_RFP), "SUPPORT_GRANT_REQUIRED", 403);
-  await rejects(access.listRfps(agent(), OTHER_ORG, {}), "SUPPORT_GRANT_REQUIRED", 403);
-
-  assert.deepEqual(uses(audit).map((e) => [e.metadata.grantId, e.targetType, e.targetId, e.metadata.operation]), [
-    [grant.id, "proposal", RFP_ONE, "rfp.read"],
-    [grant.id, "proposal", RFP_ONE, "rfp.list"],
-  ]);
-  assert.equal(audit.filter((e) => e.action === "support_access.denied" && e.organizationId === ORG).length, 3);
-  assert.equal(audit.filter((e) => e.action === "support_access.denied" && e.organizationId === OTHER_ORG).length, 2);
-});
-
-test("an organization-wide grant doesn't reach an RFP that isn't in the organization", async () => {
-  const { management, access } = setup();
-  await management.create(member(OWNER), {});
+  assert.deepEqual((await access.listRfps(agent(), ORG, {})).rfps.map((r) => r.id).sort(), [RFP_ONE, RFP_TWO].sort());
+  assert.equal((await access.getRfp(agent(), ORG, RFP_TWO)).rfp.id, RFP_TWO);
+  // Another organization's proposal asked for through this organization's path: not found, both ways.
   await rejects(access.getRfp(agent(), ORG, OTHER_RFP), "PROPOSAL_NOT_FOUND", 404);
   await rejects(access.listVendorResponses(agent(), ORG, OTHER_RFP), "PROPOSAL_NOT_FOUND", 404);
-  await rejects(access.getRfp(agent(), ORG, "not-an-id"), "PROPOSAL_NOT_FOUND", 404);
+  await rejects(access.getRfp(agent(), OTHER_ORG, RFP_ONE), "PROPOSAL_NOT_FOUND", 404);
+  await rejects(access.listVendorResponses(agent(), OTHER_ORG, RFP_ONE), "PROPOSAL_NOT_FOUND", 404);
+  // Through its own organization it is found.
+  assert.equal((await access.getRfp(agent(), OTHER_ORG, OTHER_RFP)).rfp.id, OTHER_RFP);
+
+  // A refused lookup records nothing; nothing at all is written in a customer organization.
+  assert.deepEqual(audit.map((e) => [e.organizationId, e.targetId, e.metadata.resource, e.metadata.recordId ?? null]), [
+    [STAFF_ORG, ORG, "proposals", null],
+    [STAFF_ORG, ORG, "proposal", RFP_TWO],
+    [STAFF_ORG, OTHER_ORG, "proposal", OTHER_RFP],
+  ]);
 });
 
-test("AC: the RFPs behind a ticket need a grant from the ticket's organization", async () => {
-  const { management, access, audit } = setup();
-  await rejects(access.listTicketRfps(agent(), TICKET, {}), "SUPPORT_GRANT_REQUIRED", 403);
-  // RFPilot Support reads every organization's tickets, so the agent's own organization
-  // decides nothing: the grant has to come from the ticket's organization.
-  await rejects(access.listTicketRfps(agent({ organizationId: hex("8") }), TICKET, {}), "SUPPORT_GRANT_REQUIRED", 403);
+test("a proposal that isn't in the organization is not found, and a malformed proposal id is refused", async () => {
+  const { access, audit } = setup();
+  await rejects(access.getRfp(agent(), ORG, OTHER_RFP), "PROPOSAL_NOT_FOUND", 404);
+  await rejects(access.listVendorResponses(agent(), ORG, OTHER_RFP), "PROPOSAL_NOT_FOUND", 404);
+  await rejects(access.getRfp(agent(), ORG, hex("0")), "PROPOSAL_NOT_FOUND", 404);
+  await rejects(access.getRfp(agent(), ORG, "not-an-id"), "INVALID_PROPOSAL_ID", 400);
+  await rejects(access.listVendorResponses(agent(), ORG, "not-an-id"), "INVALID_PROPOSAL_ID", 400);
+  assert.equal(audit.length, 0);
+});
+
+// Was: "AC: the RFPs behind a ticket need a grant from the ticket's organization".
+test("the proposals behind a ticket are the requester's, in the ticket's organization, with no grant", async () => {
+  const { access, audit, rows } = setup();
   await rejects(access.listTicketRfps(agent(), "not-an-id", {}), "SUPPORT_TICKET_NOT_FOUND", 404);
   await rejects(access.listTicketRfps(agent(), hex("9"), {}), "SUPPORT_TICKET_NOT_FOUND", 404);
-  // A grant from another organization does not open this ticket's proposals.
-  await management.create(member(OTHER_OWNER, OTHER_ORG), {});
-  await rejects(access.listTicketRfps(agent(), TICKET, {}), "SUPPORT_GRANT_REQUIRED", 403);
-  // A member holding a staff role is not RFPilot Support, with or without a grant.
+  // A member holding a staff role is not RFPilot Support.
   await rejects(access.listTicketRfps(agent({ accountType: "planner" }), TICKET, {}), "SUPPORT_ACCESS_FORBIDDEN", 403);
+  assert.equal(audit.length, 0);
 
-  const grant = await management.create(member(OWNER), {});
-  audit.length = 0;
-  const behind = await access.listTicketRfps(agent(), TICKET, {});
-  // Only the requester's RFPs, not the whole organization's.
+  assert.equal(rows.length, 0, "no grant exists");
+  // The staff member's own organization decides nothing: the ticket's organization is read.
+  const behind = await access.listTicketRfps(agent({ organizationId: hex("8") }), TICKET, {});
+  assert.equal(behind.organizationId, ORG);
+  // Only the requester's proposals, not the whole organization's.
   assert.deepEqual(behind.rfps.map((r) => r.id), [RFP_ONE]);
-  assert.deepEqual(audit.map((e) => [e.action, e.metadata.grantId, e.metadata.operation, e.metadata.ticketId, e.actorUserId]), [
-    ["support_access.used", grant.id, "ticket.rfp.list", TICKET, AGENT],
+  assert.deepEqual(audit.map((e) => [e.action, e.organizationId, e.targetId, e.metadata.resource, e.metadata.ticketId, e.actorUserId]), [
+    ["platform.organization_content.read", hex("8"), ORG, "ticket_proposals", TICKET, AGENT],
   ]);
 });
 
-test("\"granted to me\" lists active grants across organizations with scope and time left", async () => {
-  const { management, access, advance } = setup();
+// Was: "\"granted to me\" lists active grants across organizations with scope and time left".
+test("\"granted to me\" lists every organization as one standing organization-wide entry, whatever grants exist", async () => {
+  const { management, access, advance, audit } = setup();
+  const before = (await access.listGranted(agent())).grants;
   await management.create(member(OWNER), { proposalId: RFP_ONE, expiresInDays: 2 });
   await management.create(member(OTHER_OWNER, OTHER_ORG), { expiresInDays: 10 });
-  const expiring = await management.create(member(ADMIN), { expiresInDays: 1 });
-  advance(DAY);
+  advance(3 * DAY);
+  audit.length = 0;
   const { grants } = await access.listGranted(agent());
-  assert.ok(!JSON.stringify(grants).includes("Spring summit"), "no RFP content in an unaudited list");
-  assert.deepEqual(grants.map((g) => [g.organization.name, g.scope, g.rfp?.id ?? null, g.secondsRemaining]).sort(), [
-    ["Acme Events", "rfp", RFP_ONE, 24 * 60 * 60],
-    ["Other Co", "organization", null, 9 * 24 * 60 * 60],
+  assert.ok(!JSON.stringify(grants).includes("Spring summit"), "no proposal content in an unrecorded list");
+  assert.deepEqual(grants.map((g) => [g.id, g.organization.id, g.organization.name, g.scope, g.proposalId, g.rfp, g.reason, g.secondsRemaining]), [
+    [ORG, ORG, "Acme Events", "organization", null, null, null, STANDING_WINDOW_DAYS * 24 * 60 * 60],
+    [OTHER_ORG, OTHER_ORG, "Other Co", "organization", null, null, null, STANDING_WINDOW_DAYS * 24 * 60 * 60],
+    [STAFF_ORG, STAFF_ORG, "RFPilot", "organization", null, null, null, STANDING_WINDOW_DAYS * 24 * 60 * 60],
   ]);
-  assert.ok(!grants.some((g) => g.id === expiring.id));
+  assert.deepEqual(before.map((g) => g.id), grants.map((g) => g.id), "the list does not depend on grants");
+  for (const grant of grants) assert.equal(new Date(grant.expiresAt).getTime(), START.getTime() + (3 + STANDING_WINDOW_DAYS) * DAY);
+  assert.equal(audit.length, 0, "organization names only: nothing is recorded");
 });
 
 class MockResponse {
@@ -441,22 +479,20 @@ test("the controller builds the actor from the stored account and maps errors to
 });
 
 test("a grant whose audit event can't be written is closed again", async () => {
-  const { management, access, rows, state } = setup();
+  const { management, rows, state } = setup();
   state.failAudit = true;
   await assert.rejects(management.create(member(OWNER), {}), /audit store down/);
   state.failAudit = false;
   assert.equal(rows.length, 1);
   assert.ok(rows[0].revokedAt, "the unaudited grant is revoked");
-  await rejects(access.getRfp(agent(), ORG, RFP_ONE), "SUPPORT_GRANT_REQUIRED", 403);
 });
 
-test("a list under RFP grants logs a use only for the grants whose RFP was returned", async () => {
-  const { management, access, audit } = setup();
-  const two = await management.create(member(OWNER), { proposalId: RFP_TWO });
-  audit.length = 0;
-  // The ticket's requester owns RFP_ONE, which isn't granted: nothing is returned, nothing is logged as used.
-  assert.deepEqual((await access.listTicketRfps(agent(), TICKET, {})).rfps, []);
-  assert.equal(uses(audit).length, 0);
-  assert.deepEqual((await access.listRfps(agent(), ORG, {})).rfps.map((r) => r.id), [RFP_TWO]);
-  assert.deepEqual(uses(audit).map((e) => [e.metadata.grantId, e.targetId]), [[two.id, RFP_TWO]]);
+// Was: "a list under RFP grants logs a use only for the grants whose RFP was returned". Grants no
+// longer scope a list, and one read is one staff-side event whatever it returned.
+test("each list is one staff-side event, including an empty one", async () => {
+  const { access, audit } = setup();
+  assert.deepEqual((await access.listRfps(agent(), STAFF_ORG, {})).rfps, []);
+  assert.deepEqual((await access.listRfps(agent(), ORG, {})).rfps.length, 2);
+  assert.deepEqual(audit.map((e) => [e.organizationId, e.targetId, e.metadata.resource]), [[STAFF_ORG, STAFF_ORG, "proposals"], [STAFF_ORG, ORG, "proposals"]]);
 });
+
