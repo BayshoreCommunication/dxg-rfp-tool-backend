@@ -49,7 +49,7 @@ class Abort extends Error {
    commit or neither does. It goes to `audit.organizationId` (the STAFF organization), which is
    not the organization of the membership being changed; nothing is written to that one. */
 const MAX_AUDITED_RFP_IDS = 1000;
-const appendAudit = async (audit: MemberChangeAudit | undefined, session: ClientSession, extra: Record<string, unknown> = {}) => {
+export const appendAudit = async (audit: MemberChangeAudit | undefined, session: ClientSession, extra: Record<string, unknown> = {}) => {
   if (!audit) return;
   await SecurityAuditEvent.create([{
     organizationId: objectId(audit.organizationId),
