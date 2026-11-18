@@ -559,7 +559,9 @@ test("routes: the older staff routes have the same guard, and the customer grant
   for (const route of staffRoutes) {
     assert.equal(route.stack[0].handle, authenticate, route.path);
     guardRefusesCustomers(route.stack[1].handle, route.path);
-    if (route.path !== "/admin/support-access/grants") assert.equal(route.stack[2].handle, staffContentReads, route.path);
+    // Every staff route, the organization list included: it names every organization.
+    assert.equal(route.stack.length, 4, route.path);
+    assert.equal(route.stack[2].handle, staffContentReads, route.path);
   }
   const customerRoutes = routes.filter((route) => route.path.startsWith("/organization/support-grants"));
   assert.equal(customerRoutes.length, 4, "the customer grant endpoints still answer");

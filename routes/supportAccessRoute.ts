@@ -32,8 +32,10 @@ const agentGuard = [authenticate, authorize("admin", "super_admin", "superadmin"
 // The content reads share the staff content rate limit (per staff member).
 const contentGuard = [...agentGuard, staffContentReads];
 
-// One standing entry per organization (names only; the admin app polls it, so it is not limited).
-router.get("/admin/support-access/grants", ...agentGuard, controller.listGranted);
+// One standing entry per organization: every organization's id and name, so it is limited like
+// the content reads. The admin app polls it every 30 seconds per open screen (30 requests per
+// 15 minutes, 90 at its fastest), which fits inside the shared 300.
+router.get("/admin/support-access/grants", ...contentGuard, controller.listGranted);
 router.get("/admin/support-access/organizations/:organizationId/rfps", ...contentGuard, controller.listGrantedRfps);
 router.get("/admin/support-access/organizations/:organizationId/rfps/:proposalId", ...contentGuard, controller.getGrantedRfp);
 router.get("/admin/support-access/organizations/:organizationId/rfps/:proposalId/vendor-responses", ...contentGuard, controller.listGrantedVendorResponses);
