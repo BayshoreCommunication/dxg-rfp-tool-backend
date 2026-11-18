@@ -204,6 +204,7 @@ const staffRows = () => [
   event({ action: "organization.legacy_customer.placed", actorUserId: STAFF, targetType: "user", targetId: PLANNER, decision: "allowed", reason: "legacy_customer_placed", metadata: { role: "planner" } }),
   event({ action: "organization.legacy_customer.placement_rolled_back", actorUserId: STAFF, targetType: "user", targetId: PLANNER, decision: "allowed", reason: "placement_rolled_back", metadata: {} }),
   event({ action: "platform.organization_content.read", actorUserId: STAFF, targetType: "organization", targetId: ORG, decision: "allowed", reason: "proposals", metadata: { resource: "proposals" } }),
+  event({ action: "platform.organization_content.denied", actorUserId: STAFF, targetType: "organization", targetId: ORG, decision: "denied", reason: "proposal_not_found", metadata: { resource: "proposal", organizationId: ORG } }),
   event({ action: "platform.organization_account.read", actorUserId: STAFF, targetType: "organization", targetId: ORG, decision: "allowed", reason: "organization_account_detail", metadata: {} }),
 ];
 
@@ -225,6 +226,11 @@ test("staff activity and support access are never shown to a customer: list, fil
         assert.equal(exported.csv.includes(hidden), false, hidden);
       }
     }
+    // The reader never looks up a staff id's name, even when that id happens to be a member's
+    // and even when the store hands hidden rows back. (Restores the pin the removed
+    // "the staff id is never looked up" tests held.)
+    assert.equal(events.nameLookups.includes(STAFF), false);
+    assert.ok(events.nameLookups.includes(OWNER), "the visible row's member is looked up, so the pin is not vacuous");
   }
 });
 
