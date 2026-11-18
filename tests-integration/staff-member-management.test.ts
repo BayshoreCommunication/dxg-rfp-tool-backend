@@ -511,6 +511,258 @@ test("A's customer audit endpoints (list, filters, CSV) show none of the staff a
   assert.ok(own.body.data.events.length >= 1);
 });
 
+// ── What the member's own requests do after a staff change (fix round, 2026-11-18) ───────────
+// A staff demotion, deactivation or ownership transfer ends sessions. The member's browser then
+// comes back: it presents its refresh token and makes authenticated requests. On origin/main
+// those requests wrote auth.refresh.reuse_detected, auth.sessions.revoked_others and
+// auth.sessions.revoked_all in the CUSTOMER organization. They must not, when staff made the
+// change; and they must still be written when a member of the organization made it.
+const SESSION_TRACE_ACTIONS = ["auth.refresh.reuse_detected", "auth.sessions.revoked_others", "auth.sessions.revoked_all"];
+const SESSION_TRACE_LABELS = ["Session reuse detected", "Other sessions signed out", "All sessions signed out"];
+const STAFF_SESSIONS_REVOKED = "platform.organization_member.sessions_revoked";
+const STAFF_REVOKE_REASON = "staff_membership_changed";
+const MEMBERS_ROUTE = "/api/organization/members";
+// The real refresh endpoint, with the refresh cookie a browser holds.
+const refresh = async (refreshToken: string) => {
+  const res = await fetch(`${baseUrl}/api/auth/refresh`, { method: "POST", headers: { cookie: `rfpilot_refresh=${encodeURIComponent(refreshToken)}` } });
+  return { status: res.status, body: (await res.json()) as Record<string, any> };
+};
+const refused = async (refreshToken: string, label: string) => {
+  const res = await refresh(refreshToken);
+  assert.deepEqual([res.status, res.body.code, res.body.reason], [401, "REFRESH_SESSION_EXPIRED", "reuse_detected"], label);
+  assert.equal(res.body.accessToken, undefined, label);
+};
+const sessionRow = async (sessionId: string) => {
+  const row = await RefreshSession.findOne({ sessionId }).lean();
+  return [row?.status, row?.revokeReason ?? null];
+};
+// A second device for a member: another real session, started before the change under test.
+const secondDevice = async (fixture: Fixture, role: (typeof ROLES)[number]) => {
+  const session = await beginAuthenticatedSession({ userId: fixture.members[role].userId, organizationId: fixture.organizationId, correlationId: randomMongoId() });
+  return { accessToken: session.accessToken, refreshToken: session.refreshToken, sessionId: session.sessionId };
+};
+// A revocation that did not run (the request died after the change committed): the session is live again.
+const revive = (sessionId: string) => RefreshSession.updateOne({ sessionId }, { $set: { status: "active", revokedAt: null, revokeReason: null } });
+const traceRows = async (organizationId: mongoose.Types.ObjectId): Promise<string[]> =>
+  (await SecurityAuditEvent.find({ organizationId, action: { $in: SESSION_TRACE_ACTIONS } }).sort({ createdAt: 1, _id: 1 }).lean())
+    .map((row: any) => `${row.action} ${row.reason} ${String(row.actorUserId)}`);
+const auditView = async (token: string) => {
+  const list = await call(token, "GET", `${AUDIT_LOG}?limit=100`);
+  assert.equal(list.status, 200, list.text);
+  const byAction: Record<string, number> = {};
+  for (const action of SESSION_TRACE_ACTIONS) {
+    const res = await call(token, "GET", `${AUDIT_LOG}?action=${action}&limit=100`);
+    assert.equal(res.status, 200, `${action}: ${res.text}`);
+    byAction[action] = res.body.data.events.length;
+  }
+  const signIn = await call(token, "GET", `${AUDIT_LOG}?category=sign_in&limit=100`);
+  assert.equal(signIn.status, 200, signIn.text);
+  // One export per call of this helper (the limit is 20 per user per 15 minutes; each user here makes at most two).
+  const csv = await call(token, "GET", `${AUDIT_LOG}/export`);
+  assert.equal(csv.status, 200, csv.text.slice(0, 200));
+  return {
+    ids: (list.body.data.events as Array<Record<string, any>>).map((event) => event.id).sort(),
+    actions: (list.body.data.events as Array<Record<string, any>>).map((event) => event.action),
+    signInIds: (signIn.body.data.events as Array<Record<string, any>>).map((event) => event.id).sort(),
+    byAction, text: `${list.text}\n${signIn.text}`, csv: csv.text, csvLines: csv.text.trim().split("\n").length,
+  };
+};
+
+test("after a staff demotion, deactivation and ownership transfer the member's real refresh and real requests are refused as before and leave NO row in the customer organization, its audit list, filters or CSV", async () => {
+  const c = await seedOrganization(`C Traces ${tag}`);
+  const cId = oid(c.organizationId);
+  const route = (role: (typeof ROLES)[number]) => `${BASE}/${c.organizationId}/members/${c.members[role].userId}`;
+  try {
+    // Second devices, signed in before any change.
+    const plannerOther = await secondDevice(c, "planner");
+    const managerOther = await secondDevice(c, "team_manager");
+    const before = await auditView(c.members.owner.accessToken);
+    const rowsBefore = await eventCount(cId);
+    const staffRevocationsBefore = await SecurityAuditEvent.countDocuments({ organizationId: dxg.org, action: STAFF_SESSIONS_REVOKED });
+    assert.deepEqual(await traceRows(cId), []);
+
+    // 1. Demotion: every session of the member ends now, for the staff reason.
+    const admin = c.members.organization_admin;
+    const demoted = await asStaff("PATCH", `${route("organization_admin")}/role`, { role: "planner", version: 1, reason: REASON });
+    assert.deepEqual([demoted.status, demoted.body.data.changed, demoted.body.data.member.roles], [200, true, ["planner"]], demoted.text);
+    assert.equal((await lastStaffEvent()).metadata.sessions, "revocation_requested");
+    assert.deepEqual(await sessionRow(admin.sessionId), ["revoked", STAFF_REVOKE_REASON]);
+    // The member's browser: the refresh is refused, the access token no longer works.
+    await refused(admin.refreshToken, "demoted member's refresh");
+    await refused(admin.refreshToken, "demoted member's refresh, again");
+    assert.equal((await call(admin.accessToken, "GET", MEMBERS_ROUTE)).status, 403);
+    assert.equal(await eventCount(cId), rowsBefore, "demotion");
+
+    // 2. A role change that is not a demotion: the member's next request ends their OTHER sessions.
+    const planner = c.members.planner;
+    const promoted = await asStaff("PATCH", `${route("planner")}/role`, { role: "team_manager", version: 1, reason: REASON });
+    assert.equal(promoted.status, 200, promoted.text);
+    assert.equal((await lastStaffEvent()).metadata.sessions, "next_request_revocation_requested");
+    let row = await membership(cId, planner.userId);
+    assert.deepEqual([row.sessionRevocationPending, row.sessionRevocationStaff], [true, { organizationId: String(dxg.org), actorUserId: String(dxg.staff) }]);
+    assert.notEqual((await call(planner.accessToken, "GET", MEMBERS_ROUTE)).status, 401, "the requesting session is kept");
+    assert.deepEqual([await sessionRow(planner.sessionId), await sessionRow(plannerOther.sessionId)], [["active", null], ["revoked", STAFF_REVOKE_REASON]]);
+    row = await membership(cId, planner.userId);
+    assert.deepEqual([row.sessionRevocationPending, row.sessionRevocationStaff ?? null], [false, null], "the flag and its marker are cleared");
+    await refused(plannerOther.refreshToken, "the other device's refresh");
+    assert.equal(await eventCount(cId), rowsBefore, "role change");
+
+    // 3. Deactivation: every session ends; then the same with the revocation not having run.
+    const viewer = c.members.viewer;
+    const deactivated = await asStaff("POST", `${route("viewer")}/deactivate`, { version: 1, reason: REASON });
+    assert.deepEqual([deactivated.status, deactivated.body.data.member.status], [200, "suspended"], deactivated.text);
+    assert.equal((await lastStaffEvent()).metadata.sessions, "revocation_requested");
+    assert.deepEqual((await membership(cId, viewer.userId)).suspendedByStaff, { organizationId: String(dxg.org), actorUserId: String(dxg.staff) });
+    assert.deepEqual(await sessionRow(viewer.sessionId), ["revoked", STAFF_REVOKE_REASON]);
+    await refused(viewer.refreshToken, "deactivated member's refresh");
+    let inactive = await call(viewer.accessToken, "GET", MEMBERS_ROUTE);
+    assert.deepEqual([inactive.status, inactive.body.code], [401, "MEMBERSHIP_INACTIVE"]);
+    assert.equal(await eventCount(cId), rowsBefore, "deactivation");
+    // The staff revocation never ran: the member's own request ends the session, still without a row.
+    await revive(viewer.sessionId);
+    inactive = await call(viewer.accessToken, "GET", MEMBERS_ROUTE);
+    assert.deepEqual([inactive.status, inactive.body.code], [401, "MEMBERSHIP_INACTIVE"]);
+    assert.deepEqual(await sessionRow(viewer.sessionId), ["revoked", STAFF_REVOKE_REASON]);
+    await refused(viewer.refreshToken, "deactivated member's refresh after their own request");
+    // ... and when the refresh comes first.
+    await revive(viewer.sessionId);
+    const refreshFirst = await refresh(viewer.refreshToken);
+    assert.deepEqual([refreshFirst.status, refreshFirst.body.reason], [401, "membership_inactive"]);
+    assert.deepEqual(await sessionRow(viewer.sessionId), ["revoked", STAFF_REVOKE_REASON]);
+    await refused(viewer.refreshToken, "deactivated member's second refresh");
+    assert.equal(await eventCount(cId), rowsBefore, "deactivation, revocation not run");
+    // Repeating the staff request finds nothing to change and asks for the revocation again.
+    await revive(viewer.sessionId);
+    const retried = await asStaff("POST", `${route("viewer")}/deactivate`, { version: 2, reason: REASON });
+    assert.deepEqual([retried.status, retried.body.data.changed], [200, false], retried.text);
+    assert.deepEqual(await sessionRow(viewer.sessionId), ["revoked", STAFF_REVOKE_REASON]);
+
+    // 4. Ownership transfer: the previous Owner is signed out everywhere; the new Owner's next request ends their other sessions.
+    const oldOwner = c.members.owner;
+    const next = c.members.team_manager;
+    const transferred = await asStaff("POST", `${BASE}/${c.organizationId}/ownership/transfer`, { toUserId: next.userId, version: 1, reason: REASON });
+    assert.equal(transferred.status, 200, transferred.text);
+    assert.deepEqual((await lastStaffEvent()).metadata.sessions, { previousOwner: "revocation_requested", newOwner: "next_request_revocation_requested" });
+    assert.deepEqual(await sessionRow(oldOwner.sessionId), ["revoked", STAFF_REVOKE_REASON]);
+    await refused(oldOwner.refreshToken, "previous Owner's refresh");
+    assert.equal((await call(oldOwner.accessToken, "GET", MEMBERS_ROUTE)).status, 403);
+    const asNewOwner = await call(next.accessToken, "GET", MEMBERS_ROUTE);
+    assert.equal(asNewOwner.status, 200, asNewOwner.text);
+    assert.deepEqual([await sessionRow(next.sessionId), await sessionRow(managerOther.sessionId)], [["active", null], ["revoked", STAFF_REVOKE_REASON]]);
+    await refused(managerOther.refreshToken, "the new Owner's other device");
+    // No marker is in an answer.
+    for (const text of ["sessionRevocationStaff", "suspendedByStaff", STAFF_REVOKE_REASON, "sessionRevocationPending"]) assert.equal(asNewOwner.text.includes(text), false, text);
+
+    // The customer organization: not one new row, of any action.
+    assert.equal(await eventCount(cId), rowsBefore, "the whole sequence");
+    assert.deepEqual(await traceRows(cId), []);
+    assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: cId, actorUserId: { $in: [dxg.staff, dxg.superAdmin] } }), 0);
+    // Its audit list, filters and CSV, read by the new Owner: exactly what the previous Owner saw before.
+    const after = await auditView(next.accessToken);
+    assert.deepEqual(after.ids, before.ids);
+    assert.deepEqual(after.signInIds, before.signInIds);
+    assert.deepEqual(after.byAction, { "auth.refresh.reuse_detected": 0, "auth.sessions.revoked_others": 0, "auth.sessions.revoked_all": 0 });
+    assert.equal(after.csvLines, before.csvLines);
+    for (const action of SESSION_TRACE_ACTIONS) assert.equal(after.actions.includes(action), false, action);
+    for (const label of SESSION_TRACE_LABELS) assert.equal(after.csv.includes(label), false, `CSV: ${label}`);
+    for (const hidden of [STAFF_REVOKE_REASON, "platform.", "organization_member.", String(dxg.staff), REASON]) {
+      assert.equal(after.text.includes(hidden), false, `list: ${hidden}`);
+      assert.equal(after.csv.includes(hidden), false, `CSV: ${hidden}`);
+    }
+    const filters = await call(next.accessToken, "GET", `${AUDIT_LOG}/filters`);
+    assert.equal(filters.status, 200);
+    for (const hidden of ["platform", "organization_member.", STAFF_REVOKE_REASON]) assert.equal(filters.text.includes(hidden), false, hidden);
+
+    // The staff organization holds the record of what the members' requests revoked.
+    const revocations = (await SecurityAuditEvent.find({ organizationId: dxg.org, action: STAFF_SESSIONS_REVOKED, "metadata.organizationId": c.organizationId }).sort({ createdAt: 1, _id: 1 }).lean()) as Array<Record<string, any>>;
+    assert.deepEqual(revocations.map((event) => [String(event.actorUserId), event.targetId, event.decision, event.reason, event.metadata.revokedCount, event.metadata.keptSession]), [
+      [String(dxg.staff), planner.userId, "revoked", "membership_role_changed", 1, true],
+      [String(dxg.staff), viewer.userId, "revoked", "membership_inactive", 1, false],
+      [String(dxg.staff), next.userId, "revoked", "membership_role_changed", 1, true],
+    ]);
+    assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: dxg.org, action: STAFF_SESSIONS_REVOKED }), staffRevocationsBefore + 3);
+    assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: { $ne: dxg.org }, action: STAFF_SESSIONS_REVOKED }), 0);
+  } finally {
+    await SecurityAuditEvent.collection.deleteMany({ organizationId: cId });
+  }
+});
+
+test("control: the same changes made by the organization's Owner through the customer routes still write the usual rows, and nothing on the staff side", async () => {
+  const d = await seedOrganization(`D Control ${tag}`);
+  const dId = oid(d.organizationId);
+  const owner = d.members.owner;
+  try {
+    const plannerOther = await secondDevice(d, "planner");
+    const managerOther = await secondDevice(d, "team_manager");
+    const staffRowsBefore = await eventCount(dxg.org);
+    assert.deepEqual(await traceRows(dId), []);
+
+    // 1. Demotion by the Owner.
+    const admin = d.members.organization_admin;
+    const demoted = await call(owner.accessToken, "PATCH", `${MEMBERS_ROUTE}/${admin.userId}/role`, { role: "planner", version: 1 });
+    assert.equal(demoted.status, 200, demoted.text);
+    assert.deepEqual(await sessionRow(admin.sessionId), ["revoked", "membership_role_demoted"]);
+    await refused(admin.refreshToken, "demoted member's refresh");
+
+    // 2. A role change that is not a demotion.
+    const planner = d.members.planner;
+    const promoted = await call(owner.accessToken, "PATCH", `${MEMBERS_ROUTE}/${planner.userId}/role`, { role: "team_manager", version: 1 });
+    assert.equal(promoted.status, 200, promoted.text);
+    let row = await membership(dId, planner.userId);
+    assert.deepEqual([row.sessionRevocationPending, row.sessionRevocationStaff ?? null], [true, null]);
+    assert.notEqual((await call(planner.accessToken, "GET", MEMBERS_ROUTE)).status, 401);
+    assert.deepEqual([await sessionRow(planner.sessionId), await sessionRow(plannerOther.sessionId)], [["active", null], ["revoked", "membership_role_changed"]]);
+    await refused(plannerOther.refreshToken, "the other device's refresh");
+
+    // 3. Deactivation, then the member's request with the revocation not having run.
+    const viewer = d.members.viewer;
+    const deactivated = await call(owner.accessToken, "POST", `${MEMBERS_ROUTE}/${viewer.userId}/deactivate`, { version: 1 });
+    assert.equal(deactivated.status, 200, deactivated.text);
+    assert.equal((await membership(dId, viewer.userId)).suspendedByStaff ?? null, null);
+    assert.deepEqual(await sessionRow(viewer.sessionId), ["revoked", "membership_deactivated"]);
+    await revive(viewer.sessionId);
+    const inactive = await call(viewer.accessToken, "GET", MEMBERS_ROUTE);
+    assert.deepEqual([inactive.status, inactive.body.code], [401, "MEMBERSHIP_INACTIVE"]);
+    assert.deepEqual(await sessionRow(viewer.sessionId), ["revoked", "membership_inactive"]);
+    await refused(viewer.refreshToken, "deactivated member's refresh");
+
+    // 4. Ownership transfer by the Owner: the new Owner's next request ends their other sessions.
+    const next = d.members.team_manager;
+    const transferred = await call(owner.accessToken, "POST", "/api/organization/ownership/transfer", { toUserId: next.userId, version: 1 });
+    assert.equal(transferred.status, 200, transferred.text);
+    assert.equal((await call(next.accessToken, "GET", MEMBERS_ROUTE)).status, 200);
+    assert.deepEqual([await sessionRow(next.sessionId), await sessionRow(managerOther.sessionId)], [["active", null], ["revoked", "membership_role_changed"]]);
+    await refused(managerOther.refreshToken, "the new Owner's other device");
+
+    // The usual rows, in the organization, in order.
+    assert.deepEqual(await traceRows(dId), [
+      `auth.sessions.revoked_others membership_role_demoted ${owner.userId}`,
+      `auth.refresh.reuse_detected consumed_or_revoked_token_presented ${admin.userId}`,
+      `auth.sessions.revoked_others membership_role_changed ${planner.userId}`,
+      `auth.refresh.reuse_detected consumed_or_revoked_token_presented ${planner.userId}`,
+      `auth.sessions.revoked_others membership_deactivated ${owner.userId}`,
+      `auth.sessions.revoked_all membership_inactive ${viewer.userId}`,
+      `auth.refresh.reuse_detected consumed_or_revoked_token_presented ${viewer.userId}`,
+      `auth.sessions.revoked_others membership_role_changed ${next.userId}`,
+      `auth.refresh.reuse_detected consumed_or_revoked_token_presented ${next.userId}`,
+    ]);
+    for (const action of ["organization.member.role_changed", "organization.member.deactivated", "organization.ownership.transferred"]) {
+      assert.ok(await SecurityAuditEvent.countDocuments({ organizationId: dId, action }) >= 1, action);
+    }
+    // And the organization's audit list, filters and CSV show them (read by the previous Owner, now an Admin, whose session was kept).
+    const view = await auditView(owner.accessToken);
+    assert.deepEqual(view.byAction, { "auth.refresh.reuse_detected": 4, "auth.sessions.revoked_others": 4, "auth.sessions.revoked_all": 1 });
+    for (const action of SESSION_TRACE_ACTIONS) assert.ok(view.actions.includes(action), action);
+    for (const label of SESSION_TRACE_LABELS) assert.ok(view.csv.includes(label), `CSV: ${label}`);
+    // No session ended for the staff reason, no staff marker, and nothing written on the staff side.
+    assert.equal(await RefreshSession.countDocuments({ organizationId: dId, revokeReason: STAFF_REVOKE_REASON }), 0);
+    assert.equal(await OrganizationMembership.countDocuments({ organizationId: dId, $or: [{ sessionRevocationStaff: { $ne: null } }, { suspendedByStaff: { $ne: null } }] }), 0);
+    assert.equal(await eventCount(dxg.org), staffRowsBefore);
+  } finally {
+    await SecurityAuditEvent.collection.deleteMany({ organizationId: dId });
+  }
+});
+
 test("nothing changed in B", async () => {
   assert.equal(await snapshotB(), bBefore);
   for (const role of ROLES) {
