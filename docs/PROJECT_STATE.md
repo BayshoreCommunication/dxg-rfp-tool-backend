@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-11-17 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
+**Last updated:** 2026-11-18 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -699,11 +699,27 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
     customer audit log (list, filter options, CSV) no longer returns any
     support-access event, `organization.plan_changed`, or either legacy-customer
     placement event; stored rows are kept.
+  - Done in the backend (member management; owner's scope decision 2026-11-18,
+    `DECISIONS.md`; on `main` when its PR merges, **not released, awaiting
+    security review**): staff change a member's role, deactivate, reactivate,
+    reassign a member's proposals and transfer ownership under
+    `/api/v1/admin/organizations/:organizationId/` (`API.md`, "Staff member
+    management"). The customer's own rules apply; the Owner is transfer-only;
+    every write needs a reason; RFPilot's own organization and holding tenants
+    are refused. Every request leaves one event in the staff organization
+    (`platform.organization_member.*`), written in the same transaction as the
+    change, and nothing in the customer's audit trail. No email or notification
+    is sent (the customer flow sends none). Open for the owner: one indirect
+    customer-side trace remains (a member's own "other sessions signed out"
+    entry on their next request after a staff role change), and whether a
+    member should be told when staff change their role or deactivate them.
+    The admin app has no screen for any of this yet.
   - Follows, not built: (a) the admin app's organization browser on the new
     routes (members, teams, templates, vendor list, proposals), replacing the
     Support access screens, whose wording ("granted", "time left", "recorded in
-    this organization's audit log") is now wrong; (b) staff account management
-    (members and roles, teams, block and reactivate; plan and placement exist),
+    this organization's audit log") is now wrong; (b) the rest of staff account management
+    (teams, invitations, two-factor reset, blocking an organization or an
+    account; members and roles are built, see above; plan and placement exist),
     recorded on the staff side only, which must not write a customer-visible
     action with a staff actor; (c) removal of the customer grant endpoints
     (`/api/v1/organization/support-grants*`), the `SupportAccessGrant` model and
