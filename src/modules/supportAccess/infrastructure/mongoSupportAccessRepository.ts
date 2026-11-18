@@ -4,6 +4,7 @@ import Proposal from "../../../../modal/proposalsModel";
 import SupportAccessGrant from "../../../../modal/supportAccessGrantModel";
 import User from "../../../../modal/userModel";
 import VendorResponse from "../../../../modal/vendorResponseModel";
+import { redactPrivateUploadUrls } from "../../proposals/infrastructure/mongo/mongoPublicProposalAccessRepository";
 import { mongoSupportDeskRepository } from "../../supportDesk/infrastructure/mongo/mongoSupportDeskRepository";
 import {
   type GrantedRfpListItem,
@@ -135,6 +136,16 @@ export const STAFF_PROPOSAL_FIELDS = [
   "contentCreative", "videoRecordingStep", "venue", "uploads", "budget", "contact", "createdAt", "updatedAt",
 ] as const;
 
+/* The allowlisted fields of one stored proposal, as staff are given them. `uploads` holds the
+   stored URL (or object key) of each private file; staff get the filename only, as the public
+   proposal view does, so a staff answer never carries a link to a customer's file. */
+export const staffProposalFields = (doc: Record<string, unknown>): Record<string, unknown> => {
+  const rfp: Record<string, unknown> = {};
+  for (const field of STAFF_PROPOSAL_FIELDS) if (doc[field] !== undefined) rfp[field] = doc[field];
+  if (rfp.uploads !== undefined) rfp.uploads = redactPrivateUploadUrls(rfp.uploads);
+  return rfp;
+};
+
 const owners = async (organizationId: string, userIds: readonly string[]) => {
   if (userIds.length === 0) return new Map<string, GrantedRfpListItem["owner"]>();
   const docs = await User.find({ _id: { $in: [...new Set(userIds)].map(oid) }, organizationId: oid(organizationId) }).select("name email").lean();
@@ -181,8 +192,7 @@ export const mongoGrantedRfpReader: GrantedRfpReader = {
     const doc = await Proposal.findOne({ _id: oid(proposalId), organizationId: oid(organizationId) })
       .select(STAFF_PROPOSAL_FIELDS.join(" ")).lean<Record<string, unknown>>();
     if (!doc) return null;
-    const rfp: Record<string, unknown> = {};
-    for (const field of STAFF_PROPOSAL_FIELDS) if (doc[field] !== undefined) rfp[field] = doc[field];
+    const rfp = staffProposalFields(doc);
     const ownerId = doc.userId ? String(doc.userId) : null;
     return {
       rfp: { ...rfp, id: String(doc._id), userId: ownerId, teamId: doc.teamId ? String(doc.teamId) : null },

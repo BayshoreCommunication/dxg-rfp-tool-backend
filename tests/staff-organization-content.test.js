@@ -398,6 +398,50 @@ test("the proposal detail is an allowlist of proposal fields, and vendor respons
   assert.doesNotMatch(source, /publicAccessGrant|PublicAccessGrant/);
 });
 
+test("the proposal detail gives staff the filename of each private upload, never its stored URL or object key", () => {
+  const { staffProposalFields } = require("../src/modules/supportAccess/infrastructure/mongoSupportAccessRepository");
+  const stored = {
+    brandGuideFiles: ["https://dxg-files.s3.amazonaws.com/DXG/proposal-files-private/user-1/1731800000000-0-brand_guide.pdf"],
+    eventLogoFiles: ["https://nyc3.digitaloceanspaces.com/rfp/proposal-files-private/user-1/1731800000001-0-logo.png", "https://cdn.example.test/DXG/proposal-files-private/user-1/1731800000002-1-logo%20dark.png"],
+    referenceFiles: ["s3://dxg-files/DXG/proposal-files-private/user-1/1731800000003-0-run_of_show.xlsx", "legacy-reference.pdf"],
+    venueDocs: ["DXG/proposal-files-private/user-1/1731800000004-0-floor_plan.pdf"],
+    ndaDocumentFiles: ["https://dxg-files.s3.us-east-1.amazonaws.com/DXG/proposal-files-private/user-1/1731800000005-0-nda.docx"],
+    scenicInspirationFiles: ["http://files.example.test/proposal-files-private/user-1/1731800000006-0-mood_board.pdf"],
+    venueCoiFiles: ["/uploads/proposal-files-private/user-1/1731800000007-0-venue_coi.pdf"],
+    ndaRequired: "YES",
+    notes: "See the brand guide",
+  };
+  const doc = { _id: PROPOSAL, organizationId: ACME, __v: 2, proposalSettings: { internal: true }, event: { eventName: "Spring summit" }, uploads: stored };
+  const view = staffProposalFields(doc);
+  const PRIVATE = ["brandGuideFiles", "eventLogoFiles", "referenceFiles", "venueDocs", "ndaDocumentFiles", "scenicInspirationFiles", "venueCoiFiles"];
+  assert.deepEqual(PRIVATE.map((field) => view.uploads[field]), [
+    ["brand_guide.pdf"], ["logo.png", "logo dark.png"], ["run_of_show.xlsx", "legacy-reference.pdf"], ["floor_plan.pdf"],
+    ["nda.docx"], ["mood_board.pdf"], ["venue_coi.pdf"],
+  ]);
+  for (const field of PRIVATE) {
+    for (const value of view.uploads[field]) {
+      assert.equal(typeof value, "string", field);
+      for (const forbidden of ["http", "s3", "/"]) assert.equal(value.includes(forbidden), false, `${field}: ${value} contains ${forbidden}`);
+    }
+  }
+  const json = JSON.stringify(view);
+  for (const forbidden of ["proposal-files-private", "amazonaws", "digitaloceanspaces", "user-1", "://"]) assert.equal(json.includes(forbidden), false, forbidden);
+  // The rest of the section, and of the proposal, is as stored; the stored document is not changed.
+  assert.equal(view.uploads.ndaRequired, "YES");
+  assert.equal(view.uploads.notes, "See the brand guide");
+  assert.deepEqual(view.event, { eventName: "Spring summit" });
+  assert.deepEqual(Object.keys(view).sort(), ["event", "uploads"]);
+  assert.equal(stored.brandGuideFiles[0].startsWith("https://"), true);
+  // A proposal with no uploads section, or an odd one, does not break the read.
+  assert.deepEqual(staffProposalFields({ event: {} }), { event: {} });
+  assert.deepEqual(staffProposalFields({ uploads: null }), { uploads: null });
+
+  // The Mongo reader builds the detail through this function and nothing else.
+  const source = fs.readFileSync(path.join(__dirname, "../src/modules/supportAccess/infrastructure/mongoSupportAccessRepository.ts"), "utf8");
+  assert.match(source, /const rfp = staffProposalFields\(doc\);/);
+  assert.match(source, /if \(rfp\.uploads !== undefined\) rfp\.uploads = redactPrivateUploadUrls\(rfp\.uploads\);/);
+});
+
 // ── HTTP ─────────────────────────────────────────────────────────────────────────────────────
 
 const fakeResponse = () => {

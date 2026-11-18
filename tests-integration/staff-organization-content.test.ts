@@ -41,6 +41,19 @@ const READ = "platform.organization_content.read";
 const NOW = Date.now();
 const DAY = 24 * 60 * 60 * 1000;
 
+// The seven private upload fields, as stored: a URL or object key per file. Staff get filenames only.
+const PRIVATE_UPLOAD_FIELDS = ["brandGuideFiles", "eventLogoFiles", "referenceFiles", "venueDocs", "ndaDocumentFiles", "scenicInspirationFiles", "venueCoiFiles"] as const;
+const STORED_UPLOADS: Record<string, unknown> = {
+  brandGuideFiles: [`https://dxg-files.s3.amazonaws.com/DXG/proposal-files-private/owner-${tag}/1731800000000-0-brand_guide.pdf`],
+  eventLogoFiles: [`https://nyc3.digitaloceanspaces.com/rfp/proposal-files-private/owner-${tag}/1731800000001-0-logo.png`],
+  referenceFiles: [`s3://dxg-files/DXG/proposal-files-private/owner-${tag}/1731800000002-0-run_of_show.xlsx`],
+  venueDocs: [`DXG/proposal-files-private/owner-${tag}/1731800000003-0-floor_plan.pdf`],
+  ndaDocumentFiles: [`https://dxg-files.s3.us-east-1.amazonaws.com/DXG/proposal-files-private/owner-${tag}/1731800000004-0-nda.docx`],
+  scenicInspirationFiles: [`http://files.example.test/proposal-files-private/owner-${tag}/1731800000005-0-mood_board.pdf`],
+  venueCoiFiles: [`/uploads/proposal-files-private/owner-${tag}/1731800000006-0-venue_coi.pdf`],
+  ndaRequired: "YES",
+};
+
 let server: http.Server;
 let baseUrl: string;
 let a: Fixture;
@@ -113,6 +126,7 @@ before(async () => {
 
   await Proposal.collection.insertMany([
     { _id: ids.aProposal, organizationId: aId, userId: oid(a.members.planner.userId), status: "unsubmitted", isDraft: true, isArchived: false, event: { eventName: `A Gala ${tag}` },
+      uploads: STORED_UPLOADS,
       proposalSettings: { internal: `internal-setting-${tag}` }, candidateApplicationIds: [`candidate-${tag}`], aiRawResponse: { provider: `stray-ai-payload-${tag}` }, createdAt: at, updatedAt: new Date(NOW - 1000) },
     { _id: ids.aProposalTwo, organizationId: aId, userId: oid(a.members.team_manager.userId), status: "unsubmitted", isDraft: true, isArchived: false, event: { eventName: `A Summit ${tag}` }, createdAt: at, updatedAt: new Date(NOW - 2000) },
     { _id: ids.bProposal, organizationId: bId, userId: oid(b.members.planner.userId), status: "unsubmitted", isDraft: true, isArchived: false, event: { eventName: `B Retreat ${tag}` }, createdAt: at, updatedAt: at },
@@ -218,6 +232,27 @@ test("staff reading A see A's content for every resource, with no grant, and not
   assert.equal(answers.proposal.rfp.id, String(ids.aProposal));
   assert.equal(answers.proposal.rfp.event.eventName, `A Gala ${tag}`);
   assert.equal(answers.proposal.rfp.organizationId, undefined);
+  // Uploads: the filename of each private file, never its stored URL or object key.
+  assert.deepEqual(PRIVATE_UPLOAD_FIELDS.map((field) => answers.proposal.rfp.uploads[field]), [
+    ["brand_guide.pdf"], ["logo.png"], ["run_of_show.xlsx"], ["floor_plan.pdf"], ["nda.docx"], ["mood_board.pdf"], ["venue_coi.pdf"],
+  ]);
+  for (const field of PRIVATE_UPLOAD_FIELDS) {
+    for (const value of answers.proposal.rfp.uploads[field] as string[]) {
+      for (const forbidden of ["http", "s3", "/"]) assert.equal(value.includes(forbidden), false, `${field}: ${value} contains ${forbidden}`);
+    }
+  }
+  assert.equal(answers.proposal.rfp.uploads.ndaRequired, "YES");
+  for (const forbidden of ["proposal-files-private", "amazonaws", "digitaloceanspaces", `owner-${tag}`]) {
+    assert.equal(JSON.stringify(answers.proposal).includes(forbidden), false, forbidden);
+  }
+  // The stored document is unchanged: redacted on the way out, not in the database.
+  const kept = await Proposal.collection.findOne({ _id: ids.aProposal });
+  assert.deepEqual(kept!.uploads.brandGuideFiles, STORED_UPLOADS.brandGuideFiles);
+  // The older support-access proposal route reads through the same reader.
+  const older = await call(staffToken, "GET", `/api/v1/admin/support-access/organizations/${a.organizationId}/rfps/${ids.aProposal}`);
+  assert.equal(older.status, 200, older.text);
+  assert.deepEqual(PRIVATE_UPLOAD_FIELDS.map((field) => older.body.data.rfp.uploads[field]), PRIVATE_UPLOAD_FIELDS.map((field) => answers.proposal.rfp.uploads[field]));
+  assert.equal(older.text.includes("proposal-files-private"), false);
   assert.deepEqual(answers.proposal.owner, { id: a.members.planner.userId, name: "planner person", email: a.members.planner.email });
   assert.deepEqual(answers.vendor_responses.vendorResponses.map((row: any) => [row.id, row.vendorName, row.documentCount]), [[String(ids.aResponse), `A Stage Audio ${tag}`, 1]]);
   const search = await call(staffToken, "GET", `${BASE}/${a.organizationId}/proposals?search=${encodeURIComponent("summit")}`);
