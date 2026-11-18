@@ -717,10 +717,13 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
   - Follows, not built: (a) the admin app's organization browser on the new
     routes (members, teams, templates, vendor list, proposals), replacing the
     Support access screens, whose wording ("granted", "time left", "recorded in
-    this organization's audit log") is now wrong; (b) the rest of staff account management
-    (teams, invitations, two-factor reset, blocking an organization or an
-    account; members and roles are built, see above; plan and placement exist),
-    recorded on the staff side only, which must not write a customer-visible
+    this organization's audit log") is now wrong; (b) staff team management (create, rename,
+    archive, team members, team managers, a member's teams), in scope by the
+    owner's decision and built in its own change after member management
+    merges; blocking a whole organization is a later, separate change;
+    invitations, two-factor reset and blocking an account are excluded
+    (members and roles are built, see above; plan and placement exist). All of
+    it is recorded on the staff side only and must not write a customer-visible
     action with a staff actor; (c) removal of the customer grant endpoints
     (`/api/v1/organization/support-grants*`), the `SupportAccessGrant` model and
     `supportAccess.active` on the organization account detail, once the dashboard

@@ -82,7 +82,7 @@ const setup = (options = {}) => {
       return result;
     },
     async reactivate(input) { calls.push(["reactivate", input]); return commit(get(input.organizationId, input.userId), input.expectedVersion, { status: "active" }, input.audit); },
-    async bumpVersion() { throw new Error("teams are not managed by staff"); },
+    async bumpVersion() { throw new Error("this ticket's routes do not change a member's teams"); },
     async activeOwner(organizationId) { calls.push(["activeOwner", organizationId]); const r = rows.find((m) => m.organizationId === organizationId && m.status === "active" && m.roles.includes("owner")); return r ? record(r) : null; },
     async transferOwnership(input) {
       calls.push(["transferOwnership", input]);
@@ -1018,7 +1018,8 @@ test("routes: every route sits behind authenticate, the staff role guard and a p
   // A limit of its own, per staff account, stricter than the 300 reads and the 120 plan writes.
   assert.match(source, /name: "organization-member-write",\s+limit: 60,\s+windowMs: 15 \* 60_000,\s+identity: \(req: Request\) => \(req as AuthRequest\)\.user\?\.userId/);
   assert.match(source, /const staff = \[authenticate, authorize\("admin", "super_admin", "superadmin"\)\];\nconst write = \[\.\.\.staff, staffMemberWrites\];/);
-  // Members and ownership only: no route on a proposal's content, templates, vendors, teams or invitations, and no delete.
+  // This file holds member and ownership routes only: no route on a proposal's content, templates, vendors or
+  // invitations, and no delete. (Staff team management follows in its own change; its routes get their own tests.)
   const lines = source.split("\n").filter((line) => /^router\./.test(line));
   assert.equal(lines.length, 6);
   for (const line of lines) {
