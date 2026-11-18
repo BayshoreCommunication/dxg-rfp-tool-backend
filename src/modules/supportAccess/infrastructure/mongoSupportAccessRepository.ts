@@ -152,8 +152,15 @@ export const mongoSupportActivityLog: SupportActivityLog = {
   },
 };
 
-// Internal bookkeeping a reader never needs (the same fields the admin RFP view hides).
-const HIDDEN_FIELDS = ["__v", "organizationId", "candidateApplicationIds", "proposalSettings"];
+/* The proposal fields a staff reader is given: the content a planner wrote, its state and its
+   dates. An allowlist, so a field added to the model later (or a stray one on an old document)
+   is not returned until it is listed here. Not listed: `organizationId`, `__v`,
+   `candidateApplicationIds` and `proposalSettings` (internal bookkeeping, as before). */
+export const STAFF_PROPOSAL_FIELDS = [
+  "userId", "teamId", "status", "isDraft", "isActive", "isFavorite", "isAccepted", "isOpen", "isArchived", "archivedAt",
+  "isCopy", "viewsCount", "version", "lifecycle", "event", "venueSchedule", "roomByRoom", "production", "hybridVirtual",
+  "contentCreative", "videoRecordingStep", "venue", "uploads", "budget", "contact", "createdAt", "updatedAt",
+] as const;
 
 const owners = async (organizationId: string, userIds: readonly string[]) => {
   if (userIds.length === 0) return new Map<string, GrantedRfpListItem["owner"]>();
@@ -198,13 +205,14 @@ export const mongoGrantedRfpReader: GrantedRfpReader = {
   },
 
   async find(organizationId, proposalId) {
-    const doc = await Proposal.findOne({ _id: oid(proposalId), organizationId: oid(organizationId) }).lean<Record<string, unknown>>();
+    const doc = await Proposal.findOne({ _id: oid(proposalId), organizationId: oid(organizationId) })
+      .select(STAFF_PROPOSAL_FIELDS.join(" ")).lean<Record<string, unknown>>();
     if (!doc) return null;
-    const { _id, ...rest } = doc;
-    for (const field of HIDDEN_FIELDS) delete rest[field];
+    const rfp: Record<string, unknown> = {};
+    for (const field of STAFF_PROPOSAL_FIELDS) if (doc[field] !== undefined) rfp[field] = doc[field];
     const ownerId = doc.userId ? String(doc.userId) : null;
     return {
-      rfp: { ...rest, id: String(_id), userId: ownerId },
+      rfp: { ...rfp, id: String(doc._id), userId: ownerId, teamId: doc.teamId ? String(doc.teamId) : null },
       owner: ownerId ? (await owners(organizationId, [ownerId])).get(ownerId) ?? null : null,
     };
   },
