@@ -1,6 +1,11 @@
 // ORG-407: the organization audit log an Owner or Admin reads (PRD P0-10).
 // The view is an allowlist: only the actions catalogued here are shown, so an event written for
 // another purpose (token rotation, staff bookkeeping) never appears because someone forgot to hide it.
+//
+// AUDIT_CATALOG is the CUSTOMER-VISIBLE catalog. Owner decision, 2026-11-17 (docs/DECISIONS.md):
+// what RFPilot staff do is recorded on the RFPilot side only and is not shown to customers, so no
+// staff-attributed action and nothing about support access is in it. STAFF_ONLY_ACTIONS names the
+// actions that are (or were) stored in customer organizations and are never returned.
 
 export class AuditLogError extends Error {
   constructor(readonly code: string, message: string, readonly status: number) {
@@ -18,15 +23,13 @@ export const AUDIT_CATEGORIES = [
   { key: "members", label: "Members and roles" },
   { key: "teams", label: "Teams" },
   { key: "sharing", label: "Proposal sharing" },
-  { key: "support_access", label: "RFPilot Support access" },
   { key: "settings", label: "Organization settings" },
   { key: "vendor_list", label: "Vendor list" },
 ] as const;
 export type AuditCategory = (typeof AUDIT_CATEGORIES)[number]["key"];
 
-type CatalogEntry = { category: AuditCategory; label: string; staffActor?: true };
+type CatalogEntry = { category: AuditCategory; label: string };
 
-// `staffActor` marks events whose actorUserId is an `admins` id (RFPilot Support), not a member.
 export const AUDIT_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   "auth.session.created": { category: "sign_in", label: "Signed in" },
   "auth.login.failed": { category: "sign_in", label: "Sign-in failed" },
@@ -58,8 +61,6 @@ export const AUDIT_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   "organization.member.sso_joined": { category: "members", label: "Member joined through company sign-in" },
   "organization.ownership.transferred": { category: "members", label: "Ownership transferred" },
   "proposal.owner.reassigned": { category: "members", label: "Proposal owner reassigned" },
-  "organization.legacy_customer.placed": { category: "members", label: "Member placed by RFPilot Support", staffActor: true },
-  "organization.legacy_customer.placement_rolled_back": { category: "members", label: "Member placement undone by RFPilot Support", staffActor: true },
 
   "team.created": { category: "teams", label: "Team created" },
   "team.renamed": { category: "teams", label: "Team renamed" },
@@ -71,14 +72,7 @@ export const AUDIT_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   "proposal.share_granted": { category: "sharing", label: "Proposal shared" },
   "proposal.share_revoked": { category: "sharing", label: "Proposal share removed" },
 
-  "support_access.granted": { category: "support_access", label: "Support access granted" },
-  "support_access.revoked": { category: "support_access", label: "Support access revoked" },
-  "support_access.used": { category: "support_access", label: "Support access used", staffActor: true },
-  "support_access.denied": { category: "support_access", label: "Support access refused", staffActor: true },
-
   "organization.settings.updated": { category: "settings", label: "Organization settings changed" },
-  // ORG-603: RFPilot staff change an organization's plan in the admin app.
-  "organization.plan_changed": { category: "settings", label: "Plan changed by RFPilot Support", staffActor: true },
   "organization.domain.added": { category: "settings", label: "Domain added" },
   "organization.domain.verified": { category: "settings", label: "Domain verified" },
   "organization.domain.unverified": { category: "settings", label: "Domain no longer verified" },
@@ -97,16 +91,38 @@ export const AUDIT_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   // Deliberately absent: proposal_template.* (ORG-604). Owner decision, 2026-11-16: customers do
   // not see template actions in their audit log. The events are still written, for staff and
   // forensics. Do not add them here without a new decision (docs/DECISIONS.md).
+  //
+  // Deliberately absent: everything in STAFF_ONLY_ACTIONS below (owner decision, 2026-11-17).
 };
 
-// Own entries only: "constructor" or "__proto__" as an action name is not in the catalog.
-export const catalogEntry = (action: string): CatalogEntry | undefined =>
-  Object.prototype.hasOwnProperty.call(AUDIT_CATALOG, action) ? AUDIT_CATALOG[action] : undefined;
+/* Stored, never shown to a customer (owner decision, 2026-11-17). Rows with these actions exist
+   in customer organizations: the support-grant events (ORG-404; the grant endpoints still write
+   `granted` and `revoked` until they are removed, and `used` / `denied` rows written before the
+   decision stay in the database), legacy-customer placement (ORG-110) and plan changes (ORG-603).
+   They are RFPilot's record. The customer list, filter options and CSV never return them, by
+   action, category or actor filter. Adding one of these to AUDIT_CATALOG needs a new decision;
+   tests/audit-log.test.js fails if one is. */
+export const STAFF_ONLY_ACTIONS: readonly string[] = [
+  "support_access.granted",
+  "support_access.revoked",
+  "support_access.used",
+  "support_access.denied",
+  "organization.legacy_customer.placed",
+  "organization.legacy_customer.placement_rolled_back",
+  "organization.plan_changed",
+];
+// Whole families that are staff-side by name, whatever a later writer adds to them.
+const STAFF_ONLY_PREFIXES = ["support_access.", "platform.", "admin."];
+export const isStaffOnlyAction = (action: string): boolean =>
+  STAFF_ONLY_ACTIONS.includes(action) || STAFF_ONLY_PREFIXES.some((prefix) => action.startsWith(prefix));
 
-export const VISIBLE_ACTIONS: readonly string[] = Object.keys(AUDIT_CATALOG);
-export const STAFF_ACTIONS: readonly string[] = VISIBLE_ACTIONS.filter((action) => AUDIT_CATALOG[action].staffActor);
-export const MEMBER_ACTIONS: readonly string[] = VISIBLE_ACTIONS.filter((action) => !AUDIT_CATALOG[action].staffActor);
-export const SUPPORT_ACTOR_LABEL = "RFPilot Support";
+// Own entries only: "constructor" or "__proto__" as an action name is not in the catalog. A
+// staff-only action is refused here as well, so the read path cannot return one even if an entry
+// for it were added to the catalog by mistake.
+export const catalogEntry = (action: string): CatalogEntry | undefined =>
+  Object.prototype.hasOwnProperty.call(AUDIT_CATALOG, action) && !isStaffOnlyAction(action) ? AUDIT_CATALOG[action] : undefined;
+
+export const VISIBLE_ACTIONS: readonly string[] = Object.keys(AUDIT_CATALOG).filter((action) => !isStaffOnlyAction(action));
 
 // Metadata keys a customer may read. Everything else a writer stored stays internal.
 const DETAIL_KEYS = new Set([
@@ -167,7 +183,6 @@ export interface AuditEventReader {
 
 export type AuditEventActor =
   | { kind: "member"; id: string; name: string; email: string }
-  | { kind: "support"; id: string | null; name: typeof SUPPORT_ACTOR_LABEL }
   | { kind: "unknown"; id: string; name: "Unknown user" }
   | { kind: "system"; id: null; name: "System" };
 
