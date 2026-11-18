@@ -82,7 +82,17 @@ export const createStaffCausedSessionRevocation = (dependencies: Dependencies) =
      placement) and a member not deactivated by staff: the customer flow. Deactivated by staff:
      every session revoked for the staff reason, recorded in the staff organization. */
   const revokeInactiveMembershipSessions = async (input: InactiveRequest) => {
-    const cause = input.reason ? null : await dependencies.suspensionCause(input);
+    if (input.reason) return dependencies.customer.revokeInactiveMembership(input);
+    let cause: StaffCause | null;
+    try {
+      cause = await dependencies.suspensionCause(input);
+    } catch (failure) {
+      // A failed read must not skip the revocation. Who deactivated the member is unknown, so the
+      // sessions end for the staff reason and nothing is recorded: nothing can reach the member's
+      // organization, and an unrecorded revocation is the lesser harm.
+      console.error("Staff member management error: the cause of a deactivation could not be read:", failure instanceof Error ? failure.message : failure);
+      return dependencies.revokeSessions({ userId: input.userId, organizationId: input.organizationId });
+    }
     if (!cause) return dependencies.customer.revokeInactiveMembership(input);
     const revokedCount = await dependencies.revokeSessions({ userId: input.userId, organizationId: input.organizationId });
     await record(cause, { ...input, reason: "membership_inactive", revokedCount, keptSession: false });

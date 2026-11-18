@@ -107,7 +107,16 @@ export const createSessionManager = (dependencies: Dependencies) => {
     if (!stored) return { kind: "invalid" };
     const key = input.rotationKey && /^[a-f0-9]{64}$/.test(input.rotationKey) && dependencies.deriveRefreshToken ? input.rotationKey : undefined;
     const keyHash = key ? hashOpaqueToken(key) : null;
-    const inactiveReason = async (member: StoredRefreshToken) => (await dependencies.inactiveMembershipReason?.(member)) ?? "membership_inactive";
+    // The reason is read before the revocation, and a failed read must not skip the revocation:
+    // the family is then ended for the staff reason, so nothing can reach the member's organization.
+    const inactiveReason = async (member: StoredRefreshToken) => {
+      try {
+        return (await dependencies.inactiveMembershipReason?.(member)) ?? "membership_inactive";
+      } catch (failure) {
+        console.error("Session revocation error: the cause of an inactive membership could not be read:", failure instanceof Error ? failure.message : failure);
+        return STAFF_MEMBERSHIP_REVOKE_REASON;
+      }
+    };
     const rejectReuse = async (current: StoredRefreshToken | null = stored) => {
       await dependencies.sessions.revokeFamily({ familyId: stored.familyId, reason: "refresh_reuse", now: issuedAt });
       // Staff ended this session and its own last token came back: refused the same, not recorded here.

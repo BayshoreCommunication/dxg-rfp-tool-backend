@@ -419,3 +419,119 @@ test("the access path asks the composition, which sends a membership with no sta
     assert.doesNotMatch(read(file), /from "[^"]*staffAccess/, file);
   }
 });
+
+// ── A failed marker read never skips a revocation ────────────────────────────────────────────
+
+const captureErrors = async (work) => {
+  const logged = [];
+  const original = console.error;
+  console.error = (...args) => logged.push(args.join(" "));
+  try { return { value: await work(), logged }; } finally { console.error = original; }
+};
+const readDown = async () => { throw new Error("membership read down"); };
+
+test("refresh, the reason read throws: the family is still revoked, the answer is membership_inactive as before, and nothing is written in the member's organization, then or on the next refresh", async () => {
+  let inactive = false;
+  const store = sessionStore({ inactive: () => inactive, inactiveMembershipReason: readDown });
+  const session = await begin(store);
+  inactive = true;
+  const { value, logged } = await captureErrors(() => store.manager.rotate({ refreshToken: session.refreshToken, correlationId: "c-1" }));
+  // The same result kind as when the read succeeds (see the trace 1 deactivation test).
+  assert.deepEqual(value, { kind: "membership_inactive" });
+  assert.deepEqual(store.calls.filter(([name]) => name === "revokeFamily"), [["revokeFamily", store.records[0].familyId, STAFF_MEMBERSHIP_REVOKE_REASON]]);
+  assert.deepEqual([store.records[0].status, store.records[0].revokeReason], ["revoked", STAFF_MEMBERSHIP_REVOKE_REASON]);
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /could not be read: membership read down/);
+  // The cause is unknown, so the non-audited reason is used: the next refresh is refused and writes nothing.
+  assert.deepEqual(await store.manager.rotate({ refreshToken: session.refreshToken, correlationId: "c-2" }), { kind: "reuse_detected" });
+  assert.deepEqual(store.audit.map((e) => e.action), ["auth.session.created"]);
+});
+
+test("refresh handoff retry, the reason read throws: the family is still revoked and the answer is membership_inactive", async () => {
+  let inactive = false;
+  const store = sessionStore({ inactive: () => inactive, inactiveMembershipReason: readDown });
+  const session = await begin(store);
+  assert.equal((await store.manager.rotate({ refreshToken: session.refreshToken, rotationKey: KEY, correlationId: "c-rotate" })).kind, "rotated");
+  // The response is lost, the member is deactivated, the client retries the same token and key.
+  inactive = true;
+  const { value, logged } = await captureErrors(() => store.manager.rotate({ refreshToken: session.refreshToken, rotationKey: KEY, correlationId: "c-retry" }));
+  assert.deepEqual(value, { kind: "membership_inactive" });
+  assert.deepEqual([store.records[0].status, store.records[0].revokeReason], ["revoked", STAFF_MEMBERSHIP_REVOKE_REASON]);
+  assert.equal(logged.length, 1);
+  assert.deepEqual(store.audit.map((e) => e.action), ["auth.session.created", "auth.refresh.rotated"]);
+});
+
+test("access path, the deactivation-cause read throws: every session is still revoked, the call resolves, and no event is written in the member's organization or on the staff side", async () => {
+  const { store, staffEvents } = accessPath();
+  await begin(store);
+  await begin(store);
+  const failing = createStaffCausedSessionRevocation({
+    pendingCause: async () => null,
+    suspensionCause: readDown,
+    customer: {
+      onRequestWithPendingRevocation: async () => { throw new Error("not this path"); },
+      revokeInactiveMembership: (input) => store.manager.revokeInactiveMembership(input),
+    },
+    revokeSessions: (input) => store.sessions.revokeAll({ ...input, reason: STAFF_MEMBERSHIP_REVOKE_REASON, now: NOW }),
+    staffClaims: { claimRevocationPending: async () => false, completeRevocationPending: async () => undefined, releaseRevocationClaim: async () => undefined },
+    audit: { append: async (event) => { staffEvents.push(event); } },
+    isValidId: () => true,
+  });
+  const { value, logged } = await captureErrors(() => failing.revokeInactiveMembershipSessions({ userId: MEMBER, organizationId: ORG, correlationId: "c-req" }));
+  assert.equal(value, 2);
+  assert.deepEqual(statuses(store), [["revoked", STAFF_MEMBERSHIP_REVOKE_REASON], ["revoked", STAFF_MEMBERSHIP_REVOKE_REASON]]);
+  assert.deepEqual(store.audit.filter((e) => e.action !== "auth.session.created"), []);
+  assert.deepEqual(staffEvents, []);
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /could not be read: membership read down/);
+  // An account awaiting placement never reads the marker, so it is the customer flow as before.
+  await begin(store);
+  assert.equal(await failing.revokeInactiveMembershipSessions({ userId: MEMBER, organizationId: ORG, correlationId: "c", reason: "organization_setup_required" }), 1);
+  assert.deepEqual(store.audit.filter((e) => e.action === "auth.sessions.revoked_all").map((e) => e.reason), ["organization_setup_required"]);
+});
+
+test("middleware, the deactivation-cause read throws: the request is answered 401 MEMBERSHIP_INACTIVE, the same as when the read succeeds, with the sessions revoked", async () => {
+  const { createAuthenticate } = require("../middleware/auth");
+  const Organization = require("../modal/organizationModel").default;
+  const OrganizationMembership = require("../modal/organizationMembershipModel").default;
+  const RefreshSession = require("../modal/refreshSessionModel").default;
+  const loader = require("../src/modules/auth/infrastructure/mongo/mongoSessionAccountLoader");
+  const query = (row) => ({ select: () => ({ lean: async () => row }) });
+  const originals = [[Organization, "findOne", Organization.findOne], [OrganizationMembership, "findOne", OrganizationMembership.findOne], [RefreshSession, "exists", RefreshSession.exists], [loader, "findSessionPrincipal", loader.findSessionPrincipal]];
+  Organization.findOne = () => query({ _id: ORG, kind: "customer" });
+  OrganizationMembership.findOne = () => query({ roles: ["planner"], version: 3, status: "suspended" });
+  RefreshSession.exists = async () => ({ _id: "s" });
+  loader.findSessionPrincipal = async () => ({ accountType: "planner", email: "m@example.test", role: "customer" });
+  try {
+    const run = async (suspensionCause) => {
+      const store = sessionStore();
+      const session = await begin(store);
+      const access = createStaffCausedSessionRevocation({
+        pendingCause: async () => null,
+        suspensionCause,
+        customer: { onRequestWithPendingRevocation: async () => 0, revokeInactiveMembership: (input) => store.manager.revokeInactiveMembership(input) },
+        revokeSessions: (input) => store.sessions.revokeAll({ ...input, reason: STAFF_MEMBERSHIP_REVOKE_REASON, now: NOW }),
+        staffClaims: { claimRevocationPending: async () => false, completeRevocationPending: async () => undefined, releaseRevocationClaim: async () => undefined },
+        audit: { append: async () => undefined },
+        isValidId: () => true,
+      });
+      const authenticate = createAuthenticate(
+        () => ({ userId: MEMBER, organizationId: ORG, sessionId: session.sessionId }),
+        { revokeInactiveMembership: (input) => access.revokeInactiveMembershipSessions(input), revokeOtherSessionsAfterRoleChange: async () => 0, actorLookups: {} },
+      );
+      const res = { statusCode: 200, body: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+      const { logged } = await captureErrors(() => authenticate({ headers: { authorization: "Bearer t" }, correlationId: "c-req" }, res, () => { throw new Error("must not pass"); }));
+      return { store, res, logged };
+    };
+    const succeeded = await run(async () => STAFF_CAUSE);
+    const failed = await run(readDown);
+    assert.equal(succeeded.res.statusCode, 401);
+    assert.equal(succeeded.res.body.code, "MEMBERSHIP_INACTIVE");
+    assert.deepEqual([failed.res.statusCode, failed.res.body], [succeeded.res.statusCode, succeeded.res.body]);
+    assert.deepEqual(statuses(failed.store), [["revoked", STAFF_MEMBERSHIP_REVOKE_REASON]]);
+    assert.deepEqual(failed.store.audit.map((e) => e.action), ["auth.session.created"]);
+    assert.equal(failed.logged.length, 1);
+  } finally {
+    for (const [target, name, value] of originals) target[name] = value;
+  }
+});
