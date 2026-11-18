@@ -30,7 +30,7 @@ router.get("/admin/organization-plans/:organizationId", ...staff, controller.get
 router.put("/admin/organization-plans/:organizationId", ...staff, planWrites, controller.change);
 
 // Account-level facts about one organization (counts, settings, the Owner as account contact).
-// No support grant is needed, and no member list or customer content is returned.
+// The member list and customer content are read from routes/adminOrganizationContentRoute.ts.
 router.get("/admin/organizations/:organizationId", ...staff, accountReads, controller.account);
 
 export default router;
