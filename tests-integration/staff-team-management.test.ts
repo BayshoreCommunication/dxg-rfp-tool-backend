@@ -709,7 +709,7 @@ test("control: the same changes made by the organization's Admin through the cus
     // The customer's refusals are the ones staff got above.
     const refusals: Array<[string, string, unknown, number, string]> = [
       ["POST", "/api/v1/teams", { name: "conferences west" }, 409, "TEAM_NAME_TAKEN"],
-      ["POST", `/api/v1/teams/${teamId}/members`, { userId: planner, isManager: true }, 409, "TEAM_MEMBER_EXISTS"],
+      ["POST", `/api/v1/teams/${teamId}/members`, { userId: planner }, 409, "TEAM_MEMBER_EXISTS"],
       ["PATCH", `/api/v1/teams/${teamId}/members/${planner}`, { isManager: true }, 422, "TEAM_MANAGER_ROLE_REQUIRED"],
       ["PATCH", `/api/v1/teams/${teams.bNorth}`, { name: "Taken over" }, 404, "TEAM_NOT_FOUND"],
       ["PUT", `/api/organization/members/${planner}/teams`, { teamIds: [String(teams.bNorth)], version: 2 }, 400, "UNKNOWN_TEAMS"],
