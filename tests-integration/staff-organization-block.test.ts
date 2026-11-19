@@ -515,7 +515,7 @@ test("A's customer audit endpoints (list, filters, CSV), read after reactivation
   assert.deepEqual([...new Set(stored.map((row: any) => row.action))], ["auth.session.created"]);
   assert.ok(stored.every((row: any) => row.createdAt.getTime() > Date.parse(blockedAt)));
 
-  for (const query of ["?limit=100", "?category=security&limit=100", `?actor=${dxg.staff}`]) {
+  for (const query of ["?limit=100", "?category=sign_in&limit=100", `?actor=${dxg.staff}`]) {
     const res = await send("GET", `${AUDIT_LOG}${query}`, { token: admin });
     assert.equal(res.status, 200, `${query}: ${res.text.slice(0, 300)}`);
     for (const text of hidden) assert.equal(res.text.includes(text), false, `${query}: ${text}`);
