@@ -50,7 +50,10 @@ sit in `scan_failed` if ClamAV is down.
   (every 30 seconds) leaves the queued jobs of blocked organizations out of its batch, so a blocked
   organization with many queued jobs cannot delay the Redis-loss recovery of other tenants. Without
   it, or while MongoDB is unreachable, the dispatcher reconciles every organization as before; the
-  workers still defer a blocked organization's jobs either way.
+  workers still defer a blocked organization's jobs either way. If MongoDB was unreachable when the
+  dispatcher started, every reconcile pass tries the connection again in the background (one
+  `[dispatcher] mongodb (optional, reconcile fairness only) is not connected` line at most once a
+  minute); the dispatcher never waits for it and never exits because of it.
 - `OTP_PEPPER` is required: with `NODE_ENV=production` the API, worker and cron fail at startup
   without it (no fallback to `JWT_SECRET`). Never change it in place: it keys the hashes of
   2FA recovery codes and sign-in codes, so a new value voids every member's recovery codes.
