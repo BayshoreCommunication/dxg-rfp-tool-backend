@@ -39,8 +39,9 @@ export const ORGANIZATION_BLOCKED = {
   message: "Your organization's access to RFPilot is paused. Contact RFPilot support.",
 } as const;
 
-/* The revoke reason of a session ended because staff blocked the organization. Like
-   STAFF_MEMBERSHIP_REVOKE_REASON it marks a revocation that RFPilot staff caused, so presenting
+/* The revoke reason of a session ended because staff blocked the organization. Like the reason
+   of a staff membership change (auth/domain/ports/sessionPorts.ts, `isStaffCausedRevokeReason`)
+   it marks a revocation that RFPilot staff caused, so presenting
    such a session's last refresh token again writes no "reuse detected" event in the customer
    organization (customers see no staff activity). */
 export const ORGANIZATION_BLOCK_REVOKE_REASON = "staff_organization_blocked";
