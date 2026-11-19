@@ -10,8 +10,9 @@
 //     invitation and no notification, and is listed and approved after the reactivation.
 // F9: an organization that carries the marker is reactivated after it stopped being manageable.
 // F2: the three limited sweeps leave out a blocked organization's rows in the query.
+// F8: the dispatcher's reconcile query leaves out the queued jobs of the organizations it is given.
 import { TEST_MONGODB_DB_NAME } from "./env";
-import { connectMongo, disconnectMongo, ensureMigrated, ensureServices, randomMongoId } from "./setup";
+import { connectMongo, disconnectMongo, ensureMigrated, ensureServices, randomMongoId, seedTenant } from "./setup";
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type { AddressInfo } from "node:net";
@@ -32,6 +33,10 @@ import SupportTicket from "../modal/supportTicketModel";
 import User from "../modal/userModel";
 import VendorSubmissionDraft from "../modal/vendorSubmissionDraftModel";
 import { authenticationSessions, beginAuthenticatedSession } from "../src/modules/auth/composition";
+import { durableJobRepository } from "../src/modules/durableJobs/composition";
+import { closeQueue } from "../src/modules/durableJobs/queue";
+import { contextInput } from "../src/modules/proposalContext/domain";
+import { proposalContextRepository } from "../src/modules/proposalContext/postgresProposalContextRepository";
 import { hmacOtpCodeHasher } from "../src/modules/auth/infrastructure/security/hmacOtpCodeHasher";
 import { mongoDomainRepository } from "../src/modules/domainVerification/infrastructure/mongo/mongoDomainRepository";
 import { ORGANIZATION_BLOCK_REVOKE_REASON, isOrganizationBlocked } from "../src/modules/organizationBlock/domain";
@@ -152,6 +157,7 @@ after(async () => {
     await cleanupOrganizations();
   }
   await disconnectMongo();
+  await closeQueue();
   await closePostgres();
   await closeSecurityRateLimitRedis();
   await closeSupportRedis();
@@ -375,4 +381,25 @@ test("F2: each limited sweep query leaves out a blocked organization's rows, so 
     assert.equal(reached.some((row) => row.organizationId === String(held)), false, `${name}: none of the held organization's rows`);
     assert.equal(reached[0]?.organizationId, String(other), `${name}: the other organization's row is reached`);
   }
+});
+
+test("F8: reconcile on real PostgreSQL leaves out the queued jobs of the organizations it is told to, and only those", async () => {
+  const [held, other] = [await seedTenant("Reconcile Held Org"), await seedTenant("Reconcile Other Org")];
+  const jobOf = async (tenant: typeof held) => {
+    const created = await proposalContextRepository.create({
+      organizationMongoId: tenant.organizationMongoId, actorUserMongoId: tenant.actorUserMongoId, proposalMongoId: tenant.proposalMongoId,
+      ...contextInput({ fixture: "synthetic-conference-simple" }), idempotencyKey: randomMongoId(), correlationId: randomMongoId(),
+    });
+    return String(created.job.id);
+  };
+  const [heldJob, otherJob] = [await jobOf(held), await jobOf(other)];
+  const ALL = 100_000; // the shared database holds other suites' queued jobs; these two are the newest
+  const everything = (await durableJobRepository.reconcile(ALL)).map((message) => message.jobId);
+  assert.ok(everything.includes(heldJob) && everything.includes(otherJob), "with no ids the statement is the one it always was");
+  const without = await durableJobRepository.reconcile(ALL, [held.organizationMongoId, "not-an-id", randomMongoId()]);
+  assert.equal(without.some((message) => message.organizationMongoId === held.organizationMongoId), false, "none of the held organization's jobs");
+  assert.ok(without.map((message) => message.jobId).includes(otherJob), "the other organization's job is still reconciled");
+  const kept = new Set(without.map((message) => message.jobId));
+  assert.deepEqual(everything.filter((id) => !kept.has(id)), [heldJob], "nothing else is left out");
+  assert.ok((await durableJobRepository.reconcile(ALL, [])).some((message) => message.jobId === heldJob), "an empty list leaves nothing out");
 });

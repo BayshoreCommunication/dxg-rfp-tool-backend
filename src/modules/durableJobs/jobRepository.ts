@@ -17,5 +17,8 @@ export interface JobRepository {
  markOutboxFailed(eventId:string,code:string):Promise<void>;
  reapExpiredLeases(limit:number):Promise<Array<{jobId:string;status:string}>>;
  listDeadLetters(limit:number):Promise<Array<Record<string,unknown>>>;
- reconcile(limit:number):Promise<QueueMessage[]>;
+ /* Queued jobs to publish again, oldest first, at most `limit`. `exceptOrganizationMongoIds`
+    (organizations RFPilot staff blocked) are left out BY THE QUERY: their jobs stay queued for as
+    long as the block lasts, and would otherwise fill every batch and starve the others. */
+ reconcile(limit:number,exceptOrganizationMongoIds?:readonly string[]):Promise<QueueMessage[]>;
 }

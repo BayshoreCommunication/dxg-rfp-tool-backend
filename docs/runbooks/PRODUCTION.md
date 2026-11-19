@@ -41,6 +41,11 @@ sit in `scan_failed` if ClamAV is down.
   without it exits non-zero with one line, `<worker> cannot start: MongoDB is required ... and
   MONGODB_URL is not set.` (or `... could not be reached: <cause>`). A MongoDB outage after start-up
   does not stop a worker: jobs are deferred 30 seconds and asked again, never failed.
+- The dispatcher does not need MongoDB. When `MONGODB_URL` is set for it, its reconcile pass
+  (every 30 seconds) leaves the queued jobs of blocked organizations out of its batch, so a blocked
+  organization with many queued jobs cannot delay the Redis-loss recovery of other tenants. Without
+  it, or while MongoDB is unreachable, the dispatcher reconciles every organization as before; the
+  workers still defer a blocked organization's jobs either way.
 - `OTP_PEPPER` is required: with `NODE_ENV=production` the API, worker and cron fail at startup
   without it (no fallback to `JWT_SECRET`). Never change it in place: it keys the hashes of
   2FA recovery codes and sign-in codes, so a new value voids every member's recovery codes.

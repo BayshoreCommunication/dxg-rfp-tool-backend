@@ -642,3 +642,42 @@ test("F6 the same request when the organization is not blocked is what it is on 
     assert.equal(w.requests.length, 0);
   });
 });
+
+// ---------------------------------------------------------------- F8: dispatcher reconcile
+
+const { createDispatcher } = require("../src/modules/durableJobs/dispatcher");
+
+test("F8 reconcile: a batch-sized set of queued jobs of a blocked organization does not starve another organization's job; a failed read of the blocked set never stops reconcile", async () => {
+  const LIMIT = 5;
+  const job = (organizationMongoId, n) => ({ jobId: `job-${organizationMongoId.slice(0, 1)}-${n}`, organizationMongoId, actorUserMongoId: USER, jobType: "proposal_draft_generate", inputReference: "run", inputVersion: null, correlationId: "c", createdAt: n });
+  const queued = [...Array.from({ length: LIMIT }, (_, n) => job(A, n)), job(B, LIMIT)];
+  // As the PostgreSQL query: the organizations to leave out, then oldest first, then the limit.
+  const repository = {
+    asked: [],
+    async reapExpiredLeases() { return []; },
+    async reconcile(limit, exceptOrganizationMongoIds = []) {
+      this.asked.push([...exceptOrganizationMongoIds]);
+      return queued.filter((j) => !exceptOrganizationMongoIds.includes(j.organizationMongoId)).sort((x, y) => x.createdAt - y.createdAt).slice(0, limit);
+    },
+  };
+  const published = [];
+  const publisher = { async publish(message) { published.push(message.jobId); } };
+  assert.equal(await createDispatcher(repository, publisher, async () => new Set([A])).reconcile(LIMIT), 1);
+  assert.deepEqual(published, [`job-b-${LIMIT}`], "the other organization's job is republished");
+  assert.deepEqual(repository.asked, [[A]]);
+
+  // Fairness, not enforcement: no ids, or a failed read, reconciles every organization as before.
+  for (const blockedIds of [undefined, async () => { throw new Error("mongo down"); }]) {
+    published.length = 0;
+    assert.equal(await createDispatcher(repository, publisher, blockedIds).reconcile(LIMIT), LIMIT);
+    assert.deepEqual(repository.asked.at(-1), []);
+  }
+
+  const sql = read("src/modules/durableJobs/postgresJobRepository.ts");
+  const reconcile = sql.slice(sql.indexOf("reconcile(limit, exceptOrganizationMongoIds) {"));
+  assert.match(reconcile, /AND organization_id NOT IN \(SELECT id FROM rfpilot\.organizations WHERE external_mongo_id = ANY\(\$2::varchar\[\]\)\)\s+ORDER BY created_at LIMIT \$1/);
+  assert.match(reconcile, /\.filter\(\(id\) => \/\^\[0-9a-f\]\{24\}\$\/\.test\(id\)\)/, "only organization ids reach the statement, as a bound parameter");
+  // The dispatcher process: MongoDB optional, read only while connected.
+  assert.match(read("src/modules/durableJobs/composition.ts"), /createDispatcher\(postgresJobRepository,undefined,async\(\)=>mongoose\.connection\.readyState===1\?blockedOrganizationIds\(\):\[\]\)/);
+  assert.match(read("scripts/startDurableDispatcher.ts"), /if\(process\.env\.MONGODB_URL\|\|process\.env\.MONGO_URL\)void connectDB\(\)\.catch\(logged\(/);
+});

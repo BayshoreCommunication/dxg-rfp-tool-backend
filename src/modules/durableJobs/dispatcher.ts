@@ -20,6 +20,11 @@ export const createDispatcher = (
       >[1],
     ): Promise<unknown>;
   },
+  /* Every blocked organization's id (organizationBlock), for reconcile. This is FAIRNESS, not
+     enforcement: the worker defers a blocked organization's job whatever is published. So when
+     the ids are not given, or cannot be read, reconcile runs over every organization as it
+     always did; it never fails and never skips a pass because of the block. */
+  blockedOrganizationIds?: () => Promise<Iterable<string>>,
 ) => {
   const id = `dispatcher-${crypto.randomUUID()}`;
   const publish =
@@ -74,7 +79,16 @@ export const createDispatcher = (
     // without this the job is unreachable by every recovery path.
     async reconcile(limit = 100) {
       const reaped = await repository.reapExpiredLeases(limit);
-      const messages = await repository.reconcile(limit);
+      let except: string[] = [];
+      try {
+        except = [...((await blockedOrganizationIds?.()) ?? [])];
+      } catch {
+        except = [];
+      }
+      // A blocked organization's queued jobs are left out of the batch, so they cannot fill it
+      // and starve the Redis-loss recovery of every other organization. They are republished on
+      // the first pass after a reactivation.
+      const messages = await repository.reconcile(limit, except);
       for (const message of messages) await publish(message);
       return messages.length + reaped.length;
     },
