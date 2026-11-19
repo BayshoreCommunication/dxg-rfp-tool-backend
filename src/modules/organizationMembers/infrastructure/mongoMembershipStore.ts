@@ -49,7 +49,7 @@ class Abort extends Error {
    commit or neither does. It goes to `audit.organizationId` (the STAFF organization), which is
    not the organization of the membership being changed; nothing is written to that one. */
 const MAX_AUDITED_RFP_IDS = 1000;
-const appendAudit = async (audit: MemberChangeAudit | undefined, session: ClientSession, extra: Record<string, unknown> = {}) => {
+export const appendAudit = async (audit: MemberChangeAudit | undefined, session: ClientSession, extra: Record<string, unknown> = {}) => {
   if (!audit) return;
   await SecurityAuditEvent.create([{
     organizationId: objectId(audit.organizationId),
@@ -80,6 +80,14 @@ const updateVersioned = (
     { ...update, $inc: { version: 1 } },
     { new: true, runValidators: true, session },
   ).select(MEMBER_FIELDS).lean<MembershipRow | null>();
+
+// `bumpVersion` inside a caller's transaction (a staff change of a member's teams, which commits
+// the version, the team rows and its audit event together). Null when the version moved or the
+// member is removed.
+export const bumpVersionInTransaction = async (input: { organizationId: string; userId: string; expectedVersion: number }, session: ClientSession): Promise<number | null> => {
+  const row = await updateVersioned(input, { status: { $ne: "removed" } }, { $set: { updatedAt: new Date() } }, session);
+  return row ? Number(row.version ?? 1) : null;
+};
 
 export const mongoMembershipStore: MembershipStore = {
   async list(organizationId) {

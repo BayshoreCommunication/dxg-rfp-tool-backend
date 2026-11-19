@@ -7,10 +7,14 @@ import {
   MAX_SELECTED_RFPS,
   decideReactivation,
   decideRoleChange,
+  decideTeamsChange,
   isAssignableRole,
   isDemotion,
   ownerHasRfps,
+  parseTeamSelection,
   publicStatus,
+  teamsUnavailable,
+  unknownTeams,
   withCustomerRole,
   type CustomerRole,
   type Refusal,
@@ -162,21 +166,19 @@ export const createMemberManagement = (dependencies: Dependencies) => {
     const action = "organization.member.teams_changed";
     const manage = decideManage(actor);
     if (!manage.ok) return refuse(actor, action, input.userId, manage);
-    if (!Array.isArray(input.teamIds) || input.teamIds.length > 100 || !input.teamIds.every((id) => typeof id === "string" && /^[a-f0-9]{24}$/i.test(id))) {
-      return refusal(400, "INVALID_TEAMS", "teamIds must be a list of up to 100 team ids.");
-    }
-    const teamIds = [...new Set(input.teamIds as string[])];
+    const selection = parseTeamSelection(input.teamIds);
+    if (!selection.ok) return selection;
+    const { teamIds } = selection;
     const version = parseVersion(input.version);
     if (version === null) return versionRequired();
     const target = await dependencies.store.find(actor.organizationId, input.userId);
     if (!target) return notFound();
     if (target.version !== version) return refuse(actor, action, input.userId, stale(target));
-    if (target.status === "removed") return refuse(actor, action, input.userId, refusal(409, "MEMBER_REMOVED", "This member has been removed."));
+    const decision = decideTeamsChange({ target });
+    if (!decision.ok) return refuse(actor, action, input.userId, decision);
 
     const known = await dependencies.teams.activeTeamIds(actor.organizationId, teamIds);
-    if (known === "unavailable") return refusal(503, "TEAMS_UNAVAILABLE", "Teams aren't available yet.");
-    const unknownTeams = (unknownTeamIds: string[]) =>
-      refusal(400, "UNKNOWN_TEAMS", "Some teams aren't active teams of this organization.", { unknownTeamIds });
+    if (known === "unavailable") return teamsUnavailable();
     const unknownTeamIds = teamIds.filter((id) => !known.includes(id));
     if (unknownTeamIds.length > 0) return unknownTeams(unknownTeamIds);
 

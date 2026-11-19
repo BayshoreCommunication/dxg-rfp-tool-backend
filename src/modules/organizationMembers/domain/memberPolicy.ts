@@ -132,5 +132,22 @@ export const decideReassignment = (input: { from: MemberFacts | null; to: Member
   return allow;
 };
 
+// ORG-206 "change a member's teams": the selection and its refusals. One rule for the
+// organization's own route (manageMembers.ts) and the RFPilot staff route
+// (staffAccess/application/manageOrganizationTeams.ts).
+export const MAX_MEMBER_TEAMS = 100;
+export const invalidTeams = () => refuse(400, "INVALID_TEAMS", `teamIds must be a list of up to ${MAX_MEMBER_TEAMS} team ids.`);
+export const parseTeamSelection = (value: unknown): { ok: true; teamIds: string[] } | Refusal => {
+  if (!Array.isArray(value) || value.length > MAX_MEMBER_TEAMS || !value.every((id) => typeof id === "string" && /^[a-f0-9]{24}$/i.test(id))) {
+    return invalidTeams();
+  }
+  return { ok: true, teamIds: [...new Set(value as string[])] };
+};
+export const decideTeamsChange = (input: { target: MemberFacts }): Decision =>
+  input.target.status === "removed" ? refuse(409, "MEMBER_REMOVED", "This member has been removed.") : allow;
+export const teamsUnavailable = () => refuse(503, "TEAMS_UNAVAILABLE", "Teams aren't available yet.");
+export const unknownTeams = (unknownTeamIds: string[]) =>
+  refuse(400, "UNKNOWN_TEAMS", "Some teams aren't active teams of this organization.", { unknownTeamIds });
+
 // API status names: a suspended membership is shown as deactivated.
 export const publicStatus = (status: MemberStatus) => (status === "suspended" ? "deactivated" : status);
