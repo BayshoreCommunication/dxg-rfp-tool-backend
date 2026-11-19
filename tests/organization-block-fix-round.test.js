@@ -445,9 +445,10 @@ const accessWorld = async (run) => {
   const RefreshSession = require("../modal/refreshSessionModel").default;
   const loader = require("../src/modules/auth/infrastructure/mongo/mongoSessionAccountLoader");
   const originals = [[Organization, "findOne", Organization.findOne], [OrganizationMembership, "findOne", OrganizationMembership.findOne], [RefreshSession, "exists", RefreshSession.exists], [loader, "findSessionPrincipal", loader.findSessionPrincipal]];
-  const request = async ({ blocked, kind = "customer", membership, principal = true, session }) => {
-    const w = refreshWorld(undefined);
-    const begun = await w.begin();
+  // `world` (optional) carries one session across several requests: { w: refreshWorld(...), begun }.
+  const request = async ({ blocked, kind = "customer", membership, principal = true, session, world }) => {
+    const w = world?.w ?? refreshWorld(undefined);
+    const begun = world?.begun ?? await w.begin();
     const row = w.rows[0];
     if (session === "ended_by_block") w.blockEndsSessions();
     if (session === "logged_out") { row.status = "revoked"; row.revokeReason = "user_logout"; }
@@ -947,4 +948,51 @@ test("L3 worker start-up: a missing MONGODB_URL fails at once, with no attempt, 
   assert.match(startupFailureLine(error), /^AI gateway worker cannot start: MongoDB is required .* MONGODB_URL is not set\.$/);
   // ecosystem.config.js is not part of this change; the scripts still hand connectDB over as it is.
   for (const script of ["scripts/startAiGatewayWorker.ts", "scripts/startDurableWorker.ts"]) assert.match(read(script), /connect:connectDB,createWorker:/, script);
+});
+
+// ---------------------------------------------------------------- L5: a session the block ended stays dead
+
+test("L5 a session ended by a block stays dead after reactivation, on the access path and on refresh, and a second block shows it only the refusal; no customer audit row at any step", async () => {
+  const active = { roles: ["planner"], version: 1, status: "active", sessionRevocationPending: false };
+  await accessWorld(async (request) => {
+    // One session, the REAL authenticate middleware and the REAL session manager with the gate.
+    const w = refreshWorld(true);
+    const begun = await w.begin();
+    const world = { w, begun };
+    const row = w.rows[0];
+    const beginRows = w.audit.length;
+    const access = (blocked) => request({ blocked, membership: active, world });
+    const refreshOld = async () => { const issued = w.state.issued; const answer = await w.manager.rotate({ refreshToken: begun.refreshToken, correlationId: "c-refresh" }); return [answer, w.state.issued - issued]; };
+
+    // First block: the block's transaction ends the session.
+    w.blockEndsSessions();
+    w.state.blocked = true;
+    const told = await access(true);
+    assert.deepEqual([told.status, told.code, told.passed], [401, ORGANIZATION_BLOCKED.code, false]);
+    assert.deepEqual(await refreshOld(), [{ kind: "organization_blocked" }, 0]);
+
+    // Reactivated: the old access token is refused with main's 403 for a dead session, never
+    // the request; the old refresh token is a reuse, with no token.
+    w.state.blocked = false;
+    for (const attempt of [1, 2]) {
+      const dead = await access(false);
+      assert.deepEqual([dead.status, dead.code, dead.passed], [403, "Active organization membership required", false], `access ${attempt}`);
+      assert.deepEqual(await refreshOld(), [{ kind: "reuse_detected" }, 0], `refresh ${attempt}`);
+    }
+    assert.deepEqual([row.status, row.revokeReason], ["revoked", ORGANIZATION_BLOCK_REVOKE_REASON], "nothing revived it or rewrote why it ended");
+
+    // A second block inside the session's lifetime: the old session reaches only the refusal.
+    w.state.blocked = true;
+    const again = await access(true);
+    assert.deepEqual([again.status, again.code, again.passed], [401, ORGANIZATION_BLOCKED.code, false]);
+    assert.deepEqual(await refreshOld(), [{ kind: "organization_blocked" }, 0]);
+    // And after the second reactivation it is still dead.
+    w.state.blocked = false;
+    const still = await access(false);
+    assert.deepEqual([still.status, still.passed], [403, false]);
+    assert.deepEqual(await refreshOld(), [{ kind: "reuse_detected" }, 0]);
+
+    assert.deepEqual(w.audit.slice(beginRows), [], "no row in the customer organization at any step");
+    assert.ok(row.expiresAt > w.state.now && row.idleExpiresAt > w.state.now, "all of it inside the session's own lifetime");
+  });
 });

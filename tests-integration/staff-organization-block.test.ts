@@ -538,3 +538,38 @@ test("A's customer audit endpoints (list, filters, CSV), read after reactivation
   }
   assert.equal((await send("GET", `${AUDIT_LOG}/export?action=${STAFF_ORGANIZATION_AUDIT.blocked}`, { token: admin })).status, 400);
 });
+
+// Last on purpose: it blocks A a second time, which ends the sessions the tests above signed in
+// with. It makes no audit export (the export budget is 20 per user per 15 minutes).
+test("a session the first block ended stays dead after reactivation (403, reuse_detected), and a second block shows it only the refusal; nothing in A's audit trail", async () => {
+  const old = a.members.owner;
+  const rowsBefore = await eventCount(aId);
+  const sessionOf = async () => { const row = await RefreshSession.findOne({ sessionId: old.sessionId }).lean() as Record<string, any> | null; return [row?.status, row?.revokeReason]; };
+  assert.deepEqual(await sessionOf(), ["revoked", ORGANIZATION_BLOCK_REVOKE_REASON]);
+
+  // Reactivated (by the test above): the old access token is refused, and not for a block.
+  const dead = await me(old.accessToken);
+  assert.equal(dead.status, 403, dead.text);
+  assert.notEqual(dead.body.code, "ORGANIZATION_BLOCKED");
+  const stale = await refresh(old.refreshToken);
+  assert.deepEqual([stale.status, stale.body.reason, stale.body.accessToken], [401, "reuse_detected", undefined], stale.text);
+
+  // A second block inside the old session's lifetime.
+  const blocked = await asStaff("POST", `${BASE}/${a.organizationId}/block`, { reason: REASON });
+  assert.deepEqual([blocked.status, blocked.body.data.changed, blocked.body.data.blocked], [200, true, true], blocked.text);
+  for (const path of ["/api/auth/me", "/api/proposals"]) {
+    const refused = await send("GET", path, { token: old.accessToken });
+    assert.deepEqual([refused.status, refused.body.code], [401, "ORGANIZATION_BLOCKED"], `${path}: ${refused.text}`);
+  }
+  const told = await refresh(old.refreshToken);
+  assert.deepEqual([told.status, told.body.reason, told.body.accessToken], [401, "organization_blocked", undefined], told.text);
+
+  // Reactivated again: still dead.
+  const reactivated = await asStaff("POST", `${BASE}/${a.organizationId}/reactivate`, { reason: REASON });
+  assert.deepEqual([reactivated.status, reactivated.body.data.changed, reactivated.body.data.blocked], [200, true, false], reactivated.text);
+  assert.equal((await me(old.accessToken)).status, 403);
+  assert.deepEqual([(await refresh(old.refreshToken)).body.reason], ["reuse_detected"]);
+  assert.deepEqual(await sessionOf(), ["revoked", ORGANIZATION_BLOCK_REVOKE_REASON]);
+  assert.equal(await eventCount(aId), rowsBefore, "no row in A: no 'session reuse detected', no 'sessions signed out'");
+});
+
