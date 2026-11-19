@@ -250,3 +250,71 @@ test("F9 an organization that carries the marker but is no longer manageable can
   assert.deepEqual([never.status, never.code], [409, "ORGANIZATION_NOT_MANAGEABLE"]);
   assert.ok(audit.every((e) => e.organizationId === STAFF_ORG), "every event is in the staff organization");
 });
+
+// ---------------------------------------------------------------- F7: Microsoft sign-in links nothing when refused
+
+const crypto = require("node:crypto");
+const { createFederatedSignIn } = require("../src/modules/sso/application/federatedSignIn");
+const { createMemorySsoStateStore } = require("../src/modules/sso/infrastructure/ssoStateStore");
+const { microsoftIssuerFor, MICROSOFT_AUTHORITY } = require("../src/modules/sso/domain/ssoRules");
+
+test("F7 Microsoft sign-in for an existing account in a blocked organization links nothing; main's own refusals answer first; another organization's account is linked and signed in", async () => {
+  const TENANT = "11111111-2222-3333-4444-555555555555";
+  const bindHash = crypto.createHash("sha256").update("browser-bind-cookie-value-0123456789").digest("hex");
+  const blocked = new Set([A]);
+  const state = { users: [], links: [], audits: [], created: 0 };
+  const metadata = (issuer) => ({ issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks` });
+  const signIn = createFederatedSignIn({
+    store: createMemorySsoStateStore(),
+    oidc: {
+      async discover(issuer, expected) { return metadata(expected ?? issuer); },
+      authorizationUrl(meta, input) { const url = new URL(meta.authorization_endpoint); url.searchParams.set("state", input.state); return url.toString(); },
+      async exchangeCode() { return "id-token"; },
+      async verifyIdToken() { return { iss: microsoftIssuerFor(TENANT), sub: "s", tid: TENANT, oid: "o1", email: "pat@fabrikam.example", xms_edov: true }; },
+    },
+    microsoft: () => ({ clientId: "ms-client", clientSecret: "ms-secret" }),
+    redirectUri: () => "http://localhost:8000/api/auth/sso/callback",
+    connections: { async activeForDomain() { return null; }, async activeById() { return null; }, async organizationVerifiedDomains() { return []; } },
+    accounts: {
+      async findByIdentity() { return null; },
+      async findByEmail(email) { return state.users.find((u) => u.email === email) ?? null; },
+      async link(userId) { state.links.push(userId); },
+      async createOwner() { state.created += 1; return { userId: "owner-new", organizationId: "org-new" }; },
+      async joinOrganization() { throw new Error("not a company sign-in"); },
+      async membership() { return null; },
+      async addMembership() { throw new Error("not a company sign-in"); },
+    },
+    async ssoRequiredFor() { return false; },
+    invitations: { async organizationOf() { return null; }, async acceptWithPerson() { return { kind: "refused", code: "INVITATION_INVALID" }; } },
+    async audit(event) { state.audits.push(event); },
+    organizationBlocked: async (organizationId) => blocked.has(organizationId),
+  });
+  const roundTrip = async () => {
+    const started = await signIn.start({ kind: "microsoft", bind: bindHash });
+    assert.equal(started.kind, "redirect", JSON.stringify(started));
+    return signIn.callback({ code: "auth-code", state: new URL(started.url).searchParams.get("state") }, "corr-1");
+  };
+
+  state.users.push({ userId: "u1", email: "pat@fabrikam.example", organizationId: A, isBlocked: false, identities: [] });
+  assert.deepEqual(await roundTrip(), { kind: "error", code: "ORGANIZATION_BLOCKED", inviteToken: null });
+  assert.deepEqual([state.links, state.audits, state.created], [[], [], 0], "a refused sign-in links nothing and writes nothing");
+
+  // A refusal main gives for its own reasons is given unchanged, and still links nothing.
+  state.users[0].isBlocked = true;
+  assert.deepEqual(await roundTrip(), { kind: "error", code: "USER_BLOCKED", inviteToken: null });
+  state.users[0].isBlocked = false;
+  state.users[0].identities = [{ issuer: MICROSOFT_AUTHORITY, subject: "someone-else" }];
+  assert.deepEqual(await roundTrip(), { kind: "error", code: "SSO_IDENTITY_MISMATCH", inviteToken: null });
+  state.users[0].identities = [];
+  assert.deepEqual(state.links, []);
+
+  // Reactivated: the same round trip links the identity and signs the person in.
+  blocked.delete(A);
+  assert.equal((await roundTrip()).kind, "handoff");
+  assert.deepEqual(state.links, ["u1"]);
+  // An account of an organization that is not blocked was never affected.
+  blocked.add(A);
+  state.users[0].organizationId = B;
+  assert.equal((await roundTrip()).kind, "handoff");
+  assert.deepEqual(state.links, ["u1", "u1"]);
+});
