@@ -11,7 +11,7 @@ import type { RfpActor } from "../src/modules/identity/domain/rfpAccessPolicy";
 import { ActorLookups, resolveRfpActor } from "../src/modules/identity/application/resolveRfpActor";
 import { mongoActorLookups } from "../src/modules/identity/application/mongoActorLookups";
 import { endSessionsOfBlockedOrganization, revokeInactiveMembershipSessions, revokeOtherSessionsAfterMembershipChange } from "../src/modules/auth/composition";
-import { ORGANIZATION_BLOCKED, isOrganizationBlocked } from "../src/modules/organizationBlock/domain";
+import { ORGANIZATION_BLOCKED, ORGANIZATION_BLOCK_REVOKE_REASON, isOrganizationBlocked } from "../src/modules/organizationBlock/domain";
 import { ORGANIZATION_SETUP_REQUIRED } from "../src/modules/auth/infrastructure/mongo/organizationSetup";
 
 // Extend Express Request to include user
@@ -83,25 +83,6 @@ export const createAuthenticate = (
           idleExpiresAt: { $gt: now },
         }),
       ]);
-      /* RFPilot staff blocked this organization (owner decision, 2026-11-18): every request of
-         its members is refused, whatever their role, before anything else is decided for them.
-         The one rule is isOrganizationBlocked; the organization document is the one this request
-         reads anyway, so a block applies on the next request with no cache to wait for. 401 with
-         a code, like the two refusals below, so the client drops the session and can say why.
-         The member's sessions for THIS organization end (the block ended them already; this
-         closes one begun while it committed) and nothing is written to the organization's audit
-         trail. First on purpose: none of the customer-side revocation events below may be
-         written because of a block. A staff account is never in a blocked organization. */
-      if (isOrganizationBlocked(organization)) {
-        try {
-          await dependencies.endSessionsOfBlockedOrganization?.({ userId: decoded.userId, organizationId: decoded.organizationId });
-        } catch (failure) {
-          // The refusal stands either way; the refresh path refuses a blocked organization too.
-          console.error("Organization block error: a session could not be ended:", failure instanceof Error ? failure.message : failure);
-        }
-        res.status(401).json({ success: false, code: ORGANIZATION_BLOCKED.code, message: ORGANIZATION_BLOCKED.message });
-        return;
-      }
       // Deactivation takes effect on the next request, not at token expiry: refuse with 401 and
       // revoke the member's refresh sessions so the client can't mint a new access token.
       if (!membership || membership.status !== "active") {
@@ -130,12 +111,58 @@ export const createAuthenticate = (
         res.status(401).json({ success: false, code: ORGANIZATION_SETUP_REQUIRED.code, message: ORGANIZATION_SETUP_REQUIRED.message });
         return;
       }
-      if (!principal || !activeSession) {
+      /* RFPilot staff blocked this organization (owner decision, 2026-11-18): every request of
+         its members is refused, whatever their role. The one rule is isOrganizationBlocked; the
+         organization document is the one this request reads anyway, so a block applies on the
+         next request with no cache to wait for.
+
+         ORDER. The block is decided only for a request that would otherwise have been let
+         through. A request this middleware refuses for its own reasons gets that same refusal,
+         blocked or not, so a person holding a dead credential (no membership, removed or
+         deactivated, an account waiting for placement, a blocked or missing account, a session
+         that was logged out, revoked for another reason or expired) is told what they were
+         always told and does not learn that the organization is blocked. Those refusals are the
+         two above and the two below.
+
+         One state needs telling apart: the block itself ended every session of the organization,
+         so a live member's access token now finds no active session. A session ENDED BY THE
+         BLOCK (and not expired since) is treated as the live session it was; any other missing
+         session is the 403 it always was. Read only for a blocked organization.
+
+         AUDIT. Nothing here writes to the organization's audit trail, and the block causes no
+         row there: the customer-side revocation of the two refusals above writes its event only
+         when it actually ends a session, as it does without a block, and a block only ever
+         leaves fewer sessions to end. The pending role-change revocation further down is not
+         reached for a blocked organization. */
+      const blocked = isOrganizationBlocked(organization);
+      const liveSession = Boolean(activeSession) || (blocked && Boolean(await RefreshSession.exists({
+        sessionId: decoded.sessionId,
+        userId: decoded.userId,
+        organizationId: decoded.organizationId,
+        status: "revoked",
+        revokeReason: ORGANIZATION_BLOCK_REVOKE_REASON,
+        expiresAt: { $gt: now },
+        idleExpiresAt: { $gt: now },
+      })));
+      if (!principal || !liveSession) {
         res.status(403).json({ success: false, message: "Active organization membership required" });
         return;
       }
       if (!organization) {
         res.status(403).json({ success: false, message: "Organization is inactive or unavailable" });
+        return;
+      }
+      // 401 with a code, like the membership refusals above, so the client drops the session and
+      // can say why. The member's sessions for THIS organization end (the block ended them
+      // already; this closes one begun while it committed), unaudited, for the block's reason.
+      if (blocked) {
+        try {
+          await dependencies.endSessionsOfBlockedOrganization?.({ userId: decoded.userId, organizationId: decoded.organizationId });
+        } catch (failure) {
+          // The refusal stands either way; the refresh path refuses a blocked organization too.
+          console.error("Organization block error: a session could not be ended:", failure instanceof Error ? failure.message : failure);
+        }
+        res.status(401).json({ success: false, code: ORGANIZATION_BLOCKED.code, message: ORGANIZATION_BLOCKED.message });
         return;
       }
       // Roles always come from the membership, never the token, so a role change applies on this

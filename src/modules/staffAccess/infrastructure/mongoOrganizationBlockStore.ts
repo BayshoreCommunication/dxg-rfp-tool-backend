@@ -19,8 +19,8 @@ import type { OrganizationBlockAudit, OrganizationBlockOutcome, OrganizationBloc
    Every filter names the organization the path gave. BLOCKING requires kind `customer` and
    excludes the staff organization; a write that matches nothing changes nothing. REACTIVATING an
    organization that carries the marker removes it whatever the organization has become since
-   (it only removes a marker; otherwise such an organization could never be reactivated), by `_id`
-   and the marker itself; for an organization that carries no marker the same rule as blocking
+   (it only removes a marker; otherwise such an organization could never be reactivated), by `_id`,
+   after `isOrganizationBlocked` answered for the document read in the same transaction; for an organization that carries no marker the same rule as blocking
    applies and nothing is written. */
 
 const oid = (value: string) => new mongoose.Types.ObjectId(value);
@@ -55,7 +55,7 @@ const inTransaction = async (
       const organization = await Organization.findOne({ _id: oid(organizationId) }).session(session).select("kind blocked").lean<Row | null>();
       if (!organization) { outcome = "not_found"; return; }
       if (allowMarked && isOrganizationBlocked(organization)) {
-        outcome = await work(organization, { _id: oid(organizationId), "blocked.at": { $type: "date" } }, session);
+        outcome = await work(organization, { _id: oid(organizationId) }, session);
         return;
       }
       if (organization.kind !== "customer" || organizationId === staffOrganizationId) { outcome = "not_manageable"; return; }

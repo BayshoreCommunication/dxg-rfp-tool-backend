@@ -258,7 +258,7 @@ test("the Mongo store: one transaction, the marker written and removed only here
   assert.match(store, /\{ _id: oid\(organizationId\), kind: "customer" \}/);
   assert.match(store, /organization\.kind !== "customer" \|\| organizationId === staffOrganizationId/);
   // Reactivation of an organization that carries the marker: by its id and the marker, whatever its kind.
-  assert.match(store, /if \(allowMarked && isOrganizationBlocked\(organization\)\) \{\s+outcome = await work\(organization, \{ _id: oid\(organizationId\), "blocked\.at": \{ \$type: "date" \} \}, session\);/);
+  assert.match(store, /if \(allowMarked && isOrganizationBlocked\(organization\)\) \{\s+outcome = await work\(organization, \{ _id: oid\(organizationId\) \}, session\);/);
   assert.match(store, /if \(!input\.manageable\) return "not_manageable";/);
   assert.match(store, /\{ \$set: \{ blocked: marker \} \}, \{ session \}/);
   assert.match(store, /\{ \$unset: \{ blocked: "" \} \}, \{ session \}/);

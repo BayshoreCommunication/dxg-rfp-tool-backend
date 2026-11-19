@@ -318,3 +318,218 @@ test("F7 Microsoft sign-in for an existing account in a blocked organization lin
   assert.equal((await roundTrip()).kind, "handoff");
   assert.deepEqual(state.links, ["u1", "u1"]);
 });
+
+// ---------------------------------------------------------------- F5: a dead credential does not learn of the block
+
+const { createSessionManager, hashOpaqueToken } = require("../src/modules/auth/application/manageSessions");
+const { STAFF_MEMBERSHIP_REVOKE_REASON } = require("../src/modules/auth/domain/ports/sessionPorts");
+const { ORGANIZATION_BLOCK_REVOKE_REASON, ORGANIZATION_BLOCKED } = require("../src/modules/organizationBlock/domain");
+
+const USER = hex("1");
+const ROTATION_KEY = "c".repeat(64);
+const derive = (previous, key) => `derived-${hashOpaqueToken(previous + key).slice(0, 16)}`;
+
+/* One organization's refresh sessions over an in-memory repository that behaves as the Mongo one.
+   `blocked` undefined builds the manager WITHOUT the gate: that code path is origin/main's, so a
+   scenario run in both worlds compares the answer under a block with main's answer. */
+const refreshWorld = (blocked) => {
+  const rows = [];
+  const audit = [];
+  // `blocked` switches on when the scenario is set up: the credential existed before the block.
+  const state = { now: NOW, memberActive: true, issued: 0, blocked: false };
+  const sessions = {
+    async create(input) { rows.push({ id: `row-${rows.length}`, ...input, status: "active", revokeReason: null, rotationCount: 0, consumed: [], lastRotation: null }); },
+    async findByTokenHash(tokenHash) { const row = rows.find((r) => r.tokenHash === tokenHash || r.consumed.includes(tokenHash)); return row ? { ...row } : null; },
+    async rotateActive({ id, previousHash, tokenHash, tokenId, keyHash, now }) {
+      const row = rows.find((r) => r.id === id && r.tokenHash === previousHash && r.status === "active");
+      if (!row) return false;
+      row.consumed.push(previousHash); row.tokenHash = tokenHash; row.tokenId = tokenId; row.rotationCount++; row.lastRotation = { previousHash, keyHash, at: now };
+      return true;
+    },
+    async revokeFamily({ familyId, reason }) { let n = 0; for (const r of rows) if (r.familyId === familyId && r.status !== "revoked") { r.status = "revoked"; r.revokeReason = reason; n++; } return n; },
+    async revokeSession({ sessionId, reason }) { let n = 0; for (const r of rows) if (r.sessionId === sessionId && r.status !== "revoked") { r.status = "revoked"; r.revokeReason = reason; n++; } return n; },
+    async revokeAll({ userId, organizationId, reason }) { let n = 0; for (const r of rows) if (r.userId === userId && r.organizationId === organizationId && r.status !== "revoked") { r.status = "revoked"; r.revokeReason = reason; n++; } return n; },
+    async listActive() { return []; },
+  };
+  let token = 0;
+  const account = { userId: USER, accountType: "planner", email: "m@example.test", organizationId: A, role: "customer", roles: ["planner"], rolesVersion: 1 };
+  const manager = createSessionManager({
+    sessions,
+    accounts: { load: async () => (state.memberActive ? account : null) },
+    accessTokens: { issue: () => { state.issued += 1; return { accessToken: "access", expiresAt: 1, expiresIn: 1 }; } },
+    audit: { append: async (event) => { audit.push(event); } },
+    now: () => state.now,
+    opaqueToken: () => `refresh-${token++}`,
+    deriveRefreshToken: derive,
+    ...(blocked === undefined ? {} : { organizationBlocked: async (organizationId) => state.blocked && organizationId === A }),
+  });
+  const begin = () => manager.begin({ account, correlationId: "c-begin" });
+  // What the block's own transaction does to every session of the organization.
+  const blockEndsSessions = () => { for (const r of rows) if (r.status !== "revoked") { r.status = "revoked"; r.revokeReason = ORGANIZATION_BLOCK_REVOKE_REASON; } };
+  return { manager, rows, audit, state, begin, blockEndsSessions };
+};
+
+// Runs one scenario under a block and on main's path, and returns both outcomes.
+const underBlockAndOnMain = async (scenario) => {
+  const outcome = async (blocked) => {
+    const w = refreshWorld(blocked);
+    const presented = await scenario(w, blocked === true);
+    w.state.blocked = blocked === true;
+    const before = w.audit.length;
+    const issuedBefore = w.state.issued;
+    const answer = await w.manager.rotate({ correlationId: "c-rotate", ...presented });
+    return { kind: answer.kind, customerAuditRows: w.audit.slice(before).map((e) => [e.organizationId, e.action]), issued: w.state.issued - issuedBefore, reasons: w.rows.map((r) => r.revokeReason) };
+  };
+  return { blocked: await outcome(true), main: await outcome(undefined) };
+};
+
+test("F5a refresh: every dead credential of a blocked organization gets exactly main's answer and main's audit rows, never organization_blocked", async () => {
+  const dead = {
+    "a consumed token": async (w) => { const s = await w.begin(); await w.manager.rotate({ refreshToken: s.refreshToken, correlationId: "c0" }); return { refreshToken: s.refreshToken }; },
+    "a consumed token of a session the block ended": async (w, blocked) => { const s = await w.begin(); await w.manager.rotate({ refreshToken: s.refreshToken, correlationId: "c0" }); if (blocked) w.blockEndsSessions(); return { refreshToken: s.refreshToken }; },
+    "a logged-out session": async (w) => { const s = await w.begin(); await w.manager.revokeSession({ userId: USER, organizationId: A, sessionId: s.sessionId, correlationId: "c0" }); return { refreshToken: s.refreshToken }; },
+    "a session revoked for a staff membership change": async (w) => { const s = await w.begin(); w.rows[0].status = "revoked"; w.rows[0].revokeReason = STAFF_MEMBERSHIP_REVOKE_REASON; return { refreshToken: s.refreshToken }; },
+    "an expired session": async (w) => { const s = await w.begin(); w.state.now = new Date(NOW.getTime() + 400 * 24 * 60 * 60 * 1000); return { refreshToken: s.refreshToken }; },
+    "a member who is no longer active": async (w) => { const s = await w.begin(); w.state.memberActive = false; return { refreshToken: s.refreshToken }; },
+    "a token that was never issued": async (w) => { await w.begin(); return { refreshToken: "never-issued" }; },
+  };
+  const expected = {
+    "a consumed token": ["reuse_detected", [[A, "auth.refresh.reuse_detected"]]],
+    "a consumed token of a session the block ended": ["reuse_detected", [[A, "auth.refresh.reuse_detected"]]],
+    "a logged-out session": ["reuse_detected", [[A, "auth.refresh.reuse_detected"]]],
+    "a session revoked for a staff membership change": ["reuse_detected", []],
+    "an expired session": ["expired", []],
+    "a member who is no longer active": ["membership_inactive", []],
+    "a token that was never issued": ["invalid", []],
+  };
+  for (const [name, scenario] of Object.entries(dead)) {
+    const { blocked, main } = await underBlockAndOnMain(scenario);
+    assert.deepEqual([blocked.kind, blocked.customerAuditRows], expected[name], name);
+    assert.deepEqual([blocked.kind, blocked.customerAuditRows], [main.kind, main.customerAuditRows], `${name}: the answer and the customer audit rows are main's`);
+    assert.equal(blocked.issued, 0, name);
+  }
+  // A member removed after the block ended their session is not told either: the answer a
+  // staff-ended session's last token always gets, and no row in the customer organization.
+  const removed = refreshWorld(true);
+  const session = await removed.begin();
+  removed.blockEndsSessions();
+  removed.state.blocked = true;
+  removed.state.memberActive = false;
+  const before = removed.audit.length;
+  assert.deepEqual(await removed.manager.rotate({ refreshToken: session.refreshToken, correlationId: "c1" }), { kind: "reuse_detected" });
+  assert.equal(removed.audit.length, before);
+});
+
+test("F5a refresh: a live credential of a blocked organization is told, gets no token, and writes no customer audit row", async () => {
+  const live = {
+    "the current token of an active session": async (w) => ({ refreshToken: (await w.begin()).refreshToken }),
+    "the current token of a session the block ended": async (w, blocked) => { const s = await w.begin(); if (blocked) w.blockEndsSessions(); return { refreshToken: s.refreshToken }; },
+    // The rotation succeeded but its answer was lost; the client retries with the same key. The
+    // session is still active (it began, and rotated, while the block committed).
+    "a recoverable handoff retry": async (w) => { const s = await w.begin(); assert.equal((await w.manager.rotate({ refreshToken: s.refreshToken, rotationKey: ROTATION_KEY, correlationId: "c0" })).kind, "rotated"); return { refreshToken: s.refreshToken, rotationKey: ROTATION_KEY }; },
+  };
+  for (const [name, scenario] of Object.entries(live)) {
+    const { blocked, main } = await underBlockAndOnMain(scenario);
+    assert.equal(main.kind, "rotated", `${name}: main would have granted it`);
+    assert.deepEqual([blocked.kind, blocked.customerAuditRows, blocked.issued], ["organization_blocked", [], 0], name);
+    assert.deepEqual(blocked.reasons, [ORGANIZATION_BLOCK_REVOKE_REASON], `${name}: the session is ended for the block's reason`);
+  }
+});
+
+// The access path. Models are replaced as the collection would answer; the customer-side
+// revocation is the REAL session manager over in-memory sessions, so its audit rows are counted.
+const accessWorld = async (run) => {
+  const { createAuthenticate } = require("../middleware/auth");
+  const Organization = require("../modal/organizationModel").default;
+  const OrganizationMembership = require("../modal/organizationMembershipModel").default;
+  const RefreshSession = require("../modal/refreshSessionModel").default;
+  const loader = require("../src/modules/auth/infrastructure/mongo/mongoSessionAccountLoader");
+  const originals = [[Organization, "findOne", Organization.findOne], [OrganizationMembership, "findOne", OrganizationMembership.findOne], [RefreshSession, "exists", RefreshSession.exists], [loader, "findSessionPrincipal", loader.findSessionPrincipal]];
+  const request = async ({ blocked, kind = "customer", membership, principal = true, session }) => {
+    const w = refreshWorld(undefined);
+    const begun = await w.begin();
+    const row = w.rows[0];
+    if (session === "ended_by_block") w.blockEndsSessions();
+    if (session === "logged_out") { row.status = "revoked"; row.revokeReason = "user_logout"; }
+    if (session === "expired") row.expiresAt = new Date(0);
+    const beginRows = w.audit.length;
+    Organization.findOne = () => ({ select: () => ({ lean: async () => ({ _id: A, kind, ...(blocked ? { blocked: { at: minutesAgo(5), byStaffOrganizationId: hex("d"), byStaffAccountId: hex("7") } } : {}) }) }) });
+    OrganizationMembership.findOne = () => ({ select: () => ({ lean: async () => membership }) });
+    RefreshSession.exists = async (filter) => {
+      const found = w.rows.find((r) => r.sessionId === filter.sessionId && r.status === filter.status && (filter.revokeReason === undefined || r.revokeReason === filter.revokeReason) && r.expiresAt > filter.expiresAt.$gt && r.idleExpiresAt > filter.idleExpiresAt.$gt);
+      return found ? { _id: found.id } : null;
+    };
+    loader.findSessionPrincipal = async () => (principal ? { accountType: "planner", email: "m@example.test", role: "customer" } : null);
+    const authenticate = createAuthenticate(
+      () => ({ userId: USER, organizationId: A, sessionId: begun.sessionId }),
+      {
+        revokeInactiveMembership: (input) => w.manager.revokeInactiveMembership(input),
+        revokeOtherSessionsAfterRoleChange: async () => { throw new Error("not reached in these cases"); },
+        actorLookups: {},
+        endSessionsOfBlockedOrganization: (input) => w.manager && (async () => { let n = 0; for (const r of w.rows) if (r.userId === input.userId && r.organizationId === input.organizationId && r.status !== "revoked") { r.status = "revoked"; r.revokeReason = ORGANIZATION_BLOCK_REVOKE_REASON; n++; } return n; })(),
+      },
+    );
+    const res = { statusCode: 200, body: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+    let passed = false;
+    await authenticate({ headers: { authorization: "Bearer t" }, correlationId: "c-req" }, res, () => { passed = true; });
+    return { status: res.statusCode, code: res.body?.code ?? res.body?.message ?? null, passed, customerAuditRows: w.audit.slice(beginRows).map((e) => e.action), session: [row.status, row.revokeReason] };
+  };
+  try { await run(request); } finally { for (const [target, name, value] of originals) target[name] = value; }
+};
+
+test("F5b authenticate: a request main refuses for its own reasons gets that refusal in a blocked organization, with no customer audit row main would not have written", async () => {
+  const active = { roles: ["planner"], version: 1, status: "active", sessionRevocationPending: false };
+  await accessWorld(async (request) => {
+    const dead = [
+      ["a removed member (no membership)", { membership: null, session: "active" }, [401, "MEMBERSHIP_INACTIVE"]],
+      ["a removed member whose session the block ended", { membership: null, session: "ended_by_block" }, [401, "MEMBERSHIP_INACTIVE"]],
+      ["a deactivated member", { membership: { ...active, status: "suspended" }, session: "active" }, [401, "MEMBERSHIP_INACTIVE"]],
+      ["a deactivated member whose session the block ended", { membership: { ...active, status: "suspended" }, session: "ended_by_block" }, [401, "MEMBERSHIP_INACTIVE"]],
+      ["a logged-out session", { membership: active, session: "logged_out" }, [403, "Active organization membership required"]],
+      ["an expired session", { membership: active, session: "expired" }, [403, "Active organization membership required"]],
+      ["a blocked or missing account", { membership: active, principal: false, session: "active" }, [403, "Active organization membership required"]],
+      ["an account waiting for placement", { membership: active, kind: "legacy_holding", session: "active" }, [401, "ORGANIZATION_SETUP_REQUIRED"]],
+    ];
+    for (const [name, input, answer] of dead) {
+      const underBlock = await request({ ...input, blocked: true });
+      // Main, for the same person: the same credential with no block (so no session ended by one).
+      const onMain = await request({ ...input, blocked: false, session: input.session === "ended_by_block" ? "active" : input.session });
+      assert.deepEqual([underBlock.status, underBlock.code], answer, name);
+      assert.deepEqual([underBlock.status, underBlock.code], [onMain.status, onMain.code], `${name}: main's answer`);
+      assert.notEqual(underBlock.code, ORGANIZATION_BLOCKED.code, name);
+      assert.equal(underBlock.passed, false, name);
+      // Every customer row under the block is one main writes too; the block adds none.
+      assert.ok(underBlock.customerAuditRows.length <= onMain.customerAuditRows.length, `${name}: ${underBlock.customerAuditRows} vs ${onMain.customerAuditRows}`);
+      assert.deepEqual(underBlock.customerAuditRows, onMain.customerAuditRows.slice(0, underBlock.customerAuditRows.length), name);
+    }
+    // The counts, spelled out: a removed member with a still-live session is recorded as on main
+    // (one row); once the block ended that session there is nothing left to revoke and no row.
+    assert.deepEqual((await request({ blocked: true, membership: null, session: "active" })).customerAuditRows, ["auth.sessions.revoked_all"]);
+    assert.deepEqual((await request({ blocked: false, membership: null, session: "active" })).customerAuditRows, ["auth.sessions.revoked_all"]);
+    const ended = await request({ blocked: true, membership: null, session: "ended_by_block" });
+    assert.deepEqual([ended.customerAuditRows, ended.session], [[], ["revoked", ORGANIZATION_BLOCK_REVOKE_REASON]], "the block's reason is not overwritten");
+  });
+});
+
+test("F5b authenticate: a live member of a blocked organization is told, with or without the session the block ended, and no customer audit row is written", async () => {
+  const active = { roles: ["owner"], version: 3, status: "active", sessionRevocationPending: true };
+  await accessWorld(async (request) => {
+    for (const session of ["active", "ended_by_block"]) {
+      const refused = await request({ blocked: true, membership: active, session });
+      assert.deepEqual([refused.status, refused.code, refused.passed], [401, ORGANIZATION_BLOCKED.code, false], session);
+      assert.deepEqual(refused.customerAuditRows, [], session);
+      assert.deepEqual(refused.session, ["revoked", ORGANIZATION_BLOCK_REVOKE_REASON], session);
+    }
+  });
+  const source = read("middleware/auth.ts");
+  const at = (text) => { const index = source.indexOf(text); assert.ok(index > 0, text); return index; };
+  const order = [
+    at('if (!membership || membership.status !== "active")'),
+    at('if (organization?.kind === "legacy_holding")'),
+    at("if (!principal || !liveSession)"),
+    at("if (!organization) {"),
+    at("if (blocked) {"),
+    at("if (membership.sessionRevocationPending)"),
+  ];
+  assert.deepEqual(order, [...order].sort((x, y) => x - y), "main's own refusals, then the block, then the request goes on");
+});

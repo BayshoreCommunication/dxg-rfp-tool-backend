@@ -109,12 +109,29 @@ export const createSessionManager = (dependencies: Dependencies) => {
     const presentedHash = hashOpaqueToken(input.refreshToken);
     const stored = await dependencies.sessions.findByTokenHash(presentedHash);
     if (!stored) return { kind: "invalid" };
-    // RFPilot staff blocked the organization: no refresh, whatever the state of the token. The
-    // family ends for the staff reason and NOTHING is written to the organization's audit trail
-    // (customers see no staff activity). A failed lookup rejects, which the caller answers as a
-    // retryable 503 without clearing the cookie.
-    if (await dependencies.organizationBlocked?.(stored.organizationId)) {
+    /* RFPilot staff blocked the organization (organizationBlock/domain.ts): no refresh.
+
+       WHO IS TOLD. Only a refresh that would otherwise have been GRANTED answers
+       `organization_blocked`: the two places below that issue tokens ask the gate last, after
+       every refusal of their own (`refuseBlocked`). So a dead credential (a consumed token, a
+       logged-out or otherwise revoked session, an expired one, a member who is no longer active)
+       gets exactly the answer, the revocation and the audit event it always got, and does not
+       learn of the block. One more state is a live credential: the session the BLOCK ITSELF
+       ended, presenting its own current token while the organization is still blocked. Without
+       the block it would have refreshed, so it is told too (`endedByBlock`).
+
+       Nothing is written to the organization's audit trail for a block (customers see no staff
+       activity): the family ends for the block's reason, unaudited. A failed gate lookup
+       rejects, which the caller answers as a retryable 503 without clearing the cookie. */
+    const blockedNow = async () => (await dependencies.organizationBlocked?.(stored.organizationId)) === true;
+    const refuseBlocked = async () => {
+      if (!(await blockedNow())) return null;
       await dependencies.sessions.revokeFamily({ familyId: stored.familyId, reason: ORGANIZATION_BLOCK_REVOKE_REASON, now: issuedAt });
+      return { kind: "organization_blocked" as const };
+    };
+    const endedByBlock = stored.status === "revoked" && stored.revokeReason === ORGANIZATION_BLOCK_REVOKE_REASON &&
+      stored.tokenHash === presentedHash && stored.expiresAt > issuedAt && stored.idleExpiresAt > issuedAt;
+    if (endedByBlock && (await blockedNow()) && (await dependencies.accounts.load(stored.userId, stored.organizationId))) {
       return { kind: "organization_blocked" };
     }
     const key = input.rotationKey && /^[a-f0-9]{64}$/.test(input.rotationKey) && dependencies.deriveRefreshToken ? input.rotationKey : undefined;
@@ -161,6 +178,9 @@ export const createSessionManager = (dependencies: Dependencies) => {
         await dependencies.sessions.revokeFamily({ familyId: current.familyId, reason: await inactiveReason(current), now: issuedAt });
         return { kind: 'membership_inactive' as const };
       }
+      // A recoverable handoff is a live credential: asked last, as on the direct path below.
+      const refusedForBlock = await refuseBlocked();
+      if (refusedForBlock) return refusedForBlock;
       return { kind: 'rotated' as const, ...dependencies.accessTokens.issue(account, current.sessionId), refreshToken,
         refreshExpiresAt: current.expiresAt.getTime(), sessionId: current.sessionId };
     };
@@ -181,6 +201,9 @@ export const createSessionManager = (dependencies: Dependencies) => {
       await dependencies.sessions.revokeFamily({ familyId: stored.familyId, reason: await inactiveReason(stored), now: issuedAt });
       return { kind: "membership_inactive" };
     }
+    // Everything of its own is decided; this refresh would be granted. Is the organization blocked?
+    const refusedForBlock = await refuseBlocked();
+    if (refusedForBlock) return refusedForBlock;
     const refreshToken = key ? dependencies.deriveRefreshToken!(input.refreshToken, key) : opaqueToken();
     const tokenId = id();
     const rotated = await dependencies.sessions.rotateActive({

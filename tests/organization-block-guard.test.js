@@ -195,7 +195,8 @@ test("every route goes through authenticate or requirePublicGrant, or is listed 
 
 test("the two middlewares the guard relies on do enforce the block", () => {
   const auth = read("middleware/auth.ts");
-  assert.match(auth, /if \(isOrganizationBlocked\(organization\)\) \{[\s\S]{0,700}res\.status\(401\)\.json\(\{ success: false, code: ORGANIZATION_BLOCKED\.code, message: ORGANIZATION_BLOCKED\.message \}\);\s+return;/);
+  assert.match(auth, /const blocked = isOrganizationBlocked\(organization\);/);
+  assert.match(auth, /if \(blocked\) \{[\s\S]{0,700}res\.status\(401\)\.json\(\{ success: false, code: ORGANIZATION_BLOCKED\.code, message: ORGANIZATION_BLOCKED\.message \}\);\s+return;/);
   assert.match(auth, /export const authenticate = createAuthenticate\(verifyAccessToken\);/);
   // requirePublicGrant admits a request only with a grant from validateAndConsume (or a user
   // that authenticate already admitted); validateAndConsume asks the gate before using the link.
@@ -215,7 +216,10 @@ test("staff routes keep working on a blocked organization: they act on the path'
   // Staff requests pass `authenticate` for the STAFF organization (the session's), not the
   // customer's, so a block of the customer organization does not touch them.
   const service = read("src/modules/staffAccess/application/manageOrganizationBlock.ts");
-  assert.match(service, /const standing = unmanageableStanding\(organization, staff\.organizationId\);\s+if \(standing\) throw notManageable\(standing\);/);
+  // Blocking applies the full rule before the store is reached; reactivating leaves the decision
+  // to the store, which removes a marker from any organization that carries one (F9).
+  assert.match(service, /const standing = unmanageableStanding\(organization, staff\.organizationId\);\s+if \(standing && requireManageable\) throw notManageable\(standing\);/);
+  assert.match(service, /audit: eventOf\(current, \{\}\),\s+\}\), true\),/, "block requires a manageable organization");
   // None of the staff services or stores asks the gate: a block must not stop staff from reading or fixing the organization.
   const staffFiles = sourceFiles("src/modules/staffAccess").filter((file) => !/OrganizationBlock/.test(file));
   assert.ok(staffFiles.length >= 6);

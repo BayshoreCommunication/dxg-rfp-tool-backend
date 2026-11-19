@@ -174,7 +174,7 @@ test("every sign-in path: beginAuthenticatedSession asks the gate first and thro
 
 // ── The access path ─────────────────────────────────────────────────────────────────────────
 
-test("authenticate: a request for a blocked organization is 401 ORGANIZATION_BLOCKED, the member's sessions for it end, and no customer-side revocation runs", async () => {
+test("authenticate: an active member's request for a blocked organization is 401 ORGANIZATION_BLOCKED, the member's sessions for it end, and no customer-side revocation runs for the block", async () => {
   const { createAuthenticate } = require("../middleware/auth");
   const Organization = require("../modal/organizationModel").default;
   const OrganizationMembership = require("../modal/organizationMembershipModel").default;
@@ -213,12 +213,19 @@ test("authenticate: a request for a blocked organization is 401 ORGANIZATION_BLO
   const logged = [];
   console.error = (...args) => logged.push(args.join(" "));
   try {
-    // Whatever the member's role or state: the block is decided first.
-    for (const membership of [active, { ...active, status: "suspended" }, null]) {
+    // Whatever the member's role: an active member's request is refused for the block, and the
+    // pending role-change revocation (a customer-side event) is not reached.
+    for (const membership of [active, { ...active, roles: ["planner"] }]) {
       const refused = await run(blocked, membership);
       assert.deepEqual([refused.res.statusCode, refused.res.body], expected);
       assert.equal(refused.passed, false);
       assert.deepEqual(refused.calls, [["endSessions", { userId: USER, organizationId: A }]], "only the block's own, unaudited revocation runs");
+    }
+    // A request the middleware refuses for its own reasons gets that refusal, blocked or not, so a
+    // dead credential does not learn of the block (tests/organization-block-fix-round.test.js, F5).
+    for (const membership of [{ ...active, status: "suspended" }, null]) {
+      const refused = await run(blocked, membership);
+      assert.deepEqual([refused.res.statusCode, refused.res.body.code, refused.calls], [401, "MEMBERSHIP_INACTIVE", [["revokeInactiveMembership", null]]]);
     }
     // The refusal stands when the sessions can't be ended, and when no such dependency is given.
     const failing = await run(blocked, active, async () => { throw new Error("mongo down"); });
@@ -241,7 +248,11 @@ test("authenticate: a request for a blocked organization is 401 ORGANIZATION_BLO
     for (const [target, name, value] of originals) target[name] = value;
   }
   const source = read("middleware/auth.ts");
-  assert.ok(source.indexOf("if (isOrganizationBlocked(organization))") < source.indexOf('if (!membership || membership.status !== "active")'), "decided before any customer-side revocation");
+  // Decided after the middleware's own refusals and before the pending role-change revocation.
+  const decidedAt = source.indexOf("if (blocked) {");
+  assert.ok(decidedAt > source.indexOf('res.status(403).json({ success: false, message: "Organization is inactive or unavailable" });'));
+  assert.ok(decidedAt < source.indexOf("if (membership.sessionRevocationPending)"), "the pending role-change revocation is not reached for a blocked organization");
+  assert.match(source, /const blocked = isOrganizationBlocked\(organization\);/);
   // The unaudited revocation goes straight to the repository, for the block's reason.
   assert.match(read("src/modules/auth/composition.ts"), /export const endSessionsOfBlockedOrganization = \(input: \{ userId: string; organizationId: string \}\) =>\s+mongoRefreshSessionRepository\.revokeAll\(\{ userId: input\.userId, organizationId: input\.organizationId, reason: ORGANIZATION_BLOCK_REVOKE_REASON, now: new Date\(\) \}\);/);
 });
