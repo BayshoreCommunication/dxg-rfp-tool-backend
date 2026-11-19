@@ -335,6 +335,8 @@ const TIMERS = {
   "controller/conversationsController.ts": { setInterval: 1, setTimeout: 1, why: "the poll and the time limit of a response stream opened by a request that passed `authenticate`" },
   "server.ts": { setTimeout: 2, why: "EXEMPT: time limits on the health checks and on shutdown; no organization" },
   "src/modules/documentIngestion/clamAvScanner.ts": { setTimeout: 1, why: "EXEMPT: the time limit of one malware scan, inside a job or request that passed its own check" },
+  "src/modules/durableJobs/workerStartup.ts": { setTimeout: 1, why: "EXEMPT: the wait between MongoDB connection attempts at worker start-up, before any worker exists; no organization" },
+  "config/db.ts": { setImmediate: 1, why: "EXEMPT: lowers the quiet-attempt flag one tick after a failed MongoDB connection; no organization" },
   "src/modules/durableJobs/queue.ts": { setTimeout: 1, why: "EXEMPT: the time limit of the queue health check" },
   "src/modules/platformAssistant/openAiAssistantProvider.ts": { setTimeout: 2, why: "EXEMPT: time limits of one provider call, inside a request that passed `authenticate`" },
   "scripts/verifyAuthRefreshE2E.ts": { setTimeout: 1, why: "EXEMPT: an operator's verification script; a wait" },

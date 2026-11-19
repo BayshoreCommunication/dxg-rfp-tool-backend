@@ -55,19 +55,21 @@ export const startWorkerWithMongo = async <W>(input: {
   const log = input.log ?? ((line: string) => { console.warn(line); });
   const prefix = `${input.name} cannot start: MongoDB is required (every job asks whether its organization is blocked)`;
   if (!env.MONGODB_URL && !env.MONGO_URL) throw new WorkerStartupError(`${prefix} and MONGODB_URL is not set.`);
-  for (let attempt = 1; ; attempt += 1) {
+  let lastCause = "";
+  for (let attempt = 1; attempt <= WORKER_MONGO_ATTEMPTS; attempt += 1) {
     try {
       await input.connect({ quietFailure: true });
-      break;
     } catch (error) {
-      const cause = oneLineCause(error);
+      lastCause = oneLineCause(error);
+      if (attempt === WORKER_MONGO_ATTEMPTS) break;
       const delay = WORKER_MONGO_RETRY_DELAYS_MS[attempt - 1];
-      if (delay === undefined) throw new WorkerStartupError(`${prefix} and it could not be reached: ${cause} (${WORKER_MONGO_ATTEMPTS} attempts)`);
-      log(`${input.name}: MongoDB could not be reached (attempt ${attempt} of ${WORKER_MONGO_ATTEMPTS}), trying again in ${delay / 1000} s: ${cause}`);
+      log(`${input.name}: MongoDB could not be reached (attempt ${attempt} of ${WORKER_MONGO_ATTEMPTS}), trying again in ${delay / 1000} s: ${lastCause}`);
       await sleep(delay);
+      continue;
     }
+    return input.createWorker();
   }
-  return input.createWorker();
+  throw new WorkerStartupError(`${prefix} and it could not be reached: ${lastCause} (${WORKER_MONGO_ATTEMPTS} attempts)`);
 };
 
 /** The one line a worker script logs when it cannot start. */
