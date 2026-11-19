@@ -533,3 +533,112 @@ test("F5b authenticate: a live member of a blocked organization is told, with or
   ];
   assert.deepEqual(order, [...order].sort((x, y) => x - y), "main's own refusals, then the block, then the request goes on");
 });
+
+// ---------------------------------------------------------------- F6: sign-up on a blocked organization's domain
+
+const { createAccessRequestService, organizationForEmailDomain } = require("../src/modules/accessRequests/accessRequests");
+
+/* The collections the access-request service reads and writes, as MongoDB would answer for one
+   organization A that verified acme.example. Everything else is the real service. */
+const accessRequestWorld = async ({ blocked, autoApprove, gate = true }, run) => {
+  const Organization = require("../modal/organizationModel").default;
+  const OrganizationMembership = require("../modal/organizationMembershipModel").default;
+  const User = require("../modal/userModel").default;
+  const AccessRequest = require("../modal/accessRequestModel").default;
+  const originals = [[Organization, "findOne"], [OrganizationMembership, "find"], [User, "find"], [User, "exists"], [AccessRequest, "findOne"], [AccessRequest, "create"], [AccessRequest, "find"], [AccessRequest, "findOneAndUpdate"]].map(([model, name]) => [model, name, model[name]]);
+  const w = { blocked, requests: [], invitations: [], notifications: [], audit: [], organizationSelects: [] };
+  const OWNER = hex("9");
+  const leaf = (value) => { const chain = { select: () => chain, sort: () => chain, limit: () => chain, lean: async () => value }; return chain; };
+  Organization.findOne = (filter) => {
+    const chain = leaf(filter.verifiedDomains === "acme.example" ? { _id: oid(A), name: "Acme", autoApproveDomain: autoApprove, ...(w.blocked ? { blocked: { at: minutesAgo(5) } } : {}) } : null);
+    const select = chain.select; chain.select = (fields) => { w.organizationSelects.push(fields); return select(); };
+    return chain;
+  };
+  OrganizationMembership.find = () => leaf([{ userId: oid(OWNER), roles: ["owner"] }]);
+  User.find = () => leaf([{ _id: oid(OWNER), email: "owner@acme.example" }]);
+  User.exists = async () => null;
+  const matches = (row, filter) => Object.entries(filter).every(([key, value]) => String(row[key]) === String(value));
+  AccessRequest.findOne = (filter) => leaf(w.requests.find((r) => matches(r, filter)) ?? null);
+  AccessRequest.find = (filter) => leaf(w.requests.filter((r) => matches(r, filter)));
+  AccessRequest.create = async (doc) => { const row = { _id: oid(), createdAt: NOW, ...doc }; w.requests.push(row); return row; };
+  AccessRequest.findOneAndUpdate = (filter, update) => { const row = w.requests.find((r) => matches(r, filter)); if (row) Object.assign(row, update.$set); return leaf(row ?? null); };
+  const service = createAccessRequestService({
+    invitations: { async create(actor, input) { w.invitations.push([actor.organizationId, input.email]); return { kind: "done", rows: [{ outcome: "invited", invitation: { id: hex("5") } }] }; } },
+    notifier: { async requestCreated(input) { w.notifications.push(input.recipients.map((r) => r.email)); }, async requestDenied() {} },
+    audit: async (event) => { w.audit.push([event.organizationId, event.action, event.reason]); },
+    now: () => NOW,
+    ...(gate ? { organizationBlocked: async (organizationId) => w.blocked && organizationId === A } : {}),
+  });
+  try { return await run(service, w, OWNER); } finally { for (const [model, name, value] of originals) model[name] = value; }
+};
+
+test("F6 a blocked organization's domain still matches, with nothing about the block in the answer: an outsider sees what they would see without a block", async () => {
+  const answers = [];
+  for (const blocked of [true, false]) {
+    await accessRequestWorld({ blocked, autoApprove: true }, async (_service, w) => {
+      answers.push(await organizationForEmailDomain("new@acme.example"));
+      assert.deepEqual(w.organizationSelects, ["_id name autoApproveDomain"], "the marker is not even read by the matcher");
+    });
+  }
+  assert.deepEqual(answers[0], { id: A, name: "Acme", autoApproveDomain: true, basis: "verified_domain" });
+  assert.deepEqual(answers[0], answers[1]);
+  // The three consumers answer from this one function, so each is what it is on main: the match
+  // at verify-otp, 409 ORGANIZATION_DOMAIN_MATCH at register and Google unless the person chose a
+  // separate organization, and ORGANIZATION_DOMAIN_MATCH for a first Microsoft sign-in.
+  const controller = read("controller/authController.ts");
+  assert.match(controller, /const match = await organizationForEmailDomain\(email\);\s+res\.status\(200\)\.json\(\{\s+success: true,\s+message: "Email verified successfully",\s+organizationMatch: match \? \{ name: match\.name \} : null,/);
+  assert.match(controller, /if \(req\.body\?\.separateOrganization !== true\) \{\s+const match = await organizationForEmailDomain\(req\.body\?\.email\);\s+if \(match\) \{\s+res\.status\(409\)\.json\(domainMatchResponse\(match\.name\)\);/);
+  assert.match(read("src/modules/auth/composition.ts"), /domainOrganizationFor: organizationForEmailDomain,/);
+  assert.match(read("src/modules/sso/composition.ts"), /domainOrganizationFor: organizationForEmailDomain,/);
+  assert.match(read("src/modules/sso/application/federatedSignIn.ts"), /if \(await deps\.domainOrganizationFor\?\.\(person\.email\)\) return \{ error: "ORGANIZATION_DOMAIN_MATCH" \};/);
+});
+
+test("F6 an access request for a blocked organization is stored as pending and answered as pending; no invitation, no notification, no email, and only the requester's own audit row", async () => {
+  for (const autoApprove of [true, false]) {
+    await accessRequestWorld({ blocked: true, autoApprove }, async (service, w, OWNER) => {
+      const answer = await service.request({ email: "New@Acme.example", name: "New Person", correlationId: "c1" });
+      assert.deepEqual(answer, { kind: "pending", organizationName: "Acme" });
+      assert.deepEqual(w.requests.map((r) => [String(r.organizationId), r.email, r.status]), [[A, "new@acme.example", "pending"]]);
+      assert.deepEqual(w.invitations, [], "auto-approve does not run: nothing is created or sent into the blocked organization");
+      assert.deepEqual(w.notifications, [], "its Owners and Admins are not notified or emailed");
+      assert.deepEqual(w.audit, [[A, "organization.access_request.created", "domain_match"]], "what main writes for a pending request, and nothing else");
+      // Asking again answers the same and stores nothing more.
+      assert.deepEqual(await service.request({ email: "new@acme.example", name: "New Person", correlationId: "c2" }), answer);
+      assert.equal(w.requests.length, 1);
+
+      // Reactivated: the request is in the Owners' and Admins' list and can be approved. No late
+      // notification is sent, and asking again does not auto-approve it: an Owner or Admin decides.
+      w.blocked = false;
+      const listed = await service.list(A);
+      assert.deepEqual(listed.map((r) => [r.email, r.status, r.autoApproved]), [["new@acme.example", "pending", false]]);
+      assert.deepEqual(await service.request({ email: "new@acme.example", name: "New Person", correlationId: "c3" }), answer);
+      assert.deepEqual([w.invitations, w.notifications], [[], []]);
+      const decided = await service.approve({ organizationId: A, userId: OWNER, roles: ["owner"], managedTeamIds: [] }, listed[0].id, {}, "c4");
+      assert.deepEqual([decided.kind, decided.request.status], ["decided", "approved"]);
+      assert.deepEqual(w.invitations, [[A, "new@acme.example"]]);
+    });
+  }
+});
+
+test("F6 the same request when the organization is not blocked is what it is on main; the one difference under a block is pending in place of invited for an auto-approve domain", async () => {
+  const outcome = async (options) => accessRequestWorld(options, async (service, w) => ({
+    answer: await service.request({ email: "new@acme.example", name: "New Person", correlationId: "c1" }),
+    invitations: w.invitations.length, notifications: w.notifications, audit: w.audit.map((e) => e[1]),
+  }));
+  // No auto-approve: identical answer, blocked or not (and identical to main, which has no gate).
+  const manual = { blocked: await outcome({ blocked: true, autoApprove: false }), open: await outcome({ blocked: false, autoApprove: false }), main: await outcome({ blocked: false, autoApprove: false, gate: false }) };
+  assert.deepEqual(manual.blocked.answer, manual.open.answer);
+  assert.deepEqual(manual.open, manual.main);
+  assert.deepEqual(manual.open, { answer: { kind: "pending", organizationName: "Acme" }, invitations: 0, notifications: [["owner@acme.example"]], audit: ["organization.access_request.created"] });
+  // Auto-approve: the accepted tell.
+  const auto = { blocked: await outcome({ blocked: true, autoApprove: true }), open: await outcome({ blocked: false, autoApprove: true }), main: await outcome({ blocked: false, autoApprove: true, gate: false }) };
+  assert.deepEqual(auto.open, auto.main);
+  assert.deepEqual(auto.open, { answer: { kind: "invited", organizationName: "Acme" }, invitations: 1, notifications: [], audit: ["organization.access_request.auto_approved"] });
+  assert.deepEqual(auto.blocked.answer, { kind: "pending", organizationName: "Acme" });
+  // A failed gate read fails the request before anything is stored.
+  await accessRequestWorld({ blocked: true, autoApprove: true }, async (_service, w) => {
+    const failing = createAccessRequestService({ invitations: { create: async () => { throw new Error("not reached"); } }, notifier: { requestCreated: async () => { throw new Error("not reached"); }, requestDenied: async () => {} }, audit: async () => { throw new Error("not reached"); }, organizationBlocked: async () => { throw new Error("mongo down"); } });
+    await assert.rejects(() => failing.request({ email: "new@acme.example", name: "New Person", correlationId: "c1" }), /mongo down/);
+    assert.equal(w.requests.length, 0);
+  });
+});

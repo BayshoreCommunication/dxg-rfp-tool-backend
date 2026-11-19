@@ -2,6 +2,7 @@ import { createNotification } from "../../../utils/notificationService";
 import { sendTransactionalEmail } from "../../../utils/emailService";
 import { mongoSecurityAuditWriter } from "../auth/infrastructure/audit/mongoSecurityAuditWriter";
 import { invitations } from "../invitations/composition";
+import { organizationBlockGate } from "../organizationBlock/organizationBlockGate";
 import { createAccessRequestService, type Notifier } from "./accessRequests";
 
 const escapeHtml = (value: string): string =>
@@ -60,6 +61,8 @@ const notifier: Notifier = {
 export const accessRequests = createAccessRequestService({
   invitations: invitations.service,
   notifier,
+  // organization-block: a request for a blocked organization waits as pending; nothing is sent into it.
+  organizationBlocked: (organizationId) => organizationBlockGate.isBlocked(organizationId),
   audit: (input) => mongoSecurityAuditWriter.append({
     organizationId: input.organizationId,
     actorUserId: input.actorUserId,

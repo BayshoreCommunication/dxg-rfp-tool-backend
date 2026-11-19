@@ -33,13 +33,13 @@ const ENFORCED = {
   session: "ENFORCED: issues or refreshes a session only through beginAuthenticatedSession / the session manager, which refuse a blocked organization",
   step: "ENFORCED: acts on a two-factor challenge that is only issued after the block check, and completes through beginAuthenticatedSession",
   invitation: "ENFORCED: every invitation token is resolved by the invitation service, which answers INVITATION_INVALID for a blocked organization",
-  domain: "ENFORCED: the organization comes from organizationForEmailDomain, which offers a blocked organization to nobody",
+  domain: "ENFORCED: a blocked organization still matches its domain (an outsider sees no difference), but the request waits as pending: accessRequests.request asks the gate, runs no auto-approve and notifies nobody in the organization",
   tracking: "ENFORCED: trackEmailEngagement records nothing for a blocked organization and answers as an unknown tracking id",
   sso: "ENFORCED: the callback refuses a blocked organization before any account is resolved; the exchange issues its session through beginAuthenticatedSession",
 };
 const EXEMPT = {
   account: "EXEMPT: acts on a person's own account before any organization is chosen (code by email, password reset); it issues no session and reads or writes nothing of an organization",
-  newOrganization: "EXEMPT: creates a NEW organization for a new account; an organization that does not exist yet cannot be blocked. A domain match to an existing organization goes through organizationForEmailDomain",
+  newOrganization: "EXEMPT: creates a NEW organization for a new account; an organization that does not exist yet cannot be blocked. A domain match to an existing organization, blocked or not, answers 409 ORGANIZATION_DOMAIN_MATCH unless the person explicitly chooses a separate organization",
   staffSignIn: "EXEMPT: RFPilot staff accounts (`admins`) sign in to the staff organization, which can never be blocked; the session still begins through beginAuthenticatedSession",
   logout: "EXEMPT: ends the presented session; a block has already ended every session of the organization, so nothing is revoked and nothing is audited",
   discover: "EXEMPT on purpose: answers one bit per email domain to anyone; it must NOT change with a block, or it would reveal the block",

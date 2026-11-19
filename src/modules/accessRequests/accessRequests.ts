@@ -4,7 +4,6 @@ import Organization from "../../../modal/organizationModel";
 import OrganizationMembership from "../../../modal/organizationMembershipModel";
 import User from "../../../modal/userModel";
 import { isPublicMailDomain } from "../domainVerification/domain/domainRules";
-import { isOrganizationBlocked } from "../organizationBlock/domain";
 import type { CreateOutcome, InvitationService } from "../invitations/application/manageInvitations";
 import type { InvitingActor } from "../invitations/domain/invitationRules";
 
@@ -37,7 +36,14 @@ export const emailDomainOf = (email: string): string => email.slice(email.lastIn
 const RESERVED_EXAMPLE_DOMAINS = new Set(["example.com", "example.net", "example.org"]);
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/* The organization already using this email's company domain, if any (see the header). */
+/* The organization already using this email's company domain, if any (see the header).
+
+   An organization that RFPilot staff BLOCKED still matches, exactly as it does when it is not
+   blocked (owner decision, 2026-11-19). While it is blocked a sign-up on its domain must not
+   silently get a separate organization, and an outsider must see what they would see without a
+   block: the match at verify-otp, 409 ORGANIZATION_DOMAIN_MATCH at register, Google and a first
+   Microsoft or company sign-in, with `separateOrganization: true` still the person's own choice.
+   What a block changes is only what follows a REQUEST for access (see `request` below). */
 export const organizationForEmailDomain = async (rawEmail: unknown): Promise<DomainOrganization | null> => {
   if (typeof rawEmail !== "string") return null;
   const email = rawEmail.trim().toLowerCase();
@@ -46,14 +52,8 @@ export const organizationForEmailDomain = async (rawEmail: unknown): Promise<Dom
   if (isPublicMailDomain(domain)) return null;
 
   const verified = await Organization.findOne({ verifiedDomains: domain, kind: "customer", status: "active" })
-    .select("_id name autoApproveDomain blocked")
-    .lean<{ _id: mongoose.Types.ObjectId; name: string; autoApproveDomain?: boolean; blocked?: { at?: unknown } | null } | null>();
-  /* An organization that RFPilot staff blocked (owner decision, 2026-11-18) is not offered to
-     anyone: an access request, an auto-approved invitation and the "your company already uses
-     RFPilot" answer at signup all behave as if no organization used the domain, which is the
-     answer a domain nobody uses gets. Nothing is created in the blocked organization, and no
-     other organization is matched in its place. */
-  if (isOrganizationBlocked(verified)) return null;
+    .select("_id name autoApproveDomain")
+    .lean<{ _id: mongoose.Types.ObjectId; name: string; autoApproveDomain?: boolean } | null>();
   if (verified) {
     return { id: String(verified._id), name: verified.name, autoApproveDomain: verified.autoApproveDomain === true, basis: "verified_domain" };
   }
@@ -73,9 +73,8 @@ export const organizationForEmailDomain = async (rawEmail: unknown): Promise<Dom
     _id: { $in: [...new Set(memberships.map((m) => String(m.organizationId)))] },
     kind: "customer",
     status: "active",
-  }).sort({ createdAt: 1 }).select("_id name blocked").lean<{ _id: mongoose.Types.ObjectId; name: string; blocked?: { at?: unknown } | null } | null>();
-  // The same for the organization matched by its members' addresses.
-  if (!organization || isOrganizationBlocked(organization)) return null;
+  }).sort({ createdAt: 1 }).select("_id name").lean<{ _id: mongoose.Types.ObjectId; name: string } | null>();
+  if (!organization) return null;
   return { id: String(organization._id), name: organization.name, autoApproveDomain: false, basis: "member_email" };
 };
 
@@ -134,6 +133,9 @@ export const createAccessRequestService = (deps: {
   notifier: Notifier;
   audit: Audit;
   now?: () => Date;
+  /** The organization block gate (organizationBlock/organizationBlockGate.ts). Not given:
+      nothing is blocked. A failed read rejects: the request fails and nothing is stored. */
+  organizationBlocked?: (organizationId: string) => Promise<boolean>;
 }) => {
   const now = deps.now ?? (() => new Date());
 
@@ -167,7 +169,17 @@ export const createAccessRequestService = (deps: {
     const pending = await AccessRequest.findOne({ organizationId: organization.id, email, status: "pending" }).select("_id").lean();
     if (pending) return { kind: "pending", organizationName: organization.name };
 
-    if (organization.autoApproveDomain) {
+    /* The organization is blocked by RFPilot staff. The request is stored as `pending` and
+       answered as any pending request, and its `organization.access_request.created` event is
+       written as for any request (it is the requester's own action). But nothing is sent INTO the
+       blocked organization: auto-approve does not run, so no invitation is created or emailed
+       (the answer is `pending` even where the domain auto-approves, the one accepted tell), and
+       its Owners and Admins get no notification and no email. After a reactivation the request
+       is in their list like any other and they approve or deny it; no late notification is sent
+       and auto-approve is not applied to it afterwards. Asked before anything is written. */
+    const blocked = (await deps.organizationBlocked?.(organization.id)) === true;
+
+    if (organization.autoApproveDomain && !blocked) {
       const actor = await ownerActor(organization.id);
       if (actor) {
         const outcome = await deps.invitations.create(actor, { email, role: "planner", teamId: null }, input.correlationId);
@@ -198,6 +210,7 @@ export const createAccessRequestService = (deps: {
       organizationId: organization.id, action: "organization.access_request.created", targetId: String(created._id),
       reason: "domain_match", correlationId: input.correlationId, metadata: { domain: emailDomainOf(email) },
     });
+    if (blocked) return { kind: "pending", organizationName: organization.name };
     await deps.notifier.requestCreated({
       organizationId: organization.id, organizationName: organization.name, requestId: String(created._id), name, email,
       recipients: (await admins(organization.id)).map(({ userId, email: to }) => ({ userId, email: to })),

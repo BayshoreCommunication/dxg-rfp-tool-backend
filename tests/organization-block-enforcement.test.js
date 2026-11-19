@@ -352,16 +352,18 @@ test("email tracking: an open or click on a blocked organization's email records
   assert.equal((read("src/modules/email/composition.ts").match(/^ {2}organizationBlocked,$/gm) ?? []).length, 3);
 });
 
-test("domain matching: a blocked organization is offered to nobody (access request, auto-approve, signup match), by the one rule", () => {
+test("domain matching: a blocked organization matches its domain exactly as before; only a request for access is held (tests/organization-block-fix-round.test.js, F6)", () => {
   const source = read("src/modules/accessRequests/accessRequests.ts");
-  const matcher = source.slice(source.indexOf("export const organizationForEmailDomain"), source.indexOf("export type AccessRequestView"));
-  assert.match(matcher, /\.select\("_id name autoApproveDomain blocked"\)/);
-  assert.match(matcher, /if \(isOrganizationBlocked\(verified\)\) return null;\s+if \(verified\) \{/);
-  assert.match(matcher, /\.select\("_id name blocked"\)/);
-  assert.match(matcher, /if \(!organization \|\| isOrganizationBlocked\(organization\)\) return null;/);
-  // Every caller that could land someone in an organization by its domain uses this one function.
-  assert.match(source, /const organization = await organizationForEmailDomain\(email\);\s+if \(!organization\) return \{ kind: "no_match" \};/);
-  assert.match(read("controller/accessRequestController.ts"), /if \(outcome\.kind === "no_match"\) return fail\(res, 409, "NO_ORGANIZATION_MATCH"/);
+  const matcher = source.slice(source.indexOf("export const organizationForEmailDomain = async"), source.indexOf("export type AccessRequestView"));
+  // The matcher does not know about the block: it is origin/main's.
+  assert.doesNotMatch(matcher, /[Bb]locked/);
+  // The request asks the gate before anything is written, skips auto-approve and the notification.
+  const request = source.slice(source.indexOf("const request = async"), source.indexOf("const list = async"));
+  const asked = request.indexOf("const blocked = (await deps.organizationBlocked?.(organization.id)) === true;");
+  assert.ok(asked > 0 && asked < request.indexOf("deps.invitations.create(") && asked < request.indexOf("AccessRequest.create("));
+  assert.match(request, /if \(organization\.autoApproveDomain && !blocked\) \{/);
+  assert.ok(request.indexOf('if (blocked) return { kind: "pending", organizationName: organization.name };') < request.indexOf("await deps.notifier.requestCreated("));
+  assert.match(read("src/modules/accessRequests/composition.ts"), /organizationBlocked: \(organizationId\) => organizationBlockGate\.isBlocked\(organizationId\),/);
 });
 
 // ── Company and Microsoft sign-in ───────────────────────────────────────────────────────────
