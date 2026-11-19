@@ -34,6 +34,13 @@ sit in `scan_failed` if ClamAV is down.
 - Secrets (worker env only where possible): `OPENAI_API_KEY`, `JWT_SECRET`,
   `OTP_PEPPER`, `TELEMETRY_PSEUDONYM_KEY` (required when observability is on),
   `DOCUMENT_STORAGE_*`, `POSTGRES_URL`, `MONGODB_URL`, `REDIS_URL`.
+- Both workers (`worker:source-security` and the AI gateway worker) require `MONGODB_URL` and a
+  reachable MongoDB to start, whatever capabilities are enabled: every job first asks whether its
+  organization is blocked (staff organization block), and that is a MongoDB read. Until that change
+  the durable worker connected only when a capability that reads MongoDB was on. A worker started
+  without it exits non-zero with one line, `<worker> cannot start: MongoDB is required ... and
+  MONGODB_URL is not set.` (or `... could not be reached: <cause>`). A MongoDB outage after start-up
+  does not stop a worker: jobs are deferred 30 seconds and asked again, never failed.
 - `OTP_PEPPER` is required: with `NODE_ENV=production` the API, worker and cron fail at startup
   without it (no fallback to `JWT_SECRET`). Never change it in place: it keys the hashes of
   2FA recovery codes and sign-in codes, so a new value voids every member's recovery codes.
