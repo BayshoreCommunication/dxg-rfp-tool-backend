@@ -816,7 +816,7 @@ test("a staff add or manager change is checked again inside its transaction: a t
       assert.equal(raced.audit.some((event) => event.organizationId === ACME || CUSTOMER_TEAM_ACTIONS.includes(event.action)), false);
     }
   }
-  // "Not on the team" is still its own refusal, and a store answer that is none of the above is not a refusal.
+  // "Not on the team" is still its own refusal.
   const absent = setup();
   await assert.rejects(absent.management.setManager(staff(), ACME, T.east, ids.manager, { isManager: true, reason: REASON }), refusedWith(404, "TEAM_MEMBER_NOT_FOUND"));
 
@@ -851,7 +851,7 @@ test("a staff add or manager change is checked again inside its transaction: a t
   assert.equal((check.match(/return [^;]/g) ?? []).length, 0, "the check throws or passes");
   // The member paths never run it.
   for (const memberPath of [addMember, setMember]) assert.doesNotMatch(memberPath, /assertStaffWrite|StaffWriteAborted|OrganizationMembership|session/);
-  assert.equal((source.match(/assertStaffWrite\(/g) ?? []).length, 3, "its definition and the two staff branches");
+  assert.equal((source.match(/assertStaffWrite\(/g) ?? []).length, 2, "the two staff branches, nothing else");
 });
 
 // ── The customer path ────────────────────────────────────────────────────────────────────────

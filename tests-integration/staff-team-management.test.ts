@@ -510,7 +510,7 @@ test("the change and its audit event commit together: when the event cannot be w
   await assert.rejects(mongoTeamRepository.rename({ organizationId, teamId: west, name: `Never renamed ${tag}`, audit }), /action/);
   await assert.rejects(mongoTeamRepository.archive({ organizationId, teamId: west, at: new Date(), audit }), /action/);
   await assert.rejects(mongoTeamRepository.addMember({ organizationId, teamId: west, userId: manager, isManager: true, audit }), /action/);
-  await assert.rejects(mongoTeamRepository.setManager({ organizationId, teamId: west, userId: planner, isManager: true, audit }), /action/);
+  await assert.rejects(mongoTeamRepository.setManager({ organizationId, teamId: west, userId: planner, isManager: false, audit }), /action/);
   await assert.rejects(mongoTeamRepository.removeMember({ organizationId, teamId: west, userId: planner, audit }), /action/);
   await assert.rejects(mongoStaffMemberTeams.setMemberTeams({ organizationId, userId: planner, teamIds: [], expectedVersion: 5, audit: { ...audit, targetType: "organization_membership", targetId: planner } }), /action/);
   assert.equal(await snapshot(aId), beforeA, "no team, no team member and no version changed");
@@ -531,7 +531,19 @@ test("the change and its audit event commit together: when the event cannot be w
   assert.equal(await mongoTeamRepository.rename({ organizationId, teamId: String(teams.bNorth), name: "Taken over", audit: live }), null);
   assert.equal(await mongoTeamRepository.archive({ organizationId, teamId: String(teams.bNorth), at: new Date(), audit: live }), false);
   assert.equal(await mongoTeamRepository.removeMember({ organizationId, teamId: String(teams.bNorth), userId: b.members.planner.userId, audit: live }), false);
-  assert.equal(await mongoTeamRepository.setManager({ organizationId, teamId: String(teams.bNorth), userId: b.members.planner.userId, isManager: true, audit: live }), false);
+  // The member path matches no row (false). The staff path checks the team in its transaction first: not this organization's.
+  assert.equal(await mongoTeamRepository.setManager({ organizationId, teamId: String(teams.bNorth), userId: b.members.planner.userId, isManager: true }), false);
+  assert.equal(await mongoTeamRepository.setManager({ organizationId, teamId: String(teams.bNorth), userId: b.members.team_manager.userId, isManager: true, audit: live }), "team_not_found");
+  assert.equal(await mongoTeamRepository.setManager({ organizationId, teamId: String(teams.bNorth), userId: b.members.team_manager.userId, isManager: false, audit: live }), "team_not_found");
+  // B's Team Manager, on A's team: not a member of A. A's own Team Manager, on B's team: not A's team.
+  assert.equal(await mongoTeamRepository.setManager({ organizationId, teamId: west, userId: b.members.team_manager.userId, isManager: true, audit: live }), "member_not_found");
+  assert.equal(await mongoTeamRepository.addMember({ organizationId, teamId: String(teams.bNorth), userId: manager, isManager: true, audit: live }), "team_not_found");
+  assert.equal(await mongoTeamRepository.addMember({ organizationId, teamId: String(teams.bNorth), userId: b.members.viewer.userId, isManager: false, audit: live }), "team_not_found");
+  assert.equal(await mongoTeamRepository.addMember({ organizationId, teamId: west, userId: b.members.team_manager.userId, isManager: true, audit: live }), "member_not_found");
+  assert.equal(await mongoTeamRepository.addMember({ organizationId, teamId: west, userId: b.members.viewer.userId, isManager: false, audit: live }), "member_not_found");
+  assert.equal(await TeamMembership.countDocuments({ teamId: teams.aWest, userId: { $in: [oid(b.members.team_manager.userId), oid(b.members.viewer.userId)] } }), 0);
+  assert.equal(await TeamMembership.countDocuments({ teamId: teams.bNorth, organizationId: aId }), 0);
+  assert.equal(await TeamMembership.countDocuments({ teamId: teams.bNorth, userId: { $in: [oid(manager), oid(b.members.viewer.userId)] } }), 0);
   assert.deepEqual(await mongoStaffMemberTeams.setMemberTeams({ organizationId, userId: planner, teamIds: [String(teams.bNorth)], expectedVersion: 5, audit: live }), { unknownTeamIds: [String(teams.bNorth)] });
   assert.equal(await mongoStaffMemberTeams.setMemberTeams({ organizationId, userId: b.members.planner.userId, teamIds: [], expectedVersion: 1, audit: live }), "stale");
   assert.equal(await eventCount(dxg.org), staffBefore + 1);
@@ -735,6 +747,90 @@ test("control: the same changes made by the organization's Admin through the cus
     assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: dId, action: /^platform\./ }), 0);
   } finally {
     await SecurityAuditEvent.collection.deleteMany({ organizationId: dId });
+  }
+});
+
+test("staff addMember and setManager check again inside the transaction: a team archived, or a member deactivated or demoted to Viewer, after the service's check leaves nothing applied and no event", async () => {
+  const e = await seedOrganization(`E Race ${tag}`);
+  const eId = oid(e.organizationId);
+  const organizationId = e.organizationId;
+  const manager = e.members.team_manager.userId;
+  const managerId = oid(manager);
+  // `onTeam` holds the Team Manager (not yet its manager); `empty` holds nobody.
+  const onTeam = oid();
+  const empty = oid();
+  const now = new Date("2026-11-01T00:00:00Z");
+  const event = (action: string, reason: string, teamId: mongoose.Types.ObjectId) => ({
+    organizationId: String(dxg.org), actorUserId: String(dxg.staff[0]), action, targetType: "team", targetId: String(teamId), reason, correlationId: randomMongoId(),
+    metadata: { agentAccountType: "admin", organizationId, teamId: String(teamId), memberUserId: manager, staffReason: REASON },
+  });
+  const add = (isManager: boolean, teamId = empty, userId = manager) =>
+    mongoTeamRepository.addMember({ organizationId, teamId: String(teamId), userId, isManager, audit: event(STAFF_TEAM_AUDIT.memberAdded, "team_member_added", teamId) });
+  const set = (isManager: boolean, teamId = onTeam, userId = manager) =>
+    mongoTeamRepository.setManager({ organizationId, teamId: String(teamId), userId, isManager, audit: event(STAFF_TEAM_AUDIT.managerChanged, "team_manager_changed", teamId) });
+  const setTeams = (fields: Record<string, unknown>) => Team.collection.updateMany({ _id: { $in: [onTeam, empty] } }, { $set: fields });
+  const setMembership = (fields: Record<string, unknown>) => OrganizationMembership.collection.updateOne({ organizationId: eId, userId: managerId }, { $set: fields });
+  try {
+    await Team.collection.insertMany([
+      { _id: onTeam, organizationId: eId, name: "On team", archived: false, archivedAt: null, createdBy: null, createdAt: now, updatedAt: now },
+      { _id: empty, organizationId: eId, name: "Empty", archived: false, archivedAt: null, createdBy: null, createdAt: now, updatedAt: now },
+    ]);
+    await TeamMembership.collection.insertOne({ organizationId: eId, teamId: onTeam, userId: managerId, isManager: false, createdAt: now, updatedAt: now });
+    const staffBefore = await eventCount(dxg.org);
+    const customerBefore = await eventCount(eId);
+    const bRows = JSON.stringify(await teamMemberRows(bId));
+
+    // Each case: the document is changed directly (as a concurrent request would, after the
+    // service's own check passed), the staff write is refused, and nothing at all is different
+    // afterwards: no team row, no manager flag, not even the team's timestamp, and no event.
+    type Write = [string, () => Promise<unknown>, unknown];
+    const cases: Array<[string, () => Promise<unknown>, () => Promise<unknown>, Write[]]> = [
+      ["the team was archived", () => setTeams({ archived: true, archivedAt: now }), () => setTeams({ archived: false, archivedAt: null }),
+        [["addMember as manager", () => add(true), "team_archived"], ["addMember", () => add(false), "team_archived"], ["setManager(true)", () => set(true), "team_archived"], ["setManager(false)", () => set(false), "team_archived"]]],
+      ["the member was suspended", () => setMembership({ status: "suspended" }), () => setMembership({ status: "active" }),
+        [["addMember as manager", () => add(true), "member_not_found"], ["addMember", () => add(false), "member_not_found"], ["setManager(true)", () => set(true), "member_not_found"]]],
+      ["the member was removed", () => setMembership({ status: "removed" }), () => setMembership({ status: "active" }),
+        [["addMember as manager", () => add(true), "member_not_found"], ["addMember", () => add(false), "member_not_found"], ["setManager(true)", () => set(true), "member_not_found"]]],
+      ["the member was demoted to Viewer", () => setMembership({ roles: ["viewer"] }), () => setMembership({ roles: ["team_manager"] }),
+        [["addMember as manager", () => add(true), "manager_role_required"], ["setManager(true)", () => set(true), "manager_role_required"]]],
+      ["nothing changed, but the team or the member is not this organization's, or does not exist", async () => undefined, async () => undefined,
+        [
+          ["addMember to B's team", () => add(true, teams.bNorth), "team_not_found"], ["setManager on B's team", () => set(true, teams.bNorth, b.members.team_manager.userId), "team_not_found"],
+          ["addMember to a team that does not exist", () => add(false, oid()), "team_not_found"], ["setManager on a team that does not exist", () => set(false, oid()), "team_not_found"],
+          ["addMember of B's Team Manager", () => add(true, empty, b.members.team_manager.userId), "member_not_found"], ["addMember of nobody", () => add(false, empty, String(oid())), "member_not_found"],
+          ["setManager(true) for B's Team Manager", () => set(true, onTeam, b.members.team_manager.userId), "member_not_found"],
+          // An active Team Manager who is not on the team: the customer's "not on the team" (false), and the check's own write is rolled back.
+          ["setManager(true) for someone not on the team", () => set(true, empty), false], ["setManager(false) for someone not on the team", () => set(false, empty), false],
+        ]],
+    ];
+    for (const [label, change, restore, writes] of cases) {
+      await change();
+      try {
+        const before = await snapshot(eId);
+        for (const [name, write, expected] of writes) {
+          assert.equal(await write(), expected, `${label}: ${name}`);
+          assert.equal(await snapshot(eId), before, `${label}: ${name} applied nothing`);
+          assert.equal(await eventCount(dxg.org), staffBefore, `${label}: ${name} wrote no event`);
+        }
+      } finally {
+        await restore();
+      }
+    }
+    assert.equal(await eventCount(eId), customerBefore, "and nothing was recorded in the customer organization");
+    assert.equal(JSON.stringify(await teamMemberRows(bId)), bRows);
+
+    // Control: with the team active and the member an active Team Manager, the same two writes apply, one event each.
+    assert.equal(await add(true), "added");
+    assert.equal(await set(true), true);
+    assert.deepEqual((await teamMemberRows(eId)).sort(), [[String(onTeam), manager, true], [String(empty), manager, true]].sort());
+    assert.equal(await eventCount(dxg.org), staffBefore + 2);
+    // Unsetting a manager asks nothing of the member, as on the customer route: a suspended member can be unset.
+    await setMembership({ status: "suspended" });
+    assert.equal(await set(false), true);
+    assert.deepEqual((await teamMemberRows(eId)).find(([teamId]) => teamId === String(onTeam)), [String(onTeam), manager, false]);
+    assert.equal(await eventCount(eId), customerBefore);
+  } finally {
+    await SecurityAuditEvent.collection.deleteMany({ organizationId: eId });
   }
 });
 
