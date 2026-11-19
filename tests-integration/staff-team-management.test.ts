@@ -834,6 +834,44 @@ test("staff addMember and setManager check again inside the transaction: a team 
   }
 });
 
+test("a suspended or removed member already on the team can't be made its manager: staff get the customer's refusal, the row is unchanged and the customer organization gains no row", async () => {
+  const f = await seedOrganization(`F Inactive ${tag}`);
+  const fId = oid(f.organizationId);
+  const manager = f.members.team_manager.userId;
+  const teamId = oid();
+  const now = new Date("2026-11-01T00:00:00Z");
+  const path = `${BASE}/${f.organizationId}/teams/${teamId}/members/${manager}`;
+  try {
+    await Team.collection.insertOne({ _id: teamId, organizationId: fId, name: "Inactive", archived: false, archivedAt: null, createdBy: null, createdAt: now, updatedAt: now });
+    await TeamMembership.collection.insertOne({ organizationId: fId, teamId, userId: oid(manager), isManager: false, createdAt: now, updatedAt: now });
+    for (const status of ["suspended", "removed"]) {
+      await OrganizationMembership.collection.updateOne({ organizationId: fId, userId: oid(manager) }, { $set: { status } });
+      const before = await snapshot(fId);
+      const rowsBefore = await eventCount(fId);
+      const res = await asStaff("PATCH", path, { isManager: true, reason: REASON });
+      assert.deepEqual([res.status, res.body.code], [404, "MEMBER_NOT_FOUND"], `${status}: ${res.text}`);
+      const event = await lastStaffEvent();
+      assert.deepEqual([String(event.organizationId), event.action, event.decision, event.reason, event.metadata.organizationId], [String(dxg.org), STAFF_TEAM_AUDIT.managerChanged, "denied", "member_not_found", f.organizationId]);
+      // The store itself refuses too, in its transaction.
+      const audit = { organizationId: String(dxg.org), actorUserId: String(dxg.staff[0]), action: STAFF_TEAM_AUDIT.managerChanged, targetType: "team", targetId: String(teamId), reason: "team_manager_changed", correlationId: randomMongoId(), metadata: { agentAccountType: "admin", organizationId: f.organizationId } };
+      const staffRows = await eventCount(dxg.org);
+      assert.equal(await mongoTeamRepository.setManager({ organizationId: f.organizationId, teamId: String(teamId), userId: manager, isManager: true, audit }), "member_not_found", status);
+      assert.equal(await eventCount(dxg.org), staffRows);
+      assert.equal(await snapshot(fId), before, `${status}: nothing applied`);
+      assert.deepEqual(await teamMemberRows(fId, teamId), [[String(teamId), manager, false]]);
+      assert.equal(await eventCount(fId), rowsBefore, `${status}: no row in the customer organization`);
+      // The organization's own Admin gets the same refusal.
+      const customer = await call(f.members.organization_admin.accessToken, "PATCH", `/api/v1/teams/${teamId}/members/${manager}`, { isManager: true });
+      assert.deepEqual([customer.status, customer.body.code, customer.body.message], [res.status, res.body.code, res.body.message], status);
+      assert.deepEqual(await teamMemberRows(fId, teamId), [[String(teamId), manager, false]]);
+    }
+    assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: fId, actorUserId: { $in: dxg.staff } }), 0);
+    assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: fId, action: { $in: [...STAFF_ACTIONS, ...CUSTOMER_TEAM_ACTIONS] } }), 0);
+  } finally {
+    await SecurityAuditEvent.collection.deleteMany({ organizationId: fId });
+  }
+});
+
 test("nothing changed in B", async () => {
   assert.equal(await snapshot(bId), bBefore);
   assert.deepEqual(await teamRows(bId), [[String(teams.bNorth), "North", false, b.members.owner.userId]]);

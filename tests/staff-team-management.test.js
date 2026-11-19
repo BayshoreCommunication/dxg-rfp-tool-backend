@@ -565,6 +565,52 @@ test("team members: add (as a member or a manager), set and unset the manager, r
   }
 });
 
+test("a suspended or removed member who is already on the team can't be made its manager: staff get the customer's refusal, nothing is applied and nothing is recorded in the customer organization", async () => {
+  const ADMIN = { organizationId: ACME, userId: ids.admin, roles: ["organization_admin"], correlationId: "corr-admin" };
+  for (const [status, userId] of [["suspended", ids.suspended], ["removed", ids.removed]]) {
+    // The member joined the team while active; the row is still there. They hold no Team Manager role either way,
+    // and with it: a suspended or removed Team Manager is refused for the same reason.
+    for (const roles of [["planner"], ["team_manager"]]) {
+      const world = () => {
+        const made = setup();
+        made.member(ACME, userId).roles = roles;
+        made.teamMembers.push({ organizationId: ACME, teamId: T.west, userId, isManager: false });
+        return made;
+      };
+      const label = `${status} ${roles[0]}`;
+      assert.equal(world().member(ACME, userId).status, status);
+      // What the organization's own Admin gets.
+      const customer = world();
+      let expected;
+      await assert.rejects(customer.customerTeams.setManager(ADMIN, T.west, userId, { isManager: true }), (error) => { expected = error; return error instanceof TeamError; });
+      assert.deepEqual([expected.status, expected.code], [404, "MEMBER_NOT_FOUND"], label);
+      // Staff: the same status, code and message.
+      const staffed = world();
+      const before = staffed.world();
+      await assert.rejects(staffed.management.setManager(staff(), ACME, T.west, userId, { isManager: true, reason: REASON }), (error) => {
+        assert.ok(error instanceof StaffMemberError, label);
+        assert.deepEqual([error.status, error.code, error.message], [expected.status, expected.code, expected.message], label);
+        return true;
+      });
+      // Nothing applied: the row is still there and still not a manager; the store was never asked to write.
+      assert.equal(staffed.world(), before, label);
+      assert.deepEqual(staffed.teamMembers.find((m) => m.teamId === T.west && m.userId === userId), { organizationId: ACME, teamId: T.west, userId, isManager: false }, label);
+      assert.deepEqual(staffed.writes(), [], label);
+      assert.deepEqual([staffed.member(ACME, userId).status, staffed.member(ACME, userId).version], [status, 1], label);
+      // One staff-side event, denied; no row of any kind in the customer organization.
+      oneStaffEvent(staffed.audit, { action: STAFF_TEAM_AUDIT.managerChanged, decision: "denied", reason: "member_not_found", targetId: T.west, metadata: { organizationId: ACME } });
+      assert.equal(staffed.audit.some((event) => event.organizationId === ACME || CUSTOMER_TEAM_ACTIONS.includes(event.action)), false, label);
+    }
+  }
+  // Unsetting asks nothing of the member, for the customer and for staff alike: a suspended member's manager flag can be taken away.
+  for (const run of [(c) => c.customerTeams.setManager(ADMIN, T.west, ids.suspended, { isManager: false }), (c) => c.management.setManager(staff(), ACME, T.west, ids.suspended, { isManager: false, reason: REASON })]) {
+    const made = setup();
+    made.teamMembers.push({ organizationId: ACME, teamId: T.west, userId: ids.suspended, isManager: true });
+    await run(made);
+    assert.equal(made.teamMembers.find((m) => m.teamId === T.west && m.userId === ids.suspended).isManager, false);
+  }
+});
+
 test("set a member's teams: the active teams become exactly the list, manager flags kept on teams the member stays on; version checked and moved with the change; one event", async () => {
   const { management, audit, teamMembers, member } = setup();
   const of = (userId) => teamMembers.filter((m) => m.userId === userId).map((m) => [m.teamId, m.isManager]).sort();
