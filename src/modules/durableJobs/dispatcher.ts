@@ -79,12 +79,7 @@ export const createDispatcher = (
     // without this the job is unreachable by every recovery path.
     async reconcile(limit = 100) {
       const reaped = await repository.reapExpiredLeases(limit);
-      let except: string[] = [];
-      try {
-        except = [...((await blockedOrganizationIds?.()) ?? [])];
-      } catch {
-        except = [];
-      }
+      const except: string[] = await (async () => [...((await blockedOrganizationIds?.()) ?? [])])().catch(() => []);
       // A blocked organization's queued jobs are left out of the batch, so they cannot fill it
       // and starve the Redis-loss recovery of every other organization. They are republished on
       // the first pass after a reactivation.
