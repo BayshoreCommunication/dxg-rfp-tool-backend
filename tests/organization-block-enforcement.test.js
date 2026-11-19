@@ -468,8 +468,8 @@ test("durable jobs: a job of a blocked organization is deferred, not run, not cl
   }
   assert.match(fs.readFileSync(require.resolve("bullmq/dist/cjs/classes/job.js"), "utf8"), /async moveToDelayed\(timestamp, token\) \{[\s\S]{0,300}skipAttempt: true/);
   // The workers connect to MongoDB, which the gate reads.
-  assert.match(read("scripts/startDurableWorker.ts"), /\n await connectDB\(\);/);
-  assert.match(read("scripts/startAiGatewayWorker.ts"), /connectDB\(\)/);
+  // (awaited before the worker exists: tests/organization-block-fix-round.test.js, F1).
+  for (const script of ["scripts/startDurableWorker.ts", "scripts/startAiGatewayWorker.ts"]) assert.match(read(script), /await startWorkerWithMongo\(\{[^}]*connect:connectDB,/);
 });
 
 test("invitation sweep: a blocked organization's invitations are not expired, reminded or emailed; the others are", async () => {
