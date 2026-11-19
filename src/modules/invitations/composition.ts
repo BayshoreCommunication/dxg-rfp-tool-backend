@@ -17,6 +17,7 @@ import { mongoInviteeDirectory, mongoOrganizationDirectory } from "./infrastruct
 import { placeInTeam, teamsInvitationDirectory, type TeamPlacement } from "./infrastructure/teamsInvitationDirectory";
 import { defaultInvitationMailer } from "./infrastructure/invitationMailer";
 import { mongoCompanySsoFor, mongoSsoRequiredFor } from "../sso/infrastructure/mongoSsoRepositories";
+import { blockedOrganizationIds, organizationBlockGate } from "../organizationBlock/organizationBlockGate";
 
 // The dashboard's accept page (ORG-205). FRONTEND_URL is the dashboard origin.
 export const invitationAcceptUrl = (token: string): string => {
@@ -66,11 +67,12 @@ export const createInvitationModule = (overrides: {
     randomSecret: () => cryptoSecretGenerator.generate(),
     ssoRequiredFor: mongoSsoRequiredFor,
     companySsoFor: mongoCompanySsoFor,
+    organizationBlocked: (organizationId) => organizationBlockGate.isBlocked(organizationId),
     dailyEmailLimit: overrides.dailyEmailLimit ?? dailyInvitationEmailLimit(),
     resendCooldownMs: overrides.resendCooldownMs,
     now: overrides.now,
   });
-  const sweep = createInvitationSweep({ sweeps: mongoInvitationSweepRepository, dispatcher, now: overrides.now });
+  const sweep = createInvitationSweep({ sweeps: mongoInvitationSweepRepository, dispatcher, blockedOrganizationIds, now: overrides.now });
   return { service, dispatcher, sweep };
 };
 

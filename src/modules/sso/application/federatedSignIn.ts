@@ -51,6 +51,7 @@ export type SsoErrorCode =
   | "SSO_INVITE_ORG_MISMATCH"
   | "SSO_HANDOFF_INVALID"
   | "ORGANIZATION_DOMAIN_MATCH"
+  | "ORGANIZATION_BLOCKED"
   | string; // invitation refusal codes pass through unchanged
 
 export type ActiveConnection = {
@@ -117,6 +118,9 @@ export type FederatedSignInDependencies = {
     acceptWithPerson(token: string, person: VerifiedPerson, method: "sso" | "company_sso", correlationId: string): Promise<InvitationOutcome>;
   };
   audit(event: { organizationId: string; userId: string; action: string; reason: string; correlationId: string; metadata?: Record<string, unknown> }): Promise<void>;
+  /** The organization block gate (organizationBlock). When it answers true, nobody is signed
+      in to, joined to or linked in that organization. Not given: nothing is blocked. */
+  organizationBlocked?(organizationId: string): Promise<boolean>;
   /** ORG-306: the organization that verified the email's domain, if any. */
   domainOrganizationFor?(email: string): Promise<{ name: string } | null>;
 };
@@ -310,8 +314,18 @@ export const createFederatedSignIn = (deps: FederatedSignInDependencies) => {
 
     if (pending.kind === "microsoft" && (await deps.ssoRequiredFor(person.email))) return fail("SSO_REQUIRED");
 
+    /* RFPilot staff blocked the organization (owner decision, 2026-11-18). `start` is left as it
+       is: it answers anyone who types an email, so it must not change with a block. Here the
+       company's own identity provider has just vouched for the person, so they are told, and
+       nothing is resolved: no account linked, no first sign-in membership, no event in the
+       organization. With an invitation the invitation service answers instead, with the same
+       "not valid" it gives for a link that does not exist. */
+    if (connection && !pending.inviteToken && (await deps.organizationBlocked?.(connection.organizationId))) return fail("ORGANIZATION_BLOCKED");
+
     const outcome = await resolveAccount(pending, person, connection, correlationId);
     if ("error" in outcome) return fail(outcome.error);
+    // Microsoft sign-in to an existing account whose organization is blocked: no handoff.
+    if (await deps.organizationBlocked?.(outcome.organizationId)) return fail("ORGANIZATION_BLOCKED");
     const handoff = random();
     await deps.store.put("handoff", handoff, { bindHash: pending.bindHash, outcome } satisfies Handoff, HANDOFF_TTL_MS);
     return { kind: "handoff", handoff };

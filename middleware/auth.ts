@@ -10,7 +10,8 @@ import { hasOrganizationAction, legacyAuthorizationRoles, OrganizationAction } f
 import type { RfpActor } from "../src/modules/identity/domain/rfpAccessPolicy";
 import { ActorLookups, resolveRfpActor } from "../src/modules/identity/application/resolveRfpActor";
 import { mongoActorLookups } from "../src/modules/identity/application/mongoActorLookups";
-import { revokeInactiveMembershipSessions, revokeOtherSessionsAfterMembershipChange } from "../src/modules/auth/composition";
+import { endSessionsOfBlockedOrganization, revokeInactiveMembershipSessions, revokeOtherSessionsAfterMembershipChange } from "../src/modules/auth/composition";
+import { ORGANIZATION_BLOCKED, isOrganizationBlocked } from "../src/modules/organizationBlock/domain";
 import { ORGANIZATION_SETUP_REQUIRED } from "../src/modules/auth/infrastructure/mongo/organizationSetup";
 
 // Extend Express Request to include user
@@ -25,12 +26,16 @@ type AuthenticateDependencies = {
   // ORG-307: the member's role was changed by someone else; keep this session, end the others.
   revokeOtherSessionsAfterRoleChange(input: { userId: string; organizationId: string; sessionId: string; correlationId: string }): Promise<number>;
   actorLookups: ActorLookups;
+  // The organization is blocked by RFPilot staff: end this member's sessions for it, writing
+  // nothing to the organization's audit trail. Optional so existing callers keep their shape.
+  endSessionsOfBlockedOrganization?(input: { userId: string; organizationId: string }): Promise<number>;
 };
 
 const defaultDependencies: AuthenticateDependencies = {
   revokeInactiveMembership: (input) => revokeInactiveMembershipSessions(input),
   revokeOtherSessionsAfterRoleChange: (input) => revokeOtherSessionsAfterMembershipChange(input),
   actorLookups: mongoActorLookups,
+  endSessionsOfBlockedOrganization: (input) => endSessionsOfBlockedOrganization(input),
 };
 
 export const createAuthenticate = (
@@ -63,7 +68,7 @@ export const createAuthenticate = (
       const now = new Date();
       const [principal, organization, membership, activeSession] = await Promise.all([
         findSessionPrincipal(decoded.userId, decoded.organizationId),
-        Organization.findOne({ _id: decoded.organizationId, status: "active" }).select("_id kind").lean(),
+        Organization.findOne({ _id: decoded.organizationId, status: "active" }).select("_id kind blocked").lean(),
         // Any status: a deactivated or removed member is told so and signed out below.
         OrganizationMembership.findOne({
           organizationId: decoded.organizationId,
@@ -78,6 +83,25 @@ export const createAuthenticate = (
           idleExpiresAt: { $gt: now },
         }),
       ]);
+      /* RFPilot staff blocked this organization (owner decision, 2026-11-18): every request of
+         its members is refused, whatever their role, before anything else is decided for them.
+         The one rule is isOrganizationBlocked; the organization document is the one this request
+         reads anyway, so a block applies on the next request with no cache to wait for. 401 with
+         a code, like the two refusals below, so the client drops the session and can say why.
+         The member's sessions for THIS organization end (the block ended them already; this
+         closes one begun while it committed) and nothing is written to the organization's audit
+         trail. First on purpose: none of the customer-side revocation events below may be
+         written because of a block. A staff account is never in a blocked organization. */
+      if (isOrganizationBlocked(organization)) {
+        try {
+          await dependencies.endSessionsOfBlockedOrganization?.({ userId: decoded.userId, organizationId: decoded.organizationId });
+        } catch (failure) {
+          // The refusal stands either way; the refresh path refuses a blocked organization too.
+          console.error("Organization block error: a session could not be ended:", failure instanceof Error ? failure.message : failure);
+        }
+        res.status(401).json({ success: false, code: ORGANIZATION_BLOCKED.code, message: ORGANIZATION_BLOCKED.message });
+        return;
+      }
       // Deactivation takes effect on the next request, not at token expiry: refuse with 401 and
       // revoke the member's refresh sessions so the client can't mint a new access token.
       if (!membership || membership.status !== "active") {

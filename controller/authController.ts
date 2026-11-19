@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import crypto from "node:crypto";
 import { AuthRequest } from "../middleware/auth";
 import { isAwaitingPlacement, ORGANIZATION_SETUP_REQUIRED } from "../src/modules/auth/infrastructure/mongo/organizationSetup";
+import { ORGANIZATION_BLOCKED, OrganizationBlockedError } from "../src/modules/organizationBlock/domain";
+import { organizationBlockGate } from "../src/modules/organizationBlock/organizationBlockGate";
 import { organizationForEmailDomain } from "../src/modules/accessRequests/accessRequests";
 import {
   authenticateGoogleIdentity,
@@ -114,6 +116,23 @@ const domainMatchResponse = (organizationName: string) => ({
   message: `${organizationName} already uses RFPilot with your email domain. Request access, or choose to create a separate organization.`,
   organizationName,
 });
+/* What a member of an organization that RFPilot staff blocked is told at sign-in (owner decision,
+   2026-11-18): 403 with a code the dashboard shows a plain message for. Only someone who has just
+   proved who they are (password, Google, company sign-in, second factor) ever gets this answer. */
+export const respondOrganizationBlocked = (res: Response): void => {
+  res.status(403).json({
+    success: false,
+    code: ORGANIZATION_BLOCKED.code,
+    errorCode: ORGANIZATION_BLOCKED.code,
+    message: ORGANIZATION_BLOCKED.message,
+  });
+};
+/** For a sign-in handler's catch: answers and returns true when the session was refused for a block. */
+export const respondIfOrganizationBlocked = (res: Response, error: unknown): boolean => {
+  if (!(error instanceof OrganizationBlockedError)) return false;
+  respondOrganizationBlocked(res);
+  return true;
+};
 export const createSession = async (req: Request, res: Response, user: {
   id: string;
   organizationId?: string;
@@ -151,6 +170,12 @@ export const respondWithSecondFactorStep = async (
   method: PrimaryMethod,
 ): Promise<boolean> => {
   if (!user.organizationId) return false;
+  // Checked before 2FA so a member of a blocked organization never gets a challenge they can't use.
+  // beginAuthenticatedSession refuses too; this is the same rule asked one step earlier.
+  if (await organizationBlockGate.isBlocked(user.organizationId)) {
+    respondOrganizationBlocked(res);
+    return true;
+  }
   // Checked before 2FA so an account waiting for DXG never gets a challenge it can't use.
   if (await isAwaitingPlacement(user.organizationId)) {
     res.status(403).json({
@@ -398,6 +423,7 @@ export const signInWithCredentials = async (req: Request, res: Response): Promis
       ...bffRefreshResponse(req, session),
     });
   } catch (error) {
+    if (respondIfOrganizationBlocked(res, error)) return;
     console.error("Sign in error:", error);
     res.status(500).json({
       success: false,
@@ -460,6 +486,7 @@ export const signInWithGoogle = async (req: Request, res: Response): Promise<voi
       ...bffRefreshResponse(req, session),
     });
   } catch (error) {
+    if (respondIfOrganizationBlocked(res, error)) return;
     console.error("Google sign in error:", error);
     res.status(500).json({
       success: false,

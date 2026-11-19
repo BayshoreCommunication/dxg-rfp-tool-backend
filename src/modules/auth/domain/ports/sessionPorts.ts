@@ -1,3 +1,5 @@
+import { ORGANIZATION_BLOCK_REVOKE_REASON } from "../../../organizationBlock/domain";
+
 export type AccountType = "planner" | "admin";
 
 export type SessionAccount = {
@@ -33,6 +35,13 @@ export type StoredRefreshToken = {
    last refresh token is presented again the refresh is refused as always, and no "reuse detected"
    event is written in the member's organization, where staff activity is never shown. */
 export const STAFF_MEMBERSHIP_REVOKE_REASON = "staff_membership_changed";
+
+/* Every revoke reason that means "RFPilot staff caused this": a staff membership change, or a
+   staff block of the whole organization (owner decision 2026-11-18, organizationBlock/domain.ts).
+   One rule for both: such a session's own last token coming back is refused and not recorded in
+   the member's organization. */
+export const isStaffCausedRevokeReason = (reason: string | null | undefined): boolean =>
+  reason === STAFF_MEMBERSHIP_REVOKE_REASON || reason === ORGANIZATION_BLOCK_REVOKE_REASON;
 
 export interface RefreshSessionRepository {
   create(input: {

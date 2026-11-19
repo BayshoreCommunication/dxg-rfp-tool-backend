@@ -7,7 +7,8 @@ import type {
   SessionAccountLoader,
   StoredRefreshToken,
 } from "../domain/ports/sessionPorts";
-import { STAFF_MEMBERSHIP_REVOKE_REASON } from "../domain/ports/sessionPorts";
+import { STAFF_MEMBERSHIP_REVOKE_REASON, isStaffCausedRevokeReason } from "../domain/ports/sessionPorts";
+import { ORGANIZATION_BLOCK_REVOKE_REASON } from "../../organizationBlock/domain";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_REFRESH_TOKEN_TTL_MS = 30 * DAY_MS;
@@ -35,6 +36,9 @@ type Dependencies = {
   deriveRefreshToken?: (previous: string, operationKey: string) => string;
   /** The revoke reason for a member who is no longer active; "membership_inactive" when not given. */
   inactiveMembershipReason?: (member: { userId: string; organizationId: string }) => Promise<string>;
+  /** The organization block gate (organizationBlock/organizationBlockGate.ts). When it answers
+      true no session is begun or refreshed for that organization. Not given: nothing is blocked. */
+  organizationBlocked?: (organizationId: string) => Promise<boolean>;
 };
 
 const deadline = (base: Date, ms: number) => new Date(base.getTime() + ms);
@@ -99,12 +103,20 @@ export const createSessionManager = (dependencies: Dependencies) => {
     ip?: string;
   }): Promise<
     | { kind: "rotated"; accessToken: string; expiresAt: number; expiresIn: number; refreshToken: string; refreshExpiresAt: number; sessionId: string }
-    | { kind: "invalid" | "expired" | "reuse_detected" | "membership_inactive" }
+    | { kind: "invalid" | "expired" | "reuse_detected" | "membership_inactive" | "organization_blocked" }
   > => {
     const issuedAt = now();
     const presentedHash = hashOpaqueToken(input.refreshToken);
     const stored = await dependencies.sessions.findByTokenHash(presentedHash);
     if (!stored) return { kind: "invalid" };
+    // RFPilot staff blocked the organization: no refresh, whatever the state of the token. The
+    // family ends for the staff reason and NOTHING is written to the organization's audit trail
+    // (customers see no staff activity). A failed lookup rejects, which the caller answers as a
+    // retryable 503 without clearing the cookie.
+    if (await dependencies.organizationBlocked?.(stored.organizationId)) {
+      await dependencies.sessions.revokeFamily({ familyId: stored.familyId, reason: ORGANIZATION_BLOCK_REVOKE_REASON, now: issuedAt });
+      return { kind: "organization_blocked" };
+    }
     const key = input.rotationKey && /^[a-f0-9]{64}$/.test(input.rotationKey) && dependencies.deriveRefreshToken ? input.rotationKey : undefined;
     const keyHash = key ? hashOpaqueToken(key) : null;
     // The reason is read before the revocation, and a failed read must not skip the revocation:
@@ -120,7 +132,7 @@ export const createSessionManager = (dependencies: Dependencies) => {
     const rejectReuse = async (current: StoredRefreshToken | null = stored) => {
       await dependencies.sessions.revokeFamily({ familyId: stored.familyId, reason: "refresh_reuse", now: issuedAt });
       // Staff ended this session and its own last token came back: refused the same, not recorded here.
-      if (current?.status === "revoked" && current.revokeReason === STAFF_MEMBERSHIP_REVOKE_REASON && current.tokenHash === presentedHash) return { kind: "reuse_detected" as const };
+      if (current?.status === "revoked" && isStaffCausedRevokeReason(current.revokeReason) && current.tokenHash === presentedHash) return { kind: "reuse_detected" as const };
       await dependencies.audit.append({
         organizationId: stored.organizationId,
         actorUserId: stored.userId,
