@@ -180,3 +180,73 @@ test("F2 support desk sweep: batch-sized sets of due tickets of a blocked organi
   assert.deepEqual(messages, [other, other, other], "only the other organization's ticket is written to");
   assert.deepEqual(events, [["reminder", other], ["resolved", other]]);
 });
+
+// ---------------------------------------------------------------- F9: reactivating an organization that became unmanageable
+
+const { createStaffOrganizationBlock } = require("../src/modules/staffAccess/application/manageOrganizationBlock");
+const { isOrganizationBlocked } = require("../src/modules/organizationBlock/domain");
+
+test("F9 an organization that carries the marker but is no longer manageable can be reactivated, with a reason, by staff, recorded on the staff side; it still cannot be blocked", async () => {
+  const STAFF_ORG = hex("d");
+  const STAFF = hex("7");
+  const REASON = "Reactivated after review, ticket 5530";
+  const staff = { adminId: STAFF, organizationId: STAFF_ORG, role: "admin", accountType: "admin", correlationId: "corr" };
+  const marker = () => ({ at: minutesAgo(60), byStaffOrganizationId: STAFF_ORG, byStaffAccountId: STAFF });
+  // Blocked as customer organizations; since then one got an `admins` account and one changed kind.
+  const organizations = {
+    [hex("1")]: { kind: "customer", staffAccountCount: 1, blocked: marker() },
+    [hex("2")]: { kind: "legacy_holding", staffAccountCount: 0, blocked: marker() },
+    [hex("3")]: { kind: "legacy_holding", staffAccountCount: 0 }, // unmanageable, never blocked
+  };
+  const audit = [];
+  // Commits as the Mongo store does (mongoOrganizationBlockStore.ts).
+  const store = {
+    async block() { throw new Error("an unmanageable organization must be refused before the store"); },
+    async reactivate(input) {
+      const o = organizations[input.organizationId];
+      if (!o) return "not_found";
+      if (!isOrganizationBlocked(o)) {
+        if (!input.manageable || o.kind !== "customer") return "not_manageable";
+        audit.push({ ...input.audit, decision: "allowed", reason: "organization_not_blocked" });
+        return { changed: false, blockedAt: null, sessionsEnded: 0 };
+      }
+      delete o.blocked;
+      audit.push({ ...input.audit, decision: "allowed", reason: "organization_reactivated" });
+      return { changed: true, blockedAt: null, sessionsEnded: 0 };
+    },
+  };
+  const service = createStaffOrganizationBlock({
+    directory: { async organization(id) { const o = organizations[id]; return o ? { id, kind: o.kind, staffAccountCount: o.staffAccountCount } : null; } },
+    store, now: () => NOW,
+    audit: { append: async (event) => { audit.push(event); } },
+  });
+
+  for (const [organizationId, standing] of [[hex("1"), "platform"], [hex("2"), "legacy_holding"]]) {
+    // Blocking keeps the full rule.
+    const refusedBlock = await service.block(staff, organizationId, { reason: REASON }).catch((e) => e);
+    assert.deepEqual([refusedBlock.status, refusedBlock.code], [409, "ORGANIZATION_NOT_MANAGEABLE"]);
+    // Still needs a reason.
+    const noReason = await service.reactivate(staff, organizationId, {}).catch((e) => e);
+    assert.deepEqual([noReason.status, noReason.code], [400, "INVALID_REASON"]);
+    assert.equal(isOrganizationBlocked(organizations[organizationId]), true);
+    // Still staff only.
+    const notStaff = await service.reactivate({ ...staff, accountType: "user", role: "user" }, organizationId, { reason: REASON }).catch((e) => e);
+    assert.equal(notStaff.status, 403);
+    assert.equal(isOrganizationBlocked(organizations[organizationId]), true);
+
+    const result = await service.reactivate(staff, organizationId, { reason: REASON });
+    assert.deepEqual(result, { organizationId, changed: true, blocked: false, blockedAt: null });
+    assert.equal(isOrganizationBlocked(organizations[organizationId]), false);
+    const event = audit.at(-1);
+    assert.deepEqual([event.organizationId, event.action, event.decision, event.reason, event.targetId], [STAFF_ORG, "platform.organization.reactivated", "allowed", "organization_reactivated", organizationId]);
+    assert.equal(event.metadata.staffReason, REASON);
+    assert.equal(event.metadata.standing, standing, "the staff-side record says the organization is not a manageable one");
+    // Once the marker is gone the full rule applies again.
+    const again = await service.reactivate(staff, organizationId, { reason: REASON }).catch((e) => e);
+    assert.deepEqual([again.status, again.code, again.details.standing], [409, "ORGANIZATION_NOT_MANAGEABLE", standing]);
+  }
+  // Unmanageable and never blocked: refused as before, nothing written but the denial.
+  const never = await service.reactivate(staff, hex("3"), { reason: REASON }).catch((e) => e);
+  assert.deepEqual([never.status, never.code], [409, "ORGANIZATION_NOT_MANAGEABLE"]);
+  assert.ok(audit.every((e) => e.organizationId === STAFF_ORG), "every event is in the staff organization");
+});

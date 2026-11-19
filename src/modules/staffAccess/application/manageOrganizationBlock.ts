@@ -25,6 +25,13 @@ import type { StaffContentAudit } from "./readOrganizationContent";
    organization that is not of kind `customer` (a legacy holding tenant) can never be blocked:
    409 ORGANIZATION_NOT_MANAGEABLE, by the rule the member and team routes share.
 
+   REACTIVATING is wider on purpose. It only removes a marker, so it is allowed for any
+   organization that CARRIES the marker, also one that stopped being manageable after it was
+   blocked (an `admins` account added, its kind changed); otherwise that organization could never
+   be reactivated through the route. It is still staff-guarded, still needs a reason and is still
+   recorded on the staff side (with `standing` in the event when the organization is not
+   manageable). An organization that is not manageable and carries no marker is refused as before.
+
    Idempotent: blocking a blocked organization, or reactivating one that is not blocked, answers
    success with `changed: false`, and is still recorded.
 
@@ -94,7 +101,10 @@ export const createStaffOrganizationBlock = (dependencies: Dependencies) => {
     action: string,
     organizationId: unknown,
     input: { reason?: unknown },
-    write: (current: Attempt, organization: string) => Promise<OrganizationBlockOutcome>,
+    write: (current: Attempt, organization: string, standing: string | null) => Promise<OrganizationBlockOutcome>,
+    /** Blocking: the full rule, before anything is written. Reactivating: the store decides,
+        inside its transaction, by whether the organization carries the marker. */
+    requireManageable: boolean,
   ) => {
     assertStaff(staff);
     const current: Attempt = { staff, action, organizationId: asTyped(organizationId), staffReason: null };
@@ -106,12 +116,12 @@ export const createStaffOrganizationBlock = (dependencies: Dependencies) => {
       if (!organization) throw refused(404, "ORGANIZATION_NOT_FOUND", "Organization not found.");
       // One rule for the member, team and block routes (domain.ts).
       const standing = unmanageableStanding(organization, staff.organizationId);
-      if (standing) throw notManageable(standing);
-      const outcome = await write(current, organization.id);
+      if (standing && requireManageable) throw notManageable(standing);
+      const outcome = await write(current, organization.id, standing);
       // The store re-checks inside its transaction: the organization may have gone, or stopped
       // being a customer organization, between the read above and the commit.
       if (outcome === "not_found") throw refused(404, "ORGANIZATION_NOT_FOUND", "Organization not found.");
-      if (outcome === "not_manageable") throw notManageable("changed");
+      if (outcome === "not_manageable") throw notManageable(standing ?? "changed");
       return {
         organizationId: organization.id,
         changed: outcome.changed,
@@ -135,12 +145,19 @@ export const createStaffOrganizationBlock = (dependencies: Dependencies) => {
           staffAccountId: staff.adminId,
           now: now(),
           audit: eventOf(current, {}),
-        })),
+        }), true),
 
-    /** Body: { reason }. Removes the marker. Sessions the block ended stay ended; members sign in again. */
+    /** Body: { reason }. Removes the marker, from any organization that carries it. Sessions the
+        block ended stay ended; members sign in again. */
     reactivate: (staff: PlanStaff, organizationId: unknown, input: { reason?: unknown }) =>
-      attempt(staff, STAFF_ORGANIZATION_AUDIT.reactivated, organizationId, input, (current, organization) =>
-        store.reactivate({ organizationId: organization, staffOrganizationId: staff.organizationId, now: now(), audit: eventOf(current, {}) })),
+      attempt(staff, STAFF_ORGANIZATION_AUDIT.reactivated, organizationId, input, (current, organization, standing) =>
+        store.reactivate({
+          organizationId: organization,
+          staffOrganizationId: staff.organizationId,
+          manageable: standing === null,
+          now: now(),
+          audit: eventOf(current, standing ? { standing } : {}),
+        }), false),
   };
 };
 

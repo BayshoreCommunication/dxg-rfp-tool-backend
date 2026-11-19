@@ -84,9 +84,12 @@ const setup = () => {
       return { changed: true, blockedAt: input.now, sessionsEnded };
     },
     async reactivate(input) {
-      const o = precheck(input);
+      // An organization that carries the marker is reactivated whatever it has become (F9).
+      const marked = !state.vanish && isOrganizationBlocked(organizations[input.organizationId]);
+      const o = marked ? organizations[input.organizationId] : precheck(input);
       if (typeof o === "string") return o;
       if (!isOrganizationBlocked(o)) {
+        if (!input.manageable) return "not_manageable";
         commit(input, "organization_not_blocked", { changed: false }, () => undefined);
         return { changed: false, blockedAt: null, sessionsEnded: 0 };
       }
@@ -158,7 +161,7 @@ test("block and reactivate are idempotent, and a request that changes nothing is
   assert.ok(w.audit.every((e) => e.organizationId === STAFF_ORG), "nothing is written to the customer organization");
 });
 
-test("the staff organization, any organization holding admins accounts, and a holding tenant can never be blocked or reactivated", async () => {
+test("the staff organization, any organization holding admins accounts, and a holding tenant can never be blocked, nor reactivated while they carry no marker", async () => {
   const w = setup();
   for (const [organizationId, standing] of [[STAFF_ORG, "platform"], [SECOND_STAFF_ORG, "platform"], [HOLDING, "legacy_holding"]]) {
     for (const call of ["block", "reactivate"]) {
@@ -254,6 +257,9 @@ test("the Mongo store: one transaction, the marker written and removed only here
   assert.match(store, /session\.withTransaction\(/);
   assert.match(store, /\{ _id: oid\(organizationId\), kind: "customer" \}/);
   assert.match(store, /organization\.kind !== "customer" \|\| organizationId === staffOrganizationId/);
+  // Reactivation of an organization that carries the marker: by its id and the marker, whatever its kind.
+  assert.match(store, /if \(allowMarked && isOrganizationBlocked\(organization\)\) \{\s+outcome = await work\(organization, \{ _id: oid\(organizationId\), "blocked\.at": \{ \$type: "date" \} \}, session\);/);
+  assert.match(store, /if \(!input\.manageable\) return "not_manageable";/);
   assert.match(store, /\{ \$set: \{ blocked: marker \} \}, \{ session \}/);
   assert.match(store, /\{ \$unset: \{ blocked: "" \} \}, \{ session \}/);
   assert.match(store, /RefreshSession\.updateMany\(\s*\{ organizationId, status: \{ \$ne: "revoked" \} \}/);

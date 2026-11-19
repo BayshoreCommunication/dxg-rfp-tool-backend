@@ -16,8 +16,12 @@ import type { OrganizationBlockAudit, OrganizationBlockOutcome, OrganizationBloc
    the marker on its own organization document and the status of its own refresh sessions, and
    no audit event is written in the customer organization.
 
-   Every filter names the organization the path gave, requires kind `customer`, and excludes the
-   staff organization; a write that matches nothing changes nothing. */
+   Every filter names the organization the path gave. BLOCKING requires kind `customer` and
+   excludes the staff organization; a write that matches nothing changes nothing. REACTIVATING an
+   organization that carries the marker removes it whatever the organization has become since
+   (it only removes a marker; otherwise such an organization could never be reactivated), by `_id`
+   and the marker itself; for an organization that carries no marker the same rule as blocking
+   applies and nothing is written. */
 
 const oid = (value: string) => new mongoose.Types.ObjectId(value);
 type Row = { _id: unknown; kind?: string; blocked?: { at?: unknown } | null };
@@ -41,6 +45,8 @@ const inTransaction = async (
   organizationId: string,
   staffOrganizationId: string,
   work: (organization: Row, filter: Record<string, unknown>, session: ClientSession) => Promise<Applied | "not_manageable">,
+  /** Reactivation only: an organization that carries the marker passes whatever it is now. */
+  allowMarked = false,
 ): Promise<OrganizationBlockOutcome> => {
   const session = await mongoose.startSession();
   let outcome: OrganizationBlockOutcome = "not_found";
@@ -48,6 +54,10 @@ const inTransaction = async (
     await session.withTransaction(async () => {
       const organization = await Organization.findOne({ _id: oid(organizationId) }).session(session).select("kind blocked").lean<Row | null>();
       if (!organization) { outcome = "not_found"; return; }
+      if (allowMarked && isOrganizationBlocked(organization)) {
+        outcome = await work(organization, { _id: oid(organizationId), "blocked.at": { $type: "date" } }, session);
+        return;
+      }
       if (organization.kind !== "customer" || organizationId === staffOrganizationId) { outcome = "not_manageable"; return; }
       outcome = await work(organization, { _id: oid(organizationId), kind: "customer" }, session);
     });
@@ -87,6 +97,8 @@ export const mongoOrganizationBlockStore: OrganizationBlockStore = {
   reactivate: (input) =>
     inTransaction(input.organizationId, input.staffOrganizationId, async (organization, filter, session) => {
       if (!isOrganizationBlocked(organization)) {
+        // No marker to remove: the full rule applies, as for a block (the service's verdict).
+        if (!input.manageable) return "not_manageable";
         await appendEvent(input.audit, "organization_not_blocked", { changed: false, before: { blocked: false, blockedAt: null }, after: { blocked: false, blockedAt: null } }, session);
         return { changed: false, blockedAt: null, sessionsEnded: 0 };
       }
@@ -95,5 +107,5 @@ export const mongoOrganizationBlockStore: OrganizationBlockStore = {
       if (written.matchedCount !== 1) return "not_manageable";
       await appendEvent(input.audit, "organization_reactivated", { changed: true, before: { blocked: true, blockedAt: since }, after: { blocked: false, blockedAt: null }, reactivatedAt: input.now }, session);
       return { changed: true, blockedAt: null, sessionsEnded: 0 };
-    }),
+    }, true),
 };

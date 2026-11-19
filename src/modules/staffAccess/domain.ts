@@ -221,5 +221,10 @@ export type OrganizationBlockOutcome =
    nothing to change commits its event alone. */
 export interface OrganizationBlockStore {
   block(input: { organizationId: string; staffOrganizationId: string; staffAccountId: string; now: Date; audit: OrganizationBlockAudit }): Promise<OrganizationBlockOutcome>;
-  reactivate(input: { organizationId: string; staffOrganizationId: string; now: Date; audit: OrganizationBlockAudit }): Promise<OrganizationBlockOutcome>;
+  /* Reactivating only removes a marker, so it is allowed for ANY organization that carries one,
+     manageable or not: an organization blocked while it was a customer organization and later
+     made unmanageable (an `admins` account added, its kind changed) must not stay blocked for
+     ever. `manageable` is the service's verdict on the full rule; the store applies it only to an
+     organization that carries NO marker (answer `not_manageable`, nothing written). */
+  reactivate(input: { organizationId: string; staffOrganizationId: string; manageable: boolean; now: Date; audit: OrganizationBlockAudit }): Promise<OrganizationBlockOutcome>;
 }
