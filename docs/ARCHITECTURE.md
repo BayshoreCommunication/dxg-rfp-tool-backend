@@ -67,7 +67,7 @@ The backend is a transitional modular monolith. The API creates authoritative re
 - Jobs, messages, applications, and provider attempts use idempotency controls.
 - PostgreSQL is authoritative for durable work; Redis loss is recoverable from jobs/outbox.
 - Private/quarantined storage, tenant isolation, malware scanning, citation validation, and human publication control are non-removable controls.
-- Organization block: RFPilot staff can block a customer organization. The marker is `blocked` on the MongoDB organization document; one predicate and one uncached lookup (`src/modules/organizationBlock/`) are asked by the access path (`middleware/auth.ts`), session begin and refresh, the public-grant, invitation and domain-match paths, both durable workers and every scheduled job. A blocked organization's members get `ORGANIZATION_BLOCKED`, its public links answer as unknown links, and its jobs are deferred, not dropped. See `API.md`, "Staff organization block".
+- Organization block: RFPilot staff can block a customer organization. The marker is `blocked` on the MongoDB organization document; one predicate and one uncached lookup (`src/modules/organizationBlock/`) are asked by the access path (`middleware/auth.ts`), session begin and refresh, the public-grant, invitation and access-request paths, both durable workers (which require MongoDB for it) and every scheduled job. A blocked organization's live members get `ORGANIZATION_BLOCKED` (a dead credential gets the answer it always got), its public links answer as unknown links, its domain still matches at sign-up but a request for access waits as pending, and its jobs are deferred, not dropped (one already running finishes). See `API.md`, "Staff organization block".
 
 ## Detailed references
 

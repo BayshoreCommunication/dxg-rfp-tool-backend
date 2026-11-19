@@ -74,8 +74,11 @@ export const createSourceSecurityWorker = (repository: JobRepository) => {
   const leaseSeconds = Number(process.env.JOB_LEASE_SECONDS || 90);
   const maxAttempts = Number(process.env.JOB_MAX_ATTEMPTS || 5);
   return new Worker<QueueMessage>(SOURCE_SECURITY_QUEUE, async (job: Job<QueueMessage>, token?: string) => {
-    // organization-block: nothing runs for an organization RFPilot staff blocked; the job is
-    // deferred, unclaimed, and resumes after a reactivation (organizationBlockDeferral.ts).
+    // organization-block: no job STARTS for an organization RFPilot staff blocked; it is deferred,
+    // unclaimed, and resumes after a reactivation (organizationBlockDeferral.ts). This is the
+    // only check: a job already running when the block commits finishes. The gate is not asked
+    // again at lease renewal, since stopping a handler part-way could leave its writes half
+    // done (docs/API.md, "Staff organization block", known limits).
     await deferJobOfBlockedOrganization(job, token);
     const attempt = job.attemptsMade + 1;
     const startedAt = Date.now();

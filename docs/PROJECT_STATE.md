@@ -735,14 +735,17 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
     a JSON body, which the admin app's client must send.
   - Done in the backend (organization block; owner's decision 2026-11-18,
     `DECISIONS.md` row of 2026-11-19; in its own draft PR, **not released, not
-    merged, awaiting security review**): staff block a whole customer
+    merged; security review done 2026-11-19 with no critical or high
+    finding, its fix round is in the same PR**): staff block a whole customer
     organization and reactivate it with `POST
     /api/v1/admin/organizations/:organizationId/block` and `/reactivate`
     (`API.md`, "Staff organization block"). A block is a dedicated marker on
     the organization (never `status`); one predicate and one uncached lookup
-    decide it everywhere. While blocked: members are refused at sign-in, on
-    every request and on refresh with code `ORGANIZATION_BLOCKED`, and their
-    sessions end; vendor links, shared proposal pages and invitation links
+    decide it everywhere. While blocked: live members are refused at sign-in,
+    on every request and on refresh with code `ORGANIZATION_BLOCKED`, and their
+    sessions end (a dead credential gets the answer it always got); a sign-up
+    on the organization's domain still gets the domain match, and a request
+    for access waits as pending with nothing sent into the organization; vendor links, shared proposal pages and invitation links
     answer as links that do not exist; durable jobs are deferred and scheduled
     jobs skip the organization; nothing is deleted. Reactivation removes the
     marker and everything resumes; members sign in again. The staff
@@ -750,7 +753,9 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
     in the staff organization (`platform.organization.blocked` /
     `.reactivated`); nothing in the customer's audit trail, including no
     "sessions signed out" or "session reuse detected" row. Staff reads show
-    blocked and since when. Both workers now always connect to MongoDB.
+    blocked and since when. Both workers now require MongoDB and fail
+    start-up without it. A job already running when the block commits
+    finishes (accepted limit).
     Not built: the dashboard message for `ORGANIZATION_BLOCKED` and the admin
     app's block button. Known limits are listed in `API.md`.
   - Follows, not built: (a) the admin app's organization browser on the new

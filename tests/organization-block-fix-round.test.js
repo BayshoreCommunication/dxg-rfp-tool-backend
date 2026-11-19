@@ -681,3 +681,19 @@ test("F8 reconcile: a batch-sized set of queued jobs of a blocked organization d
   assert.match(read("src/modules/durableJobs/composition.ts"), /createDispatcher\(postgresJobRepository,undefined,async\(\)=>mongoose\.connection\.readyState===1\?blockedOrganizationIds\(\):\[\]\)/);
   assert.match(read("scripts/startDurableDispatcher.ts"), /if\(process\.env\.MONGODB_URL\|\|process\.env\.MONGO_URL\)void connectDB\(\)\.catch\(logged\(/);
 });
+
+// ---------------------------------------------------------------- F4: a job already running is documented, not stopped
+
+test("F4 the docs do not claim that nothing runs for a blocked organization: a job already running when the block commits is listed as a known limit", () => {
+  const api = read("docs/API.md");
+  const section = api.slice(api.indexOf("### Staff organization block"));
+  assert.match(section, /\*\*Not yet: a job already running when the block commits runs to completion\.\*\*/);
+  assert.match(section, /A job that was \*\*already running\*\* when the block committed is not stopped/);
+  for (const file of ["docs/API.md", "docs/DECISIONS.md", "docs/ARCHITECTURE.md", "docs/PROJECT_STATE.md", "src/modules/durableJobs/worker.ts", "src/modules/durableJobs/aiGatewayWorker.ts", "src/modules/durableJobs/organizationBlockDeferral.ts"]) {
+    assert.doesNotMatch(read(file), /nothing runs for an organization/i, file);
+  }
+  // The only gate check in the worker is before the claim; the heartbeat does not ask again.
+  const worker = read("src/modules/durableJobs/worker.ts");
+  assert.equal((worker.match(/deferJobOfBlockedOrganization\(/g) ?? []).length, 1);
+  assert.match(worker, /a job already running when the block commits finishes/);
+});

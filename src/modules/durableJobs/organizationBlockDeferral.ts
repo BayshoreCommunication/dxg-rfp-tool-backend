@@ -16,7 +16,12 @@ import type { QueueMessage } from "./domain";
      LOOKUP_FAILED_DEFER_MS. It is not executed on a guess and it is not failed.
 
    The authoritative record is the PostgreSQL job row and its outbox event; if Redis loses the
-   delayed job the dispatcher's reconcile publishes it again and it comes back here. */
+   delayed job the dispatcher's reconcile publishes it again and it comes back here (while the
+   organization is blocked reconcile leaves its jobs out of its batch, so they come back on the
+   first pass after a reactivation: dispatcher.ts).
+
+   NOT COVERED: a job that was already claimed and running when the block committed. It is not
+   asked again and runs to completion (docs/API.md, "Staff organization block", known limits). */
 
 export const BLOCKED_JOB_DEFER_MS = 5 * 60_000;
 export const LOOKUP_FAILED_DEFER_MS = 30_000;
