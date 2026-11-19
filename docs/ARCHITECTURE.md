@@ -1,6 +1,6 @@
 # RFPilot Architecture
 
-> Purpose: current system map and source-of-truth boundaries. Last updated: 2026-08-12. Owner: engineering.
+> Purpose: current system map and source-of-truth boundaries. Last updated: 2026-11-19. Owner: engineering.
 
 ## System
 
@@ -67,6 +67,7 @@ The backend is a transitional modular monolith. The API creates authoritative re
 - Jobs, messages, applications, and provider attempts use idempotency controls.
 - PostgreSQL is authoritative for durable work; Redis loss is recoverable from jobs/outbox.
 - Private/quarantined storage, tenant isolation, malware scanning, citation validation, and human publication control are non-removable controls.
+- Organization block: RFPilot staff can block a customer organization. The marker is `blocked` on the MongoDB organization document; one predicate and one uncached lookup (`src/modules/organizationBlock/`) are asked by the access path (`middleware/auth.ts`), session begin and refresh, the public-grant, invitation and domain-match paths, both durable workers and every scheduled job. A blocked organization's members get `ORGANIZATION_BLOCKED`, its public links answer as unknown links, and its jobs are deferred, not dropped. See `API.md`, "Staff organization block".
 
 ## Detailed references
 
