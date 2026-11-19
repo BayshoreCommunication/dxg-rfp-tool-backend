@@ -3,10 +3,16 @@ import mongoose from "mongoose";
 import connectDB from "../config/db";
 import {closePostgres} from "../config/postgres";
 import {durableJobDispatcher} from "../src/modules/durableJobs/composition";
+import {createOptionalMongoReconnect} from "../src/modules/durableJobs/optionalMongoReconnect";
 import {closeQueue} from "../src/modules/durableJobs/queue";
 import {durableJobsEnabled} from "../src/modules/durableJobs/redis";
 if(!durableJobsEnabled())throw new Error("DURABLE_JOBS_ENABLED must be true to start the dispatcher");
-let stopping=false;const tick=async()=>{if(!stopping)await durableJobDispatcher.dispatch(50);};const reconcile=async()=>{if(!stopping)await durableJobDispatcher.reconcile(200);};
+let stopping=false;const tick=async()=>{if(!stopping)await durableJobDispatcher.dispatch(50);};
+// If MongoDB was unreachable at boot (below) nothing else retries it. Each reconcile pass starts a
+// reconnect when one is needed: not awaited, never throws, logs at most once a minute
+// (optionalMongoReconnect.ts). Reconcile itself runs at once either way.
+const reconnectMongo=createOptionalMongoReconnect({configured:()=>Boolean(process.env.MONGODB_URL||process.env.MONGO_URL),readyState:()=>mongoose.connection.readyState,connect:()=>connectDB({quietFailure:true}),log:line=>{console.error(line);}});
+const reconcile=async()=>{if(stopping)return;reconnectMongo();await durableJobDispatcher.reconcile(200);};
 // A failed pass must never kill the process (the unprotected initial tick
 // did exactly that when the schema had not been migrated yet), and failures
 // must be visible to operators rather than swallowed.

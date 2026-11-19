@@ -18,7 +18,7 @@ export class WorkerStartupError extends Error {
 }
 
 /** Connection strings never reach a log line, with or without credentials. */
-const withoutConnectionStrings = (text: string) => text.replace(/mongodb(\+srv)?:\/\/\S+/gi, "mongodb://[redacted]");
+export const withoutConnectionStrings = (text: string) => text.replace(/mongodb(\+srv)?:\/\/\S+/gi, "mongodb://[redacted]");
 
 export const startWorkerWithMongo = async <W>(input: {
   name: string;

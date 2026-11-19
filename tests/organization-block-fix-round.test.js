@@ -764,3 +764,107 @@ test("L1 controls: a genuine reuse, an out-of-window retry, a wrong or missing k
     assert.deepEqual([sibling.kind, sibling.rows, sibling.issued, sibling.reasons], ["reuse_detected", REUSE_ROW, 0, [STAFF_MEMBERSHIP_REVOKE_REASON]], `staff membership change, blocked ${blocked}`);
   }
 });
+
+// ---------------------------------------------------------------- L2: the dispatcher's optional MongoDB connection is retried
+
+const { createOptionalMongoReconnect, RECONNECT_LOG_EVERY_MS } = require("../src/modules/durableJobs/optionalMongoReconnect");
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+test("L2 dispatcher: MongoDB unreachable at boot is retried from the reconcile timer without being awaited, logs at most once a minute, and stops once connected", async () => {
+  const state = { readyState: 0, now: 0, attempts: 0, up: false, hang: null };
+  const lines = [];
+  const connect = async () => {
+    state.attempts += 1;
+    if (state.hang) await state.hang;
+    if (!state.up) throw new Error('connect ECONNREFUSED 10.0.0.5:27017 (Invalid connection string "mongodb+srv://user:secret@db.internal/x")');
+    state.readyState = 1;
+  };
+  const ensure = createOptionalMongoReconnect({ configured: () => true, readyState: () => state.readyState, connect, log: (line) => lines.push(line), now: () => state.now });
+
+  // Not awaited: with a connect that never settles, ensure() returns at once and starts only one attempt.
+  let release;
+  state.hang = new Promise((resolve) => { release = resolve; });
+  assert.equal(ensure(), undefined);
+  await settle();
+  ensure();
+  await settle();
+  assert.equal(state.attempts, 1, "one attempt at a time");
+  release();
+  state.hang = null;
+  await settle();
+  assert.equal(lines.length, 1, "the first failure is logged");
+  assert.match(lines[0], /^\[dispatcher\] mongodb \(optional, reconcile fairness only\) is not connected; retrying on the next reconcile: connect ECONNREFUSED/);
+  assert.ok(!lines[0].includes("secret") && !lines[0].includes("\n"), "one line, no connection string");
+
+  // Reconcile every 30 s: each pass retries, a failure is logged at most once per minute.
+  for (const at of [30_000, 59_999]) { state.now = at; ensure(); await settle(); }
+  assert.deepEqual([state.attempts, lines.length], [3, 1]);
+  state.now = RECONNECT_LOG_EVERY_MS;
+  ensure();
+  await settle();
+  assert.deepEqual([state.attempts, lines.length], [4, 2]);
+
+  // MongoDB comes back: the next pass connects, and nothing is attempted afterwards, even if the
+  // connection later drops (the driver reconnects an established connection itself).
+  state.up = true;
+  state.now += 30_000;
+  ensure();
+  await settle();
+  assert.deepEqual([state.attempts, state.readyState, lines.length], [5, 1, 2]);
+  state.readyState = 0;
+  ensure();
+  await settle();
+  assert.equal(state.attempts, 5);
+});
+
+test("L2 dispatcher: the reconnect never throws and never attempts when MongoDB is not configured, is connected or is already connecting", async () => {
+  let attempts = 0;
+  const connect = async () => { attempts += 1; };
+  for (const [configured, readyState] of [[false, 0], [true, 1], [true, 2], [true, 3]]) {
+    createOptionalMongoReconnect({ configured: () => configured, readyState: () => readyState, connect, log: () => {} })();
+    await settle();
+  }
+  assert.equal(attempts, 0);
+  // A connect that throws synchronously, a failing state read and a failing logger reach nobody.
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const hostile = [
+      { configured: () => true, readyState: () => 0, connect: () => { throw new Error("sync"); }, log: () => { throw new Error("logger"); } },
+      { configured: () => { throw new Error("env"); }, readyState: () => 0, connect, log: () => { throw new Error("logger"); } },
+      { configured: () => true, readyState: () => { throw new Error("state"); }, connect, log: () => {} },
+    ];
+    for (const input of hostile) { const ensure = createOptionalMongoReconnect(input); assert.doesNotThrow(() => { ensure(); ensure(); }); await settle(); }
+    await settle();
+  } finally { process.off("unhandledRejection", onUnhandled); }
+  assert.deepEqual(unhandled, []);
+
+  // The start script: boot attempt unchanged, the reconcile path calls the reconnect and does not await it.
+  const script = read("scripts/startDurableDispatcher.ts");
+  assert.match(script, /const reconcile=async\(\)=>\{if\(stopping\)return;reconnectMongo\(\);await durableJobDispatcher\.reconcile\(200\);\};/);
+  assert.match(script, /createOptionalMongoReconnect\(\{configured:\(\)=>Boolean\(process\.env\.MONGODB_URL\|\|process\.env\.MONGO_URL\),readyState:\(\)=>mongoose\.connection\.readyState,connect:\(\)=>connectDB\(\{quietFailure:true\}\),/);
+  assert.ok(!/await reconnectMongo\(/.test(script));
+});
+
+test("L2/L3 a quiet connection attempt prints neither the failure banner nor the raw driver error; the default attempt prints what it always did", async () => {
+  const connectDB = require("../config/db").default;
+  const saved = { url: process.env.MONGODB_URL, alt: process.env.MONGO_URL, error: console.error, log: console.log };
+  const printed = [];
+  console.error = (...args) => { printed.push(args.map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : String(a))).join(" ")); };
+  console.log = () => {};
+  process.env.MONGODB_URL = "not-a-uri://user:secret-value@db.internal";
+  delete process.env.MONGO_URL;
+  try {
+    await assert.rejects(() => connectDB({ quietFailure: true }));
+    await settle(); await settle();
+    assert.deepEqual(printed, [], "nothing printed by a quiet attempt, on the banner or on the connection's error event");
+    await assert.rejects(() => connectDB());
+    await settle(); await settle();
+    assert.ok(printed.some((line) => line.includes("Database Connection Error")) && printed.some((line) => line.startsWith("Full error:")), "the API's banner is unchanged");
+  } finally {
+    console.error = saved.error; console.log = saved.log;
+    if (saved.url === undefined) delete process.env.MONGODB_URL; else process.env.MONGODB_URL = saved.url;
+    if (saved.alt !== undefined) process.env.MONGO_URL = saved.alt;
+  }
+});
