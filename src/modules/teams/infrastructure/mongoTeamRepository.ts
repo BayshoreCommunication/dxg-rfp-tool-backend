@@ -3,7 +3,7 @@ import Team from "../../../../modal/teamModel";
 import TeamMembership from "../../../../modal/teamMembershipModel";
 import OrganizationMembership from "../../../../modal/organizationMembershipModel";
 import { appendAudit } from "../../organizationMembers/infrastructure/mongoMembershipStore";
-import type { OrganizationMemberDirectory, TeamRecord, TeamRepository } from "../domain";
+import type { OrganizationMemberDirectory, TeamRecord, TeamRepository, TeamWriteRefusal } from "../domain";
 
 const isDuplicateKey = (error: unknown) => (error as { code?: number })?.code === 11000;
 
@@ -31,6 +31,42 @@ const inTransaction = async <T>(work: (session: ClientSession) => Promise<T>): P
   } finally {
     await session.endSession();
   }
+};
+
+const isObjectId = (value: string) => /^[0-9a-f]{24}$/i.test(value);
+// Manager scope also needs the role (rfpAccessPolicy); the same rule as the team service's.
+const MANAGER_ROLE = "team_manager";
+
+// Thrown inside a staff transaction to abort it: nothing of it is applied and no event is written.
+class StaffWriteAborted extends Error {
+  constructor(readonly outcome: TeamWriteRefusal | false) {
+    super(`Staff team write not applied: ${outcome || "not_on_team"}`);
+  }
+}
+
+/* What the team service checked before the write, checked again INSIDE the staff transaction, so
+   that a team archived, or a member deactivated or demoted, between that check and this write is
+   refused here. Every query names the organization: a team or a member of another organization
+   does not match. The team document is written, not just read (as `addMemberInTransaction`
+   below), so a concurrent archive conflicts with the transaction instead of slipping past it.
+   `member` is left out when the write needs none (unsetting a manager). */
+const assertStaffWrite = async (
+  input: { organizationId: string; teamId: string; member?: { userId: string; isManager: boolean } },
+  session: ClientSession,
+): Promise<void> => {
+  const { organizationId, teamId, member } = input;
+  if (!isObjectId(organizationId) || !isObjectId(teamId)) throw new StaffWriteAborted("team_not_found");
+  const team = await Team.updateOne({ _id: teamId, organizationId, archived: false }, { $set: { updatedAt: new Date() } }, { session, timestamps: false });
+  if (team.matchedCount !== 1) {
+    const archived = await Team.exists({ _id: teamId, organizationId }).session(session);
+    throw new StaffWriteAborted(archived ? "team_archived" : "team_not_found");
+  }
+  if (!member) return;
+  if (!isObjectId(member.userId)) throw new StaffWriteAborted("member_not_found");
+  const membership = await OrganizationMembership.findOne({ organizationId, userId: member.userId, status: "active" })
+    .select("roles").session(session).lean<{ roles?: string[] } | null>();
+  if (!membership) throw new StaffWriteAborted("member_not_found");
+  if (member.isManager && !(membership.roles ?? []).includes(MANAGER_ROLE)) throw new StaffWriteAborted("manager_role_required");
 };
 
 export const mongoTeamRepository: TeamRepository = {
@@ -119,11 +155,13 @@ export const mongoTeamRepository: TeamRepository = {
     if (audit) {
       try {
         return await inTransaction(async (session) => {
+          await assertStaffWrite({ organizationId, teamId, member: { userId, isManager } }, session);
           await TeamMembership.create([{ organizationId, teamId, userId, isManager }], { session });
           await appendAudit(audit, session);
           return "added" as const;
         });
       } catch (error) {
+        if (error instanceof StaffWriteAborted && error.outcome !== false) return error.outcome;
         if (isDuplicateKey(error)) return "exists";
         throw error;
       }
@@ -152,13 +190,21 @@ export const mongoTeamRepository: TeamRepository = {
 
   async setManager({ organizationId, teamId, userId, isManager, audit }) {
     if (audit) {
-      return inTransaction(async (session) => {
-        const previous = await TeamMembership.findOneAndUpdate({ organizationId, teamId, userId }, { $set: { isManager } }, { new: false, session })
-          .select("isManager").lean<{ isManager?: boolean } | null>();
-        if (!previous) return false;
-        await appendAudit(audit, session, { before: { isManager: previous.isManager === true }, changed: (previous.isManager === true) !== isManager });
-        return true;
-      });
+      try {
+        return await inTransaction(async (session) => {
+          // Only setting a manager asks anything of the member, as in the team service.
+          await assertStaffWrite({ organizationId, teamId, ...(isManager ? { member: { userId, isManager } } : {}) }, session);
+          const previous = await TeamMembership.findOneAndUpdate({ organizationId, teamId, userId }, { $set: { isManager } }, { new: false, session })
+            .select("isManager").lean<{ isManager?: boolean } | null>();
+          // Not on the team: aborted, so the team document above is not left written.
+          if (!previous) throw new StaffWriteAborted(false);
+          await appendAudit(audit, session, { before: { isManager: previous.isManager === true }, changed: (previous.isManager === true) !== isManager });
+          return true;
+        });
+      } catch (error) {
+        if (error instanceof StaffWriteAborted) return error.outcome;
+        throw error;
+      }
     }
     const result = await TeamMembership.updateOne({ organizationId, teamId, userId }, { $set: { isManager } });
     return result.matchedCount === 1;

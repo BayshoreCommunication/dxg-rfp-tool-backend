@@ -51,7 +51,7 @@ const noSecrets = (value, label) => {
 // customer services and the staff service over it. `audit` holds every event written anywhere.
 const setup = () => {
   const audit = [];
-  const state = { failAudit: false, failStoreAudit: false, archiveRace: false, teamsUnavailable: false, archivedAtCommit: null };
+  const state = { failAudit: false, failStoreAudit: false, archiveRace: false, teamsUnavailable: false, archivedAtCommit: null, storeRefusal: null };
   const calls = [];
   const memberRows = [];
   const addMemberRow = (organizationId, userId, roles, status = "active") => memberRows.push({ organizationId, membershipId: `m-${userId}`, userId, name: `Name ${userId[0]}`, email: `${userId[0]}@example.test`, roles, status, version: 1, lastSignedInAt: null, createdAt: new Date("2026-10-01T00:00:00Z") });
@@ -113,6 +113,8 @@ const setup = () => {
     async members(organizationId, teamIds) { calls.push(["teams.members", organizationId, teamIds]); return teamMembers.filter((m) => m.organizationId === organizationId && teamIds.includes(m.teamId)).map(({ organizationId: _o, ...m }) => m); },
     async addMember(input) {
       calls.push(["teams.addMember", input]);
+      // As the Mongo store: what a staff write finds changed inside its transaction. Nothing is applied.
+      if (input.audit && state.storeRefusal) return state.storeRefusal;
       if (teamMembers.some((m) => m.teamId === input.teamId && m.userId === input.userId)) return "exists";
       commit(input.audit, {}, () => teamMembers.push({ organizationId: input.organizationId, teamId: input.teamId, userId: input.userId, isManager: input.isManager }));
       return "added";
@@ -126,6 +128,7 @@ const setup = () => {
     },
     async setManager(input) {
       calls.push(["teams.setManager", input]);
+      if (input.audit && state.storeRefusal) return state.storeRefusal;
       const m = teamMembers.find((x) => x.organizationId === input.organizationId && x.teamId === input.teamId && x.userId === input.userId);
       if (!m) return false;
       const before = m.isManager;
@@ -779,6 +782,76 @@ test("the Mongo team store writes a staff change's audit event inside the transa
   // The customer's member composition still uses the member write.
   assert.match(read("src/modules/organizationMembers/composition.ts"), /teams: mongoTeamDirectory,/);
   assert.doesNotMatch(read("src/modules/organizationMembers/composition.ts"), /mongoStaffMemberTeams/);
+});
+
+test("a staff add or manager change is checked again inside its transaction: a team archived, or a member deactivated or demoted, after the service's check is refused with the customer's refusal, nothing applied and no change event", async () => {
+  // The service: what the store found in the transaction becomes the refusal the first check gives.
+  const customerRefusals = {
+    team_not_found: (c, admin) => c.customerTeams.addMember(admin, "aaaa0000000000000000dead", { userId: ids.viewer }),
+    team_archived: (c, admin) => c.customerTeams.addMember(admin, T.old, { userId: ids.viewer }),
+    member_not_found: (c, admin) => c.customerTeams.addMember(admin, T.east, { userId: ids.suspended }),
+    manager_role_required: (c, admin) => c.customerTeams.addMember(admin, T.east, { userId: ids.viewer, isManager: true }),
+  };
+  const ADMIN = { organizationId: ACME, userId: ids.admin, roles: ["organization_admin"], correlationId: "corr-admin" };
+  const staffWrites = [
+    ["addMember", STAFF_TEAM_AUDIT.memberAdded, (m) => m.addMember(staff(), ACME, T.east, { userId: ids.manager, isManager: true, reason: REASON })],
+    ["setManager", STAFF_TEAM_AUDIT.managerChanged, (m) => m.setManager(staff(), ACME, T.west, ids.manager, { isManager: true, reason: REASON })],
+  ];
+  for (const [outcome, byAdmin] of Object.entries(customerRefusals)) {
+    let customer;
+    await assert.rejects(byAdmin(setup(), ADMIN), (error) => { customer = error; return error instanceof TeamError; });
+    assert.equal(customer.code, outcome === "manager_role_required" ? "TEAM_MANAGER_ROLE_REQUIRED" : outcome.toUpperCase());
+    for (const [name, action, run] of staffWrites) {
+      const raced = setup();
+      raced.state.storeRefusal = outcome; // every check of the service passes; the store refuses in its transaction
+      const before = raced.world();
+      await assert.rejects(run(raced.management), (error) => {
+        assert.ok(error instanceof StaffMemberError, `${name} ${outcome}`);
+        assert.deepEqual([error.status, error.code, error.message], [customer.status, customer.code, customer.message], `${name} ${outcome}`);
+        return true;
+      });
+      assert.equal(raced.world(), before, `${name} ${outcome}: nothing applied`);
+      assert.equal(raced.writes().length, 1, "the store was asked once, with the event");
+      oneStaffEvent(raced.audit, { action, decision: "denied", reason: customer.code.toLowerCase(), metadata: { organizationId: ACME } });
+      assert.equal(raced.audit.some((event) => event.organizationId === ACME || CUSTOMER_TEAM_ACTIONS.includes(event.action)), false);
+    }
+  }
+  // "Not on the team" is still its own refusal, and a store answer that is none of the above is not a refusal.
+  const absent = setup();
+  await assert.rejects(absent.management.setManager(staff(), ACME, T.east, ids.manager, { isManager: true, reason: REASON }), refusedWith(404, "TEAM_MEMBER_NOT_FOUND"));
+
+  // The Mongo store: the check runs inside the transaction of addMember and setManager, before the write, with the session.
+  const source = read("src/modules/teams/infrastructure/mongoTeamRepository.ts");
+  const check = source.slice(source.indexOf("const assertStaffWrite = async ("), source.indexOf("export const mongoTeamRepository"));
+  assert.match(check, /const team = await Team\.updateOne\(\{ _id: teamId, organizationId, archived: false \}, \{ \$set: \{ updatedAt: new Date\(\) \} \}, \{ session, timestamps: false \}\);\s+if \(team\.matchedCount !== 1\) \{\s+const archived = await Team\.exists\(\{ _id: teamId, organizationId \}\)\.session\(session\);\s+throw new StaffWriteAborted\(archived \? "team_archived" : "team_not_found"\);/);
+  assert.match(check, /const membership = await OrganizationMembership\.findOne\(\{ organizationId, userId: member\.userId, status: "active" \}\)\s+\.select\("roles"\)\.session\(session\)\.lean<[^\n]*\(\);\s+if \(!membership\) throw new StaffWriteAborted\("member_not_found"\);\s+if \(member\.isManager && !\(membership\.roles \?\? \[\]\)\.includes\(MANAGER_ROLE\)\) throw new StaffWriteAborted\("manager_role_required"\);/);
+  assert.match(source, /const MANAGER_ROLE = "team_manager";/);
+  // Every query of the check carries the session and names the organization; it writes nothing but the team's own timestamp.
+  for (const query of check.match(/(Team|TeamMembership|OrganizationMembership)\.\w+\([^\n]*(\n\s+\.[^\n]*)?/g)) {
+    assert.match(query, /\{ session, timestamps: false \}|\.session\(session\)/, query);
+    assert.match(query, /organizationId/, query);
+  }
+  assert.doesNotMatch(check, /\.(create|insertMany|deleteOne|deleteMany|findOneAndUpdate|findOneAndDelete|save)\(|appendAudit/);
+  const branch = (method) => {
+    const start = source.indexOf(`  async ${method}(`);
+    const body = source.slice(start, source.indexOf("\n  },", start));
+    const memberStart = body.search(/\n    (try \{\n      await TeamMembership|const result = await)/);
+    return [body.slice(0, memberStart), body.slice(memberStart)];
+  };
+  const [addStaff, addMember] = branch("addMember");
+  assert.match(addStaff, /inTransaction\(async \(session\) => \{\s+await assertStaffWrite\(\{ organizationId, teamId, member: \{ userId, isManager \} \}, session\);\s+await TeamMembership\.create\(/);
+  assert.match(addStaff, /if \(error instanceof StaffWriteAborted && error\.outcome !== false\) return error\.outcome;/);
+  const [setStaff, setMember] = branch("setManager");
+  assert.match(setStaff, /inTransaction\(async \(session\) => \{\s+(\/\/[^\n]*\s+)?await assertStaffWrite\(\{ organizationId, teamId, \.\.\.\(isManager \? \{ member: \{ userId, isManager \} \} : \{\}\) \}, session\);\s+const previous = await TeamMembership\.findOneAndUpdate\(/);
+  // Not on the team: aborted too, so the team's timestamp written by the check is rolled back.
+  assert.match(setStaff, /if \(!previous\) throw new StaffWriteAborted\(false\);/);
+  assert.match(setStaff, /if \(error instanceof StaffWriteAborted\) return error\.outcome;/);
+  // A refusal aborts: it is thrown out of the transaction, never returned from inside it.
+  for (const staffBranch of [addStaff, setStaff]) assert.ok(staffBranch.indexOf("assertStaffWrite(") < staffBranch.indexOf("appendAudit("));
+  assert.equal((check.match(/return [^;]/g) ?? []).length, 0, "the check throws or passes");
+  // The member paths never run it.
+  for (const memberPath of [addMember, setMember]) assert.doesNotMatch(memberPath, /assertStaffWrite|StaffWriteAborted|OrganizationMembership|session/);
+  assert.equal((source.match(/assertStaffWrite\(/g) ?? []).length, 3, "its definition and the two staff branches");
 });
 
 // ── The customer path ────────────────────────────────────────────────────────────────────────

@@ -46,6 +46,20 @@ export type TeamManager = TeamActor | StaffTeamActor;
 // Only an actor made by `staffTeamActor` is one: an object that merely carries `staff: true`
 // (a request body, a session, a member actor with an extra field) is not.
 const staffTeamActors = new WeakSet<object>();
+/* CAPABILITY: the ONLY caller allowed is
+   src/modules/staffAccess/application/manageOrganizationTeams.ts. Do not call this from anywhere else.
+
+   Why: an actor made here skips the Owner/Admin role check of the team rules (`requireManager`
+   in application/manageTeams.ts) for whatever `organizationId` it is given, and makes the store
+   take its staff branch. Nothing in this function checks who is asking: the staff guard (an
+   `admins` account with an admin role), the request validation and the "is this a customer
+   organization" check all run in manageOrganizationTeams.ts BEFORE it makes the actor, and its
+   `committed` / `unchanged` are what put the audit event in the STAFF organization. A second
+   caller would be a way to change any organization's teams without those checks or that record.
+
+   It is exported only because the staff service lives in another module. The language does not
+   enforce the rule: tests/staff-team-management.test.js walks the source tree and fails if any
+   other file names this function. Keep that test when changing this. */
 export const staffTeamActor = (input: Omit<StaffTeamActor, "staff">): StaffTeamActor => {
   const actor: StaffTeamActor = Object.freeze({ staff: true as const, organizationId: input.organizationId, committed: input.committed, unchanged: input.unchanged });
   staffTeamActors.add(actor);
@@ -56,6 +70,12 @@ export const isStaffTeamActor = (actor: TeamManager): actor is StaffTeamActor =>
 
 export type TeamRecord = { id: string; name: string; archived: boolean; archivedAt: Date | null; createdAt: Date };
 export type TeamMemberRecord = { teamId: string; userId: string; isManager: boolean };
+
+/* Why a STAFF write (one given an `audit` event) was not applied. The team rules check the team
+   and the member before they call the store; the store checks them again inside the transaction
+   of the write, so a team archived, or a member deactivated or demoted, in between is refused
+   there with nothing applied and no event. A write without an event never returns one. */
+export type TeamWriteRefusal = "team_not_found" | "team_archived" | "member_not_found" | "manager_role_required";
 
 export type TeamView = TeamRecord & { members: { userId: string; isManager: boolean }[] };
 export type TeamSummary = Pick<TeamRecord, "id" | "name">;
@@ -74,9 +94,13 @@ export interface TeamRepository {
   // False when the team is missing or already archived.
   archive(input: { organizationId: string; teamId: string; at: Date; audit?: TeamChangeAudit }): Promise<boolean>;
   members(organizationId: string, teamIds: readonly string[]): Promise<TeamMemberRecord[]>;
-  addMember(input: { organizationId: string; teamId: string; userId: string; isManager: boolean; audit?: TeamChangeAudit }): Promise<"added" | "exists">;
+  // With an event: the team must be an active team of the organization and the user an active
+  // member of it (holding the Team Manager role when `isManager`), checked in the transaction.
+  addMember(input: { organizationId: string; teamId: string; userId: string; isManager: boolean; audit?: TeamChangeAudit }): Promise<"added" | "exists" | TeamWriteRefusal>;
   removeMember(input: { organizationId: string; teamId: string; userId: string; audit?: TeamChangeAudit }): Promise<boolean>;
-  setManager(input: { organizationId: string; teamId: string; userId: string; isManager: boolean; audit?: TeamChangeAudit }): Promise<boolean>;
+  // False when the user is not on the team. With an event: the team must be an active team of the
+  // organization, and to set a manager the user an active member holding the Team Manager role.
+  setManager(input: { organizationId: string; teamId: string; userId: string; isManager: boolean; audit?: TeamChangeAudit }): Promise<boolean | TeamWriteRefusal>;
 }
 
 export interface OrganizationMemberDirectory {

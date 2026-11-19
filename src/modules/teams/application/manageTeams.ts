@@ -12,6 +12,7 @@ import {
   type TeamRepository,
   type TeamSummary,
   type TeamView,
+  type TeamWriteRefusal,
 } from "../domain";
 
 type Dependencies = {
@@ -37,6 +38,17 @@ const teamName = (value: unknown): string => {
 const teamNameTaken = () => new TeamError("TEAM_NAME_TAKEN", "An active team already has this name.", 409);
 const teamNotFound = () => new TeamError("TEAM_NOT_FOUND", "Team not found.", 404);
 const memberNotFound = () => new TeamError("MEMBER_NOT_FOUND", "Member not found in this organization.", 404);
+const teamArchived = () => new TeamError("TEAM_ARCHIVED", "Archived teams can't be changed.", 409);
+const managerRoleRequired = () => new TeamError("TEAM_MANAGER_ROLE_REQUIRED", "Only members with the Team Manager role can manage a team.", 422);
+// What the store found inside a staff write's transaction (the team or the member changed after
+// the checks below): the refusal those checks give. Nothing was applied and no event committed.
+const WRITE_REFUSALS: Record<TeamWriteRefusal, () => TeamError> = {
+  team_not_found: teamNotFound,
+  team_archived: teamArchived,
+  member_not_found: memberNotFound,
+  manager_role_required: managerRoleRequired,
+};
+const isWriteRefusal = (outcome: unknown): outcome is TeamWriteRefusal => typeof outcome === "string" && Object.keys(WRITE_REFUSALS).includes(outcome);
 
 export const createTeamAdministration = (dependencies: Dependencies) => {
   const { teams, directory, audit } = dependencies;
@@ -79,7 +91,7 @@ export const createTeamAdministration = (dependencies: Dependencies) => {
   };
   const loadActiveTeam = async (actor: TeamManager, teamId: string): Promise<TeamRecord> => {
     const team = await loadTeam(actor, teamId);
-    if (team.archived) throw new TeamError("TEAM_ARCHIVED", "Archived teams can't be changed.", 409);
+    if (team.archived) throw teamArchived();
     return team;
   };
   const loadActiveMember = async (actor: TeamManager, userId: string) => {
@@ -88,9 +100,7 @@ export const createTeamAdministration = (dependencies: Dependencies) => {
     return member;
   };
   const assertCanManageTeam = (member: { roles: readonly string[] }) => {
-    if (!member.roles.some((role) => MANAGER_ROLES.includes(role))) {
-      throw new TeamError("TEAM_MANAGER_ROLE_REQUIRED", "Only members with the Team Manager role can manage a team.", 422);
-    }
+    if (!member.roles.some((role) => MANAGER_ROLES.includes(role))) throw managerRoleRequired();
   };
 
   const withMembers = async (organizationId: string, list: TeamRecord[]): Promise<TeamView[]> => {
@@ -168,6 +178,7 @@ export const createTeamAdministration = (dependencies: Dependencies) => {
         organizationId: actor.organizationId, teamId, userId, isManager,
         ...staffEvent(actor, "member_added", { teamId, userId }, { changed: true, before: null, after: { userId, isManager } }),
       });
+      if (isWriteRefusal(outcome)) throw WRITE_REFUSALS[outcome]();
       if (outcome === "exists") throw new TeamError("TEAM_MEMBER_EXISTS", "This member is already on the team.", 409);
       await record(actor, "team.member_added", teamId, "created", { userId, isManager });
       const [view] = await withMembers(actor.organizationId, [team]);
@@ -192,9 +203,9 @@ export const createTeamAdministration = (dependencies: Dependencies) => {
       const team = await loadActiveTeam(actor, teamId);
       if (input.isManager) assertCanManageTeam(await loadActiveMember(actor, userId));
       const event = staffEvent(actor, "manager_changed", { teamId, userId }, { after: { isManager: input.isManager } });
-      if (!dependencies.isValidId(userId) || !(await teams.setManager({ organizationId: actor.organizationId, teamId, userId, isManager: input.isManager, ...event }))) {
-        throw new TeamError("TEAM_MEMBER_NOT_FOUND", "This member is not on the team.", 404);
-      }
+      const outcome = dependencies.isValidId(userId) && (await teams.setManager({ organizationId: actor.organizationId, teamId, userId, isManager: input.isManager, ...event }));
+      if (isWriteRefusal(outcome)) throw WRITE_REFUSALS[outcome]();
+      if (!outcome) throw new TeamError("TEAM_MEMBER_NOT_FOUND", "This member is not on the team.", 404);
       await record(actor, "team.manager_changed", teamId, input.isManager ? "created" : "revoked", { userId, isManager: input.isManager });
       const [view] = await withMembers(actor.organizationId, [team]);
       return view;
