@@ -38,6 +38,8 @@ export default tseslint.config(
       "routes/adminOrganizationMembersRoute.ts",
       "controller/adminOrganizationTeamsController.ts",
       "routes/adminOrganizationTeamsRoute.ts",
+      "controller/adminOrganizationBlockController.ts",
+      "routes/adminOrganizationBlockRoute.ts",
       "controller/adminLegacyCustomersController.ts",
       "routes/adminLegacyCustomersRoute.ts",
       "scripts/placeLegacyCustomer.ts",
