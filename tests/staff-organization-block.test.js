@@ -330,7 +330,7 @@ test("customers never see it: the block's actions are staff-only and outside the
   }
 });
 
-test("staff reads: the organization list and plan view say blocked and since when; the account detail adds it only while blocked", async () => {
+test("staff reads: the organization list, plan view and account detail say blocked and since when, only while blocked", async () => {
   const blockedAt = new Date("2026-11-19T09:00:00Z");
   const rows = [
     { id: ACME, name: "Acme", slug: "acme", status: "active", kind: "customer", plan: "free_trial", proposalsCreated: 0, createdAt: null, blockedAt },
@@ -347,7 +347,8 @@ test("staff reads: the organization list and plan view say blocked and since whe
     env: {},
   });
   const listed = await plans.list(staff(), {});
-  assert.deepEqual(listed.organizations.map((o) => [o.id, o.blocked, o.blockedAt]), [[ACME, true, blockedAt], [OTHER, false, null]]);
+  assert.deepEqual(listed.organizations.map((o) => [o.id, o.blocked, o.blockedAt]), [[ACME, true, blockedAt], [OTHER, undefined, undefined]]);
+  assert.deepEqual(Object.keys(listed.organizations[1]), ["id", "name", "slug", "status", "createdAt", "plan", "proposals", "features"], "an organization that is not blocked is listed as before");
   assert.equal(JSON.stringify(listed).includes("byStaff"), false, "who blocked it is not in the list");
 
   const detailOf = (record) => createOrganizationAccountDetail({

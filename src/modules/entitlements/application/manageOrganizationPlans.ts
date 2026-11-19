@@ -113,13 +113,13 @@ export const createOrganizationPlanManagement = (dependencies: Dependencies) => 
       slug: organization.slug,
       status: organization.status,
       createdAt: organization.createdAt,
-      // Whether RFPilot staff have the organization blocked, and since when. Not who did it:
-      // that is in the staff organization's audit trail (`platform.organization.blocked`).
-      blocked: Boolean(organization.blockedAt),
-      blockedAt: organization.blockedAt ?? null,
       plan,
       proposals,
       features,
+      // Present ONLY while RFPilot staff have the organization blocked: `blocked: true` and since
+      // when. An organization that is not blocked answers exactly as before this field existed.
+      // Not who did it: that is in the staff organization's audit trail.
+      ...(organization.blockedAt ? { blocked: true as const, blockedAt: organization.blockedAt } : {}),
     };
   };
 
