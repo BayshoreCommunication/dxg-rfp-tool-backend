@@ -76,7 +76,9 @@ export interface VendorSubmissionDraftRepository {
     submittedVersionId: string;
     now: Date;
   }): Promise<VendorSubmissionDraftRecord | null>;
-  listCleanupCandidates(now: Date, limit: number): Promise<VendorSubmissionDraftRecord[]>;
+  /** Oldest first, at most `limit`. `exceptOrganizationIds` are left out BY THE QUERY, so their
+      drafts, which stay candidates, cannot fill the batch and starve every other organization. */
+  listCleanupCandidates(now: Date, limit: number, exceptOrganizationIds?: readonly string[]): Promise<VendorSubmissionDraftRecord[]>;
   markExpiredAbandoned(draftId: string, now: Date): Promise<boolean>;
   documentIsSubmitted(organizationId: string, documentId: string): Promise<boolean>;
   markDocumentDeleted(draftId: string, documentId: string, deletedAt: Date): Promise<void>;

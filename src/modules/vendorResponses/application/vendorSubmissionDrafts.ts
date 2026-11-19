@@ -836,10 +836,13 @@ export const createVendorSubmissionDraftService = (dependencies: {
         : 50;
       // organization-block: an expired draft of a blocked organization is neither abandoned nor
       // has its documents deleted; data is kept while RFPilot staff have the organization blocked.
+      // The ids go INTO the query: the batch is limited and oldest-first, and a blocked
+      // organization's drafts stay at its head.
       const blocked = (await dependencies.blockedOrganizationIds?.()) ?? new Set<string>();
       const drafts = (await dependencies.repository.listCleanupCandidates(
         at,
         boundedLimit,
+        [...blocked],
       )).filter((draft) => !blocked.has(String(draft.organizationId)));
       let deletedDocuments = 0;
       let retainedDocuments = 0;

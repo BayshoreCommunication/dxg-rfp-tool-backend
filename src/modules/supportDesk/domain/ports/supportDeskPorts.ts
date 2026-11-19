@@ -80,12 +80,14 @@ export interface SupportDeskRepository {
   staffAgentLoads(): Promise<Map<string, number>>;
   /** Open tickets, across organizations, still unanswered at `answeredBefore`. */
   listUnansweredSince(answeredBefore: Date, limit: number): Promise<SupportTicketRecord[]>;
+  /* The three lists below are oldest first, at most `limit`. `exceptOrganizationIds` are left out
+     BY THE QUERY, so their tickets, which stay due, cannot fill a batch and starve the others. */
   /** Waiting tickets, across organizations, idle since `waitingBefore` with no reminder yet. */
-  listNeedingCloseReminder(waitingBefore: Date, limit: number): Promise<SupportTicketRecord[]>;
+  listNeedingCloseReminder(waitingBefore: Date, limit: number, exceptOrganizationIds?: readonly string[]): Promise<SupportTicketRecord[]>;
   /** Reminded tickets, across organizations, idle since `waitingBefore` and reminded before `remindedBefore`. */
-  listDueToAutoResolve(waitingBefore: Date, remindedBefore: Date, limit: number): Promise<SupportTicketRecord[]>;
+  listDueToAutoResolve(waitingBefore: Date, remindedBefore: Date, limit: number, exceptOrganizationIds?: readonly string[]): Promise<SupportTicketRecord[]>;
   /** Resolved tickets, across organizations, resolved at or before `resolvedBefore`. */
-  listResolvedBefore(resolvedBefore: Date, limit: number): Promise<SupportTicketRecord[]>;
+  listResolvedBefore(resolvedBefore: Date, limit: number, exceptOrganizationIds?: readonly string[]): Promise<SupportTicketRecord[]>;
   /** One-time fill of the service-level fields on tickets created before they existed. */
   backfillServiceLevels(now: Date): Promise<number>;
   findUserSummaries(

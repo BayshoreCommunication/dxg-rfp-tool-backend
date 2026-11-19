@@ -88,6 +88,9 @@ export const createSupportDeskSweeper = (dependencies: {
          RFPilot staff, who still work the ticket. */
       const blocked = (await dependencies.blockedOrganizationIds?.()) ?? new Set<string>();
       const open = (tickets: SupportTicketRecord[]) => tickets.filter((ticket) => !blocked.has(String(ticket.organizationId)));
+      // The ids also go INTO each query: a batch is limited and oldest-first, and a blocked
+      // organization's tickets stay at its head.
+      const exceptOrganizationIds = [...blocked];
 
       const escalation = await each(
         await repository.listUnansweredSince(new Date(now.getTime() - ESCALATE_AFTER_MS), batchSize),
@@ -103,7 +106,7 @@ export const createSupportDeskSweeper = (dependencies: {
       );
 
       const reminders = await each(
-        open(await repository.listNeedingCloseReminder(new Date(now.getTime() - AUTO_RESOLVE_REMINDER_AFTER_MS), batchSize)),
+        open(await repository.listNeedingCloseReminder(new Date(now.getTime() - AUTO_RESOLVE_REMINDER_AFTER_MS), batchSize, exceptOrganizationIds)),
         async (ticket) => {
           const requester = await person(ticket, ticket.requesterUserId);
           // Customer-visible and signed as RFPilot support, like the first
@@ -134,6 +137,7 @@ export const createSupportDeskSweeper = (dependencies: {
           new Date(now.getTime() - AUTO_RESOLVE_AFTER_MS),
           new Date(now.getTime() - AUTO_RESOLVE_MIN_NOTICE_MS),
           batchSize,
+          exceptOrganizationIds,
         )),
         async (ticket) => {
           await repository.appendMessage({
@@ -161,7 +165,7 @@ export const createSupportDeskSweeper = (dependencies: {
       // Closing after the grace period is quiet: the planner was already told
       // when it was resolved.
       const closures = await each(
-        open(await repository.listResolvedBefore(new Date(now.getTime() - CLOSE_AFTER_RESOLVED_MS), batchSize)),
+        open(await repository.listResolvedBefore(new Date(now.getTime() - CLOSE_AFTER_RESOLVED_MS), batchSize, exceptOrganizationIds)),
         async (ticket) => {
           await repository.appendMessage({
             organizationId: ticket.organizationId,
