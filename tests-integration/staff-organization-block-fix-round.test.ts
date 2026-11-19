@@ -14,6 +14,7 @@
 import { TEST_MONGODB_DB_NAME } from "./env";
 import { connectMongo, disconnectMongo, ensureMigrated, ensureServices, randomMongoId, seedTenant } from "./setup";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { after, before, test } from "node:test";
 import type { AddressInfo } from "node:net";
 import http from "node:http";
@@ -388,7 +389,7 @@ test("F8: reconcile on real PostgreSQL leaves out the queued jobs of the organiz
   const jobOf = async (tenant: typeof held) => {
     const created = await proposalContextRepository.create({
       organizationMongoId: tenant.organizationMongoId, actorUserMongoId: tenant.actorUserMongoId, proposalMongoId: tenant.proposalMongoId,
-      ...contextInput({ fixture: "synthetic-conference-simple" }), idempotencyKey: randomMongoId(), correlationId: randomMongoId(),
+      ...contextInput({ fixture: "synthetic-conference-simple" }), idempotencyKey: crypto.randomUUID(), correlationId: crypto.randomUUID(),
     });
     return String(created.job.id);
   };
