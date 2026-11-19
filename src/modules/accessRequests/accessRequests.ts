@@ -4,6 +4,7 @@ import Organization from "../../../modal/organizationModel";
 import OrganizationMembership from "../../../modal/organizationMembershipModel";
 import User from "../../../modal/userModel";
 import { isPublicMailDomain } from "../domainVerification/domain/domainRules";
+import { isOrganizationBlocked } from "../organizationBlock/domain";
 import type { CreateOutcome, InvitationService } from "../invitations/application/manageInvitations";
 import type { InvitingActor } from "../invitations/domain/invitationRules";
 
@@ -45,8 +46,14 @@ export const organizationForEmailDomain = async (rawEmail: unknown): Promise<Dom
   if (isPublicMailDomain(domain)) return null;
 
   const verified = await Organization.findOne({ verifiedDomains: domain, kind: "customer", status: "active" })
-    .select("_id name autoApproveDomain")
-    .lean<{ _id: mongoose.Types.ObjectId; name: string; autoApproveDomain?: boolean } | null>();
+    .select("_id name autoApproveDomain blocked")
+    .lean<{ _id: mongoose.Types.ObjectId; name: string; autoApproveDomain?: boolean; blocked?: { at?: unknown } | null } | null>();
+  /* An organization that RFPilot staff blocked (owner decision, 2026-11-18) is not offered to
+     anyone: an access request, an auto-approved invitation and the "your company already uses
+     RFPilot" answer at signup all behave as if no organization used the domain, which is the
+     answer a domain nobody uses gets. Nothing is created in the blocked organization, and no
+     other organization is matched in its place. */
+  if (isOrganizationBlocked(verified)) return null;
   if (verified) {
     return { id: String(verified._id), name: verified.name, autoApproveDomain: verified.autoApproveDomain === true, basis: "verified_domain" };
   }
@@ -66,8 +73,9 @@ export const organizationForEmailDomain = async (rawEmail: unknown): Promise<Dom
     _id: { $in: [...new Set(memberships.map((m) => String(m.organizationId)))] },
     kind: "customer",
     status: "active",
-  }).sort({ createdAt: 1 }).select("_id name").lean<{ _id: mongoose.Types.ObjectId; name: string } | null>();
-  if (!organization) return null;
+  }).sort({ createdAt: 1 }).select("_id name blocked").lean<{ _id: mongoose.Types.ObjectId; name: string; blocked?: { at?: unknown } | null } | null>();
+  // The same for the organization matched by its members' addresses.
+  if (!organization || isOrganizationBlocked(organization)) return null;
   return { id: String(organization._id), name: organization.name, autoApproveDomain: false, basis: "member_email" };
 };
 

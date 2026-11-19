@@ -17,6 +17,9 @@ import { mongoEmailCampaignSendingRepository } from "./infrastructure/mongo/mong
 import { customEmailDeliveryAdapter } from "./infrastructure/delivery/customEmailDeliveryAdapter";
 import { publicAccess } from "../publicAccess/composition";
 import { currentTenant } from "../shared/tenancy/tenantContext";
+import { organizationBlockGate } from "../organizationBlock/organizationBlockGate";
+
+const organizationBlocked = (organizationId: string) => organizationBlockGate.isBlocked(organizationId);
 
 const firstUrl = (value: string) =>
   value
@@ -31,13 +34,16 @@ const apiBaseUrl = firstUrl(
 );
 
 export const trackEmailOpen = createTrackEmailOpen({
+  organizationBlocked,
   repository: mongoEmailTrackingRepository,
 });
 export const trackProposalClick = createTrackProposalClick({
+  organizationBlocked,
   repository: mongoEmailTrackingRepository,
   frontendBaseUrl,
 });
 export const trackVendorResponseClick = createTrackVendorResponseClick({
+  organizationBlocked,
   repository: mongoEmailTrackingRepository,
   frontendBaseUrl,
 });

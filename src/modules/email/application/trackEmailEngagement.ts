@@ -9,21 +9,34 @@ const accessGrantFrom = (value?: string) => {
   } catch { return ""; }
 };
 
-export const createTrackEmailOpen = (dependencies: {
+/* The organization block (organizationBlock): an open or a click on an email of an organization
+   that RFPilot staff blocked records nothing, and answers exactly as an unknown tracking id does
+   (the pixel is still served, a click falls back to its redirect). `organizationBlocked` not
+   given: nothing is blocked. */
+type BlockAware = { organizationBlocked?: (organizationId: string) => Promise<boolean> };
+const senderBlocked = async (dependencies: BlockAware & { repository: EmailTrackingRepository }, trackingId: string): Promise<boolean> => {
+  if (!dependencies.organizationBlocked || !dependencies.repository.organizationOf) return false;
+  const organizationId = await dependencies.repository.organizationOf(trackingId);
+  return organizationId ? dependencies.organizationBlocked(organizationId) : false;
+};
+
+export const createTrackEmailOpen = (dependencies: BlockAware & {
   repository: EmailTrackingRepository;
   now?: () => Date;
-}) => (trackingId: string) =>
-  dependencies.repository.markOpenedOnce({
+}) => async (trackingId: string) => {
+  if (await senderBlocked(dependencies, trackingId)) return;
+  await dependencies.repository.markOpenedOnce({
     trackingId,
     occurredAt: (dependencies.now ?? (() => new Date()))(),
   });
+};
 
-export const createTrackProposalClick = (dependencies: {
+export const createTrackProposalClick = (dependencies: BlockAware & {
   repository: EmailTrackingRepository;
   frontendBaseUrl: string;
   now?: () => Date;
 }) => async (input: { trackingId: string; fallbackRedirect?: string }) => {
-  const tracked = await dependencies.repository.markProposalClickedOnce({
+  const tracked = (await senderBlocked(dependencies, input.trackingId)) ? null : await dependencies.repository.markProposalClickedOnce({
     trackingId: input.trackingId,
     occurredAt: (dependencies.now ?? (() => new Date()))(),
   });
@@ -36,12 +49,12 @@ export const createTrackProposalClick = (dependencies: {
     : base(dependencies.frontendBaseUrl);
 };
 
-export const createTrackVendorResponseClick = (dependencies: {
+export const createTrackVendorResponseClick = (dependencies: BlockAware & {
   repository: EmailTrackingRepository;
   frontendBaseUrl: string;
   now?: () => Date;
 }) => async (input: { trackingId: string; fallbackRedirect?: string }) => {
-  const tracked = await dependencies.repository.markVendorResponseClickedOnce({
+  const tracked = (await senderBlocked(dependencies, input.trackingId)) ? null : await dependencies.repository.markVendorResponseClickedOnce({
     trackingId: input.trackingId,
     occurredAt: (dependencies.now ?? (() => new Date()))(),
   });
