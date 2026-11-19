@@ -165,6 +165,22 @@ export const createSessionManager = (dependencies: Dependencies) => {
     const recoverHandoff = async (current: StoredRefreshToken | null) => {
       const retryAt = now();
       const rotation = current?.lastRotation;
+      /* The block ended this session just after a keyed rotation, and the retry of THAT rotation
+         arrives: the previous token, the same key, inside the hand-off window, its successor
+         still the current token. Without the block this request answers `rotated` and writes no
+         row, so the block must not cause one (`rejectReuse` below would record a reuse in the
+         customer organization). Told like any live credential while the organization is still
+         blocked and the account loads; otherwise refused as the dead session it is. No audit row
+         and no token either way; the family is already ended for the block's reason. Only for
+         the block's reason: a session ended for any other reason takes the path below. */
+      if (current && key && rotation && current.status === 'revoked' && current.revokeReason === ORGANIZATION_BLOCK_REVOKE_REASON &&
+        rotation.previousHash === presentedHash && rotation.keyHash === keyHash &&
+        retryAt.getTime() >= rotation.at.getTime() - REFRESH_CLOCK_SKEW_MS && retryAt.getTime() - rotation.at.getTime() < REFRESH_HANDOFF_MS &&
+        current.expiresAt > retryAt && current.idleExpiresAt > retryAt &&
+        current.tokenHash === hashOpaqueToken(dependencies.deriveRefreshToken!(input.refreshToken, key))) {
+        return (await blockedNow()) && (await dependencies.accounts.load(current.userId, current.organizationId))
+          ? { kind: 'organization_blocked' as const } : { kind: 'reuse_detected' as const };
+      }
       if (!current || current.status !== 'active' || !key || !rotation ||
         rotation.previousHash !== presentedHash || rotation.keyHash !== keyHash ||
         retryAt.getTime() < rotation.at.getTime() - REFRESH_CLOCK_SKEW_MS || retryAt.getTime() - rotation.at.getTime() >= REFRESH_HANDOFF_MS ||

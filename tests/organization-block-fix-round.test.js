@@ -697,3 +697,70 @@ test("F4 the docs do not claim that nothing runs for a blocked organization: a j
   assert.equal((worker.match(/deferJobOfBlockedOrganization\(/g) ?? []).length, 1);
   assert.match(worker, /a job already running when the block commits finishes/);
 });
+
+// ================================================================ Final round (second review, low findings)
+
+// ---------------------------------------------------------------- L1: a hand-off retry on a session the block ended
+
+/* A tab rotates with the BFF's rotation key; the block commits a second later and ends the session;
+   the BFF's retry (or a second tab) presents the PREVIOUS token with the same key. `after` runs
+   between the rotation and the retry. Returns the answer and what the retry itself caused. */
+const handoffRetry = async ({ gate = true, after = () => {}, retry = {} } = {}) => {
+  const w = refreshWorld(gate ? true : undefined);
+  const session = await w.begin();
+  assert.equal((await w.manager.rotate({ refreshToken: session.refreshToken, rotationKey: ROTATION_KEY, correlationId: "c-first" })).kind, "rotated");
+  w.state.now = new Date(NOW.getTime() + 1_000);
+  await after(w, session);
+  const before = w.audit.length;
+  const issuedBefore = w.state.issued;
+  const answer = await w.manager.rotate({ refreshToken: session.refreshToken, rotationKey: ROTATION_KEY, correlationId: "c-retry", ...retry });
+  return { answer, kind: answer.kind, rows: w.audit.slice(before).map((e) => [e.organizationId, e.action]), issued: w.state.issued - issuedBefore, reasons: w.rows.map((r) => r.revokeReason) };
+};
+const blockCommits = (w) => { w.blockEndsSessions(); w.state.blocked = true; };
+const REUSE_ROW = [[A, "auth.refresh.reuse_detected"]];
+
+test("L1 a hand-off retry on a session the block ended writes no customer audit row: told while blocked, refused as reuse after reactivation, never a token", async () => {
+  // Main, and this branch with no block: the retry is answered `rotated` and records no reuse.
+  for (const gate of [false, true]) {
+    const granted = await handoffRetry({ gate });
+    assert.equal(granted.kind, "rotated");
+    assert.deepEqual([granted.rows, granted.issued], [[], 1]);
+  }
+  const whileBlocked = await handoffRetry({ after: blockCommits });
+  assert.deepEqual(whileBlocked.answer, { kind: "organization_blocked" });
+  assert.deepEqual([whileBlocked.rows, whileBlocked.issued, whileBlocked.reasons], [[], 0, [ORGANIZATION_BLOCK_REVOKE_REASON]]);
+
+  const afterReactivation = await handoffRetry({ after: (w) => { blockCommits(w); w.state.blocked = false; } });
+  assert.deepEqual(afterReactivation.answer, { kind: "reuse_detected" });
+  assert.deepEqual([afterReactivation.rows, afterReactivation.issued, afterReactivation.reasons], [[], 0, [ORGANIZATION_BLOCK_REVOKE_REASON]]);
+
+  // A member removed since is not told of the block, and still nothing is recorded.
+  const removed = await handoffRetry({ after: (w) => { blockCommits(w); w.state.memberActive = false; } });
+  assert.deepEqual([removed.answer, removed.rows, removed.issued], [{ kind: "reuse_detected" }, [], 0]);
+});
+
+test("L1 controls: a genuine reuse, an out-of-window retry, a wrong or missing key, and a session ended for another staff reason are recorded exactly as before", async () => {
+  const outOfWindow = (w) => { w.state.now = new Date(NOW.getTime() + 30_000); };
+  // No block anywhere: a consumed token presented outside the hand-off, or without its key.
+  for (const [name, input] of [["out of window", { after: outOfWindow }], ["no key", { retry: { rotationKey: undefined } }], ["another key", { retry: { rotationKey: "d".repeat(64) } }]]) {
+    for (const gate of [false, true]) {
+      const reuse = await handoffRetry({ gate, ...input });
+      assert.deepEqual([reuse.kind, reuse.rows, reuse.issued, reuse.reasons], ["reuse_detected", REUSE_ROW, 0, ["refresh_reuse"]], `${name}, gate ${gate}`);
+    }
+  }
+  // The block ended the session, but the retry is not the recoverable one: main records it too.
+  for (const [name, input] of [
+    ["out of window", { after: (w) => { blockCommits(w); outOfWindow(w); } }],
+    ["no key", { after: blockCommits, retry: { rotationKey: undefined } }],
+    ["another key", { after: blockCommits, retry: { rotationKey: "d".repeat(64) } }],
+    ["a second rotation happened since", { after: async (w, session) => { const current = derive(session.refreshToken, ROTATION_KEY); assert.equal((await w.manager.rotate({ refreshToken: current, correlationId: "c-second" })).kind, "rotated"); blockCommits(w); } }],
+  ]) {
+    const reuse = await handoffRetry(input);
+    assert.deepEqual([reuse.kind, reuse.rows, reuse.issued, reuse.reasons], ["reuse_detected", REUSE_ROW, 0, [ORGANIZATION_BLOCK_REVOKE_REASON]], name);
+  }
+  // Not widened: the sibling staff reason keeps its behaviour, blocked or not.
+  for (const blocked of [false, true]) {
+    const sibling = await handoffRetry({ after: (w) => { w.rows[0].status = "revoked"; w.rows[0].revokeReason = STAFF_MEMBERSHIP_REVOKE_REASON; w.state.blocked = blocked; } });
+    assert.deepEqual([sibling.kind, sibling.rows, sibling.issued, sibling.reasons], ["reuse_detected", REUSE_ROW, 0, [STAFF_MEMBERSHIP_REVOKE_REASON]], `staff membership change, blocked ${blocked}`);
+  }
+});
