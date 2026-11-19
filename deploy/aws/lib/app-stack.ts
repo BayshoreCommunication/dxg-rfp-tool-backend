@@ -219,6 +219,16 @@ export class AppStack extends cdk.Stack {
       SMTP_USER: secret('SMTP_USER'),
       SMTP_PASSWORD: secret('SMTP_PASSWORD'),
     };
+    // "Continue with Microsoft" (docs/SSO_SETUP.md). Only the API serves the
+    // sign-in routes, and it reads these per request, so they go to the API
+    // container alone and not into apiOnlySecrets, which the cron task also
+    // receives. Both keys must exist in the app secret before this deploys
+    // (the operator adds them; nothing generates them), or the API tasks
+    // can't start.
+    const microsoftSignInSecrets: Record<string, ecs.Secret> = {
+      MICROSOFT_CLIENT_ID: secret('MICROSOFT_CLIENT_ID'),
+      MICROSOFT_CLIENT_SECRET: secret('MICROSOFT_CLIENT_SECRET'),
+    };
 
     const makeTaskDefinition = (
       name: string,
@@ -249,7 +259,11 @@ export class AppStack extends cdk.Stack {
         ...sharedEnvironment,
         CRON_ENABLED: rolloutPolicyOnly ? 'true' : 'false',
       },
-      secrets: { ...sharedSecrets, ...apiOnlySecrets },
+      secrets: {
+        ...sharedSecrets,
+        ...apiOnlySecrets,
+        ...microsoftSignInSecrets,
+      },
       logging: ecs.LogDrivers.awsLogs({
         logGroup: logGroup('Api'),
         streamPrefix: 'api',

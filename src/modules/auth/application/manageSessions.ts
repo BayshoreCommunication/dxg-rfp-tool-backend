@@ -7,6 +7,7 @@ import type {
   SessionAccountLoader,
   StoredRefreshToken,
 } from "../domain/ports/sessionPorts";
+import { STAFF_MEMBERSHIP_REVOKE_REASON } from "../domain/ports/sessionPorts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_REFRESH_TOKEN_TTL_MS = 30 * DAY_MS;
@@ -32,6 +33,8 @@ type Dependencies = {
   id?: () => string;
   refreshTokenTtlMs?: number;
   deriveRefreshToken?: (previous: string, operationKey: string) => string;
+  /** The revoke reason for a member who is no longer active; "membership_inactive" when not given. */
+  inactiveMembershipReason?: (member: { userId: string; organizationId: string }) => Promise<string>;
 };
 
 const deadline = (base: Date, ms: number) => new Date(base.getTime() + ms);
@@ -104,8 +107,20 @@ export const createSessionManager = (dependencies: Dependencies) => {
     if (!stored) return { kind: "invalid" };
     const key = input.rotationKey && /^[a-f0-9]{64}$/.test(input.rotationKey) && dependencies.deriveRefreshToken ? input.rotationKey : undefined;
     const keyHash = key ? hashOpaqueToken(key) : null;
-    const rejectReuse = async () => {
+    // The reason is read before the revocation, and a failed read must not skip the revocation:
+    // the family is then ended for the staff reason, so nothing can reach the member's organization.
+    const inactiveReason = async (member: StoredRefreshToken) => {
+      try {
+        return (await dependencies.inactiveMembershipReason?.(member)) ?? "membership_inactive";
+      } catch (failure) {
+        console.error("Session revocation error: the cause of an inactive membership could not be read:", failure instanceof Error ? failure.message : failure);
+        return STAFF_MEMBERSHIP_REVOKE_REASON;
+      }
+    };
+    const rejectReuse = async (current: StoredRefreshToken | null = stored) => {
       await dependencies.sessions.revokeFamily({ familyId: stored.familyId, reason: "refresh_reuse", now: issuedAt });
+      // Staff ended this session and its own last token came back: refused the same, not recorded here.
+      if (current?.status === "revoked" && current.revokeReason === STAFF_MEMBERSHIP_REVOKE_REASON && current.tokenHash === presentedHash) return { kind: "reuse_detected" as const };
       await dependencies.audit.append({
         organizationId: stored.organizationId,
         actorUserId: stored.userId,
@@ -124,14 +139,14 @@ export const createSessionManager = (dependencies: Dependencies) => {
       if (!current || current.status !== 'active' || !key || !rotation ||
         rotation.previousHash !== presentedHash || rotation.keyHash !== keyHash ||
         retryAt.getTime() < rotation.at.getTime() - REFRESH_CLOCK_SKEW_MS || retryAt.getTime() - rotation.at.getTime() >= REFRESH_HANDOFF_MS ||
-        current.expiresAt <= retryAt || current.idleExpiresAt <= retryAt) return rejectReuse();
+        current.expiresAt <= retryAt || current.idleExpiresAt <= retryAt) return rejectReuse(current);
       const refreshToken = dependencies.deriveRefreshToken!(input.refreshToken, key);
       // Only the immediate, still-current successor is recoverable. Neither a
       // second rotation nor logout can be undone by a delayed response.
-      if (current.tokenHash !== hashOpaqueToken(refreshToken)) return rejectReuse();
+      if (current.tokenHash !== hashOpaqueToken(refreshToken)) return rejectReuse(current);
       const account = await dependencies.accounts.load(current.userId, current.organizationId);
       if (!account) {
-        await dependencies.sessions.revokeFamily({ familyId: current.familyId, reason: 'membership_inactive', now: issuedAt });
+        await dependencies.sessions.revokeFamily({ familyId: current.familyId, reason: await inactiveReason(current), now: issuedAt });
         return { kind: 'membership_inactive' as const };
       }
       return { kind: 'rotated' as const, ...dependencies.accessTokens.issue(account, current.sessionId), refreshToken,
@@ -151,7 +166,7 @@ export const createSessionManager = (dependencies: Dependencies) => {
     }
     const account = await dependencies.accounts.load(stored.userId, stored.organizationId);
     if (!account) {
-      await dependencies.sessions.revokeFamily({ familyId: stored.familyId, reason: "membership_inactive", now: issuedAt });
+      await dependencies.sessions.revokeFamily({ familyId: stored.familyId, reason: await inactiveReason(stored), now: issuedAt });
       return { kind: "membership_inactive" };
     }
     const refreshToken = key ? dependencies.deriveRefreshToken!(input.refreshToken, key) : opaqueToken();

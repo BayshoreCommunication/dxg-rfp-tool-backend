@@ -32,6 +32,7 @@ therefore requires a restart:
 | `REDIS_URL` | `rediss://:<token>@<endpoint>` — scheme **must** be `rediss`, token URL-encoded | composed |
 | `OPENAI_API_KEY` | Live AI | operator |
 | `GOOGLE_CLIENT_ID` | Google sign-in | operator |
+| `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | Microsoft sign-in ([SSO_SETUP.md](../SSO_SETUP.md)). API container only. Not in the secret's template: add both by hand before the build that maps them is released. The client secret **expires**; rotate before it lapses | operator |
 | `SMTP_HOST`/`SMTP_PORT` | `email-smtp.us-east-2.amazonaws.com` / `587` | operator |
 | `SMTP_MAIL` | From address (`noreply@dxg-agency.com`) | operator |
 | `SMTP_USER`/`SMTP_PASSWORD` | **IAM-derived SES SMTP credentials** (user `rfpilot-<env>-ses-smtp`); username is an access-key id, *not* an email | operator |

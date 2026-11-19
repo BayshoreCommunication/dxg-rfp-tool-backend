@@ -21,9 +21,18 @@ export type StoredRefreshToken = {
   rotationCount: number;
   lastRotation?: { previousHash: string; keyHash: string | null; at: Date } | null;
   status: "active" | "consumed" | "revoked";
+  /** Why a revoked session was revoked (see STAFF_MEMBERSHIP_REVOKE_REASON). */
+  revokeReason?: string | null;
   expiresAt: Date;
   idleExpiresAt: Date;
 };
+
+/* The revoke reason of a session that ended because RFPILOT STAFF changed the member's membership
+   (role, deactivation, ownership transfer; owner decision 2026-11-18, docs/DECISIONS.md). It is
+   data set by the staff flow only. A session revoked for this reason was not stolen: when its own
+   last refresh token is presented again the refresh is refused as always, and no "reuse detected"
+   event is written in the member's organization, where staff activity is never shown. */
+export const STAFF_MEMBERSHIP_REVOKE_REASON = "staff_membership_changed";
 
 export interface RefreshSessionRepository {
   create(input: {

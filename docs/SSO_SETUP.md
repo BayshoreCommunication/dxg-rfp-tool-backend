@@ -17,11 +17,21 @@ Customers sign in with **Google**, **Microsoft** or **their company's OpenID Con
 
 1. Entra admin center → App registrations → New registration.
    - Supported account types: **Accounts in any organizational directory and personal Microsoft accounts**.
-   - Redirect URI (Web): the `SSO_CALLBACK_URL` value, e.g. `https://api.av-rfpilot.com/api/auth/sso/callback`.
-2. Certificates & secrets → New client secret → put it in `MICROSOFT_CLIENT_SECRET` (note its expiry; rotate before it lapses).
+   - Redirect URI (Web): the callback URL of the environment, exactly (see "The callback URL" below). Register one per environment; `http://localhost:8000/api/auth/sso/callback` for local development.
+2. Certificates & secrets → New client secret → put it in `MICROSOFT_CLIENT_SECRET` (note its expiry; rotate before it lapses, see "Secret rotation" in [`deploy/aws/README.md`](../deploy/aws/README.md)).
 3. Token configuration → Add optional claim → ID token → **`email`** and **`xms_edov`**. Without `xms_edov`, work-account sign-ins are refused with `MICROSOFT_EMAIL_UNVERIFIED` (we don't trust unverified tenant emails, see nOAuth).
 4. API permissions: the default `openid`, `email`, `profile` (delegated) are enough. No admin consent is needed for these.
 5. Copy the Application (client) ID into `MICROSOFT_CLIENT_ID`.
+
+On AWS both values are keys of the `rfpilot/<env>/app` secret, passed to the API container only (`deploy/aws/lib/app-stack.ts`). Add both keys to the secret **before** releasing a build that maps them: an API task whose secret lacks a mapped key cannot start. Order: add the keys, register the redirect URI, release, test.
+
+### The callback URL
+
+`ssoRedirectUri()` in `src/modules/sso/composition.ts` decides it: `SSO_CALLBACK_URL` if set, otherwise `${BACKEND_URL}/api/auth/sso/callback` (first entry of `BACKEND_URL`, trailing slashes removed).
+
+On AWS, `SSO_CALLBACK_URL` is not set and `BACKEND_URL` is `https://<API_DOMAIN>`, where `API_DOMAIN` is the `production` environment's GitHub variable that the deploy workflow passes as `-c apiDomain=...`. So the production redirect URI is `https://<API_DOMAIN>/api/auth/sso/callback`. Read the variable (repository → Settings → Environments → production, or `gh variable get API_DOMAIN --env production`) rather than assuming a hostname. If `API_DOMAIN` is empty, `BACKEND_URL` is not set and the callback falls back to localhost, so Microsoft sign-in cannot work.
+
+To confirm what a running environment uses, an Owner or Admin can open Settings → Security → Single sign-on in the dashboard: the redirect URI shown there is the same value.
 
 ## Company SSO (per customer, by the customer's Owner or Admin)
 
