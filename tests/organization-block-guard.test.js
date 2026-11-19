@@ -73,7 +73,10 @@ const ts = require("typescript");
      instead of through its repository port (utils/cronJobs.ts is the one file where that is
      the style, and its functions are each checked for the blocked set);
    - an authenticated route that acts for an organization OTHER than the session's (staff routes
-     do so on purpose and are exempt by design; tests/tenant-scope-guard.test.js covers the rest).
+     do so on purpose and are exempt by design; tests/tenant-scope-guard.test.js covers the rest);
+   - a boot-time one-shot call that acts across organizations without a timer, a worker or a
+     route: for example `void sendWeeklyDigests()` added to `startServer()` or to a start script.
+     It runs once per process start, so nothing above counts it.
 
    Modelled on tests/tenant-scope-guard.test.js. Keep the lists short and the reasons exact: an
    entry says HOW the block is enforced for that surface, or WHY it does not need to be. */
@@ -152,7 +155,8 @@ const ENFORCED = {
 const EXEMPT = {
   account: "EXEMPT: acts on a person's own account before any organization is chosen (code by email, password reset); it issues no session and reads or writes nothing of an organization",
   newOrganization: "EXEMPT: creates a NEW organization for a new account; an organization that does not exist yet cannot be blocked. A domain match to an existing organization, blocked or not, answers 409 ORGANIZATION_DOMAIN_MATCH unless the person explicitly chooses a separate organization",
-  staffSignIn: "EXEMPT: RFPilot staff accounts (`admins`) sign in to the staff organization, which can never be blocked; the session still begins through beginAuthenticatedSession",
+  domainMatch: "EXEMPT on purpose: answers the same for a blocked organization, by decision 2026-11-19: the domain keeps matching. After the code proved the address it names the organization that owns the email's domain (organizationForEmailDomain); it issues no session and writes nothing in that organization",
+  staffSignIn: "EXEMPT: RFPilot staff accounts (`admins`) sign in to the staff organization, which the block route refuses to block; the session still begins through beginAuthenticatedSession",
   logout: "EXEMPT: ends the presented session; a block has already ended every session of the organization, so nothing is revoked and nothing is audited",
   discover: "EXEMPT on purpose: answers one bit per email domain to anyone; it must NOT change with a block, or it would reveal the block",
   ssoStart: "EXEMPT on purpose: redirects anyone who types an email to the identity provider; it must not change with a block. The callback enforces",
@@ -163,7 +167,7 @@ const PUBLIC_ROUTES = {
   "routes/accessRequestRoute.ts": { "POST /auth/access-requests": ENFORCED.domain },
   "routes/authRoute.ts": {
     "POST /send-otp": EXEMPT.account,
-    "POST /verify-otp": EXEMPT.account,
+    "POST /verify-otp": EXEMPT.domainMatch,
     "POST /register": EXEMPT.newOrganization,
     "POST /login": ENFORCED.session,
     "POST /google": ENFORCED.session,
@@ -435,6 +439,18 @@ test("every route goes through authenticate or requirePublicGrant at its own pos
   for (const file of Object.keys(PUBLIC_ROUTES)) assert.ok(files.includes(file), `${file} is listed but does not exist`);
   for (const file of Object.keys(GUARD_CHAINS)) assert.ok(files.includes(file), `${file} is in GUARD_CHAINS but does not exist`);
   for (const reasons of Object.values(PUBLIC_ROUTES)) for (const reason of Object.values(reasons)) assert.match(reason, /^(ENFORCED|EXEMPT)[ :]/);
+  /* The reasons must be true of the handler. `POST /verify-otp` reads an organization (it names the
+     one that owns the email's domain), so it is not listed as "reads nothing of an organization";
+     the handlers listed that way do not call the domain lookup. */
+  const authController = read("controller/authController.ts");
+  const handler = (name) => { const start = authController.indexOf(`export const ${name} = `); assert.ok(start > 0, name); const next = authController.indexOf("\nexport const ", start + 1); return authController.slice(start, next < 0 ? undefined : next); };
+  assert.equal(PUBLIC_ROUTES["routes/authRoute.ts"]["POST /verify-otp"], EXEMPT.domainMatch);
+  assert.match(EXEMPT.domainMatch, /answers the same for a blocked organization, by decision 2026-11-19: the domain keeps matching/);
+  assert.match(handler("verifySignupOtp"), /organizationForEmailDomain\(/);
+  assert.doesNotMatch(handler("sendSignupOtp"), /organizationForEmailDomain\(/);
+  for (const factory of ["createSendForgotPasswordOtp", "createVerifyForgotPasswordOtp"]) { const start = authController.indexOf(`const ${factory} = `); assert.ok(start > 0, factory); assert.doesNotMatch(authController.slice(start, authController.indexOf("\nconst ", start + 1)), /organizationForEmailDomain\(/, factory); }
+  assert.doesNotMatch(EXEMPT.staffSignIn, /can never be blocked/);
+  assert.match(EXEMPT.staffSignIn, /staff organization, which the block route refuses to block/);
   // Routers exist only in routes/, and there is one application and one HTTP server.
   const sources = allSources();
   const creates = (pattern) => sources.filter((file) => callsIn(parse(file)).some((call) => pattern.test(call.expression.getText())));
