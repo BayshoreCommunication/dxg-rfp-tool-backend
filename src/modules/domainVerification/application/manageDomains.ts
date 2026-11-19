@@ -94,6 +94,9 @@ type Dependencies = {
   methods?: () => { dnsTxt: boolean; adminEmail: boolean };
   now?: () => Date;
   token?: () => string;
+  /** Every blocked organization's id (organizationBlock). Their rows are left exactly as they
+      are while the block lasts. A failed read fails the pass: nothing is done on a guess. */
+  blockedOrganizationIds?: () => Promise<ReadonlySet<string>>;
 };
 
 export const verificationInstructions = (record: Pick<DomainRecord, "domain" | "verificationToken">) => ({
@@ -218,7 +221,11 @@ export const createDomainVerification = (dependencies: Dependencies) => {
     if (sweeping) return { ...counts, skipped: true };
     sweeping = true;
     try {
-      const queue = await dependencies.domains.due(now(), input.limit ?? 100);
+      // organization-block: a blocked organization's domains are not re-checked, so none is
+      // un-verified while RFPilot staff have the organization blocked. They stay due and are
+      // checked on the first pass after a reactivation.
+      const blocked = (await dependencies.blockedOrganizationIds?.()) ?? new Set<string>();
+      const queue = (await dependencies.domains.due(now(), input.limit ?? 100)).filter((record) => !blocked.has(String(record.organizationId)));
       const checkOne = async (record: DomainRecord) => {
         const at = now();
         if (!await dependencies.domains.claimDue({ id: record.id, now: at, leaseUntil: after(at, CHECK_LEASE_MS) })) return;

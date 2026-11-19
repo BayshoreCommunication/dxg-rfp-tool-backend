@@ -152,6 +152,9 @@ export const createVendorSubmissionDraftService = (dependencies: {
   folderName: string;
   retentionDays?: number;
   now?: () => Date;
+  /** Every blocked organization's id (organizationBlock). Their rows are left exactly as they
+      are while the block lasts. A failed read fails the pass: nothing is done on a guess. */
+  blockedOrganizationIds?: () => Promise<ReadonlySet<string>>;
 }) => {
   const now = dependencies.now ?? (() => new Date());
   const retentionDays = boundedRetentionDays(dependencies.retentionDays);
@@ -831,10 +834,13 @@ export const createVendorSubmissionDraftService = (dependencies: {
       const boundedLimit = Number.isInteger(limit)
         ? Math.min(Math.max(limit, 1), 100)
         : 50;
-      const drafts = await dependencies.repository.listCleanupCandidates(
+      // organization-block: an expired draft of a blocked organization is neither abandoned nor
+      // has its documents deleted; data is kept while RFPilot staff have the organization blocked.
+      const blocked = (await dependencies.blockedOrganizationIds?.()) ?? new Set<string>();
+      const drafts = (await dependencies.repository.listCleanupCandidates(
         at,
         boundedLimit,
-      );
+      )).filter((draft) => !blocked.has(String(draft.organizationId)));
       let deletedDocuments = 0;
       let retainedDocuments = 0;
       let failedDocuments = 0;

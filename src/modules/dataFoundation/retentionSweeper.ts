@@ -1,3 +1,4 @@
+import { isOrganizationBlocked } from "../organizationBlock/domain";
 import { v7 as uuidv7 } from "uuid";
 import type { PoolClient } from "pg";
 import { postgresEnabled, withPostgresTransaction } from "../../../config/postgres";
@@ -223,8 +224,10 @@ export const sweepExpiredArtifacts = async (): Promise<SweepResult> => {
   // nothing — which is exactly what the first dry run reported. Resolving the
   // tenant from Mongo and then setting the GUC per organization uses the same
   // pattern as every other module and needs no RLS exemption.
-  const tenants = await Organization.find({ status: "active" }).select("_id").lean<{ _id: unknown }[]>();
-  const organizationMongoIds = tenants.map((row) => String(row._id));
+  // organization-block: retention deletes nothing in an organization that RFPilot staff blocked
+  // ("data is kept"); its expired rows are swept on the first daily pass after a reactivation.
+  const tenants = await Organization.find({ status: "active" }).select("_id blocked").lean<{ _id: unknown; blocked?: { at?: unknown } | null }[]>();
+  const organizationMongoIds = tenants.filter((row) => !isOrganizationBlocked(row)).map((row) => String(row._id));
 
   for (const organizationMongoId of organizationMongoIds) {
     try {
