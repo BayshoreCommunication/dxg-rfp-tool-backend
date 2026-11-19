@@ -36,7 +36,7 @@ test("F1 worker start-up: a missing MONGODB_URL fails with one line naming the c
 test("F1 worker start-up: an unreachable MongoDB fails with one line naming the cause, without the connection string; no worker is created", async () => {
   let created = 0;
   const connect = async () => { throw new Error("getaddrinfo ENOTFOUND db.internal\n  at mongodb+srv://user:secret@db.internal/x"); };
-  const error = await startWorkerWithMongo({ name: "AI gateway worker", connect, createWorker: () => { created += 1; }, env: { MONGODB_URL: "mongodb+srv://user:secret@db.internal/x" } }).catch((e) => e);
+  const error = await startWorkerWithMongo({ name: "AI gateway worker", connect, createWorker: () => { created += 1; }, env: { MONGODB_URL: "mongodb+srv://user:secret@db.internal/x" }, sleep: async () => {}, log: () => {} }).catch((e) => e);
   assert.ok(error instanceof WorkerStartupError);
   assert.equal(created, 0);
   const line = startupFailureLine(error);
@@ -867,4 +867,84 @@ test("L2/L3 a quiet connection attempt prints neither the failure banner nor the
     if (saved.url === undefined) delete process.env.MONGODB_URL; else process.env.MONGODB_URL = saved.url;
     if (saved.alt !== undefined) process.env.MONGO_URL = saved.alt;
   }
+});
+
+// ---------------------------------------------------------------- L3: worker start-up retries MongoDB before it gives up
+
+const { WORKER_MONGO_ATTEMPTS, WORKER_MONGO_RETRY_DELAYS_MS } = require("../src/modules/durableJobs/workerStartup");
+const SECRET_URI = "mongodb+srv://user:secret@db.internal/x";
+const unreachable = () => { const error = new Error(`getaddrinfo ENOTFOUND db.internal\n  at ${SECRET_URI}\nInvalid connection string "${SECRET_URI}"`); error.reason = { servers: SECRET_URI }; return error; };
+
+test("L3 worker start-up: a MongoDB blip is retried with backoff and the worker starts; the real timers are the ones waited on", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const lines = [];
+  const calls = [];
+  let created = 0;
+  let failuresLeft = 2;
+  const connect = async (options) => { calls.push(options); if (failuresLeft-- > 0) throw unreachable(); };
+  let outcome = "pending";
+  const starting = startWorkerWithMongo({ name: "Durable worker", connect, createWorker: () => { created += 1; return "worker"; }, env: { MONGODB_URL: SECRET_URI }, log: (line) => lines.push(line) })
+    .then((worker) => { outcome = worker; }, (error) => { outcome = error; });
+  await settle();
+  assert.deepEqual([calls.length, created, outcome], [1, 0, "pending"], "first attempt failed; waiting");
+  t.mock.timers.tick(WORKER_MONGO_RETRY_DELAYS_MS[0] - 1);
+  await settle();
+  assert.equal(calls.length, 1, "not before the first delay has passed");
+  t.mock.timers.tick(1);
+  await settle();
+  assert.deepEqual([calls.length, created], [2, 0]);
+  t.mock.timers.tick(WORKER_MONGO_RETRY_DELAYS_MS[1]);
+  await settle();
+  await starting;
+  assert.deepEqual([calls.length, created, outcome], [3, 1, "worker"], "third attempt connects; the worker is created once, after it");
+  assert.deepEqual(calls, [{ quietFailure: true }, { quietFailure: true }, { quietFailure: true }], "config/db.ts prints no banner and no driver error for this path");
+  assert.deepEqual(lines, [
+    "Durable worker: MongoDB could not be reached (attempt 1 of 5), trying again in 5 s: getaddrinfo ENOTFOUND db.internal at mongodb://[redacted] Invalid connection string \"mongodb://[redacted]",
+    "Durable worker: MongoDB could not be reached (attempt 2 of 5), trying again in 10 s: getaddrinfo ENOTFOUND db.internal at mongodb://[redacted] Invalid connection string \"mongodb://[redacted]",
+  ]);
+});
+
+test("L3 worker start-up: MongoDB down for the whole window fails after 5 attempts and 60 s of waiting with one final line; no connection string, no error object, no worker", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  assert.deepEqual([WORKER_MONGO_ATTEMPTS, WORKER_MONGO_RETRY_DELAYS_MS.reduce((sum, ms) => sum + ms, 0)], [5, 60_000]);
+  const printed = [];
+  const saved = { warn: console.warn, error: console.error, log: console.log };
+  for (const level of Object.keys(saved)) console[level] = (...args) => { printed.push(args); };
+  let attempts = 0;
+  let created = 0;
+  let outcome = "pending";
+  try {
+    // No `log` given: the default (console.warn) is what a worker process uses.
+    const starting = startWorkerWithMongo({ name: "AI gateway worker", connect: async () => { attempts += 1; throw unreachable(); }, createWorker: () => { created += 1; }, env: { MONGO_URL: SECRET_URI } })
+      .then(() => { outcome = "started"; }, (error) => { outcome = error; });
+    for (const delay of WORKER_MONGO_RETRY_DELAYS_MS) {
+      await settle();
+      assert.equal(outcome, "pending");
+      t.mock.timers.tick(delay);
+    }
+    await starting;
+  } finally { Object.assign(console, saved); }
+  assert.ok(outcome instanceof WorkerStartupError);
+  assert.deepEqual([attempts, created], [5, 0]);
+  const line = startupFailureLine(outcome);
+  assert.match(line, /^AI gateway worker cannot start: MongoDB is required .* and it could not be reached: getaddrinfo ENOTFOUND db\.internal .*\(5 attempts\)$/);
+  assert.ok(!line.includes("\n"), "one line");
+  // Everything this path printed: four retry lines, each a single string.
+  assert.equal(printed.length, 4);
+  for (const args of [...printed, [line]]) {
+    assert.deepEqual(args.map((a) => typeof a), ["string"], "strings only, never an error object");
+    assert.ok(!args[0].includes("secret") && !args[0].includes("user:") && !args[0].includes("\n"), args[0]);
+  }
+});
+
+test("L3 worker start-up: a missing MONGODB_URL fails at once, with no attempt, no wait and no retry line", async () => {
+  let touched = 0;
+  const started = Date.now();
+  const error = await startWorkerWithMongo({ name: "AI gateway worker", connect: async () => { touched += 1; }, createWorker: () => { touched += 1; }, env: {}, sleep: async () => { touched += 1; }, log: () => { touched += 1; } }).catch((e) => e);
+  assert.ok(error instanceof WorkerStartupError);
+  assert.equal(touched, 0);
+  assert.ok(Date.now() - started < 1_000);
+  assert.match(startupFailureLine(error), /^AI gateway worker cannot start: MongoDB is required .* MONGODB_URL is not set\.$/);
+  // ecosystem.config.js is not part of this change; the scripts still hand connectDB over as it is.
+  for (const script of ["scripts/startAiGatewayWorker.ts", "scripts/startDurableWorker.ts"]) assert.match(read(script), /connect:connectDB,createWorker:/, script);
 });

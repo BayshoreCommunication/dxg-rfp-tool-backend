@@ -39,7 +39,12 @@ sit in `scan_failed` if ClamAV is down.
   organization is blocked (staff organization block), and that is a MongoDB read. Until that change
   the durable worker connected only when a capability that reads MongoDB was on. A worker started
   without it exits non-zero with one line, `<worker> cannot start: MongoDB is required ... and
-  MONGODB_URL is not set.` (or `... could not be reached: <cause>`). A MongoDB outage after start-up
+  MONGODB_URL is not set.` (or `... could not be reached: <cause> (5 attempts)`). An unreachable
+  MongoDB is tried 5 times, waiting 5, 10, 15 and 30 seconds between attempts (one `MongoDB could
+  not be reached (attempt n of 5)` line each), so a blip during a deploy does not exit the task
+  and trip the ECS circuit breaker; each attempt can itself wait up to 30 seconds, so a start that
+  cannot reach MongoDB exits after about 1 to 3.5 minutes. A missing `MONGODB_URL` exits at once.
+  No connection string is logged on this path. A MongoDB outage after start-up
   does not stop a worker: jobs are deferred 30 seconds and asked again, never failed.
 - The dispatcher does not need MongoDB. When `MONGODB_URL` is set for it, its reconcile pass
   (every 30 seconds) leaves the queued jobs of blocked organizations out of its batch, so a blocked
