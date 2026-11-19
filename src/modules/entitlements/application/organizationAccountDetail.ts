@@ -156,6 +156,10 @@ export const createOrganizationAccountDetail = (dependencies: Dependencies) => {
           status: organization.status,
           kind: organization.kind,
           standing: standingOf(organization, facts.staffAccounts),
+          // Present ONLY while RFPilot staff have the organization blocked: `blocked: true` and
+          // since when. An organization that is not blocked answers exactly as before this field
+          // existed. Who blocked it is not here: it is in the staff organization's audit trail.
+          ...(organization.blockedAt ? { blocked: true as const, blockedAt: organization.blockedAt } : {}),
         },
         owner: facts.owner ? { name: facts.owner.name, email: facts.owner.email } : null,
         plan: {

@@ -39,6 +39,9 @@ export type OrganizationPlanRecord = {
   plan: string | null;
   proposalsCreated: number | null;
   createdAt: Date | null;
+  /** Since when RFPilot staff have had the organization blocked; null or absent when it is not
+      (decided by organizationBlock/domain.ts, never by `status`). */
+  blockedAt?: Date | null;
 };
 
 export type PlanChangeRecord = {
@@ -110,6 +113,10 @@ export const createOrganizationPlanManagement = (dependencies: Dependencies) => 
       slug: organization.slug,
       status: organization.status,
       createdAt: organization.createdAt,
+      // Whether RFPilot staff have the organization blocked, and since when. Not who did it:
+      // that is in the staff organization's audit trail (`platform.organization.blocked`).
+      blocked: Boolean(organization.blockedAt),
+      blockedAt: organization.blockedAt ?? null,
       plan,
       proposals,
       features,
