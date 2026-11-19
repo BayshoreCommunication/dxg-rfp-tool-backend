@@ -3,6 +3,7 @@ import http from "http";
 import { Duplex } from "stream";
 import Notification from "../modal/notificationModel";
 import RefreshSession from "../modal/refreshSessionModel";
+import { organizationBlockGate } from "../src/modules/organizationBlock/organizationBlockGate";
 import User from "../modal/userModel";
 import Admin from "../modal/adminModel";
 import { verifyNotificationSocketTicket } from "../config/jwt";
@@ -177,7 +178,9 @@ export const initializeNotificationWebSocketServer = (server: http.Server) => {
         expiresAt: { $gt: new Date() },
         idleExpiresAt: { $gt: new Date() },
       });
-      if (!activeSession) {
+      // A block ends every session of the organization, so the check above already refuses; the
+      // gate is asked as well for a session begun while the block committed (organizationBlock).
+      if (!activeSession || (await organizationBlockGate.isBlocked(payload.organizationId))) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         return;

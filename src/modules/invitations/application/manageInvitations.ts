@@ -167,6 +167,9 @@ export type InvitationServiceDependencies = {
   ssoRequiredFor?(email: string): Promise<boolean>;
   // True when this organization has an active company SSO connection for the email's domain.
   companySsoFor?(organizationId: string, email: string): Promise<boolean>;
+  /** The organization block gate (organizationBlock). When it answers true, every link of that
+      organization answers as a link that does not exist. Not given: nothing is blocked. */
+  organizationBlocked?(organizationId: string): Promise<boolean>;
   dailyEmailLimit?: number;
   resendCooldownMs?: number;
   now?: () => Date;
@@ -317,6 +320,11 @@ export const createInvitationService = (deps: InvitationServiceDependencies) => 
     const found = await deps.invitations.findByTokenHash(tokenHash);
     const refusal = tokenRefusal(found ? { status: found.invitation.status, expiresAt: found.invitation.expiresAt, current: found.current } : null, now());
     if (refusal || !found) return { refusal: refusal ?? "INVITATION_INVALID" };
+    // RFPilot staff blocked the inviting organization (owner decision, 2026-11-18): the link is
+    // closed for lookup and for every way of accepting it, with the answer an unknown link gets,
+    // so the invited person can't tell. The invitation itself is untouched and works again after
+    // a reactivation (until its own expiry). Every token path goes through here.
+    if (await deps.organizationBlocked?.(found.invitation.organizationId)) return { refusal: "INVITATION_INVALID" };
     return { invitation: found.invitation, tokenHash };
   };
 

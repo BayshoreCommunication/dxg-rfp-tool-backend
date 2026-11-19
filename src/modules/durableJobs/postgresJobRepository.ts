@@ -736,9 +736,23 @@ export const postgresJobRepository: JobRepository = {
       return r.rows;
     });
   },
-  reconcile(limit) {
+  /* reconcile(limit) republishes the authoritative queued jobs after a Redis loss. It is a
+     limited, oldest-first batch, so the organizations it is told to leave out (blocked by RFPilot
+     staff; their jobs stay queued while the block lasts) are excluded in the query. The subquery
+     reads rfpilot.organizations, which this statement's transaction already reads for every row
+     it returns (messageFrom), under the same role and the same row-level security; no new
+     access and no migration. With no ids the statement is the one it always was. */
+  reconcile(limit, exceptOrganizationMongoIds) {
     return withPostgresTransaction(async (c) => {
-      const r = await c.query<Row>(
+      const except = (exceptOrganizationMongoIds ?? []).filter((id) => /^[0-9a-f]{24}$/.test(id));
+      const r = except.length
+        ? await c.query<Row>(
+          `SELECT * FROM rfpilot.ai_jobs WHERE status IN ('queued','retry_scheduled') AND available_at<=now()
+              AND organization_id NOT IN (SELECT id FROM rfpilot.organizations WHERE external_mongo_id = ANY($2::varchar[]))
+            ORDER BY created_at LIMIT $1`,
+          [limit, except],
+        )
+        : await c.query<Row>(
         "SELECT * FROM rfpilot.ai_jobs WHERE status IN ('queued','retry_scheduled') AND available_at<=now() ORDER BY created_at LIMIT $1",
         [limit],
       );

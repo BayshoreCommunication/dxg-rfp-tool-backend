@@ -8,6 +8,7 @@ import {
   correlationId,
   createSession,
   isAuthorizedBff,
+  respondIfOrganizationBlocked,
   respondWithSecondFactorStep,
 } from "./authController";
 
@@ -116,6 +117,7 @@ export const exchangeSsoHandoff = async (req: Request, res: Response): Promise<v
       ...bffRefreshResponse(req, session),
     });
   } catch (error) {
+    if (respondIfOrganizationBlocked(res, error)) return;
     console.error("SSO exchange error:", error instanceof Error ? error.name : "unknown");
     res.status(500).json({ success: false, code: "SSO_ERROR", message: "Sign-in failed. Please try again." });
   }

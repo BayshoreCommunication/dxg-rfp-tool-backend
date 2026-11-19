@@ -37,6 +37,8 @@ import { REFRESH_TOKEN_EXPIRY_MS } from "../../../config/jwt";
 import crypto from 'node:crypto';
 import { mongoSsoRequiredFor } from "../sso/infrastructure/mongoSsoRepositories";
 import { organizationForEmailDomain } from "../accessRequests/accessRequests";
+import { ORGANIZATION_BLOCK_REVOKE_REASON, OrganizationBlockedError } from "../organizationBlock/domain";
+import { organizationBlockGate } from "../organizationBlock/organizationBlockGate";
 
 export const requestAuthenticationOtp = createRequestOtp({
   users: mongoAuthUserLookup,
@@ -140,6 +142,8 @@ export const authenticationSessions = createSessionManager({
   refreshTokenTtlMs: REFRESH_TOKEN_EXPIRY_MS,
   // A refresh by a member whom staff deactivated ends the session for the staff reason.
   inactiveMembershipReason: async (member) => ((await suspendedByStaff(member)) ? STAFF_MEMBERSHIP_REVOKE_REASON : "membership_inactive"),
+  // No refresh for an organization RFPilot staff blocked (organizationBlock/domain.ts).
+  organizationBlocked: (organizationId) => organizationBlockGate.isBlocked(organizationId),
   deriveRefreshToken: (previous, operationKey) => {
     const secret = process.env.BFF_SHARED_SECRET?.trim();
     if (!secret) throw new Error('BFF_SHARED_SECRET is required for refresh handoff');
@@ -201,6 +205,11 @@ export const beginAuthenticatedSession = async (input: {
   userAgent?: string;
   ip?: string;
 }) => {
+  // EVERY sign-in path ends here (password, Google, company SSO, two-factor completion,
+  // invitation acceptance, signup): no session is begun for an organization that RFPilot staff
+  // blocked. Asked before anything is read or written for the sign-in, so nothing reaches the
+  // organization's audit trail. Callers answer OrganizationBlockedError as 403 ORGANIZATION_BLOCKED.
+  if (await organizationBlockGate.isBlocked(input.organizationId)) throw new OrganizationBlockedError();
   const account = await mongoSessionAccountLoader.load(input.userId, input.organizationId);
   if (!account) throw new Error("Active organization membership is required");
   await provisionIdentityProjection(input);
@@ -304,3 +313,11 @@ export const staffMembershipSessions = createMembershipSessionHardening({
   },
   ...revocationClaims(true),
 });
+
+/* The access path, for a request whose organization RFPilot staff blocked (owner decision,
+   2026-11-18; organizationBlock/domain.ts). The block already ended the organization's sessions
+   in its own transaction; this closes one that began while the block committed. Straight through
+   the repository, for the block's reason: the session manager would record it in the member's
+   organization, and customers see no staff activity. The staff-side record is the block's event. */
+export const endSessionsOfBlockedOrganization = (input: { userId: string; organizationId: string }) =>
+  mongoRefreshSessionRepository.revokeAll({ userId: input.userId, organizationId: input.organizationId, reason: ORGANIZATION_BLOCK_REVOKE_REASON, now: new Date() });

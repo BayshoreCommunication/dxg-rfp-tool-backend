@@ -2,6 +2,11 @@ import EmailCampaign from "../../../../../modal/emailModel";
 import type { EmailTrackingRepository } from "../../domain/ports/emailTrackingRepository";
 
 export const mongoEmailTrackingRepository: EmailTrackingRepository = {
+  async organizationOf(trackingId) {
+    const campaign = await EmailCampaign.findOne({ "recipients.trackingId": trackingId }).select("organizationId").lean<{ organizationId?: unknown } | null>();
+    return campaign?.organizationId ? String(campaign.organizationId) : null;
+  },
+
   async markOpenedOnce({ trackingId, occurredAt }) {
     await EmailCampaign.updateOne(
       {

@@ -1,3 +1,4 @@
+import { blockedOrganizationIds } from "../organizationBlock/organizationBlockGate";
 import { createAgentSupportDesk } from "./application/agentSupportDesk";
 import { createCustomerSupportDesk } from "./application/customerSupportDesk";
 import { mongoSupportDeskRepository } from "./infrastructure/mongo/mongoSupportDeskRepository";
@@ -31,6 +32,7 @@ export const supportPresence = createSupportPresence({
 });
 
 export const supportDeskSweeper = createSupportDeskSweeper({
+  blockedOrganizationIds,
   repository: mongoSupportDeskRepository,
   notifier: supportDeskNotifier,
 });

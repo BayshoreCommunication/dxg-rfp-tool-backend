@@ -36,7 +36,9 @@ export interface DomainRepository {
   recordCheck(input: { id: string; now: Date; nextCheckAt: Date; outcome: string }): Promise<void>;
   /** Also removes the domain from the organization's verifiedDomains. */
   remove(organizationId: string, id: string): Promise<DomainRecord | null>;
-  due(now: Date, limit: number): Promise<DomainRecord[]>;
+  /** Oldest first, at most `limit`. `exceptOrganizationIds` are left out BY THE QUERY, so their
+      rows, which stay due, cannot fill the batch and starve every other organization. */
+  due(now: Date, limit: number, exceptOrganizationIds?: readonly string[]): Promise<DomainRecord[]>;
   /**
    * Atomic: takes a due record for one checker by moving its nextCheckAt to leaseUntil. False
    * when another task (or an earlier sweep) already took it. A checker that dies mid-check
@@ -94,6 +96,9 @@ type Dependencies = {
   methods?: () => { dnsTxt: boolean; adminEmail: boolean };
   now?: () => Date;
   token?: () => string;
+  /** Every blocked organization's id (organizationBlock). Their rows are left exactly as they
+      are while the block lasts. A failed read fails the pass: nothing is done on a guess. */
+  blockedOrganizationIds?: () => Promise<ReadonlySet<string>>;
 };
 
 export const verificationInstructions = (record: Pick<DomainRecord, "domain" | "verificationToken">) => ({
@@ -218,7 +223,12 @@ export const createDomainVerification = (dependencies: Dependencies) => {
     if (sweeping) return { ...counts, skipped: true };
     sweeping = true;
     try {
-      const queue = await dependencies.domains.due(now(), input.limit ?? 100);
+      // organization-block: a blocked organization's domains are not re-checked, so none is
+      // un-verified while RFPilot staff have the organization blocked. They stay due and are
+      // checked on the first pass after a reactivation. The ids go INTO the query: the batch is
+      // limited and oldest-first, and a blocked organization's rows stay at its head.
+      const blocked = (await dependencies.blockedOrganizationIds?.()) ?? new Set<string>();
+      const queue = (await dependencies.domains.due(now(), input.limit ?? 100, [...blocked])).filter((record) => !blocked.has(String(record.organizationId)));
       const checkOne = async (record: DomainRecord) => {
         const at = now();
         if (!await dependencies.domains.claimDue({ id: record.id, now: at, leaseUntil: after(at, CHECK_LEASE_MS) })) return;
