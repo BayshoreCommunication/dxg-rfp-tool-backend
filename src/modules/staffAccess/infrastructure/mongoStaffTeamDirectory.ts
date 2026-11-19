@@ -19,6 +19,8 @@ type Row = Record<string, unknown>;
 
 // Members returned with a team. `memberCount` is the true count, whatever this is.
 export const STAFF_TEAM_MEMBER_LIMIT = 200;
+// Managers returned with a team. Read on their own, so a manager is listed wherever they sort among the members.
+export const STAFF_TEAM_MANAGER_LIMIT = 200;
 const LOOKUPS_AT_ONCE = 10;
 
 export const createMongoStaffTeamDirectory = (members: Pick<StaffMemberDirectory, "member">): StaffTeamDirectory => ({
@@ -26,19 +28,39 @@ export const createMongoStaffTeamDirectory = (members: Pick<StaffMemberDirectory
     const organization = oid(organizationId);
     const team = await Team.findOne({ organizationId: organization, _id: oid(teamId) }).select("name archived archivedAt createdAt").lean<Row>();
     if (!team) return null;
-    const [rows, memberCount] = await Promise.all([
+    const [rows, memberCount, managerRows] = await Promise.all([
       TeamMembership.find({ organizationId: organization, teamId: team._id }).select("userId isManager")
         .sort({ createdAt: 1, _id: 1 }).limit(STAFF_TEAM_MEMBER_LIMIT).lean<Row[]>(),
       TeamMembership.countDocuments({ organizationId: organization, teamId: team._id }),
+      // The team's managers, whether or not they are among the members returned above.
+      TeamMembership.find({ organizationId: organization, teamId: team._id, isManager: true }).select("userId")
+        .sort({ createdAt: 1, _id: 1 }).limit(STAFF_TEAM_MANAGER_LIMIT).lean<Row[]>(),
     ]);
+    type Found = NonNullable<Awaited<ReturnType<typeof members.member>>>;
+    const known = new Map<string, Found>();
+    // The member is looked up in the SAME organization: a row whose user is not a member of it is left out.
+    const lookUp = async (list: Row[]) => {
+      // A manager already read as one of the members above is not read twice.
+      const missing = list.filter((row) => !known.has(String(row.userId)));
+      for (let start = 0; start < missing.length; start += LOOKUPS_AT_ONCE) {
+        const batch = missing.slice(start, start + LOOKUPS_AT_ONCE);
+        const found = await Promise.all(batch.map((row) => members.member(organizationId, String(row.userId))));
+        found.forEach((member, index) => {
+          if (member) known.set(String(batch[index].userId), member);
+        });
+      }
+    };
+    await lookUp(rows);
     const detail: StaffTeamDetail["members"] = [];
-    for (let start = 0; start < rows.length; start += LOOKUPS_AT_ONCE) {
-      const batch = rows.slice(start, start + LOOKUPS_AT_ONCE);
-      // The member is looked up in the SAME organization: a row whose user is not a member of it is left out.
-      const found = await Promise.all(batch.map((row) => members.member(organizationId, String(row.userId))));
-      found.forEach((member, index) => {
-        if (member) detail.push({ member: member.member, version: member.version, isManager: batch[index].isManager === true });
-      });
+    for (const row of rows) {
+      const member = known.get(String(row.userId));
+      if (member) detail.push({ member: member.member, version: member.version, isManager: row.isManager === true });
+    }
+    await lookUp(managerRows);
+    const managers: StaffTeamDetail["team"]["managers"] = [];
+    for (const row of managerRows) {
+      const member = known.get(String(row.userId));
+      if (member) managers.push({ id: member.member.userId, name: member.member.name, email: member.member.email });
     }
     return {
       team: {
@@ -48,7 +70,7 @@ export const createMongoStaffTeamDirectory = (members: Pick<StaffMemberDirectory
         archivedAt: date(team.archivedAt),
         createdAt: date(team.createdAt),
         memberCount,
-        managers: detail.filter((entry) => entry.isManager).map((entry) => ({ id: entry.member.userId, name: entry.member.name, email: entry.member.email })),
+        managers,
       },
       members: detail,
     };

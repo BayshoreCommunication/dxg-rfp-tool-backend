@@ -635,6 +635,80 @@ test("team read: the team of the path's organization with its members and their 
   await assert.rejects(failing.management.team(staff(), ACME, T.west), /audit store down/);
 });
 
+test("team read on a large team: the managers are read on their own, so a manager who sorts after the 200 members returned is still listed; every query names the organization and the team", async () => {
+  const Team = require("../modal/teamModel").default;
+  const TeamMembership = require("../modal/teamMembershipModel").default;
+  const { createMongoStaffTeamDirectory, STAFF_TEAM_MEMBER_LIMIT, STAFF_TEAM_MANAGER_LIMIT } = require("../src/modules/staffAccess/infrastructure/mongoStaffTeamDirectory");
+  assert.deepEqual([STAFF_TEAM_MEMBER_LIMIT, STAFF_TEAM_MANAGER_LIMIT], [200, 200]);
+  const user = (n) => n.toString(16).padStart(24, "0");
+  const at = (n) => new Date(Date.UTC(2026, 9, 1, 0, 0, n));
+  // 205 members of West in Acme. The first (row 1) and the LAST two (rows 204 and 205) are managers.
+  // Row 205's user is no longer a member of Acme. Plus a manager of another team and one of another organization.
+  const TOTAL = 205;
+  const stored = Array.from({ length: TOTAL }, (_, i) => ({ _id: user(1000 + i), organizationId: ACME, teamId: T.west, userId: user(i + 1), isManager: i === 0 || i >= TOTAL - 2, createdAt: at(i) }));
+  stored.push({ _id: user(5000), organizationId: ACME, teamId: T.east, userId: user(9001), isManager: true, createdAt: at(0) });
+  stored.push({ _id: user(5001), organizationId: OTHER, teamId: T.north, userId: user(9002), isManager: true, createdAt: at(0) });
+  stored.reverse(); // stored order is not the answer's order
+  const queries = [];
+  const matches = (filter) => (row) => Object.entries(filter).every(([key, value]) => String(row[key]) === String(value));
+  const original = { findOne: Team.findOne, find: TeamMembership.find, countDocuments: TeamMembership.countDocuments };
+  Team.findOne = (filter) => ({ select() { return this; }, lean: async () => (String(filter._id) === T.west && String(filter.organizationId) === ACME ? { _id: T.west, name: "West", archived: false, archivedAt: null, createdAt: at(0) } : null) });
+  TeamMembership.find = (filter) => {
+    const query = { filter, fields: null, order: null, max: null };
+    queries.push(query);
+    return {
+      select(fields) { query.fields = fields; return this; },
+      sort(order) { query.order = order; return this; },
+      limit(max) { query.max = max; return this; },
+      lean: async () => stored.filter(matches(filter)).sort((x, y) => x.createdAt - y.createdAt || x._id.localeCompare(y._id)).slice(0, query.max ?? undefined)
+        .map((row) => Object.fromEntries(["_id", ...query.fields.split(" ")].map((field) => [field, row[field]]))),
+    };
+  };
+  TeamMembership.countDocuments = async (filter) => { queries.push({ filter, count: true }); return stored.filter(matches(filter)).length; };
+  const lookups = [];
+  const members = {
+    async member(organizationId, userId) {
+      lookups.push([organizationId, userId]);
+      if (organizationId !== ACME || userId === user(TOTAL) || parseInt(userId, 16) > TOTAL) return null;
+      return { member: { userId, name: `Member ${parseInt(userId, 16)}`, email: `m${parseInt(userId, 16)}@example.test`, roles: ["team_manager"], status: "active", teams: [], joinedAt: at(0), lastSignedInAt: null }, version: 3 };
+    },
+  };
+  try {
+    const answer = await createMongoStaffTeamDirectory(members).team(ACME, T.west);
+    assert.equal(answer.team.memberCount, TOTAL, "the true count");
+    assert.equal(answer.members.length, 200, "the first 200 members, oldest first");
+    assert.deepEqual([answer.members[0].member.userId, answer.members[199].member.userId], [user(1), user(200)]);
+    assert.equal(answer.members.some((m) => m.member.userId === user(204)), false, "the last manager is not among the members returned");
+    assert.deepEqual(answer.members.filter((m) => m.isManager).map((m) => m.member.userId), [user(1)]);
+    // The manager of row 204 is listed all the same; row 205's user is not a member of Acme and is left out.
+    assert.deepEqual(answer.team.managers, [{ id: user(1), name: "Member 1", email: "m1@example.test" }, { id: user(204), name: "Member 204", email: "m204@example.test" }]);
+    assert.deepEqual(Object.keys(answer.team).sort(), ["archived", "archivedAt", "createdAt", "id", "managers", "memberCount", "name"]);
+    // Three reads of team rows: the members, the count and the managers. Each names the organization AND the team; both lists are bounded and ordered.
+    assert.equal(queries.length, 3);
+    for (const query of queries) assert.deepEqual([String(query.filter.organizationId), String(query.filter.teamId)], [ACME, T.west]);
+    const [memberRead, , managerRead] = [queries.find((q) => !q.count && q.filter.isManager === undefined), null, queries.find((q) => q.filter.isManager !== undefined)];
+    assert.deepEqual([Object.keys(memberRead.filter).sort(), memberRead.fields, memberRead.order, memberRead.max], [["organizationId", "teamId"], "userId isManager", { createdAt: 1, _id: 1 }, 200]);
+    assert.deepEqual([Object.keys(managerRead.filter).sort(), managerRead.filter.isManager, managerRead.fields, managerRead.order, managerRead.max], [["isManager", "organizationId", "teamId"], true, "userId", { createdAt: 1, _id: 1 }, 200]);
+    // Every person is read through the staff member directory in the path's organization, once each: the other team's and the other organization's managers never.
+    assert.equal(lookups.every(([organizationId]) => organizationId === ACME), true);
+    assert.equal(new Set(lookups.map(([, userId]) => userId)).size, lookups.length);
+    assert.deepEqual(lookups.map(([, userId]) => userId).filter((userId) => parseInt(userId, 16) > 200), [user(204), user(205)]);
+    assert.equal(lookups.length, 202);
+    // Another organization's team is not found, and no team row is read for it.
+    queries.length = 0;
+    assert.equal(await createMongoStaffTeamDirectory(members).team(OTHER, T.west), null);
+    assert.deepEqual(queries, []);
+  } finally {
+    Team.findOne = original.findOne;
+    TeamMembership.find = original.find;
+    TeamMembership.countDocuments = original.countDocuments;
+  }
+  const directory = read("src/modules/staffAccess/infrastructure/mongoStaffTeamDirectory.ts");
+  assert.match(directory, /TeamMembership\.find\(\{ organizationId: organization, teamId: team\._id, isManager: true \}\)\.select\("userId"\)\s+\.sort\(\{ createdAt: 1, _id: 1 \}\)\.limit\(STAFF_TEAM_MANAGER_LIMIT\)\.lean<Row\[\]>\(\)/);
+  assert.equal((directory.match(/TeamMembership\.\w+\(/g) ?? []).length, 3);
+  assert.doesNotMatch(directory, /detail\.filter\(/, "the managers are not picked from the members returned");
+});
+
 // ── Audit ────────────────────────────────────────────────────────────────────────────────────
 
 test("audit: every request leaves exactly one event in the STAFF organization and none in the customer organization, allowed or refused", async () => {
