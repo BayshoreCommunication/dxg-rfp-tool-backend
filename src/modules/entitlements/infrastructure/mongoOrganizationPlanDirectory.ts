@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Admin from "../../../../modal/adminModel";
 import Organization from "../../../../modal/organizationModel";
 import SecurityAuditEvent from "../../../../modal/securityAuditEventModel";
+import { blockedSince } from "../../organizationBlock/domain";
 import {
   PLAN_AUDIT,
   type OrganizationPlanDirectory,
@@ -14,7 +15,7 @@ import {
    acts on or lists customer organizations for the staff directory. Nothing here reads the
    caller's tenant context, and nothing reads an organization's RFPs or members. */
 
-const FIELDS = "name slug status kind plan proposalsCreated createdAt";
+const FIELDS = "name slug status kind plan proposalsCreated createdAt blocked";
 const CUSTOMER = { kind: { $ne: "legacy_holding" } };
 
 const oid = (value: string) => new mongoose.Types.ObjectId(value);
@@ -30,6 +31,7 @@ const record = (doc: Record<string, unknown>): OrganizationPlanRecord => ({
   plan: text(doc.plan),
   proposalsCreated: typeof doc.proposalsCreated === "number" ? doc.proposalsCreated : null,
   createdAt: doc.createdAt instanceof Date ? doc.createdAt : null,
+  blockedAt: blockedSince(doc),
 });
 
 export const isValidOrganizationId = (value: string) => /^[a-f0-9]{24}$/i.test(value);

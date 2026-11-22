@@ -25,7 +25,7 @@ import type {
   RfpOwnershipMirror,
   RfpReassignmentStore,
 } from "../../organizationMembers/domain/ports";
-import { STAFF_MEMBER_AUDIT, StaffAccessError, StaffMemberError, type StaffMemberDirectory } from "../domain";
+import { STAFF_MEMBER_AUDIT, StaffAccessError, StaffMemberError, unmanageableStanding, type StaffMemberDirectory } from "../domain";
 import { staffMemberView, type StaffContentAudit } from "./readOrganizationContent";
 
 /* Staff member management (owner decision, 2026-11-18; docs/DECISIONS.md). RFPilot staff change a
@@ -88,18 +88,18 @@ type Attempt = {
 };
 
 // What a caller typed in a path or body, cut to an id's length before it is stored.
-const asTyped = (value: unknown) => (typeof value === "string" ? value.slice(0, 64) : "");
+export const asTyped = (value: unknown) => (typeof value === "string" ? value.slice(0, 64) : "");
 
-const refused = (status: number, code: string, message: string, details?: Record<string, unknown>) => new StaffMemberError(code, message, status, details);
-const fromRefusal = (refusal: Refusal) => refused(refusal.status, refusal.code, refusal.message, refusal.details);
-const allow = (decision: Decision) => {
+export const refused = (status: number, code: string, message: string, details?: Record<string, unknown>) => new StaffMemberError(code, message, status, details);
+export const fromRefusal = (refusal: Refusal) => refused(refusal.status, refusal.code, refusal.message, refusal.details);
+export const allow = (decision: Decision) => {
   if (!decision.ok) throw fromRefusal(decision);
 };
-const memberNotFound = () => refused(404, "MEMBER_NOT_FOUND", "Member not found.");
-const stale = (current: MemberRecord | null) =>
+export const memberNotFound = () => refused(404, "MEMBER_NOT_FOUND", "Member not found.");
+export const stale = (current: MemberRecord | null) =>
   refused(409, "STALE_VERSION", "This member was changed by someone else. Reload and try again.", { currentVersion: current?.version ?? null });
 
-const parseReason = (value: unknown): string => {
+export const parseReason = (value: unknown): string => {
   const reason = typeof value === "string" ? value.trim() : "";
   if (reason.length < STAFF_REASON_MIN || reason.length > STAFF_REASON_MAX) {
     const message = `Give a reason of ${STAFF_REASON_MIN} to ${STAFF_REASON_MAX} characters.`;
@@ -108,7 +108,7 @@ const parseReason = (value: unknown): string => {
   return reason;
 };
 
-const versionOf = (value: unknown): number => {
+export const versionOf = (value: unknown): number => {
   const version = parseVersion(value);
   if (version === null) throw refused(400, "VERSION_REQUIRED", "The member's current version is required.");
   return version;
@@ -184,11 +184,13 @@ export const createStaffMemberManagement = (dependencies: Dependencies) => {
   const organizationOf = async (current: Attempt): Promise<string> => {
     const organization = await directory.organization(current.organizationId);
     if (!organization) throw refused(404, "ORGANIZATION_NOT_FOUND", "Organization not found.");
-    if (organization.id === current.staff.organizationId || organization.staffAccountCount > 0) {
-      throw refused(409, "ORGANIZATION_NOT_MANAGEABLE", "Members of RFPilot's own organization can't be managed here.", { standing: "platform" });
+    // One rule for the member and the team routes (domain.ts).
+    const standing = unmanageableStanding(organization, current.staff.organizationId);
+    if (standing === "platform") {
+      throw refused(409, "ORGANIZATION_NOT_MANAGEABLE", "Members of RFPilot's own organization can't be managed here.", { standing });
     }
-    if (organization.kind !== "customer") {
-      throw refused(409, "ORGANIZATION_NOT_MANAGEABLE", "This organization is awaiting placement. Its members can't be managed yet.", { standing: organization.kind });
+    if (standing) {
+      throw refused(409, "ORGANIZATION_NOT_MANAGEABLE", "This organization is awaiting placement. Its members can't be managed yet.", { standing });
     }
     return organization.id;
   };

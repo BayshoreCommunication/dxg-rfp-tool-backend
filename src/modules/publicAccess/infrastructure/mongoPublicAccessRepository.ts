@@ -33,6 +33,11 @@ export const mongoPublicAccessRepository: PublicAccessRepository = {
       useCount: grant.useCount, revokedAt: grant.revokedAt,
     } : null;
   },
+  async organizationOf(tokenHash) {
+    // scope-exempt: the hashed token is the credential; only the grant's organization is read
+    const grant = await PublicAccessGrant.findOne({ tokenHash }).select("organizationId").lean<{ organizationId?: unknown } | null>();
+    return grant?.organizationId ? String(grant.organizationId) : null;
+  },
   async revoke(id, organizationId, reason) {
     const result = await PublicAccessGrant.updateOne({ _id: id, organizationId, revokedAt: null }, { $set: { revokedAt: new Date(), revokeReason: reason } });
     return result.modifiedCount === 1;

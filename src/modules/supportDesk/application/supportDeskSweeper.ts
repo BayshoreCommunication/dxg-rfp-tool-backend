@@ -44,6 +44,9 @@ export const createSupportDeskSweeper = (dependencies: {
   notifier: SupportDeskNotifier;
   clock?: SupportDeskClock;
   batchSize?: number;
+  /** Every blocked organization's id (organizationBlock). Their rows are left exactly as they
+      are while the block lasts. A failed read fails the pass: nothing is done on a guess. */
+  blockedOrganizationIds?: () => Promise<ReadonlySet<string>>;
 }) => {
   const { repository, notifier } = dependencies;
   const clock = dependencies.clock ?? (() => new Date());
@@ -78,6 +81,16 @@ export const createSupportDeskSweeper = (dependencies: {
       const now = clock();
       const nowIso = now.toISOString();
       const backfilled = await repository.backfillServiceLevels(now);
+      /* organization-block: a ticket of an organization RFPilot staff blocked gets no automatic
+         customer-facing step: no auto-close reminder (a message and an email to the customer), no
+         auto-resolve, no auto-close. Its clock is not reset; the step happens on the first pass
+         after a reactivation. The staff escalation below is NOT paused: it is addressed to
+         RFPilot staff, who still work the ticket. */
+      const blocked = (await dependencies.blockedOrganizationIds?.()) ?? new Set<string>();
+      const open = (tickets: SupportTicketRecord[]) => tickets.filter((ticket) => !blocked.has(String(ticket.organizationId)));
+      // The ids also go INTO each query: a batch is limited and oldest-first, and a blocked
+      // organization's tickets stay at its head.
+      const exceptOrganizationIds = [...blocked];
 
       const escalation = await each(
         await repository.listUnansweredSince(new Date(now.getTime() - ESCALATE_AFTER_MS), batchSize),
@@ -93,7 +106,7 @@ export const createSupportDeskSweeper = (dependencies: {
       );
 
       const reminders = await each(
-        await repository.listNeedingCloseReminder(new Date(now.getTime() - AUTO_RESOLVE_REMINDER_AFTER_MS), batchSize),
+        open(await repository.listNeedingCloseReminder(new Date(now.getTime() - AUTO_RESOLVE_REMINDER_AFTER_MS), batchSize, exceptOrganizationIds)),
         async (ticket) => {
           const requester = await person(ticket, ticket.requesterUserId);
           // Customer-visible and signed as RFPilot support, like the first
@@ -120,11 +133,12 @@ export const createSupportDeskSweeper = (dependencies: {
       );
 
       const resolutions = await each(
-        await repository.listDueToAutoResolve(
+        open(await repository.listDueToAutoResolve(
           new Date(now.getTime() - AUTO_RESOLVE_AFTER_MS),
           new Date(now.getTime() - AUTO_RESOLVE_MIN_NOTICE_MS),
           batchSize,
-        ),
+          exceptOrganizationIds,
+        )),
         async (ticket) => {
           await repository.appendMessage({
             organizationId: ticket.organizationId,
@@ -151,7 +165,7 @@ export const createSupportDeskSweeper = (dependencies: {
       // Closing after the grace period is quiet: the planner was already told
       // when it was resolved.
       const closures = await each(
-        await repository.listResolvedBefore(new Date(now.getTime() - CLOSE_AFTER_RESOLVED_MS), batchSize),
+        open(await repository.listResolvedBefore(new Date(now.getTime() - CLOSE_AFTER_RESOLVED_MS), batchSize, exceptOrganizationIds)),
         async (ticket) => {
           await repository.appendMessage({
             organizationId: ticket.organizationId,

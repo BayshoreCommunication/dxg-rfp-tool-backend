@@ -6,6 +6,7 @@ import {
   correlationId,
   createSession,
   rejectInvalidBffCredential,
+  respondIfOrganizationBlocked,
   respondWithSecondFactorStep,
 } from "./authController";
 import { getAuthenticatedUserAccount } from "../src/modules/auth/composition";
@@ -26,6 +27,10 @@ const refuseToken = (res: Response, code: TokenRefusal) => {
 };
 
 const fail = (res: Response) => (error: unknown) => {
+  // The inviting organization was blocked after the invitation was accepted and before the
+  // session began: the person is a member by now, so they are told (the link itself answers
+  // "not valid" for a blocked organization, in the service).
+  if (!res.headersSent && respondIfOrganizationBlocked(res, error)) return;
   console.error("[Invitations] Request failed:", error instanceof Error ? error.name : "unknown");
   if (!res.headersSent) res.status(500).json({ success: false, message: "Something went wrong with the invitation. Try again." });
 };

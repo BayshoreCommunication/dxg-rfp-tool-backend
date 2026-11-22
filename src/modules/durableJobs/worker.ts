@@ -5,6 +5,7 @@ import type { QueueMessage } from "./domain";
 import { redisConnection } from "./redis";
 import { SOURCE_SECURITY_QUEUE } from "./queue";
 import { handleSourceSecurity } from "./sourceSecurityHandler";
+import { deferJobOfBlockedOrganization } from "./organizationBlockDeferral";
 import { CHAT_PROVIDER_UNAVAILABLE_REPLY } from "../conversations/chatReply";
 import { handleKnowledgeParse } from "./knowledgeParseHandler";
 import { handleKnowledgeIndex } from "./knowledgeIndexHandler";
@@ -72,7 +73,13 @@ export const createSourceSecurityWorker = (repository: JobRepository) => {
   const workerId = `source-security-${crypto.randomUUID()}`;
   const leaseSeconds = Number(process.env.JOB_LEASE_SECONDS || 90);
   const maxAttempts = Number(process.env.JOB_MAX_ATTEMPTS || 5);
-  return new Worker<QueueMessage>(SOURCE_SECURITY_QUEUE, async (job: Job<QueueMessage>) => {
+  return new Worker<QueueMessage>(SOURCE_SECURITY_QUEUE, async (job: Job<QueueMessage>, token?: string) => {
+    // organization-block: no job STARTS for an organization RFPilot staff blocked; it is deferred,
+    // unclaimed, and resumes after a reactivation (organizationBlockDeferral.ts). This is the
+    // only check: a job already running when the block commits finishes. The gate is not asked
+    // again at lease renewal, since stopping a handler part-way could leave its writes half
+    // done (docs/API.md, "Staff organization block", known limits).
+    await deferJobOfBlockedOrganization(job, token);
     const attempt = job.attemptsMade + 1;
     const startedAt = Date.now();
     // Identity of this attempt, shared by all three lifecycle lines so one

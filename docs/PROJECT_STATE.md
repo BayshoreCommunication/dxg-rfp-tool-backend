@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-11-18 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
+**Last updated:** 2026-11-19 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -716,15 +716,57 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
     staff side (`DECISIONS.md`). Open for the owner: whether a member should
     be told when staff change their role or deactivate them.
     The admin app has no screen for any of this yet.
+  - Done in the backend (team management; owner's decision 2026-11-18,
+    `DECISIONS.md`; in its own PR after member management, **not released,
+    awaiting security review**): staff create, rename and archive a team, add
+    and remove a team member, set and unset a team manager, and set which teams
+    a member is on, under `/api/v1/admin/organizations/:organizationId/`
+    (`API.md`, "Staff team management"). The customer's own team rules and
+    store are used, through a deliberate staff actor that is not a member; a
+    reason is required; RFPilot's own organization and holding tenants are
+    refused. Every request leaves one event in the staff organization
+    (`platform.organization_team.*`, `platform.organization_member.teams_changed`),
+    written in the same transaction as the change, and nothing in the
+    customer's audit trail. Staff cannot change which team a proposal is on.
+    **Archiving a team changes no proposal:** proposals on it keep their team,
+    and its Team Managers lose their reach over them, exactly as when the
+    customer archives it. No session is ended and no email or notification is
+    sent (the customer flow does neither). A DELETE here carries its reason in
+    a JSON body, which the admin app's client must send.
+  - Done in the backend (organization block; owner's decision 2026-11-18,
+    `DECISIONS.md` row of 2026-11-19; in its own draft PR, **not released, not
+    merged; security review done 2026-11-19 with no critical or high
+    finding, its fix round is in the same PR**): staff block a whole customer
+    organization and reactivate it with `POST
+    /api/v1/admin/organizations/:organizationId/block` and `/reactivate`
+    (`API.md`, "Staff organization block"). A block is a dedicated marker on
+    the organization (never `status`); one predicate and one uncached lookup
+    decide it everywhere. While blocked: live members are refused at sign-in,
+    on every request and on refresh with code `ORGANIZATION_BLOCKED`, and their
+    sessions end (a dead credential gets the answer it always got); a sign-up
+    on the organization's domain still gets the domain match, and a request
+    for access waits as pending with nothing sent into the organization; vendor links, shared proposal pages and invitation links
+    answer as links that do not exist; durable jobs are deferred and scheduled
+    jobs skip the organization; nothing is deleted. Reactivation removes the
+    marker and everything resumes; members sign in again. The staff
+    organization and holding tenants cannot be blocked. One event per request
+    in the staff organization (`platform.organization.blocked` /
+    `.reactivated`); nothing in the customer's audit trail, including no
+    "sessions signed out" or "session reuse detected" row. Staff reads show
+    blocked and since when. Both workers now require MongoDB and fail
+    start-up without it. A job already running when the block commits
+    finishes (accepted limit).
+    Not built: the dashboard message for `ORGANIZATION_BLOCKED` and the admin
+    app's block button. Known limits are listed in `API.md`.
   - Follows, not built: (a) the admin app's organization browser on the new
     routes (members, teams, templates, vendor list, proposals), replacing the
     Support access screens, whose wording ("granted", "time left", "recorded in
-    this organization's audit log") is now wrong; (b) staff team management (create, rename,
-    archive, team members, team managers, a member's teams), in scope by the
-    owner's decision and built in its own change after member management
-    merges; blocking a whole organization is a later, separate change;
-    invitations, two-factor reset and blocking an account are excluded
-    (members and roles are built, see above; plan and placement exist). All of
+    this organization's audit log") is now wrong, and screens for staff member
+    and team management, which have none yet; (b) the dashboard's
+    message for `ORGANIZATION_BLOCKED` and the admin app's block and reactivate
+    controls (the backend is built, see above); invitations, two-factor reset and
+    blocking an account are excluded (members, roles and teams are built, see
+    above; plan and placement exist). All of
     it is recorded on the staff side only and must not write a customer-visible
     action with a staff actor; (c) removal of the customer grant endpoints
     (`/api/v1/organization/support-grants*`), the `SupportAccessGrant` model and

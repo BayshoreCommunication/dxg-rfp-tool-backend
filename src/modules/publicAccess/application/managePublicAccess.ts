@@ -20,13 +20,23 @@ export interface PublicAccessRepository {
   create(input: PublicGrantRecord & { tokenHash: string; createdByUserId: string; recipientHash?: string | null }): Promise<{ id: string }>;
   consume(tokenHash: string, purpose: PublicGrantPurpose, resourceId: string, now: Date, recipientHash?: string | null): Promise<ConsumedPublicGrantRecord | null>;
   revoke(id: string, organizationId: string, reason: string): Promise<boolean>;
+  /** The organization a link belongs to, read without using the link. Null for an unknown link. */
+  organizationOf?(tokenHash: string): Promise<string | null>;
 }
 
 // Told after a vendor response link is issued, so the RFP's invited-vendor count stays current
 // (ORG-403). It must not throw: the link exists either way.
 export type VendorInvitedListener = (input: { organizationId: string; proposalId: string; createdByUserId: string }) => Promise<void>;
 
-export const createPublicAccessManager = (repository: PublicAccessRepository, onVendorInvited?: VendorInvitedListener) => ({
+/* `organizationBlocked` is the organization block gate (organizationBlock). When it answers true
+   for a link's organization the link answers as one that does not exist, and it is NOT used: no
+   use is counted while the organization is blocked, so the link works as before after a
+   reactivation (until its own expiry). Not given: nothing is blocked. */
+export const createPublicAccessManager = (
+  repository: PublicAccessRepository,
+  onVendorInvited?: VendorInvitedListener,
+  organizationBlocked?: (organizationId: string) => Promise<boolean>,
+) => ({
   async issue(input: { organizationId: string; resourceId: string; purpose: PublicGrantPurpose; createdByUserId: string; expiresInHours?: number; maxUses?: number; recipient?: string }) {
     if (!await repository.resourceOwned(input.resourceId, input.organizationId, input.createdByUserId)) {
       throw new Error("Proposal not found for this organization");
@@ -45,7 +55,7 @@ export const createPublicAccessManager = (repository: PublicAccessRepository, on
     }
     return { id: record.id, token, expiresAt, purpose: input.purpose, resourceId: input.resourceId };
   },
-  validateAndConsume(input: {
+  async validateAndConsume(input: {
     token: string;
     purpose: PublicGrantPurpose;
     resourceId: string;
@@ -59,7 +69,13 @@ export const createPublicAccessManager = (repository: PublicAccessRepository, on
       && !recipient
       && !input.allowRecipientlessVendorProposalRead
       && !input.allowAlternateVendorContact
-    ) return Promise.resolve(null);
+    ) return null;
+    // Every public and vendor surface of an organization comes through here (vendor workspace,
+    // drafts, uploads, finalize, receipts, revisions, the shared and public proposal pages).
+    if (organizationBlocked && repository.organizationOf) {
+      const organizationId = await repository.organizationOf(hashPublicGrant(input.token));
+      if (organizationId && (await organizationBlocked(organizationId))) return null;
+    }
     // Three states, and the repository tells them apart: a hash must match the
     // invited vendor, null means the route explicitly accepts any recipient,
     // and undefined means the caller never decided — which fails closed.

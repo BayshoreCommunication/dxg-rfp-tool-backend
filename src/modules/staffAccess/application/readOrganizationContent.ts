@@ -7,6 +7,7 @@ import {
   type StaffMemberView,
   type StaffOrganizationReader,
   type StaffOrganizationRef,
+  type StaffTeamView,
 } from "../domain";
 
 /* The VIEW half of staff access (owner decision, 2026-11-17). One service behind both the new
@@ -241,15 +242,7 @@ export const createStaffOrganizationContent = (dependencies: Dependencies) => {
       await recordRead(staff, organization.id, "teams");
       return {
         organizationId: organization.id,
-        teams: teams.map((team) => ({
-          id: team.id,
-          name: team.name,
-          archived: team.archived,
-          archivedAt: team.archivedAt,
-          createdAt: team.createdAt,
-          memberCount: team.memberCount,
-          managers: team.managers.map((manager) => ({ id: manager.id, name: manager.name, email: manager.email })),
-        })),
+        teams: teams.map(staffTeamView),
       };
     },
 
@@ -324,6 +317,18 @@ export const staffMemberView = (member: StaffMemberView): StaffMemberView => ({
   teams: member.teams.map((team) => ({ id: team.id, name: team.name, archived: team.archived, isManager: team.isManager })),
   joinedAt: member.joinedAt,
   lastSignedInAt: member.lastSignedInAt,
+});
+
+// The team allowlist: the only shape in which a team reaches a staff response, from the teams
+// read above and from the staff team management routes (manageOrganizationTeams.ts).
+export const staffTeamView = (team: StaffTeamView): StaffTeamView => ({
+  id: team.id,
+  name: team.name,
+  archived: team.archived,
+  archivedAt: team.archivedAt,
+  createdAt: team.createdAt,
+  memberCount: team.memberCount,
+  managers: team.managers.map((manager) => ({ id: manager.id, name: manager.name, email: manager.email })),
 });
 
 // Field by field, so nothing else a reader hands back reaches the response.

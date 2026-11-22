@@ -148,3 +148,83 @@ export interface StaffMemberDirectory {
   organization(organizationId: string): Promise<StaffManagedOrganization | null>;
   member(organizationId: string, userId: string): Promise<{ member: StaffMemberView; version: number } | null>;
 }
+
+/** Why staff can't manage this organization's members or teams (`platform`: RFPilot's own
+    organization, the caller's or any that `admins` accounts belong to; otherwise its kind, such
+    as `legacy_holding`), or null when they can. One rule for the member and the team routes. */
+export const unmanageableStanding = (organization: StaffManagedOrganization, staffOrganizationId: string): string | null => {
+  if (organization.id === staffOrganizationId || organization.staffAccountCount > 0) return "platform";
+  if (organization.kind !== "customer") return organization.kind;
+  return null;
+};
+
+/* Staff team management (owner decision, 2026-11-18; docs/DECISIONS.md). RFPilot staff create,
+   rename and archive a customer organization's teams, add and remove team members, set and unset
+   a team manager, and set which teams a member is on, under the rules its own Owner and Admins
+   work under. As for members: every request that reaches the service as staff leaves exactly one
+   event in the STAFF organization's audit trail (allowed or denied, under the same action name);
+   nothing is written to the customer organization's. `platform.*` is never shown in a customer
+   audit log. `memberTeamsChanged` is a change of a member, so it is named with the member actions. */
+export const STAFF_TEAM_AUDIT = {
+  read: "platform.organization_team.read",
+  created: "platform.organization_team.created",
+  renamed: "platform.organization_team.renamed",
+  archived: "platform.organization_team.archived",
+  memberAdded: "platform.organization_team.member_added",
+  memberRemoved: "platform.organization_team.member_removed",
+  managerChanged: "platform.organization_team.manager_changed",
+  memberTeamsChanged: "platform.organization_member.teams_changed",
+} as const;
+
+/** One team with its members: the staff teams read's team and the staff members read's member. */
+export type StaffTeamDetail = {
+  team: StaffTeamView;
+  members: Array<{ member: StaffMemberView; version: number; isManager: boolean }>;
+};
+
+/* One team of the organization the path names. Every query names the organization; a team of
+   another organization is not found. */
+export interface StaffTeamDirectory {
+  team(organizationId: string, teamId: string): Promise<StaffTeamDetail | null>;
+}
+
+/* Staff organization block (owner decision, 2026-11-18; docs/DECISIONS.md). RFPilot staff block a
+   whole customer organization and reactivate it. As for members and teams: the organization
+   comes only from the path, a reason is required, RFPilot's own organization and a legacy
+   holding tenant are refused, and every request that reaches the service as staff leaves exactly
+   one event in the STAFF organization's audit trail; nothing is written to the customer
+   organization's. What "blocked" means is src/modules/organizationBlock/domain.ts, and nowhere else. */
+export const STAFF_ORGANIZATION_AUDIT = {
+  blocked: "platform.organization.blocked",
+  reactivated: "platform.organization.reactivated",
+} as const;
+
+/** The staff-side event of a block or a reactivation, without the facts only the store knows. */
+export type OrganizationBlockAudit = {
+  organizationId: string;
+  actorUserId: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  correlationId: string;
+  metadata: Record<string, unknown>;
+};
+
+export type OrganizationBlockOutcome =
+  | { changed: boolean; blockedAt: Date | null; sessionsEnded: number }
+  /** The organization was not there, or was not a customer organization, when the change committed. */
+  | "not_found" | "not_manageable";
+
+/* The two writes. Each runs in ONE MongoDB transaction: the marker (set or removed), for a block
+   the organization's sessions ended, and the staff-side event, which the store completes with
+   `changed`, the dates and the session count it saw inside the transaction. A request that finds
+   nothing to change commits its event alone. */
+export interface OrganizationBlockStore {
+  block(input: { organizationId: string; staffOrganizationId: string; staffAccountId: string; now: Date; audit: OrganizationBlockAudit }): Promise<OrganizationBlockOutcome>;
+  /* Reactivating only removes a marker, so it is allowed for ANY organization that carries one,
+     manageable or not: an organization blocked while it was a customer organization and later
+     made unmanageable (an `admins` account added, its kind changed) must not stay blocked for
+     ever. `manageable` is the service's verdict on the full rule; the store applies it only to an
+     organization that carries NO marker (answer `not_manageable`, nothing written). */
+  reactivate(input: { organizationId: string; staffOrganizationId: string; manageable: boolean; now: Date; audit: OrganizationBlockAudit }): Promise<OrganizationBlockOutcome>;
+}

@@ -8,8 +8,8 @@ import { staffContentReads } from "./adminOrganizationContentRoute";
 /* Mounted at /api/v1. RFPilot staff manage a customer organization's members (owner decision,
    2026-11-18; docs/DECISIONS.md): role, deactivate, reactivate, reassign the member's proposals,
    transfer ownership. Members only. Nothing here edits or deletes a proposal's content, a
-   template or the vendor list. Staff team management follows in its own change; invitations,
-   two-factor reset and blocking an account are not built.
+   template or the vendor list. Staff team management is routes/adminOrganizationTeamsRoute.ts;
+   invitations, two-factor reset and blocking an account are not built.
 
    Guard: the chain of the staff read routes (authenticate, a staff membership role, and in the
    service an `admins` account holding an admin role), plus a write limit of its own that is
