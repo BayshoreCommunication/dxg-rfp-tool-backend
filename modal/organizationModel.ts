@@ -48,6 +48,9 @@ export interface IOrganization extends Document {
   allowManagerInvites: boolean;
   /** Where the Owner is in onboarding (details → plan → team → done). Older organizations are "done". */
   onboardingStep: OnboardingStep;
+  /** Set only while RFPilot staff have blocked the organization (src/modules/organizationBlock).
+      Absent on every organization that is not blocked; `status` is unrelated and not enforced. */
+  blocked?: { at: Date; byStaffOrganizationId: string; byStaffAccountId: string } | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -94,6 +97,14 @@ const organizationSchema = new Schema<IOrganization>(
     requireSso: { type: Boolean, default: false },
     allowManagerInvites: { type: Boolean, default: false },
     onboardingStep: { type: String, enum: ONBOARDING_STEPS, default: "done", required: true },
+    // The organization block marker. NO default: a document without it is not blocked. Written
+    // and removed only by the staff block service (staffAccess/infrastructure/mongoOrganizationBlockStore.ts).
+    blocked: {
+      type: new Schema(
+        { at: { type: Date, required: true }, byStaffOrganizationId: { type: String, required: true }, byStaffAccountId: { type: String, required: true } },
+        { _id: false },
+      ),
+    },
   },
   { timestamps: true },
 );

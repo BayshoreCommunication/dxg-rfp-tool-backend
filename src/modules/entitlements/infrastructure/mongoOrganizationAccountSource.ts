@@ -1,3 +1,4 @@
+import { blockedSince } from "../../organizationBlock/domain";
 import mongoose from "mongoose";
 import Admin from "../../../../modal/adminModel";
 import Organization from "../../../../modal/organizationModel";
@@ -24,7 +25,7 @@ import type {
    Proposals are counted from the organizationId index alone: nothing here loads a proposal
    document, which is why there is no archived count and no last-update time. */
 
-const FIELDS = "name slug status kind plan proposalsCreated createdAt country requireTwoFactor requireSso allowManagerInvites autoApproveDomain";
+const FIELDS = "name slug status kind plan proposalsCreated createdAt country requireTwoFactor requireSso allowManagerInvites autoApproveDomain blocked";
 const DOMAIN_LIMIT = 50;
 
 const oid = (value: string) => new mongoose.Types.ObjectId(value);
@@ -59,6 +60,7 @@ export const mongoOrganizationAccountSource: OrganizationAccountSource = {
       plan: text(doc.plan),
       proposalsCreated: typeof doc.proposalsCreated === "number" ? doc.proposalsCreated : null,
       createdAt: date(doc.createdAt),
+      blockedAt: blockedSince(doc),
       country: text(doc.country),
       requireTwoFactor: doc.requireTwoFactor === true,
       requireSso: doc.requireSso === true,

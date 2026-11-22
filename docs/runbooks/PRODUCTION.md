@@ -34,6 +34,26 @@ sit in `scan_failed` if ClamAV is down.
 - Secrets (worker env only where possible): `OPENAI_API_KEY`, `JWT_SECRET`,
   `OTP_PEPPER`, `TELEMETRY_PSEUDONYM_KEY` (required when observability is on),
   `DOCUMENT_STORAGE_*`, `POSTGRES_URL`, `MONGODB_URL`, `REDIS_URL`.
+- Both workers (`worker:source-security` and the AI gateway worker) require `MONGODB_URL` and a
+  reachable MongoDB to start, whatever capabilities are enabled: every job first asks whether its
+  organization is blocked (staff organization block), and that is a MongoDB read. Until that change
+  the durable worker connected only when a capability that reads MongoDB was on. A worker started
+  without it exits non-zero with one line, `<worker> cannot start: MongoDB is required ... and
+  MONGODB_URL is not set.` (or `... could not be reached: <cause> (5 attempts)`). An unreachable
+  MongoDB is tried 5 times, waiting 5, 10, 15 and 30 seconds between attempts (one `MongoDB could
+  not be reached (attempt n of 5)` line each), so a blip during a deploy does not exit the task
+  and trip the ECS circuit breaker; each attempt can itself wait up to 30 seconds, so a start that
+  cannot reach MongoDB exits after about 1 to 3.5 minutes. A missing `MONGODB_URL` exits at once.
+  No connection string is logged on this path. A MongoDB outage after start-up
+  does not stop a worker: jobs are deferred 30 seconds and asked again, never failed.
+- The dispatcher does not need MongoDB. When `MONGODB_URL` is set for it, its reconcile pass
+  (every 30 seconds) leaves the queued jobs of blocked organizations out of its batch, so a blocked
+  organization with many queued jobs cannot delay the Redis-loss recovery of other tenants. Without
+  it, or while MongoDB is unreachable, the dispatcher reconciles every organization as before; the
+  workers still defer a blocked organization's jobs either way. If MongoDB was unreachable when the
+  dispatcher started, every reconcile pass tries the connection again in the background (one
+  `[dispatcher] mongodb (optional, reconcile fairness only) is not connected` line at most once a
+  minute); the dispatcher never waits for it and never exits because of it.
 - `OTP_PEPPER` is required: with `NODE_ENV=production` the API, worker and cron fail at startup
   without it (no fallback to `JWT_SECRET`). Never change it in place: it keys the hashes of
   2FA recovery codes and sign-in codes, so a new value voids every member's recovery codes.

@@ -9,6 +9,7 @@ import type {
   VendorSubmissionDraftScope,
 } from "../../domain/draft";
 import type { VendorSubmissionDraftRepository } from "../../domain/ports/vendorSubmissionDraftRepository";
+import { exceptOrganizations } from "../../../organizationBlock/mongoFilter";
 
 type DraftRow = {
   _id: unknown;
@@ -400,8 +401,11 @@ export const mongoVendorSubmissionDraftRepository: VendorSubmissionDraftReposito
     return row ? toRecord(row) : null;
   },
 
-  async listCleanupCandidates(now, limit) {
+  async listCleanupCandidates(now, limit, exceptOrganizationIds) {
     const rows = await VendorSubmissionDraft.find({
+      // Organizations the cleanup leaves alone (blocked by RFPilot staff) are excluded here, so
+      // their drafts cannot fill the batch.
+      ...exceptOrganizations(exceptOrganizationIds),
       cleanupCompletedAt: null,
       $or: [
         { status: "abandoned" },

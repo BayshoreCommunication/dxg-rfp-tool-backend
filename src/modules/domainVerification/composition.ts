@@ -1,3 +1,4 @@
+import { blockedOrganizationIds } from "../organizationBlock/organizationBlockGate";
 import OrganizationMembership from "../../../modal/organizationMembershipModel";
 import User from "../../../modal/userModel";
 import { hasOrganizationAction } from "../identity/domain/authorizationPolicy";
@@ -19,6 +20,7 @@ const mongoAdminEmailDirectory: AdminEmailDirectory = {
 };
 
 export const domainVerification = createDomainVerification({
+  blockedOrganizationIds,
   domains: mongoDomainRepository,
   resolver: nodeTxtResolver,
   adminEmails: mongoAdminEmailDirectory,

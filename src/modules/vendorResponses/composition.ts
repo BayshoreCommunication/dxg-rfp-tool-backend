@@ -1,3 +1,4 @@
+import { blockedOrganizationIds } from "../organizationBlock/organizationBlockGate";
 import { checkRequestProposalAccess, isProposalAccessDenied } from "../identity/application/proposalAccess";
 import {
   createGetOwnedVendorSubmissionDetail,
@@ -65,6 +66,7 @@ const configuredDraftRetentionDays = Number.parseInt(
   10,
 );
 const draftService = createVendorSubmissionDraftService({
+  blockedOrganizationIds,
   repository: mongoVendorSubmissionDraftRepository,
   storage: spacesVendorDocumentStorage,
   malwareScan: vendorUploadMalwareScan,

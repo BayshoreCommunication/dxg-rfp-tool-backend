@@ -6,6 +6,7 @@ import { createSecretBox, parseEncryptionKey, type SecretBox } from "../../share
 import { mongoSecurityAuditWriter } from "../auth/infrastructure/audit/mongoSecurityAuditWriter";
 import { authenticationSessions } from "../auth/composition";
 import { invitations } from "../invitations/composition";
+import { organizationBlockGate } from "../organizationBlock/organizationBlockGate";
 import { createDiscoverSignInMethod } from "./application/discoverSignInMethod";
 import { createFederatedSignIn } from "./application/federatedSignIn";
 import { createManageSsoConnection } from "./application/manageSsoConnection";
@@ -73,6 +74,7 @@ const randomPasswordHash = async () => bcryptPasswordHasher.hash(crypto.randomBy
 
 export const federatedSignIn = createFederatedSignIn({
   domainOrganizationFor: organizationForEmailDomain,
+  organizationBlocked: (organizationId) => organizationBlockGate.isBlocked(organizationId),
   store: ssoStateStore(),
   oidc,
   microsoft: microsoftConfig,

@@ -1,6 +1,7 @@
 import { createPublicAccessManager } from "./application/managePublicAccess";
 import { mongoPublicAccessRepository } from "./infrastructure/mongoPublicAccessRepository";
 import { proposalLifecycle } from "../proposalLifecycle/composition";
+import { organizationBlockGate } from "../organizationBlock/organizationBlockGate";
 
 export const publicAccess = createPublicAccessManager(mongoPublicAccessRepository, async (input) => {
   await proposalLifecycle.record({
@@ -10,4 +11,4 @@ export const publicAccess = createPublicAccessManager(mongoPublicAccessRepositor
     reason: "vendor_invited",
     recount: ["invited"],
   });
-});
+}, (organizationId) => organizationBlockGate.isBlocked(organizationId));

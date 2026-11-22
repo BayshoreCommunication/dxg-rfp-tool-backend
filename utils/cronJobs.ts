@@ -2,6 +2,13 @@ import { createNotification } from "./notificationService";
 import Proposal from "../modal/proposalsModel";
 import Settings from "../modal/settingsModel";
 import { proposalLifecycle } from "../src/modules/proposalLifecycle/composition";
+import { blockedOrganizationIds } from "../src/modules/organizationBlock/organizationBlockGate";
+
+/* Organization block (owner decision, 2026-11-18): the maintenance crons below leave an
+   organization that RFPilot staff blocked exactly as it is. Nothing of it expires, is purged,
+   swept, reminded or emailed while the block lasts; each job treats it like any other on its
+   first run after a reactivation. A failed read of the blocked set fails that run (caught and
+   logged like any other error of the job), so nothing destructive is done on a guess. */
 
 const parseExpiryDays = (expirySetting?: string): number | null => {
   if (!expirySetting || typeof expirySetting !== "string") return null;
@@ -22,8 +29,11 @@ export const runExpirationCheck = async () => {
       status: { $ne: "unsubmitted" },
     });
     const settingsByUserId = new Map<string, any>();
+    const blocked = await blockedOrganizationIds();
     
     for (const proposal of activeProposals) {
+      // organization-block: no expiry warning and no expiry for a blocked organization.
+      if (proposal.organizationId && blocked.has(String(proposal.organizationId))) continue;
       const userId = proposal.userId;
       const userIdText = userId ? String(userId) : "";
       let settings = userIdText ? settingsByUserId.get(userIdText) : null;
@@ -94,9 +104,12 @@ export const runExpirationCheck = async () => {
 export const purgeArchivedProposals = async () => {
   try {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const doomed = await Proposal.find({ isArchived: true, archivedAt: { $lte: thirtyDaysAgo } })
+    // organization-block: an archived proposal of a blocked organization is not purged.
+    const blocked = await blockedOrganizationIds();
+    const doomed = (await Proposal.find({ isArchived: true, archivedAt: { $lte: thirtyDaysAgo } })
       .select("_id organizationId")
-      .lean<{ _id: unknown; organizationId?: unknown }[]>();
+      .lean<{ _id: unknown; organizationId?: unknown }[]>())
+      .filter((doc) => !blocked.has(String(doc.organizationId ?? "")));
     if (!doomed.length) return;
     const ids = doomed.map((doc) => String(doc._id));
     // Propagate to private storage and Postgres source rows BEFORE the Mongo

@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Organization from "../../../../../modal/organizationModel";
 import OrganizationDomain from "../../../../../modal/organizationDomainModel";
 import type { DomainRecord, DomainRepository } from "../../application/manageDomains";
+import { exceptOrganizations } from "../../../organizationBlock/mongoFilter";
 
 type Row = {
   _id: unknown; organizationId: unknown; domain: string; status: DomainRecord["status"]; verificationToken: string;
@@ -95,9 +96,10 @@ export const mongoDomainRepository: DomainRepository = {
     if (row.status === "verified") await mirror.remove(row.organizationId, row.domain);
     return toRecord(row);
   },
-  async due(now, limit) {
-    // scope-exempt: the background re-check runs across every organization.
-    const rows = await OrganizationDomain.find({ nextCheckAt: { $lte: now } }).sort({ nextCheckAt: 1 }).limit(limit).lean<Row[]>();
+  async due(now, limit, exceptOrganizationIds) {
+    // scope-exempt: the background re-check runs across every organization, except those it is
+    // told to leave alone (blocked by RFPilot staff), excluded here so they cannot fill the batch.
+    const rows = await OrganizationDomain.find({ nextCheckAt: { $lte: now }, ...exceptOrganizations(exceptOrganizationIds) }).sort({ nextCheckAt: 1 }).limit(limit).lean<Row[]>();
     return rows.map(toRecord);
   },
   async claimDue(input) {

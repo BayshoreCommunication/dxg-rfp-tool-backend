@@ -13,7 +13,15 @@ if (process.env.NODE_ENV !== 'production') {
 let isConnected = false;
 let connectionPromise: Promise<void> | null = null;
 
-const connectDB = async (): Promise<void> => {
+/* `quietFailure` is for the background processes (worker start-up, the dispatcher's optional
+   reconnect): they retry and log one redacted line of their own, so the failure banner below is
+   skipped for them. The banner prints the driver's message and the raw error object, and a
+   malformed URI is quoted in that message (`Invalid connection string "..."`). The API passes
+   nothing and logs exactly what it always did. An attempt already in flight keeps the mode of
+   the call that started it. Mongoose also emits the same raw error on the connection's `error`
+   event after a failed first connection; that print is skipped for a quiet attempt too. */
+let quietAttemptInFlight = false;
+const connectDB = async (options: { quietFailure?: boolean } = {}): Promise<void> => {
   // If already connected, reuse connection
   if (isConnected && mongoose.connection.readyState === 1) {
     console.log('✅ Using existing MongoDB connection');
@@ -39,8 +47,9 @@ const connectDB = async (): Promise<void> => {
         );
       }
 
-      console.log('🔄 Attempting to connect to MongoDB...');
+      if (!options.quietFailure) console.log('🔄 Attempting to connect to MongoDB...');
 
+      if (options.quietFailure) quietAttemptInFlight = true;
       const conn = await mongoose.connect(mongoURI, {
         // Database name
         dbName: DATABASE_NAME,
@@ -57,6 +66,7 @@ const connectDB = async (): Promise<void> => {
         w: 'majority',
       });
 
+      quietAttemptInFlight = false;
       isConnected = true;
       console.log('========================================');
       console.log('✅ Database Connected Successfully!');
@@ -67,14 +77,18 @@ const connectDB = async (): Promise<void> => {
       console.log('========================================\n');
       connectionPromise = null; // Reset connection promise on success
     } catch (error) {
-      console.error('========================================');
-      console.error('❌ Database Connection Error:');
-      console.error('========================================');
-      console.error(
-        error instanceof Error ? error.message : 'Unknown error',
-      );
-      console.error('Full error:', error);
-      console.error('========================================\n');
+      // Mongoose emits `error` on a later tick; the flag is lowered after that.
+      if (quietAttemptInFlight) setImmediate(() => { quietAttemptInFlight = false; });
+      if (!options.quietFailure) {
+        console.error('========================================');
+        console.error('❌ Database Connection Error:');
+        console.error('========================================');
+        console.error(
+          error instanceof Error ? error.message : 'Unknown error',
+        );
+        console.error('Full error:', error);
+        console.error('========================================\n');
+      }
       isConnected = false;
       connectionPromise = null; // Reset connection promise on error
 
@@ -104,6 +118,7 @@ mongoose.connection.on('disconnected', () => {
 
 mongoose.connection.on('error', (err) => {
   isConnected = false;
+  if (quietAttemptInFlight) return;
   console.error('❌ MongoDB connection error:', err);
 });
 

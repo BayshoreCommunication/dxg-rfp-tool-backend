@@ -11,9 +11,11 @@ import { mongoStaffMemberTeams, mongoTeamDirectory } from "../organizationMember
 import { proposalReferenceOwnershipMirror } from "../organizationMembers/infrastructure/proposalReferenceOwnershipMirror";
 import { createTeamAdministration } from "../teams/application/manageTeams";
 import { isValidTeamId, mongoOrganizationMemberDirectory, mongoTeamRepository } from "../teams/infrastructure/mongoTeamRepository";
+import { createStaffOrganizationBlock } from "./application/manageOrganizationBlock";
 import { createStaffMemberManagement } from "./application/manageOrganizationMembers";
 import { createStaffTeamManagement } from "./application/manageOrganizationTeams";
 import { createStaffOrganizationContent } from "./application/readOrganizationContent";
+import { mongoOrganizationBlockStore } from "./infrastructure/mongoOrganizationBlockStore";
 import { mongoStaffMemberDirectory } from "./infrastructure/mongoStaffMemberDirectory";
 import { mongoStaffOrganizationReader } from "./infrastructure/mongoStaffOrganizationReader";
 import { mongoStaffTeamDirectory } from "./infrastructure/mongoStaffTeamDirectory";
@@ -59,5 +61,13 @@ export const staffTeamManagement = createStaffTeamManagement({
   teams: staffTeamRules,
   members: mongoMembershipStore,
   memberTeams: { activeTeamIds: mongoTeamDirectory.activeTeamIds, setMemberTeams: mongoStaffMemberTeams.setMemberTeams },
+  audit: mongoSecurityAuditWriter,
+});
+
+// Staff organization block (owner decision, 2026-11-18): the marker, the organization's sessions
+// and the staff-side event commit in one transaction (infrastructure/mongoOrganizationBlockStore.ts).
+export const staffOrganizationBlock = createStaffOrganizationBlock({
+  directory: mongoStaffMemberDirectory,
+  store: mongoOrganizationBlockStore,
   audit: mongoSecurityAuditWriter,
 });

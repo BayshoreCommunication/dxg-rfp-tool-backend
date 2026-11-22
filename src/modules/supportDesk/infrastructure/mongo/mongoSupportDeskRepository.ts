@@ -6,6 +6,7 @@ import SupportAttachment from "../../../../../modal/supportAttachmentModel";
 import User from "../../../../../modal/userModel";
 import Admin from "../../../../../modal/adminModel";
 import Organization from "../../../../../modal/organizationModel";
+import { exceptOrganizations } from "../../../organizationBlock/mongoFilter";
 import type {
   SupportCannedReplyRecord,
   SupportDeskRepository,
@@ -392,9 +393,10 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
     return docs.map((doc) => ticketRecord(doc as Record<string, unknown>));
   },
 
-  async listNeedingCloseReminder(waitingBefore, limit) {
+  async listNeedingCloseReminder(waitingBefore, limit, exceptOrganizationIds) {
     // scope-exempt: the sweeper runs outside any request, across every organization
     const docs = await SupportTicket.find({
+      ...exceptOrganizations(exceptOrganizationIds),
       status: "waiting_on_customer",
       waitingSince: { $ne: null, $lte: waitingBefore },
       autoCloseReminderSentAt: null,
@@ -405,9 +407,10 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
     return docs.map((doc) => ticketRecord(doc as Record<string, unknown>));
   },
 
-  async listResolvedBefore(resolvedBefore, limit) {
+  async listResolvedBefore(resolvedBefore, limit, exceptOrganizationIds) {
     // scope-exempt: the sweeper runs outside any request, across every organization
     const docs = await SupportTicket.find({
+      ...exceptOrganizations(exceptOrganizationIds),
       status: "resolved",
       resolvedAt: { $ne: null, $lte: resolvedBefore },
     })
@@ -417,9 +420,10 @@ export const mongoSupportDeskRepository: SupportDeskRepository = {
     return docs.map((doc) => ticketRecord(doc as Record<string, unknown>));
   },
 
-  async listDueToAutoResolve(waitingBefore, remindedBefore, limit) {
+  async listDueToAutoResolve(waitingBefore, remindedBefore, limit, exceptOrganizationIds) {
     // scope-exempt: the sweeper runs outside any request, across every organization
     const docs = await SupportTicket.find({
+      ...exceptOrganizations(exceptOrganizationIds),
       status: "waiting_on_customer",
       waitingSince: { $ne: null, $lte: waitingBefore },
       autoCloseReminderSentAt: { $ne: null, $lte: remindedBefore },

@@ -6,6 +6,7 @@ import {
   correlationId,
   createSession,
   rejectInvalidBffCredential,
+  respondIfOrganizationBlocked,
 } from "./authController";
 import { authenticateWithCredentials, getAuthenticatedUserAccount } from "../src/modules/auth/composition";
 import { TwoFactorNotConfiguredError, accountIsSsoLinked, twoFactor } from "../src/modules/twoFactor/composition";
@@ -56,6 +57,8 @@ const respondWithSession = async (req: Request, res: Response, userId: string, e
   try {
     session = await createSession(req, res, user);
   } catch (error) {
+    // The organization was blocked by RFPilot staff after the first factor was accepted.
+    if (respondIfOrganizationBlocked(res, error)) return;
     if (error instanceof Error && /membership/i.test(error.message)) {
       fail(res, 403, "MEMBERSHIP_INACTIVE", "Active organization membership required");
       return;
