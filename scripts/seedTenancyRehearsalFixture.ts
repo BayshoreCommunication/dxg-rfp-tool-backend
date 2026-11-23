@@ -97,6 +97,8 @@ const PG_COLUMNS: Record<string, string[]> = {
   guidance_reports: ["id", "organization_id", "proposal_reference_id", "actor_external_user_id", "proposal_version", "overall_completeness", "correlation_id"],
   source_extraction_runs: ["id", "organization_id", "proposal_reference_id", "vendor_submission_mongo_id", "vendor_submission_version_mongo_id",
     "source_kind", "source_label", "mime_type", "source_checksum", "policy_version", "idempotency_key"],
+  historical_insight_reports: ["id", "organization_id", "current_proposal_reference_id", "actor_external_user_id", "current_proposal_version",
+    "analysis_version", "reference_summary", "section_comparisons", "insights", "privacy_summary", "correlation_id"],
   outbox_events: ["organization_id", "aggregate_type", "aggregate_id", "event_type", "idempotency_key", "payload", "status"],
   audit_events: ["id", "organization_id", "actor_external_user_id", "action", "target_type", "decision", "correlation_id"],
   expert_rules: ["id", "organization_id", "rule_key", "title", "updated_by_external_user_id"],
@@ -115,6 +117,8 @@ const buildOrganization = (input: {
   const { organizationId, pgOrganizationId } = input;
   const now = new Date();
 
+  // The first proposal reference of the last customer who has one, for the next cross-acting customer.
+  let neighbour: { referenceId: string } | null = null;
   for (let i = 0; i < input.customers; i++) {
     const userId = oid();
     const n = `${input.label}-${pad(i)}`;
@@ -153,6 +157,18 @@ const buildOrganization = (input: {
       for (let k = 0; k < 3; k++) row("audit_events", [crypto.randomUUID(), pgOrganizationId, String(userId), "rehearsal_action", "proposal", "allowed", crypto.randomUUID()]);
     }
 
+    // One customer in seven acted on another customer's proposal, as members of the shared
+    // organization could: a guidance report (plain foreign key to the reference) and a historical
+    // insight report (tied to it through organization_id) with its outbox event. All of it
+    // belongs with that proposal's owner, not with the customer who did it (finding 9).
+    if (input.legacy && projected && neighbour && i % 7 === 2) {
+      row("guidance_reports", [crypto.randomUUID(), pgOrganizationId, neighbour.referenceId, String(userId), 1, 0.5, crypto.randomUUID()]);
+      const reportId = crypto.randomUUID();
+      row("historical_insight_reports", [reportId, pgOrganizationId, neighbour.referenceId, String(userId), 1, "rehearsal", "[]", "[]", "[]", "{}", crypto.randomUUID()]);
+      row("outbox_events", [pgOrganizationId, "historical_insight_report", reportId, "rehearsal.generated", hex(12), "{}", "published"]);
+    }
+    let firstReferenceId: string | null = null;
+
     const proposals = input.legacy && i === 1 ? input.heavyProposals : PROPOSAL_COUNTS[i % PROPOSAL_COUNTS.length];
     for (let j = 0; j < proposals; j++) {
       const proposalId = oid();
@@ -182,6 +198,7 @@ const buildOrganization = (input: {
       if (!projected) continue;
       const referenceId = crypto.randomUUID();
       row("proposal_references", [referenceId, pgOrganizationId, pgUserId, String(proposalId)]);
+      firstReferenceId ??= referenceId;
       if (j % 2 === 0) {
         const conversationId = crypto.randomUUID();
         row("conversations", [conversationId, pgOrganizationId, referenceId, String(userId)]);
@@ -196,6 +213,7 @@ const buildOrganization = (input: {
           "cover_message", "cover", "text/plain", hex(32), "v1", hex(12)]);
       }
     }
+    if (firstReferenceId) neighbour = { referenceId: firstReferenceId };
   }
   return { mongo, pg };
 };
