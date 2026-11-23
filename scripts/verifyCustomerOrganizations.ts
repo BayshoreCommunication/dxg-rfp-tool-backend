@@ -7,6 +7,7 @@ import Organization from "../modal/organizationModel";
 import {
   compareVisibility,
   findCustomerLeftovers,
+  findMisplacedProposalData,
   findOrphanedProposals,
   snapshotVisibility,
   type VisibilitySnapshot,
@@ -27,8 +28,9 @@ const help = () => process.stdout.write(`Usage:
 
 The snapshot records, per active member, the proposal and vendor-response ids they can see (ids
 only, no content). Verification then proves: every member in the snapshot sees exactly the same
-ids, nothing customer-owned is left in the shared organization, and every proposal's owner is an
-active member of its organization. Exits 1 when any check fails.
+ids, nothing customer-owned is left in the shared organization, every proposal's owner is an
+active member of its organization, and every proposal's Postgres reference is in the proposal's
+organization together with its owner and the rows that name it. Exits 1 when any check fails.
 `);
 
 const main = async () => {
@@ -55,14 +57,16 @@ const main = async () => {
       : null;
     const leftovers = await findCustomerLeftovers({ organizationId: String(from._id), pool });
     const orphans = await findOrphanedProposals();
+    const misplaced = pool ? await findMisplacedProposalData({ pool }) : null;
     const checks = {
       visibilityUnchanged: visibility === null ? "skipped: pass --before=<snapshot>" : visibility.length === 0,
       noCustomerRecordsInSharedOrganization: Object.keys(leftovers.mongo).length === 0 && Object.keys(leftovers.postgres).length === 0,
       everyProposalHasAnActiveOwner: orphans.total === 0,
+      proposalDataFollowsProposal: misplaced === null ? "skipped: no Postgres connection" : misplaced.total === 0,
     };
     process.stdout.write(`${JSON.stringify({
       database: DATABASE_NAME, postgres: pool ? "checked" : "skipped", from: fromSlug, checks,
-      visibilityDifferences: visibility ?? [], leftovers, orphans,
+      visibilityDifferences: visibility ?? [], leftovers, orphans, misplacedProposalData: misplaced,
     }, null, 2)}\n`);
     if (Object.values(checks).some((ok) => ok === false)) process.exitCode = 1;
   } finally {
