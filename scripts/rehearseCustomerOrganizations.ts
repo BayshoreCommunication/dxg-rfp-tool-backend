@@ -176,6 +176,17 @@ const holdingTenantChecks = async () => {
   };
 };
 
+// Customers whose dry-run counts are not the counts the apply reported, in either store.
+const customersCountedDifferently = (dryRun: Record<string, unknown> | null, applied: Record<string, unknown> | null) => {
+  type Result = { userId: string; mongo: Record<string, number>; postgres: Record<string, number> | "skipped" };
+  const counts = (report: Record<string, unknown> | null) => new Map(((report?.results ?? []) as Result[]).map((r) => [
+    r.userId,
+    JSON.stringify([r.mongo, r.postgres].map((c) => (typeof c === "string" ? c : Object.entries(c).sort(([a], [b]) => a.localeCompare(b))))),
+  ]));
+  const [dry, real] = [counts(dryRun), counts(applied)];
+  return [...new Set([...dry.keys(), ...real.keys()])].filter((userId) => dry.get(userId) !== real.get(userId));
+};
+
 const main = async () => {
   if (args.has("--help")) return help();
   const target = targets();
@@ -224,9 +235,12 @@ const main = async () => {
     // What starting the process costs (npm, ts-node, connecting): part of every step below.
     run("00-startup", "migrate:customer-organizations", ["--help"], 0, "process start-up only");
     run("01-snapshot", "verify:customer-organizations", [`--snapshot=${snapshotFile}`]);
-    run("02-dry-run", "migrate:customer-organizations", [`--run-id=${runId}`, `--from-slug=${fromSlug}`]);
+    const dryRun = run("02-dry-run", "migrate:customer-organizations", [`--run-id=${runId}`, `--from-slug=${fromSlug}`]);
     summary.unchangedByDryRun = differences(before, await stateOf(sharedId, pool));
-    run("03-apply", "migrate:customer-organizations", ["--apply", `--run-id=${runId}`, `--from-slug=${fromSlug}`]);
+    const applied = run("03-apply", "migrate:customer-organizations", ["--apply", `--run-id=${runId}`, `--from-slug=${fromSlug}`]);
+    // The dry run has to say what the apply then does, customer by customer (finding 9: it used
+    // to count one customer's rows for two).
+    summary.dryRunDiffersFromApply = customersCountedDifferently(dryRun, applied);
     run("04-verify-after-apply", "verify:customer-organizations", [`--before=${snapshotFile}`, `--from-slug=${fromSlug}`]);
     summary.afterApply = await stateOf(sharedId, pool);
     summary.holdingTenantsAfterApply = await holdingTenantChecks();
