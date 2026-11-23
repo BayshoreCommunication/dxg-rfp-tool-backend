@@ -108,18 +108,73 @@ export const loadTenantSchema = async (client: PoolClient): Promise<TenantSchema
 };
 
 // One text value per row for its primary key, e.g. ["<uuid>"] or ["<uuid>","3"].
-const keyOf = (schema: TenantSchema, name: string) => {
+const keyOf = (schema: TenantSchema, name: string, alias?: string) => {
   const pk = schema.primaryKeys[name];
   if (!pk?.length) throw new Error(`Table ${name} has no primary key; its rows can't be journaled`);
-  return `jsonb_build_array(${pk.map((column) => `${quoteIdent(column)}::text`).join(",")})::text`;
+  return `jsonb_build_array(${pk.map((column) => `${alias ? `${alias}.` : ""}${quoteIdent(column)}::text`).join(",")})::text`;
 };
 
 const add = (counts: MoveCounts, name: string, rows: number | null) => {
   if (rows) counts[name] = (counts[name] ?? 0) + rows;
 };
 
+// Owner wins (DECISIONS.md, 2026-11-23): a proposal's Postgres data follows the proposal's owner.
+// Before one customer moves, this lists every row of the source organization that hangs off a
+// proposal reference somebody else owns: those references, then every row that points at a listed
+// row through any foreign key or by id, until nothing more is found. moveCustomerRows never moves
+// a listed row, so a row the customer did under another owner's proposal stays with that proposal,
+// and the composite-parent step can't drag that proposal after it. The list depends only on who
+// owns each reference, never on which customers have already moved.
+const PINNED = "tenant_move_pinned";
+
+const pinOtherOwnersProposalData = async (
+  client: PoolClient,
+  schema: TenantSchema,
+  input: { fromOrganizationId: string; userMongoId: string },
+): Promise<Set<string>> => {
+  // Column names no tenant table uses, so a primary key column can't be mistaken for one of these.
+  await client.query(
+    `CREATE TEMP TABLE IF NOT EXISTS ${PINNED} (pinned_table text NOT NULL, pinned_key text NOT NULL, pinned_id uuid,
+       PRIMARY KEY (pinned_table, pinned_key)) ON COMMIT DROP`,
+  );
+  await client.query(`TRUNCATE ${PINNED}`);
+  const pinnedTables = new Set<string>();
+  const pin = async (name: string, where: string, params: unknown[]) => {
+    if (STAY_TABLES.has(name)) return 0;
+    const result = await client.query(
+      `INSERT INTO ${PINNED} SELECT $2::text, ${keyOf(schema, name)}, ${schema.idTables.includes(name) ? "id" : "NULL::uuid"}
+         FROM ${table(name)} WHERE organization_id = $1 AND (${where}) ON CONFLICT DO NOTHING`,
+      [input.fromOrganizationId, name, ...params],
+    );
+    if (result.rowCount) pinnedTables.add(name);
+    return result.rowCount ?? 0;
+  };
+
+  await pin("proposal_references",
+    `NOT EXISTS (SELECT 1 FROM rfpilot.users owning_user WHERE owning_user.id = owner_user_id AND owning_user.external_mongo_id = $3)`, [input.userMongoId]);
+  for (let added = pinnedTables.size, pass = 0; added > 0; pass++) {
+    if (pass > 50) throw new Error("Tenant move did not settle after 50 passes");
+    added = 0;
+    for (const edge of schema.edges) {
+      if (STAY_TABLES.has(edge.child) || STAY_TABLES.has(edge.parent) || !pinnedTables.has(edge.parent)) continue;
+      added += await pin(edge.child,
+        `(${columns(edge.childColumns)}) IN (SELECT ${edge.parentColumns.map((column) => `parent.${quoteIdent(column)}`).join(",")} FROM ${table(edge.parent)} parent
+           WHERE parent.organization_id = $1 AND EXISTS (SELECT 1 FROM ${PINNED} WHERE pinned_table = $3 AND pinned_key = ${keyOf(schema, edge.parent, "parent")}))`,
+        [edge.parent]);
+    }
+    for (const reference of POLYMORPHIC_REFERENCES) {
+      if (!schema.tables.includes(reference.table)) continue;
+      added += await pin(reference.table,
+        `${quoteIdent(reference.column)} IN (SELECT pinned_id${reference.text ? "::text" : ""} FROM ${PINNED} WHERE pinned_id IS NOT NULL)`, []);
+    }
+  }
+  if (pinnedTables.size) await client.query(`ANALYZE ${PINNED}`);
+  return pinnedTables;
+};
+
 // Moves every row owned by one customer: their users row, their proposal references, rows they did,
-// then everything reachable along foreign keys, until nothing more moves.
+// then everything reachable along foreign keys, until nothing more moves. Rows under a proposal
+// reference another user owns never move (see pinOtherOwnersProposalData).
 export const moveCustomerRows = async (
   client: PoolClient,
   schema: TenantSchema,
@@ -128,10 +183,14 @@ export const moveCustomerRows = async (
 ): Promise<MoveCounts> => {
   const { fromOrganizationId: from, toOrganizationId: to, keys } = input;
   const counts: MoveCounts = {};
+  const pinnedTables = await pinOtherOwnersProposalData(client, schema, input);
   const update = async (name: string, where: string, params: unknown[]) => {
     if (STAY_TABLES.has(name)) return 0;
+    const notPinned = pinnedTables.has(name)
+      ? ` AND NOT EXISTS (SELECT 1 FROM ${PINNED} WHERE pinned_table = '${name.replace(/'/g, "''")}' AND pinned_key = ${keyOf(schema, name)})`
+      : "";
     const result = await client.query<{ key: string }>(
-      `UPDATE ${table(name)} SET organization_id = $1 WHERE organization_id = $2 AND (${where})${keys ? ` RETURNING ${keyOf(schema, name)} AS key` : ""}`,
+      `UPDATE ${table(name)} SET organization_id = $1 WHERE organization_id = $2 AND (${where})${notPinned}${keys ? ` RETURNING ${keyOf(schema, name)} AS key` : ""}`,
       [to, from, ...params],
     );
     add(counts, name, result.rowCount);
