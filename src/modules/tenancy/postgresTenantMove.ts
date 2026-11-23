@@ -125,7 +125,9 @@ const add = (counts: MoveCounts, name: string, rows: number | null) => {
 // and every parent a listed row is tied to through organization_id, until nothing more is found.
 // moveCustomerRows never moves a listed row, so a row the customer did under another owner's
 // proposal stays with that proposal, and nothing can drag that proposal after it. The list
-// depends only on who owns each reference, never on which customers have already moved.
+// depends only on who owns each reference, never on which customers have already moved: a row
+// that hangs by a plain foreign key off data that has already left for a third organization is
+// listed too, exactly as it was while that data was still here.
 const PINNED = "tenant_move_pinned";
 // A customer's users row and proposal references move by ownership only, never as some row's parent.
 const ANCHOR_TABLES = new Set(["users", "proposal_references"]);
@@ -135,10 +137,16 @@ const pointsAtMoved = (edge: Edge) =>
 const isPointedAtByMoved = (edge: Edge) =>
   `(${columns(edge.parentColumns)}) IN (SELECT ${columns(edge.childColumns)} FROM ${table(edge.child)} WHERE organization_id = $1)`;
 
+// Plain (one-column-set, no organization_id) foreign keys whose parent is a customer's own row.
+// Parents in STAY_TABLES are DXG's shared corpus and configuration, which rows in any
+// organization may legitimately name.
+export const plainParentEdges = (schema: TenantSchema): Edge[] =>
+  schema.edges.filter((edge) => !edge.composite && !STAY_TABLES.has(edge.parent));
+
 const pinOtherOwnersProposalData = async (
   client: PoolClient,
   schema: TenantSchema,
-  input: { fromOrganizationId: string; userMongoId: string },
+  input: { fromOrganizationId: string; toOrganizationId: string; userMongoId: string },
 ): Promise<Set<string>> => {
   // Column names no tenant table uses, so a primary key column can't be mistaken for one of these.
   await client.query(
@@ -151,7 +159,7 @@ const pinOtherOwnersProposalData = async (
     if (STAY_TABLES.has(name)) return 0;
     const result = await client.query(
       `INSERT INTO ${PINNED} SELECT $2::text, ${keyOf(schema, name)}, ${schema.idTables.includes(name) ? "id" : "NULL::uuid"}
-         FROM ${table(name)} WHERE organization_id = $1 AND (${where}) ON CONFLICT DO NOTHING`,
+         FROM ${table(name)} moving WHERE moving.organization_id = $1 AND (${where}) ON CONFLICT DO NOTHING`,
       [input.fromOrganizationId, name, ...params],
     );
     if (result.rowCount) pinnedTables.add(name);
@@ -164,6 +172,15 @@ const pinOtherOwnersProposalData = async (
 
   await pin("proposal_references",
     `NOT EXISTS (SELECT 1 FROM rfpilot.users owning_user WHERE owning_user.id = owner_user_id AND owning_user.external_mongo_id = $3)`, [input.userMongoId]);
+  // Another owner's data that has already left: whatever still hangs off it by a plain foreign key
+  // stays here, as it did while that data was here. (A composite key can't span organizations.)
+  for (const edge of plainParentEdges(schema)) {
+    if (STAY_TABLES.has(edge.child)) continue;
+    await pin(edge.child,
+      `EXISTS (SELECT 1 FROM ${table(edge.parent)} elsewhere WHERE elsewhere.organization_id NOT IN ($1, $3::uuid)
+         AND ${edge.childColumns.map((column, i) => `elsewhere.${quoteIdent(edge.parentColumns[i])} = moving.${quoteIdent(column)}`).join(" AND ")})`,
+      [input.toOrganizationId]);
+  }
   for (let added = pinnedTables.size, pass = 0; added > 0; pass++) {
     if (pass > 50) throw new Error("Tenant move did not settle after 50 passes");
     added = 0;
@@ -252,6 +269,108 @@ export const moveCustomerRows = async (
     }
   }
   return counts;
+};
+
+type CrossOwnerRows = { rows: number; byTable: Record<string, number>; sample: Array<{ table: string; key: string; owners: string[] }> };
+export type CrossOwnerCompositeTies = CrossOwnerRows & {
+  references: number;
+  // The known way in: an extraction run that reuses a run made for another owner's proposal.
+  reusedExtractionRunsAcrossOwners: number;
+};
+export type CrossOwnerTies = { crossOwnerCompositeTies: CrossOwnerCompositeTies; rowsUnderTwoOwners: CrossOwnerRows };
+
+// Rows of one organization reached from the references of two or more owners. With
+// compositeOnly, each reference's unit is walked exactly as step 1 of moveCustomerRows walks it
+// (foreign keys that include organization_id, both ways). Without, plain foreign keys are
+// followed downwards as well, which is everything that hangs off a reference.
+const UNITS = "tenant_move_units";
+const rowsOfSeveralOwners = async (
+  client: PoolClient, schema: TenantSchema, input: { organizationId: string; compositeOnly: boolean; sampleSize: number },
+): Promise<CrossOwnerRows & { references: number }> => {
+  await client.query(
+    `CREATE TEMP TABLE IF NOT EXISTS ${UNITS} (unit_table text NOT NULL, unit_key text NOT NULL, unit_owner uuid NOT NULL,
+       PRIMARY KEY (unit_table, unit_key, unit_owner)) ON COMMIT DROP`,
+  );
+  await client.query(`DELETE FROM ${UNITS}`);
+  const labelled = new Set<string>();
+  // `tied` rows take the owners of the `other` rows they share a key with.
+  const label = async (tied: string, tiedColumns: string[], other: string, otherColumns: string[]) => {
+    const result = await client.query(
+      `INSERT INTO ${UNITS} SELECT DISTINCT $2::text, ${keyOf(schema, tied, "tied")}, unit.unit_owner
+         FROM ${table(tied)} tied
+         JOIN ${table(other)} other ON other.organization_id = $1
+          AND ${tiedColumns.map((column, i) => `other.${quoteIdent(otherColumns[i])} = tied.${quoteIdent(column)}`).join(" AND ")}
+         JOIN ${UNITS} unit ON unit.unit_table = $3 AND unit.unit_key = ${keyOf(schema, other, "other")}
+        WHERE tied.organization_id = $1 ON CONFLICT DO NOTHING`,
+      [input.organizationId, tied, other],
+    );
+    if (result.rowCount) labelled.add(tied);
+    return result.rowCount ?? 0;
+  };
+  const seeded = await client.query(
+    `INSERT INTO ${UNITS} SELECT 'proposal_references', ${keyOf(schema, "proposal_references", "tied")}, tied.owner_user_id
+       FROM rfpilot.proposal_references tied WHERE tied.organization_id = $1`,
+    [input.organizationId],
+  );
+  if (seeded.rowCount) labelled.add("proposal_references");
+  for (let added = seeded.rowCount ?? 0, pass = 0; added > 0; pass++) {
+    if (pass > 50) throw new Error("Proposal units did not settle after 50 passes");
+    added = 0;
+    for (const edge of schema.edges) {
+      if (STAY_TABLES.has(edge.child) || STAY_TABLES.has(edge.parent) || (input.compositeOnly && !edge.composite)) continue;
+      if (labelled.has(edge.parent)) added += await label(edge.child, edge.childColumns, edge.parent, edge.parentColumns);
+      if (edge.composite && labelled.has(edge.child) && !ANCHOR_TABLES.has(edge.parent)) added += await label(edge.parent, edge.parentColumns, edge.child, edge.childColumns);
+    }
+  }
+  const several = `SELECT unit_table, unit_key FROM ${UNITS} GROUP BY unit_table, unit_key HAVING count(*) > 1`;
+  const byTable: Record<string, number> = {};
+  for (const row of (await client.query<{ unit_table: string; rows: string }>(`SELECT unit_table, count(*) AS rows FROM (${several}) tied GROUP BY unit_table ORDER BY 1`)).rows) {
+    byTable[row.unit_table] = Number(row.rows);
+  }
+  const sample = await client.query<{ unit_table: string; unit_key: string; owners: string[] }>(
+    `SELECT unit.unit_table, unit.unit_key, array_agg(DISTINCT coalesce(owning_user.external_mongo_id::text, unit.unit_owner::text)) AS owners
+       FROM ${UNITS} unit JOIN (${several}) tied USING (unit_table, unit_key)
+       LEFT JOIN rfpilot.users owning_user ON owning_user.id = unit.unit_owner AND owning_user.organization_id = $1
+      GROUP BY unit.unit_table, unit.unit_key ORDER BY 1, 2 LIMIT $2`,
+    [input.organizationId, input.sampleSize],
+  );
+  return {
+    references: seeded.rowCount ?? 0,
+    rows: Object.values(byTable).reduce((sum, n) => sum + n, 0),
+    byTable,
+    sample: sample.rows.map((row) => ({ table: row.unit_table, key: row.unit_key, owners: row.owners })),
+  };
+};
+
+// Pre-flight for one organization, before any customer moves. Owners in the samples are MongoDB
+// user ids. Writes only its own temporary table.
+// - crossOwnerCompositeTies: rows the database ties, through foreign keys that include
+//   organization_id, to the references of two different owners. Such a row cannot follow both, so
+//   both of those customers' moves fail on a foreign key and neither can leave (nothing is
+//   misplaced).
+// - rowsUnderTwoOwners: every row that hangs off two owners' references by any foreign key (the
+//   rows above included). The others move without an error but end up apart from one parent, or
+//   stay behind, and the verifier then reports them.
+export const findCrossOwnerCompositeTies = async (
+  client: PoolClient,
+  schema: TenantSchema,
+  input: { organizationId: string; sampleSize?: number },
+): Promise<CrossOwnerTies> => {
+  const sampleSize = input.sampleSize ?? 20;
+  const composite = await rowsOfSeveralOwners(client, schema, { organizationId: input.organizationId, compositeOnly: true, sampleSize });
+  const { references: _references, ...any } = await rowsOfSeveralOwners(client, schema, { organizationId: input.organizationId, compositeOnly: false, sampleSize });
+  void _references;
+  const reused = schema.tables.includes("source_extraction_runs")
+    ? Number((await client.query<{ rows: string }>(
+        `SELECT count(*) AS rows FROM rfpilot.source_extraction_runs run
+           JOIN rfpilot.source_extraction_runs reused ON reused.organization_id = run.organization_id AND reused.id = run.reused_from_run_id
+           JOIN rfpilot.proposal_references mine ON mine.id = run.proposal_reference_id
+           JOIN rfpilot.proposal_references theirs ON theirs.id = reused.proposal_reference_id
+          WHERE run.organization_id = $1 AND mine.owner_user_id <> theirs.owner_user_id`,
+        [input.organizationId],
+      )).rows[0].rows)
+    : 0;
+  return { crossOwnerCompositeTies: { ...composite, reusedExtractionRunsAcrossOwners: reused }, rowsUnderTwoOwners: any };
 };
 
 // Moves exactly the rows a journaled move recorded, and nothing else (ORG-110 rollback, and the

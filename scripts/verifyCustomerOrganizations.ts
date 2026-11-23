@@ -6,6 +6,7 @@ import { DATABASE_NAME } from "../config/db";
 import Organization from "../modal/organizationModel";
 import {
   compareVisibility,
+  findCrossOwnerTies,
   findCustomerLeftovers,
   findMisplacedProposalData,
   findOrphanedProposals,
@@ -32,7 +33,10 @@ The snapshot records, per active member, the proposal and vendor-response ids th
 only, no content). Verification then proves: every member in the snapshot sees exactly the same
 ids, nothing customer-owned is left in the shared organization, every proposal's owner is an
 active member of its organization, and every proposal's Postgres reference is in the proposal's
-organization together with its owner and the rows that name it. Exits 1 when any check fails.
+organization together with its owner, every row with the parent it hangs off. Exits 1 when any
+check fails. The report's preflight counts rows in the shared organization that hang off two
+owners' proposals: crossOwnerCompositeTies.rows (those customers' moves fail) and
+rowsUnderTwoOwners.rows (rows that end up apart from a parent). Both must be 0 before an apply.
 `);
 
 const main = async () => {
@@ -60,10 +64,13 @@ const main = async () => {
     const leftovers = await findCustomerLeftovers({ organizationId: String(from._id), pool });
     const orphans = await findOrphanedProposals();
     const misplaced = pool ? await findMisplacedProposalData({ pool }) : null;
+    // Pre-flight, not a check: before the apply both counts have to be 0 (ORG_TENANCY_CUTOVER.md, go/no-go).
+    const ties = pool ? await findCrossOwnerTies({ pool, organizationId: String(from._id) }) : null;
     const checks = verificationChecks({ visibility, leftovers, orphans, misplaced });
     process.stdout.write(`${JSON.stringify({
       database: DATABASE_NAME, postgres: pool ? "checked" : "skipped", from: fromSlug, checks,
       visibilityDifferences: visibility ?? [], leftovers, orphans, misplacedProposalData: misplaced,
+      preflight: ties ?? { skipped: pool ? `'${fromSlug}' has no row in Postgres` : "no Postgres connection" },
     }, null, 2)}\n`);
     if (verificationFailed(checks)) process.exitCode = 1;
   } finally {
