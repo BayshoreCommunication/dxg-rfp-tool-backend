@@ -329,3 +329,50 @@ test("a placement whose checks fail is rolled back and reported as an error", as
   assert.equal(await OrganizationMembership.exists({ organizationId: second.organizationId, userId: legacy.gus.userId }), null);
   await Proposal.collection.deleteOne({ _id: stray });
 });
+
+// What the tenancy migration left behind before 2026-11-23 (ORG_TENANCY_REHEARSAL.md, finding 9):
+// a holding tenant holding another customer's proposal reference, dragged in by a row its own
+// customer did under that proposal. Placement used to carry all of it into the target
+// organization. Now a reference moves only with its owner, so it stays behind with everything
+// under it, the placement's own leftover check fails, and the placement is rolled back.
+test("another owner's proposal data in a holding tenant never reaches the target organization", async () => {
+  const pool = postgresPool();
+  const gus = legacy.gus;
+  const otherUserMongoId = randomMongoId();
+  const otherOrg = (await pool.query<{ id: string }>("INSERT INTO rfpilot.organizations(external_mongo_id,name) VALUES($1,$2) RETURNING id", [randomMongoId(), "Other customer's holding"])).rows[0].id;
+  const otherUser = (await pool.query<{ id: string }>("INSERT INTO rfpilot.users(organization_id,external_mongo_id) VALUES($1,$2) RETURNING id", [otherOrg, otherUserMongoId])).rows[0].id;
+  const strayRef = (await pool.query<{ id: string }>("INSERT INTO rfpilot.proposal_references(organization_id,owner_user_id,external_mongo_id) VALUES($1,$2,$3) RETURNING id", [gus.pgOrg, otherUser, randomMongoId()])).rows[0].id;
+  const conversation = randomUUID();
+  await pool.query("INSERT INTO rfpilot.conversations(id,organization_id,proposal_reference_id,owner_external_user_id) VALUES($1,$2,$3,$4)", [conversation, gus.pgOrg, strayRef, otherUserMongoId]);
+  // The row Gus did under it, tied to the reference through organization_id.
+  const report = randomUUID();
+  await pool.query(
+    `INSERT INTO rfpilot.historical_insight_reports(id,organization_id,current_proposal_reference_id,actor_external_user_id,current_proposal_version,analysis_version,reference_summary,section_comparisons,insights,privacy_summary,correlation_id)
+     VALUES($1,$2,$3,$4,1,'v1','[]','[]','[]','{}',$5)`, [report, gus.pgOrg, strayRef, String(gus.userId), randomUUID()]);
+  const pgTarget = await pgOrganization(second.organizationId);
+  const targetReferences = await pgReferences(pgTarget);
+  const pgOrgOf = async (table: string, id: string) => (await pool.query<{ organization_id: string }>(`SELECT organization_id FROM rfpilot.${table} WHERE id=$1`, [id])).rows[0]?.organization_id;
+  try {
+    const res = await api(adminToken, "POST", `/${gus.userId}/placements`, { target: "existing", organizationId: second.organizationId, role: "planner" });
+    assert.equal(res.status, 409, JSON.stringify(res.body));
+    assert.equal(res.body.code, "PLACEMENT_VERIFICATION_FAILED");
+    assert.equal(res.body.details.rolledBack, true);
+    // Left behind when Gus moved, and reported.
+    assert.deepEqual(res.body.details.verification.holdingLeftovers.postgres, { conversations: 1, historical_insight_reports: 1, proposal_references: 1 });
+    for (const [table, id] of [["proposal_references", strayRef], ["conversations", conversation], ["historical_insight_reports", report]] as const) {
+      assert.equal(await pgOrgOf(table, id), gus.pgOrg, `${table} never left the holding tenant`);
+    }
+    assert.equal(await pgReferences(await pgOrganization(second.organizationId)), targetReferences, "the target organization gained no reference");
+    // Rolled back: Gus and Gus's own proposal are in the holding tenant again.
+    assert.equal(await ownedIn(gus.holding, gus.userId), 1);
+    assert.equal(await pgReferences(gus.pgOrg!), 2);
+    assert.equal((await Organization.findById(gus.holding).lean())?.status, "active");
+    assert.equal(await OrganizationMembership.exists({ organizationId: second.organizationId, userId: gus.userId }), null);
+  } finally {
+    await pool.query("DELETE FROM rfpilot.historical_insight_reports WHERE id=$1", [report]);
+    await pool.query("DELETE FROM rfpilot.conversations WHERE id=$1", [conversation]);
+    await pool.query("DELETE FROM rfpilot.proposal_references WHERE id=$1", [strayRef]);
+    await pool.query("DELETE FROM rfpilot.users WHERE id=$1", [otherUser]);
+    await pool.query("DELETE FROM rfpilot.organizations WHERE id=$1", [otherOrg]);
+  }
+});

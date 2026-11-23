@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import type { Pool } from "pg";
+import Organization from "../../../modal/organizationModel";
 import OrganizationMembership from "../../../modal/organizationMembershipModel";
 import Proposal from "../../../modal/proposalsModel";
 import User from "../../../modal/userModel";
@@ -8,11 +9,12 @@ import { rfpListScope } from "../identity/domain/rfpAccessPolicy";
 import { resolveRfpActor } from "../identity/application/resolveRfpActor";
 import { mongoActorLookups } from "../identity/application/mongoActorLookups";
 import { STAFF_ROLES } from "./customerOrganizationMigration";
-import { STAY_TABLES } from "./postgresTenantMove";
+import { STAY_TABLES, findCrossOwnerCompositeTies, loadTenantSchema, plainParentEdges, type CrossOwnerTies, type TenantSchema } from "./postgresTenantMove";
 
-// ORG-109: proves the customer organization migration (ORG-107) lost nobody's access. Three checks:
+// ORG-109: proves the customer organization migration (ORG-107) lost nobody's access. Four checks:
 // every customer sees exactly what they saw before, nothing customer-owned is left in the shared
-// organization, and every proposal's owner is an active member of its organization.
+// organization, every proposal's owner is an active member of its organization, and every
+// proposal's Postgres data is in the proposal's organization.
 
 export type UserVisibility = { userId: string; organizationId: string; proposals: string[]; vendorResponses: string[] };
 export type VisibilitySnapshot = { takenAt: string; users: UserVisibility[] };
@@ -132,6 +134,176 @@ export const findCustomerLeftovers = async (input: { organizationId: string; poo
   }
   return { mongo, postgres };
 };
+
+export type MisplacedProposalData = {
+  // What the check read. A run that read no organization or no reference proved nothing.
+  checked: { organizations: number; references: number; proposals: number };
+  // Why the check proved nothing, when it read nothing it could judge; null when it read.
+  notRead: string | null;
+  total: number;
+  // A proposal's reference row is in a different organization than the proposal (MongoDB).
+  referenceNotWithProposal: Array<{ proposalId: string; proposalOrganizationId: string | null; referenceOrganizationId: string }>;
+  // A reference's owner (rfpilot.users) is in a different organization than the reference; null
+  // when the owner's row is in no organization MongoDB knows.
+  ownerNotWithReference: Array<{ proposalId: string; referenceOrganizationId: string; ownerOrganizationId: string | null }>;
+  // Rows whose parent, by a plain foreign key, is not in their own organization: a message apart
+  // from its conversation, a job apart from its reference, and so on down every chain.
+  rowsNotWithParent: Array<{ organizationId: string; table: string; parent: string; rows: number }>;
+};
+
+type ReferencePlacement = {
+  organizationsRead: number;
+  references: Array<{ proposalId: string; ownerUserId: string; organizationId: string }>;
+  // rfpilot.users id -> the organization (MongoDB id) its row is in.
+  userOrganization: Map<string, string>;
+  rowsNotWithParent: MisplacedProposalData["rowsNotWithParent"];
+};
+
+// The plain foreign keys whose two ends must be in one organization. Composite keys can't be
+// split (the database refuses), parents in STAY_TABLES are DXG's shared corpus, and a reference
+// apart from its owner is reported by proposal id instead.
+export const parentEdgesToCheck = (schema: TenantSchema) =>
+  plainParentEdges(schema).filter((edge) => !(edge.child === "proposal_references" && edge.parent === "users"));
+
+const quoted = (name: string) => `"${name.replace(/"/g, '""')}"`;
+
+// Where every proposal reference and every users row is, and which rows are apart from a parent,
+// read one organization at a time. Tenant tables force row-level security, so the table owner
+// sees no row until the session names an organization, the way findCustomerLeftovers names one.
+// That is also how a split is found: a child in this organization whose parent is not found in
+// this organization. Every query also filters on the organization, so a superuser (who bypasses
+// the policies) reads the same.
+export const readReferencePlacement = async (input: { pool: Pool; organizationIds: string[] }): Promise<ReferencePlacement> => {
+  const placement: ReferencePlacement = { organizationsRead: 0, references: [], userOrganization: new Map(), rowsNotWithParent: [] };
+  const client = await input.pool.connect();
+  try {
+    await client.query("BEGIN READ ONLY");
+    const edges = parentEdgesToCheck(await loadTenantSchema(client));
+    for (const organizationId of input.organizationIds) {
+      await client.query("SELECT set_config('app.organization_mongo_id',$1,true)", [organizationId]);
+      const pg = (await client.query<{ id: string }>("SELECT id FROM rfpilot.organizations WHERE external_mongo_id = $1", [organizationId])).rows[0]?.id;
+      if (!pg) continue;
+      placement.organizationsRead += 1;
+      await client.query("SELECT set_config('app.organization_id',$1,true)", [pg]);
+      for (const row of (await client.query<{ id: string }>("SELECT id FROM rfpilot.users WHERE organization_id = $1", [pg])).rows) placement.userOrganization.set(row.id, organizationId);
+      const references = await client.query<{ external_mongo_id: string; owner_user_id: string }>(
+        "SELECT external_mongo_id, owner_user_id FROM rfpilot.proposal_references WHERE organization_id = $1", [pg],
+      );
+      for (const row of references.rows) placement.references.push({ proposalId: row.external_mongo_id, ownerUserId: row.owner_user_id, organizationId });
+      if (edges.length) {
+        const apart = await client.query<{ edge: number; rows: string }>(
+          edges.map((edge, i) => `SELECT ${i}::int AS edge, count(*) AS rows FROM rfpilot.${quoted(edge.child)} child
+             WHERE child.organization_id = $1 AND ${edge.childColumns.map((column) => `child.${quoted(column)} IS NOT NULL`).join(" AND ")}
+               AND NOT EXISTS (SELECT 1 FROM rfpilot.${quoted(edge.parent)} parent WHERE parent.organization_id = $1
+                 AND ${edge.childColumns.map((column, k) => `parent.${quoted(edge.parentColumns[k])} = child.${quoted(column)}`).join(" AND ")})`).join(" UNION ALL "),
+          [pg],
+        );
+        for (const row of apart.rows) {
+          if (Number(row.rows)) placement.rowsNotWithParent.push({ organizationId, table: edges[row.edge].child, parent: edges[row.edge].parent, rows: Number(row.rows) });
+        }
+      }
+    }
+    await client.query("ROLLBACK");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+  return placement;
+};
+
+// proposalOrganization: for each proposal that exists in MongoDB, the organization it is in.
+// mongoProposals: how many proposals MongoDB holds in all.
+export const compareReferencePlacement = (
+  placement: ReferencePlacement, proposalOrganization: Map<string, string | null>, options: { mongoProposals: number; sampleSize?: number },
+): MisplacedProposalData => {
+  const referenceNotWithProposal: MisplacedProposalData["referenceNotWithProposal"] = [];
+  const ownerNotWithReference: MisplacedProposalData["ownerNotWithReference"] = [];
+  for (const reference of placement.references) {
+    // A reference whose proposal was deleted from MongoDB has nothing to be compared with.
+    if (proposalOrganization.has(reference.proposalId) && proposalOrganization.get(reference.proposalId) !== reference.organizationId) {
+      referenceNotWithProposal.push({ proposalId: reference.proposalId, proposalOrganizationId: proposalOrganization.get(reference.proposalId) ?? null, referenceOrganizationId: reference.organizationId });
+    }
+    const ownerOrganizationId = placement.userOrganization.get(reference.ownerUserId) ?? null;
+    if (ownerOrganizationId !== reference.organizationId) {
+      ownerNotWithReference.push({ proposalId: reference.proposalId, referenceOrganizationId: reference.organizationId, ownerOrganizationId });
+    }
+  }
+  // Reading nothing is not passing: the wrong database, or a role the policies hide every row from.
+  const notRead = placement.organizationsRead === 0
+    ? "no organization known to MongoDB was found in Postgres, so nothing was read"
+    : placement.references.length === 0 && options.mongoProposals > 0
+      ? `no proposal reference was read in Postgres although MongoDB holds ${options.mongoProposals} proposals`
+      : null;
+  const sampleSize = options.sampleSize ?? 50;
+  return {
+    checked: { organizations: placement.organizationsRead, references: placement.references.length, proposals: proposalOrganization.size },
+    notRead,
+    total: referenceNotWithProposal.length + ownerNotWithReference.length + placement.rowsNotWithParent.reduce((sum, row) => sum + row.rows, 0),
+    referenceNotWithProposal: referenceNotWithProposal.slice(0, sampleSize),
+    ownerNotWithReference: ownerNotWithReference.slice(0, sampleSize),
+    rowsNotWithParent: placement.rowsNotWithParent.slice(0, sampleSize),
+  };
+};
+
+// A proposal's Postgres data follows the proposal (DECISIONS.md, 2026-11-23): the reference row
+// sits in the proposal's organization, with its owner, and every row is with the parent it hangs
+// off. The migration once put one customer's reference and AI data in another customer's holding
+// tenant, and no other check saw it: visibility reads MongoDB, and the owner foreign key is one
+// column. Organization ids in the result are MongoDB ids. Lists are capped at sampleSize; total
+// is not.
+export const findMisplacedProposalData = async (input: { pool: Pool; sampleSize?: number }): Promise<MisplacedProposalData> => {
+  const organizationIds = (await Organization.collection.find({}, { projection: { _id: 1 } }).toArray()).map((o) => String(o._id));
+  const placement = await readReferencePlacement({ pool: input.pool, organizationIds });
+  const proposalOrganization = new Map<string, string | null>();
+  const ids = [...new Set(placement.references.map((r) => r.proposalId))];
+  for (let i = 0; i < ids.length; i += 5000) {
+    const found = await Proposal.collection
+      .find({ _id: { $in: ids.slice(i, i + 5000).map((id) => new mongoose.Types.ObjectId(id)) } }, { projection: { organizationId: 1 } })
+      .toArray();
+    for (const proposal of found) proposalOrganization.set(String(proposal._id), proposal.organizationId ? String(proposal.organizationId) : null);
+  }
+  return compareReferencePlacement(placement, proposalOrganization, { mongoProposals: await Proposal.collection.estimatedDocumentCount(), sampleSize: input.sampleSize });
+};
+
+// Pre-flight, read before the apply: rows in one organization (the shared one) that hang off two
+// owners' references. null when the organization has no row in Postgres. See
+// findCrossOwnerCompositeTies in postgresTenantMove.ts. The transaction is always rolled back; it
+// is not READ ONLY only because Postgres refuses to create the temporary work table in one.
+export const findCrossOwnerTies = async (input: { pool: Pool; organizationId: string; sampleSize?: number }): Promise<CrossOwnerTies | null> => {
+  const client = await input.pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT set_config('app.organization_mongo_id',$1,true)", [input.organizationId]);
+    const pg = (await client.query<{ id: string }>("SELECT id FROM rfpilot.organizations WHERE external_mongo_id = $1", [input.organizationId])).rows[0]?.id;
+    let ties: CrossOwnerTies | null = null;
+    if (pg) {
+      await client.query("SELECT set_config('app.organization_id',$1,true)", [pg]);
+      ties = await findCrossOwnerCompositeTies(client, await loadTenantSchema(client), { organizationId: pg, sampleSize: input.sampleSize });
+    }
+    await client.query("ROLLBACK");
+    return ties;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+type Leftovers = { mongo: Record<string, number>; postgres: Record<string, number> };
+// The verifier's verdict, one entry per check: true, false, or why it was skipped. Any false
+// fails the run (exit 1).
+export const verificationChecks = (input: {
+  visibility: VisibilityDifference[] | null; leftovers: Leftovers; orphans: { total: number }; misplaced: Pick<MisplacedProposalData, "total" | "notRead"> | null;
+}) => ({
+  visibilityUnchanged: input.visibility === null ? "skipped: pass --before=<snapshot>" : input.visibility.length === 0,
+  noCustomerRecordsInSharedOrganization: Object.keys(input.leftovers.mongo).length === 0 && Object.keys(input.leftovers.postgres).length === 0,
+  everyProposalHasAnActiveOwner: input.orphans.total === 0,
+  proposalDataFollowsProposal: input.misplaced === null ? "skipped: no Postgres connection" : input.misplaced.total === 0 && input.misplaced.notRead === null,
+});
+export const verificationFailed = (checks: Record<string, boolean | string>) => Object.values(checks).some((ok) => ok === false);
 
 // Proposals whose owner has no active membership in the proposal's organization. Run after the
 // migration and nightly (PRD metric "orphaned RFPs = 0").
