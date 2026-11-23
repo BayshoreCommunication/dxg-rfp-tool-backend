@@ -16,13 +16,15 @@ import Proposal from '../modal/proposalsModel';
 import User from '../modal/userModel';
 import { closePostgres, postgresPool } from '../config/postgres';
 import { migrateCustomerOrganizations, rollbackCustomerOrganizations } from '../src/modules/tenancy/customerOrganizationMigration';
-import { findCustomerLeftovers, findMisplacedProposalData, findOrphanedProposals, verificationChecks, verificationFailed } from '../src/modules/tenancy/migrationVerification';
+import { findCrossOwnerTies, findCustomerLeftovers, findMisplacedProposalData, findOrphanedProposals, verificationChecks, verificationFailed } from '../src/modules/tenancy/migrationVerification';
 import { findIntegrityViolations, loadTenantSchema, type MoveCounts } from '../src/modules/tenancy/postgresTenantMove';
 
 const OWNER_ROLE = 'rfpilot_owner_wins_probe';
 const OWNER_PASSWORD = crypto.randomBytes(12).toString('hex');
 const tag = randomMongoId().slice(0, 10);
 const fromSlug = `intg-owner-wins-${tag}`;
+const tiedSlug = `intg-owner-ties-${tag}`;
+const JOURNAL = 'customerorganizationmigrations';
 const oid = () => new mongoose.Types.ObjectId();
 const uuid = () => crypto.randomUUID();
 
@@ -32,6 +34,9 @@ let ownerPool: Pool;
 let ownedTables: string[] = [];
 const ids = { shared: oid(), a: oid(), b: oid(), staff: oid(), aProposals: [oid(), oid()], bProposal: oid(), staffProposal: oid() };
 const pg = { shared: '', a: '', b: '', staff: '', aRefs: ['', ''], bRef: '', staffRef: '' };
+// A second shared organization: C's extraction run reuses the run made for D's proposal, which the
+// database ties together through organization_id. E has nothing to do with either.
+const tied = { shared: oid(), c: oid(), d: oid(), e: oid(), proposals: { c: oid(), d: oid(), e: oid() }, pgShared: '', runs: { c: '', d: '' } };
 // Every Postgres row the test seeds: how to find it, and whose organization it must end up in.
 const seeded: Record<string, { table: string; key: Record<string, string>; home: Home }> = {};
 
@@ -173,11 +178,44 @@ const seedPostgres = async () => {
     { aggregate_type: 'historical_insight_report', aggregate_id: aOnB, event_type: 'test.generated', idempotency_key: `owner-wins-${uuid()}`, payload: '{}', status: 'published' });
   // Hangs off A's report by a plain foreign key and is tied to B's reference by a composite one.
   await cites('A insight cites B proposal', 'b', aInsight, pg.bRef, 2);
+  // Hangs off A's reference and off B's conversation, by plain foreign keys only: it can follow
+  // neither without leaving the other, so it stays, whoever moves first.
+  await insert('question under A reference and B conversation', 'shared', 'clarification_questions',
+    { proposal_reference_id: pg.aRefs[0], conversation_id: bConversation, issue_code: 'test', severity: 'question', prompt: 'Which?' });
   // B acted on A's proposal.
   await guidance('B guidance on A proposal', 'a', pg.aRefs[0], ids.b);
   // A acted on a proposal DXG staff own: it stays in the shared organization with that proposal.
   await guidance('A guidance on staff proposal', 'shared', pg.staffRef, ids.a);
   await audit('staff audit event', 'shared', ids.staff);
+};
+
+const seedTied = async () => {
+  await Organization.collection.insertOne({ _id: tied.shared, name: 'Tied', slug: tiedSlug, status: 'active', kind: 'customer', plan: 'free_trial' });
+  const pool = postgresPool();
+  tied.pgShared = (await pool.query<{ id: string }>('INSERT INTO rfpilot.organizations(external_mongo_id,name) VALUES($1,$2) RETURNING id', [String(tied.shared), 'Tied'])).rows[0].id;
+  const references: Record<string, string> = {};
+  for (const who of ['c', 'd', 'e'] as const) {
+    await User.collection.insertOne({ _id: tied[who], organizationId: tied.shared, name: who, email: `${who}-${tag}@example.test`, password: 'not-a-real-hash', role: 'customer', isBlocked: false });
+    await OrganizationMembership.collection.insertOne({ organizationId: tied.shared, userId: tied[who], roles: ['planner'], status: 'active', version: 1 });
+    await Proposal.create({ _id: tied.proposals[who], organizationId: tied.shared, userId: tied[who], event: { eventName: `${who} event` } });
+    const user = (await pool.query<{ id: string }>('INSERT INTO rfpilot.users(organization_id,external_mongo_id) VALUES($1,$2) RETURNING id', [tied.pgShared, String(tied[who])])).rows[0].id;
+    references[who] = (await pool.query<{ id: string }>('INSERT INTO rfpilot.proposal_references(organization_id,owner_user_id,external_mongo_id) VALUES($1,$2,$3) RETURNING id', [tied.pgShared, user, String(tied.proposals[who])])).rows[0].id;
+  }
+  const run = async (reference: string, reusedFrom: string | null) =>
+    (await pool.query<{ id: string }>(`INSERT INTO rfpilot.source_extraction_runs(id,organization_id,proposal_reference_id,vendor_submission_mongo_id,vendor_submission_version_mongo_id,source_kind,source_label,mime_type,source_checksum,policy_version,idempotency_key,reused_from_run_id)
+      VALUES($1,$2,$3,$4,$5,'cover_message','cover','text/plain',$6,'v1',$7,$8) RETURNING id`,
+      [uuid(), tied.pgShared, reference, randomMongoId(), randomMongoId(), crypto.randomBytes(32).toString('hex'), `owner-ties-${uuid()}`, reusedFrom])).rows[0].id;
+  // The reuse lookup is organization-wide by checksum, so C's run can reuse the one made for D.
+  tied.runs.d = await run(references.d, null);
+  tied.runs.c = await run(references.c, tied.runs.d);
+  await run(references.e, null);
+};
+const tiedRows = async () => {
+  const counts: Record<string, number> = {};
+  for (const name of ['users', 'proposal_references', 'source_extraction_runs']) {
+    counts[name] = Number((await postgresPool().query(`SELECT count(*) FROM rfpilot."${name}" WHERE organization_id=$1`, [tied.pgShared])).rows[0].count);
+  }
+  return counts;
 };
 
 before(async () => {
@@ -195,6 +233,7 @@ before(async () => {
   ownerPool = new Pool({ connectionString: `postgres://${OWNER_ROLE}:${OWNER_PASSWORD}@localhost:55432/rfpilot_test`, max: 2 });
   await seedMongo();
   await seedPostgres();
+  await seedTied();
 });
 
 after(async () => {
@@ -229,6 +268,19 @@ test('the dry run counts every row for exactly one customer', async () => {
   assert.deepEqual(await sharedRows(), sharedBefore, 'the dry run changes nothing');
 });
 
+test('the pre-flight names the rows that hang off two owners before anything moves', async () => {
+  const ties = (await findCrossOwnerTies({ pool: ownerPool, organizationId: String(ids.shared) }))!;
+  assert.equal(ties.crossOwnerCompositeTies.references, 4, 'it read the references, as the role row-level security binds');
+  // Nothing here is tied to two owners through organization_id, so nobody's move will fail.
+  assert.equal(ties.crossOwnerCompositeTies.rows, 0);
+  assert.equal(ties.crossOwnerCompositeTies.reusedExtractionRunsAcrossOwners, 0);
+  // Two rows hang off both A's and B's proposals: the citation and the question.
+  assert.deepEqual(ties.rowsUnderTwoOwners.byTable, { clarification_questions: 1, historical_insight_report_references: 1 });
+  for (const row of ties.rowsUnderTwoOwners.sample) assert.deepEqual(row.owners, [String(ids.a), String(ids.b)].sort());
+  assert.deepEqual(await sharedRows(), sharedBefore, 'the pre-flight changes nothing');
+  assert.equal(await findCrossOwnerTies({ pool: ownerPool, organizationId: randomMongoId() }), null, 'an organization Postgres does not know is not reported as clean');
+});
+
 for (const order of [['a', 'b'], ['b', 'a']] as Customer[][]) {
   const label = order.map((who) => who.toUpperCase()).join(' then ');
   const runId = `owner-wins-${order.join('')}-${tag}`;
@@ -250,7 +302,7 @@ for (const order of [['a', 'b'], ['b', 'a']] as Customer[][]) {
     const left: Record<string, number> = {};
     for (const [name, n] of Object.entries(countsOf(sharedBefore))) if (n - (remaining[name] ?? 0)) left[name] = n - (remaining[name] ?? 0);
     assert.deepEqual(sorted(sum(applied)), sorted(left));
-    assert.deepEqual(sorted(remaining), { audit_events: 1, guidance_reports: 1, proposal_references: 1, users: 1 });
+    assert.deepEqual(sorted(remaining), { audit_events: 1, clarification_questions: 1, guidance_reports: 1, proposal_references: 1, users: 1 });
 
     const holdings = [await pgOrganization(await holdingOf(ids.a)), await pgOrganization(await holdingOf(ids.b))];
     assert.ok(holdings[0] && holdings[1]);
@@ -266,17 +318,27 @@ for (const order of [['a', 'b'], ['b', 'a']] as Customer[][]) {
     }
   });
 
-  test(`apply, ${label}: the verifier's proposalDataFollowsProposal check reads every organization and passes`, async () => {
+  test(`apply, ${label}: the verifier reads every organization and reports only the rows that hang off two owners`, async () => {
     // The owner role is bound by forced row-level security: unnamed, it sees no reference at all.
     assert.equal((await ownerPool.query('SELECT count(*) FROM rfpilot.proposal_references')).rows[0].count, '0');
-    const misplaced = await findMisplacedProposalData({ pool: ownerPool });
+    const misplaced = await findMisplacedProposalData({ pool: ownerPool, sampleSize: 1_000_000 });
+    assert.equal(misplaced.notRead, null);
     assert.ok(misplaced.checked.organizations >= 3);
     assert.ok(misplaced.checked.references >= 4, 'it read the references it is judging');
     assert.ok(misplaced.checked.proposals >= 4);
-    const ours = new Set([ids.shared, await holdingOf(ids.a), await holdingOf(ids.b)].map(String));
+    const [holdingA, holdingB] = [String(await holdingOf(ids.a)), String(await holdingOf(ids.b))];
+    const ours = new Set([String(ids.shared), holdingA, holdingB]);
     assert.deepEqual(misplaced.referenceNotWithProposal.filter((r) => ours.has(r.referenceOrganizationId)), []);
     assert.deepEqual(misplaced.ownerNotWithReference.filter((r) => ours.has(r.referenceOrganizationId)), []);
-    assert.deepEqual(misplaced.rowsNotWithReference.filter((r) => ours.has(r.organizationId)), []);
+    // Every reference and every chain under it is whole, down to A's message in B's conversation.
+    // What is left are the two rows the pre-flight named: they hang off both owners' proposals, so
+    // each is apart from one parent wherever it is put, and the verifier says so.
+    const apart = misplaced.rowsNotWithParent.filter((r) => ours.has(r.organizationId)).sort((x, y) => `${x.table}>${x.parent}`.localeCompare(`${y.table}>${y.parent}`));
+    assert.deepEqual(apart, [
+      { organizationId: String(ids.shared), table: 'clarification_questions', parent: 'conversations', rows: 1 },
+      { organizationId: String(ids.shared), table: 'clarification_questions', parent: 'proposal_references', rows: 1 },
+      { organizationId: holdingB, table: 'historical_insight_report_references', parent: 'historical_insight_reports', rows: 1 },
+    ]);
   });
 
   test(`apply, ${label}: a reference put in the wrong organization fails the verifier`, async () => {
@@ -289,15 +351,22 @@ for (const order of [['a', 'b'], ['b', 'a']] as Customer[][]) {
     const stray = (await pool.query<{ id: string }>('INSERT INTO rfpilot.proposal_references(organization_id,owner_user_id,external_mongo_id) VALUES($1,$2,$3) RETURNING id', [pgB, pg.a, String(proposal)])).rows[0].id;
     const conversation = uuid();
     await pool.query('INSERT INTO rfpilot.conversations(id,organization_id,proposal_reference_id,owner_external_user_id) VALUES($1,$2,$3,$4)', [conversation, pgA, stray, String(ids.a)]);
+    // Two hops from the reference: A's message sitting in A's tenant while the conversation it
+    // belongs to is in B's. Before the fix round only the first hop was compared.
+    const message = uuid();
+    await pool.query("INSERT INTO rfpilot.conversation_messages(id,organization_id,conversation_id,ordinal,role,kind,content) VALUES($1,$2,$3,99,'user','note','split')",
+      [message, pgA, seeded['B conversation'].key.id]);
     try {
-      const misplaced = await findMisplacedProposalData({ pool: ownerPool });
+      const misplaced = await findMisplacedProposalData({ pool: ownerPool, sampleSize: 1_000_000 });
       assert.deepEqual(misplaced.referenceNotWithProposal.filter((r) => r.proposalId === String(proposal)),
         [{ proposalId: String(proposal), proposalOrganizationId: String(holdingA), referenceOrganizationId: String(holdingB) }]);
       assert.deepEqual(misplaced.ownerNotWithReference.filter((r) => r.proposalId === String(proposal)),
         [{ proposalId: String(proposal), referenceOrganizationId: String(holdingB), ownerOrganizationId: String(holdingA) }]);
-      assert.deepEqual(misplaced.rowsNotWithReference.filter((r) => r.organizationId === String(holdingA)),
-        [{ organizationId: String(holdingA), table: 'conversations', rows: 1 }]);
-      assert.ok(misplaced.total >= 3);
+      assert.deepEqual(misplaced.rowsNotWithParent.filter((r) => r.organizationId === String(holdingA)).sort((x, y) => x.table.localeCompare(y.table)), [
+        { organizationId: String(holdingA), table: 'conversation_messages', parent: 'conversations', rows: 1 },
+        { organizationId: String(holdingA), table: 'conversations', parent: 'proposal_references', rows: 1 },
+      ]);
+      assert.ok(misplaced.total >= 4);
       // Every other check is content; this one alone fails the run.
       const checks = verificationChecks({
         visibility: [], leftovers: { mongo: {}, postgres: {} }, orphans: { total: 0 }, misplaced,
@@ -305,6 +374,7 @@ for (const order of [['a', 'b'], ['b', 'a']] as Customer[][]) {
       assert.equal(checks.proposalDataFollowsProposal, false);
       assert.equal(verificationFailed(checks), true);
     } finally {
+      await pool.query('DELETE FROM rfpilot.conversation_messages WHERE id=$1', [message]);
       await pool.query('DELETE FROM rfpilot.conversations WHERE id=$1', [conversation]);
       await pool.query('DELETE FROM rfpilot.proposal_references WHERE id=$1', [stray]);
       await Proposal.collection.deleteOne({ _id: proposal });
@@ -328,20 +398,110 @@ for (const order of [['a', 'b'], ['b', 'a']] as Customer[][]) {
   });
 }
 
-test('the other verifier checks still see the proposal DXG staff own in the shared organization', async () => {
-  // Unchanged behaviour, stated so nobody reads owner-wins as "staff proposals pass": a
-  // staff-owned proposal and the rows under it stay and are reported as leftovers.
+test('without rows under two owners the check is clean, and a staff-owned proposal is still a leftover', async () => {
+  // The two rows that hang off both A's and B's proposals are removed: what remains is data that
+  // can be placed whole.
+  const pool = postgresPool();
+  await pool.query('DELETE FROM rfpilot.clarification_questions WHERE id=$1', [seeded['question under A reference and B conversation'].key.id]);
+  await pool.query('DELETE FROM rfpilot.historical_insight_report_references WHERE report_id=$1 AND reference_proposal_reference_id=$2',
+    Object.values(seeded['A insight cites B proposal'].key));
+  assert.equal((await findCrossOwnerTies({ pool: ownerPool, organizationId: String(ids.shared) }))!.rowsUnderTwoOwners.rows, 0);
   const runId = `owner-wins-final-${tag}`;
   const report = await migrateCustomerOrganizations({ fromSlug, runId, apply: true, pool: ownerPool });
   assert.equal(report.failed, 0, JSON.stringify(report.results));
   try {
+    const misplaced = await findMisplacedProposalData({ pool: ownerPool, sampleSize: 1_000_000 });
+    const ours = new Set([ids.shared, await holdingOf(ids.a), await holdingOf(ids.b)].map(String));
+    assert.equal(misplaced.notRead, null);
+    assert.deepEqual(misplaced.referenceNotWithProposal.filter((r) => ours.has(r.referenceOrganizationId)), []);
+    assert.deepEqual(misplaced.ownerNotWithReference.filter((r) => ours.has(r.referenceOrganizationId)), []);
+    assert.deepEqual(misplaced.rowsNotWithParent.filter((r) => ours.has(r.organizationId)), []);
+    // Unchanged behaviour, stated so nobody reads owner-wins as "staff proposals pass": a
+    // staff-owned proposal and the rows under it stay and are reported as leftovers.
     const leftovers = await findCustomerLeftovers({ organizationId: String(ids.shared), pool: ownerPool });
     assert.deepEqual(leftovers.postgres, { guidance_reports: 1, proposal_references: 1 });
     assert.deepEqual(leftovers.mongo, { proposals: 1 });
     const holdings = new Set([String(await holdingOf(ids.a)), String(await holdingOf(ids.b))]);
-    assert.equal((await findOrphanedProposals()).byOrganization.filter((o) => holdings.has(o.organizationId)).length, 0);
+    assert.equal((await findOrphanedProposals()).byOrganization.filter((o) => o.organizationId === String(ids.shared) || holdings.has(o.organizationId)).length, 0);
   } finally {
     const rolledBack = await rollbackCustomerOrganizations({ runId, apply: true, pool: ownerPool });
     assert.equal(rolledBack.failed, 0, JSON.stringify(rolledBack.results));
   }
+});
+
+// source_extraction_runs.reused_from_run_id is a composite foreign key, and the reuse lookup is
+// organization-wide, so one customer's run can be tied to a run under another customer's
+// reference. Neither reference can leave without the other's run. There is no remedy in the
+// migration: this states what happens today, so that it is seen before an apply and not after.
+test('rows tied to two owners through organization_id: the pre-flight counts them', async () => {
+  const ties = (await findCrossOwnerTies({ pool: ownerPool, organizationId: String(tied.shared) }))!;
+  assert.equal(ties.crossOwnerCompositeTies.references, 3);
+  assert.deepEqual(ties.crossOwnerCompositeTies.byTable, { source_extraction_runs: 2 });
+  assert.equal(ties.crossOwnerCompositeTies.rows, 2);
+  assert.equal(ties.crossOwnerCompositeTies.reusedExtractionRunsAcrossOwners, 1);
+  assert.deepEqual(ties.crossOwnerCompositeTies.sample.map((row) => [row.table, row.owners]), [
+    ['source_extraction_runs', [String(tied.c), String(tied.d)].sort()], ['source_extraction_runs', [String(tied.c), String(tied.d)].sort()],
+  ]);
+  assert.deepEqual(ties.crossOwnerCompositeTies.sample.map((row) => JSON.parse(row.key)[0]).sort(), [tied.runs.c, tied.runs.d].sort());
+});
+
+test('rows tied to two owners through organization_id: both customers fail, in the dry run too, and nothing is misplaced', async () => {
+  const before = await tiedRows();
+  assert.deepEqual(before, { users: 3, proposal_references: 3, source_extraction_runs: 3 });
+  const state = (report: { results: Array<{ userId: string; state: string; error?: string }> }, who: 'c' | 'd' | 'e') => report.results.find((r) => r.userId === String(tied[who]))!;
+
+  // The dry run already says so: the problem is visible before any apply.
+  const dry = await migrateCustomerOrganizations({ fromSlug: tiedSlug, runId: `owner-ties-dry-${tag}`, apply: false, pool: ownerPool });
+  assert.equal(dry.failed, 2, JSON.stringify(dry.results));
+  for (const who of ['c', 'd'] as const) {
+    assert.equal(state(dry, who).state, 'failed');
+    assert.match(state(dry, who).error ?? '', /foreign key/);
+  }
+  assert.equal(state(dry, 'e').state, 'would_move');
+  assert.deepEqual(await tiedRows(), before);
+
+  const runId = `owner-ties-${tag}`;
+  const report = await migrateCustomerOrganizations({ fromSlug: tiedSlug, runId, apply: true, pool: ownerPool });
+  assert.equal(report.failed, 2, JSON.stringify(report.results));
+  for (const who of ['c', 'd'] as const) {
+    assert.equal(state(report, who).state, 'failed');
+    assert.match(state(report, who).error ?? '', /foreign key/);
+  }
+  // Each failure is its own transaction: the customer between them moved.
+  assert.equal(state(report, 'e').state, 'done');
+  try {
+    // Nothing of C's or D's moved in either store, and nothing is anywhere it should not be.
+    assert.deepEqual(await tiedRows(), { users: 2, proposal_references: 2, source_extraction_runs: 2 });
+    for (const who of ['c', 'd'] as const) {
+      assert.equal(String((await User.collection.findOne({ _id: tied[who] }))?.organizationId), String(tied.shared));
+      assert.equal(String((await Proposal.collection.findOne({ _id: tied.proposals[who] }))?.organizationId), String(tied.shared));
+      assert.equal(await OrganizationMembership.countDocuments({ organizationId: tied.shared, userId: tied[who], status: 'active' }), 1);
+      // The holding tenant was created for the attempt and holds nothing, in either store.
+      const holding = await holdingOf(tied[who]);
+      assert.ok(holding);
+      assert.equal(await pgOrganization(holding), null);
+      assert.equal(await User.countDocuments({ organizationId: holding }) + await Proposal.countDocuments({ organizationId: holding }) + await OrganizationMembership.countDocuments({ organizationId: holding }), 0);
+    }
+    for (const [name, id] of [['source_extraction_runs', tied.runs.c], ['source_extraction_runs', tied.runs.d]] as const) {
+      assert.equal((await postgresPool().query(`SELECT organization_id FROM rfpilot."${name}" WHERE id=$1`, [id])).rows[0].organization_id, tied.pgShared);
+    }
+    const journal = await mongoose.connection.collection(JOURNAL).find({ runId }).toArray();
+    assert.deepEqual(journal.map((entry) => [String(entry.userId), entry.state]).sort(),
+      [[String(tied.c), 'failed'], [String(tied.d), 'failed'], [String(tied.e), 'done']].sort());
+    const misplaced = await findMisplacedProposalData({ pool: ownerPool, sampleSize: 1_000_000 });
+    const ours = new Set([tied.shared, await holdingOf(tied.c), await holdingOf(tied.d), await holdingOf(tied.e)].map(String));
+    assert.deepEqual(misplaced.referenceNotWithProposal.filter((r) => ours.has(r.referenceOrganizationId)), []);
+    assert.deepEqual(misplaced.ownerNotWithReference.filter((r) => ours.has(r.referenceOrganizationId)), []);
+    assert.deepEqual(misplaced.rowsNotWithParent.filter((r) => ours.has(r.organizationId)), []);
+
+    // Trying again does not help, and does not disturb the customer who moved.
+    const again = await migrateCustomerOrganizations({ fromSlug: tiedSlug, runId, apply: true, pool: ownerPool });
+    assert.equal(again.customers, 2);
+    assert.equal(again.failed, 2, JSON.stringify(again.results));
+  } finally {
+    const rolledBack = await rollbackCustomerOrganizations({ runId, apply: true, pool: ownerPool });
+    assert.equal(rolledBack.failed, 0, JSON.stringify(rolledBack.results));
+  }
+  assert.deepEqual(await tiedRows(), before, 'rollback puts the one customer who moved back');
+  assert.equal(await Organization.countDocuments({ slug: { $in: (['c', 'd', 'e'] as const).map((who) => `legacy-${tied[who]}`) } }), 0);
 });
