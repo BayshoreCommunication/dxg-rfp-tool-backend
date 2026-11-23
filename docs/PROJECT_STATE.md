@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-11-19 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
+**Last updated:** 2026-11-23 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -509,6 +509,22 @@ production or staging copy was available. Results, timings, findings and the ste
   (dry run included), so it cannot share the database with a serving API, and a suspended
   customer becomes an active Planner in their holding tenant.
 
+### Tenancy migration: production-copy rehearsal failed, fix in review (2026-11-23)
+
+The first rehearsal of the ORG-107 migration on a copy of production (2026-11-23) found a
+critical defect: a customer who had acted on another customer's proposal took that proposal's
+Postgres reference and all its AI data into their own holding tenant, depending on processing
+order, while the dry run double-counted and the verifier passed
+(`docs/runbooks/ORG_TENANCY_REHEARSAL.md`, finding 9).
+
+- Fixed on branch `fix/tenancy-move-owner-wins` (not merged at the time of writing): a
+  proposal's Postgres data follows the proposal's owner (`DECISIONS.md`, 2026-11-23), the dry
+  run counts each row once, and the verifier has a fourth check, `proposalDataFollowsProposal`.
+- Proven on the integration database only, in both processing orders. **Not run against
+  production data. The production-copy rehearsal must be repeated with this fix before any
+  cutover**; it also has to supply the timings, because the fix adds Postgres work per customer.
+- The cutover stays blocked until that repeated rehearsal passes.
+
 ### Tenancy cutover runbook (ORG-502, 2026-11-11)
 
 `docs/runbooks/ORG_TENANCY_CUTOVER.md` is the maintenance-window procedure and rollback for the
@@ -628,7 +644,10 @@ customers are taken to be still in the shared organization (not checked against
 production data).
 
 - The rehearsal on a restored production snapshot is owed. ORG-501 was rehearsed
-  only on a generated fixture in local Docker, up to 150 customers.
+  on a generated fixture in local Docker, up to 150 customers. A first rehearsal on
+  a copy of production (2026-11-23) failed: the migration put one customer's
+  Postgres proposal data in another customer's tenant (rehearsal finding 9). The
+  fix is in review; the production-copy rehearsal has to be run again with it.
 - The cutover runbook (ORG-502) makes that snapshot rehearsal a hard go/no-go and
   has seven steps marked "operator to confirm" against the production deployment.
 - Decisions to record before cutover: (a) the apply makes every moved customer an

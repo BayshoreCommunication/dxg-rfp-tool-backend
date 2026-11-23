@@ -269,6 +269,7 @@ compare against the snapshot. Three reports appear in the log, in order.
 | `visibilityUnchanged` | `true` (or exactly the differences decided in 0.3) |
 | `noCustomerRecordsInSharedOrganization` | `true`: `leftovers.mongo` and `leftovers.postgres` both `{}` (or exactly the RFPs decided in 0.4) |
 | `everyProposalHasAnActiveOwner` | `true`, `orphans.total` 0 |
+| `proposalDataFollowsProposal` | `true`: `misplacedProposalData.total` 0, and `misplacedProposalData.checked.references` is above 0 (it read the references it judged). `false` means a proposal's Postgres reference, its owner or rows naming it are in different organizations (rehearsal finding 9): **roll back** |
 | exit code | 0 |
 
 If the apply reported failed customers: re-run it alone with the same run id. It skips
@@ -279,7 +280,7 @@ run_migrate_task "node dist/scripts/migrateCustomerOrganizations.js --apply --ru
 ```
 
 Then verify without the snapshot (`--from-slug=dxg` only; `visibilityUnchanged` reads
-`"skipped"`, the other two checks still count). If the same customers fail twice, that is a
+`"skipped"`, the other three checks still count). If the same customers fail twice, that is a
 rollback trigger.
 
 **If the task dies mid-apply** (lost connection, task stopped): the customer in flight is

@@ -4,7 +4,11 @@ What was rehearsed, what it showed, and how to repeat it on a restored productio
 The cutover procedure itself is `ORG_TENANCY_CUTOVER.md` (ORG-502); the commands are described
 in `PRODUCTION.md` under "Moving existing customers into their own organizations".
 
-**Status: local rehearsal only.** On 2026-11-10 the owner decided that, with no production or
+**Status: local rehearsal, plus one production-copy rehearsal that failed (finding 9).** The
+first rehearsal on a copy of production, on 2026-11-23, showed the migration putting one
+customer's Postgres data in another customer's tenant. That is fixed here; the production-copy
+rehearsal has not been repeated with the fix and is still owed before any real run. The rest
+of this document describes the local rehearsal of 2026-11-11. On 2026-11-10 the owner decided that, with no production or
 staging copy available, the rehearsal runs on a generated fixture in local Docker. No production
 data, Atlas, AWS or Secrets Manager was touched. The rehearsal on a restored production snapshot
 is still to do, on cutover day, before the real run ("Repeating it on the production snapshot"
@@ -58,6 +62,10 @@ vendor responses, submissions and versions, public access grants, canonical snap
 email campaign; one customer in six has a support ticket with messages. Four customers in five
 are projected into Postgres with proposal references, conversations and messages, guidance
 reports, source extraction runs, audit events and published outbox events.
+
+About one projected customer in seven has acted on another customer's proposal: a guidance
+report and a historical insight report (with its outbox event) under the other customer's
+reference (finding 9). The counts and timings below were measured before these rows were added.
 
 Legacy shapes included on purpose: memberships carrying a DXG role (1 in 10), suspended
 memberships (1 in 40), accounts with no membership at all (1 in 25), customers with no RFPs, and
@@ -144,6 +152,9 @@ take the seconds per customer from the snapshot rehearsal, not from this laptop.
 
 The same in all four runs, at both sizes (`summary.json` of each run):
 
+These runs predate the fourth check, `proposalDataFollowsProposal` (finding 9), and the
+cross-acting customers in the fixture; they have not been repeated locally since.
+
 | After | `visibilityUnchanged` | `noCustomerRecordsInSharedOrganization` | `everyProposalHasAnActiveOwner` | Exit |
 |---|---|---|---|---|
 | apply (04) | true | true (no leftovers in MongoDB or Postgres) | true (0 orphans) | 0 |
@@ -185,6 +196,7 @@ The same in all four runs, at both sizes (`summary.json` of each run):
 | 6 | Low | A lost Postgres connection crashes the script instead of recording a failed customer | Open |
 | 7 | Info | The verifier exits 1 after a successful rollback | For ORG-502 |
 | 8 | Medium | The verifier still reports `postgres: "checked"` when the shared organization has no row in Postgres | Open |
+| 9 | Critical | A customer who had acted on another customer's proposal took that proposal's Postgres reference and all its AI data into their own holding tenant; the dry run counted the rows twice and the verifier passed | Fixed, with tests. **The production-copy rehearsal has to be repeated with the fix** |
 
 1. **Verifier blind in Postgres (high, fixed).** `findCustomerLeftovers` looked up the shared
    organization in `rfpilot.organizations` before naming an organization for the session. That
@@ -235,6 +247,78 @@ The same in all four runs, at both sizes (`summary.json` of each run):
    `rfpilot.organizations` (the dry run's per-customer Postgres counts being non-empty shows it
    does). Fixing it means changing a return shape that ORG-110 also uses, so it is left for a
    follow-up.
+
+9. **A proposal's Postgres data went with whoever acted on it (critical, fixed).** Found on
+   2026-11-23, on the first rehearsal against a copy of production; the fixture had no customer
+   acting on another's proposal, so the local rehearsal could not see it. For each customer the
+   move took their `users` row, the proposal references they own, every row a "doer" column
+   (actor, initiator, created by, …) names them in, and then everything connected by foreign
+   keys in both directions. Customer A had acted on customer B's proposal. A was processed
+   first: A's row under B's proposal pulled in the parent it is tied to through
+   `organization_id`, up to B's `proposal_references` row, and then every row under that. After
+   an apply that reported no failure:
+   - B's proposal (MongoDB) was in B's holding tenant; its Postgres reference and all its AI
+     data (about 730 requirements, 23 vendor evaluation runs, 6 comparison runs, 13 `ai_jobs`,
+     …) were in A's. B had lost the data and A's tenant held another customer's.
+   - The dry run counted those rows for both A and B, so its per-customer numbers did not add up
+     to what the apply moved.
+   - The verifier passed, `visibilityUnchanged` included: it compared what members see in
+     MongoDB and looked for leftovers, not where Postgres rows went. The reference's
+     `owner_user_id` foreign key is one column, so no constraint broke either.
+   - Which customer got the data depended on the order they were processed in.
+
+   **The rule now** (`DECISIONS.md`, 2026-11-23): a proposal's Postgres data follows the
+   proposal's owner. `moveCustomerRows` (`src/modules/tenancy/postgresTenantMove.ts`) works in
+   three steps. (1) The customer's `users` row, the references they own, and each reference's
+   unit: the rows tied to it through `organization_id`, which the database will not let live
+   apart from it. (2) Everything still in the shared organization that belongs with a reference
+   somebody else owns is set aside for this move: those references, every row pointing at a
+   set-aside row by any foreign key or by id, and every parent a set-aside row is tied to
+   through `organization_id`. (3) The rows the customer did and everything reachable from what
+   has moved, as before, except that a set-aside row never moves. A reference is never moved as
+   some row's parent, only by its owner. So a row A did under B's proposal stays in the shared
+   organization until B moves and goes with B; if the proposal's owner never moves (DXG staff),
+   it stays with that proposal. What is set aside depends only on who owns each reference, so
+   the result is the same in any order, and the dry run (each customer in a rolled-back
+   transaction against unmoved data) counts each row once.
+
+   **The verifier has a fourth check, `proposalDataFollowsProposal`**: it fails when a proposal
+   that exists in MongoDB has its `proposal_references` row in another organization, when a
+   reference's owner (`rfpilot.users`) is in another organization than the reference, or when
+   a row with a `proposal_reference_id` names a reference outside its own organization. It
+   reads every organization in turn, naming each to row-level security as the leftover check
+   does, and reports what it read under `misplacedProposalData.checked`. The report lists up to
+   50 of each kind with the proposal id and both organizations.
+
+   Tests: `tests-integration/customer-organization-owner-wins.test.ts` (both processing orders,
+   as the table-owner role) and `tests/migration-verification.test.js`. The fixture now has
+   customers acting on another customer's proposal (about one in seven), and `rehearsal:run`
+   records `dryRunDiffersFromApply`.
+
+   Still to know after the fix:
+   - **Not run against production data.** Everything above was proven on the integration
+     database only. The rehearsal on the production copy must be run again from the start.
+   - The set-aside list is built once per customer from every other owner's proposal data in
+     the shared organization, in a temporary table (`tenant_move_pinned`, dropped with the
+     transaction). That adds Postgres work per customer that grows with the size of the shared
+     organization; take the timings from the repeated rehearsal, not from the tables above.
+     The migration role needs `TEMPORARY` on the database (PostgreSQL grants it to everyone by
+     default); the dry run fails at once if it is missing.
+   - A row tied through `organization_id` to two owners' references cannot be placed at all.
+     Both customers then fail with a foreign-key error and stay in the shared organization
+     (nothing is moved wrongly); no such row was in the integration data.
+   - A row that hangs off two owners' proposals by plain foreign keys only stays in the shared
+     organization and is reported by `noCustomerRecordsInSharedOrganization`.
+   - A historical insight report on A's proposal that cites B's proposal: the citation row is
+     tied to B's reference and goes to B's tenant; the report stays with A.
+   - Not changed: rows a customer did that are under nobody's proposal (assistant threads,
+     audit events, knowledge retrieval queries) still move with whoever did them, and a parent
+     tied to such a row still moves with it. A customer who wrote into another customer's
+     assistant thread would still take the thread. Assistant threads are personal, so this is
+     not expected, but the repeated rehearsal should look for it.
+   - MongoDB was not changed and has no such chain: documents move by `userId` or by the
+     owner's proposals. One collection follows the doer: `emailcampaigns` move with the user
+     who sent them, even when the campaign is for another customer's proposal.
 
 Environment, not the migration: the local stacks probe their containers every 2 s. Under load a
 timed-out probe killed a Postgres backend, and Postgres restarted itself in the middle of a
@@ -304,8 +388,10 @@ For cutover day, before the real run. It needs an isolated restore that nothing 
    skill for the exact invocation):
    `npm run rehearsal:run -- --run-id=prod-rehearsal-<date> --out=<private dir> --confirm-target=<mongo-host>/<db>,<postgres-host>/<db>`.
    It stops at the first step that exits unexpectedly and says which.
-7. Read `<out>/summary.json`. It passes when: `unchangedByDryRun`, `restoredByRollback`,
-   `sameAsFirstApply` and `bystanderUntouched` are all `[]`; steps 04, 09 and 11 exit 0; step 07
+7. Read `<out>/summary.json`. It passes when: `unchangedByDryRun`, `dryRunDiffersFromApply`,
+   `restoredByRollback`, `sameAsFirstApply` and `bystanderUntouched` are all `[]`; every verify
+   report shows `proposalDataFollowsProposal: true` with `misplacedProposalData.checked.references`
+   above 0; steps 04, 09 and 11 exit 0; step 07
    exits 1 with `visibilityUnchanged: true` (the runner stops if it does not); `customersConsideredOnRerun` is 0; and
    `holdingTenantsFinal` shows as many holding tenants as customers, each with exactly one
    active Planner, none with an Owner, none inactive, none `notExemptFromPlanLimits`.
