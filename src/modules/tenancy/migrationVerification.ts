@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import type { Pool } from "pg";
+import Organization from "../../../modal/organizationModel";
 import OrganizationMembership from "../../../modal/organizationMembershipModel";
 import Proposal from "../../../modal/proposalsModel";
 import User from "../../../modal/userModel";
@@ -147,17 +148,20 @@ export type MisplacedProposalData = {
   rowsNotWithReference: Array<{ organizationId: string; table: string; rows: number }>;
 };
 
-// A proposal's Postgres data follows the proposal (DECISIONS.md, 2026-11-23): the reference row
-// sits in the proposal's organization, with its owner and with every row that names it. The
-// migration once put one customer's reference and AI data in another customer's holding tenant,
-// and no other check saw it: visibility reads MongoDB, and the owner foreign key is one column.
-// Organization ids in the result are MongoDB ids. Lists are capped at sampleSize; total is not.
-export const findMisplacedProposalData = async (input: { pool: Pool; sampleSize?: number }): Promise<MisplacedProposalData> => {
-  const organizations = (await mongoose.connection.collection("organizations").find({}, { projection: { _id: 1 } }).toArray()).map((o) => String(o._id));
-  const references: Array<{ proposalId: string; ownerUserId: string; organizationId: string }> = [];
-  const userOrganization = new Map<string, string>();
-  const rowsNotWithReference: MisplacedProposalData["rowsNotWithReference"] = [];
-  let organizationsRead = 0;
+type ReferencePlacement = {
+  organizationsRead: number;
+  references: Array<{ proposalId: string; ownerUserId: string; organizationId: string }>;
+  // rfpilot.users id -> the organization (MongoDB id) its row is in.
+  userOrganization: Map<string, string>;
+  rowsNotWithReference: MisplacedProposalData["rowsNotWithReference"];
+};
+
+// Where every proposal reference, every users row and every row naming a reference is, read one
+// organization at a time. Tenant tables force row-level security, so the table owner sees no row
+// until the session names an organization, the way findCustomerLeftovers names one. Every query
+// also filters on the organization, so a superuser (who bypasses the policies) reads the same.
+export const readReferencePlacement = async (input: { pool: Pool; organizationIds: string[] }): Promise<ReferencePlacement> => {
+  const placement: ReferencePlacement = { organizationsRead: 0, references: [], userOrganization: new Map(), rowsNotWithReference: [] };
   const client = await input.pool.connect();
   try {
     await client.query("BEGIN READ ONLY");
@@ -167,64 +171,90 @@ export const findMisplacedProposalData = async (input: { pool: Pool; sampleSize?
          JOIN pg_attribute o ON o.attrelid = c.oid AND o.attname = 'organization_id' AND NOT o.attisdropped
         WHERE n.nspname = 'rfpilot' AND c.relkind = 'r' ORDER BY 1`,
     )).rows.map((r) => r.name);
-    // Forced row-level security: each organization is read in turn, named the way
-    // findCustomerLeftovers names one, because the table owner sees no row otherwise. Every query
-    // also filters on the organization, so a superuser (who bypasses the policies) reads the same.
-    for (const organizationId of organizations) {
+    for (const organizationId of input.organizationIds) {
       await client.query("SELECT set_config('app.organization_mongo_id',$1,true)", [organizationId]);
       const pg = (await client.query<{ id: string }>("SELECT id FROM rfpilot.organizations WHERE external_mongo_id = $1", [organizationId])).rows[0]?.id;
       if (!pg) continue;
-      organizationsRead += 1;
+      placement.organizationsRead += 1;
       await client.query("SELECT set_config('app.organization_id',$1,true)", [pg]);
-      for (const row of (await client.query<{ id: string }>("SELECT id FROM rfpilot.users WHERE organization_id = $1", [pg])).rows) userOrganization.set(row.id, organizationId);
-      const rows = await client.query<{ external_mongo_id: string; owner_user_id: string }>(
+      for (const row of (await client.query<{ id: string }>("SELECT id FROM rfpilot.users WHERE organization_id = $1", [pg])).rows) placement.userOrganization.set(row.id, organizationId);
+      const references = await client.query<{ external_mongo_id: string; owner_user_id: string }>(
         "SELECT external_mongo_id, owner_user_id FROM rfpilot.proposal_references WHERE organization_id = $1", [pg],
       );
-      for (const row of rows.rows) references.push({ proposalId: row.external_mongo_id, ownerUserId: row.owner_user_id, organizationId });
+      for (const row of references.rows) placement.references.push({ proposalId: row.external_mongo_id, ownerUserId: row.owner_user_id, organizationId });
       if (referencing.length) {
         const strays = await client.query<{ name: string; rows: string }>(
-          referencing.map((name) => `SELECT '${name}' AS name, count(*) AS rows FROM rfpilot."${name}" c
+          referencing.map((name) => `SELECT '${name}'::text AS name, count(*) AS rows FROM rfpilot."${name}" c
              WHERE c.organization_id = $1 AND c.proposal_reference_id IS NOT NULL
                AND NOT EXISTS (SELECT 1 FROM rfpilot.proposal_references r WHERE r.id = c.proposal_reference_id AND r.organization_id = $1)`).join(" UNION ALL "),
           [pg],
         );
-        for (const row of strays.rows) if (Number(row.rows)) rowsNotWithReference.push({ organizationId, table: row.name, rows: Number(row.rows) });
+        for (const row of strays.rows) if (Number(row.rows)) placement.rowsNotWithReference.push({ organizationId, table: row.name, rows: Number(row.rows) });
       }
     }
     await client.query("ROLLBACK");
   } finally {
     client.release();
   }
+  return placement;
+};
 
+// proposalOrganization: for each proposal that exists in MongoDB, the organization it is in.
+export const compareReferencePlacement = (
+  placement: ReferencePlacement, proposalOrganization: Map<string, string | null>, sampleSize = 50,
+): MisplacedProposalData => {
+  const referenceNotWithProposal: MisplacedProposalData["referenceNotWithProposal"] = [];
+  const ownerNotWithReference: MisplacedProposalData["ownerNotWithReference"] = [];
+  for (const reference of placement.references) {
+    // A reference whose proposal was deleted from MongoDB has nothing to be compared with.
+    if (proposalOrganization.has(reference.proposalId) && proposalOrganization.get(reference.proposalId) !== reference.organizationId) {
+      referenceNotWithProposal.push({ proposalId: reference.proposalId, proposalOrganizationId: proposalOrganization.get(reference.proposalId) ?? null, referenceOrganizationId: reference.organizationId });
+    }
+    const ownerOrganizationId = placement.userOrganization.get(reference.ownerUserId) ?? null;
+    if (ownerOrganizationId !== reference.organizationId) {
+      ownerNotWithReference.push({ proposalId: reference.proposalId, referenceOrganizationId: reference.organizationId, ownerOrganizationId });
+    }
+  }
+  return {
+    checked: { organizations: placement.organizationsRead, references: placement.references.length, proposals: proposalOrganization.size },
+    total: referenceNotWithProposal.length + ownerNotWithReference.length + placement.rowsNotWithReference.reduce((sum, row) => sum + row.rows, 0),
+    referenceNotWithProposal: referenceNotWithProposal.slice(0, sampleSize),
+    ownerNotWithReference: ownerNotWithReference.slice(0, sampleSize),
+    rowsNotWithReference: placement.rowsNotWithReference.slice(0, sampleSize),
+  };
+};
+
+// A proposal's Postgres data follows the proposal (DECISIONS.md, 2026-11-23): the reference row
+// sits in the proposal's organization, with its owner and with every row that names it. The
+// migration once put one customer's reference and AI data in another customer's holding tenant,
+// and no other check saw it: visibility reads MongoDB, and the owner foreign key is one column.
+// Organization ids in the result are MongoDB ids. Lists are capped at sampleSize; total is not.
+export const findMisplacedProposalData = async (input: { pool: Pool; sampleSize?: number }): Promise<MisplacedProposalData> => {
+  const organizationIds = (await Organization.collection.find({}, { projection: { _id: 1 } }).toArray()).map((o) => String(o._id));
+  const placement = await readReferencePlacement({ pool: input.pool, organizationIds });
   const proposalOrganization = new Map<string, string | null>();
-  const ids = [...new Set(references.map((r) => r.proposalId))];
+  const ids = [...new Set(placement.references.map((r) => r.proposalId))];
   for (let i = 0; i < ids.length; i += 5000) {
     const found = await Proposal.collection
       .find({ _id: { $in: ids.slice(i, i + 5000).map((id) => new mongoose.Types.ObjectId(id)) } }, { projection: { organizationId: 1 } })
       .toArray();
     for (const proposal of found) proposalOrganization.set(String(proposal._id), proposal.organizationId ? String(proposal.organizationId) : null);
   }
-  const referenceNotWithProposal: MisplacedProposalData["referenceNotWithProposal"] = [];
-  const ownerNotWithReference: MisplacedProposalData["ownerNotWithReference"] = [];
-  for (const reference of references) {
-    // A reference whose proposal was deleted from MongoDB has nothing to be compared with.
-    if (proposalOrganization.has(reference.proposalId) && proposalOrganization.get(reference.proposalId) !== reference.organizationId) {
-      referenceNotWithProposal.push({ proposalId: reference.proposalId, proposalOrganizationId: proposalOrganization.get(reference.proposalId) ?? null, referenceOrganizationId: reference.organizationId });
-    }
-    const ownerOrganizationId = userOrganization.get(reference.ownerUserId) ?? null;
-    if (ownerOrganizationId !== reference.organizationId) {
-      ownerNotWithReference.push({ proposalId: reference.proposalId, referenceOrganizationId: reference.organizationId, ownerOrganizationId });
-    }
-  }
-  const sampleSize = input.sampleSize ?? 50;
-  return {
-    checked: { organizations: organizationsRead, references: references.length, proposals: proposalOrganization.size },
-    total: referenceNotWithProposal.length + ownerNotWithReference.length + rowsNotWithReference.reduce((sum, row) => sum + row.rows, 0),
-    referenceNotWithProposal: referenceNotWithProposal.slice(0, sampleSize),
-    ownerNotWithReference: ownerNotWithReference.slice(0, sampleSize),
-    rowsNotWithReference: rowsNotWithReference.slice(0, sampleSize),
-  };
+  return compareReferencePlacement(placement, proposalOrganization, input.sampleSize);
 };
+
+type Leftovers = { mongo: Record<string, number>; postgres: Record<string, number> };
+// The verifier's verdict, one entry per check: true, false, or why it was skipped. Any false
+// fails the run (exit 1).
+export const verificationChecks = (input: {
+  visibility: VisibilityDifference[] | null; leftovers: Leftovers; orphans: { total: number }; misplaced: MisplacedProposalData | null;
+}) => ({
+  visibilityUnchanged: input.visibility === null ? "skipped: pass --before=<snapshot>" : input.visibility.length === 0,
+  noCustomerRecordsInSharedOrganization: Object.keys(input.leftovers.mongo).length === 0 && Object.keys(input.leftovers.postgres).length === 0,
+  everyProposalHasAnActiveOwner: input.orphans.total === 0,
+  proposalDataFollowsProposal: input.misplaced === null ? "skipped: no Postgres connection" : input.misplaced.total === 0,
+});
+export const verificationFailed = (checks: Record<string, boolean | string>) => Object.values(checks).some((ok) => ok === false);
 
 // Proposals whose owner has no active membership in the proposal's organization. Run after the
 // migration and nightly (PRD metric "orphaned RFPs = 0").

@@ -10,6 +10,8 @@ import {
   findMisplacedProposalData,
   findOrphanedProposals,
   snapshotVisibility,
+  verificationChecks,
+  verificationFailed,
   type VisibilitySnapshot,
 } from "../src/modules/tenancy/migrationVerification";
 
@@ -58,17 +60,12 @@ const main = async () => {
     const leftovers = await findCustomerLeftovers({ organizationId: String(from._id), pool });
     const orphans = await findOrphanedProposals();
     const misplaced = pool ? await findMisplacedProposalData({ pool }) : null;
-    const checks = {
-      visibilityUnchanged: visibility === null ? "skipped: pass --before=<snapshot>" : visibility.length === 0,
-      noCustomerRecordsInSharedOrganization: Object.keys(leftovers.mongo).length === 0 && Object.keys(leftovers.postgres).length === 0,
-      everyProposalHasAnActiveOwner: orphans.total === 0,
-      proposalDataFollowsProposal: misplaced === null ? "skipped: no Postgres connection" : misplaced.total === 0,
-    };
+    const checks = verificationChecks({ visibility, leftovers, orphans, misplaced });
     process.stdout.write(`${JSON.stringify({
       database: DATABASE_NAME, postgres: pool ? "checked" : "skipped", from: fromSlug, checks,
       visibilityDifferences: visibility ?? [], leftovers, orphans, misplacedProposalData: misplaced,
     }, null, 2)}\n`);
-    if (Object.values(checks).some((ok) => ok === false)) process.exitCode = 1;
+    if (verificationFailed(checks)) process.exitCode = 1;
   } finally {
     await pool?.end();
     await mongoose.disconnect();
