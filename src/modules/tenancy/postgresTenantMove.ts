@@ -119,13 +119,21 @@ const add = (counts: MoveCounts, name: string, rows: number | null) => {
 };
 
 // Owner wins (DECISIONS.md, 2026-11-23): a proposal's Postgres data follows the proposal's owner.
-// Before one customer moves, this lists every row of the source organization that hangs off a
-// proposal reference somebody else owns: those references, then every row that points at a listed
-// row through any foreign key or by id, until nothing more is found. moveCustomerRows never moves
-// a listed row, so a row the customer did under another owner's proposal stays with that proposal,
-// and the composite-parent step can't drag that proposal after it. The list depends only on who
-// owns each reference, never on which customers have already moved.
+// After the customer's own proposal units have left the source organization (moveCustomerRows,
+// step 1), this lists every row still there that belongs with a proposal reference somebody else
+// owns: those references, every row that points at a listed row through any foreign key or by id,
+// and every parent a listed row is tied to through organization_id, until nothing more is found.
+// moveCustomerRows never moves a listed row, so a row the customer did under another owner's
+// proposal stays with that proposal, and nothing can drag that proposal after it. The list
+// depends only on who owns each reference, never on which customers have already moved.
 const PINNED = "tenant_move_pinned";
+// A customer's users row and proposal references move by ownership only, never as some row's parent.
+const ANCHOR_TABLES = new Set(["users", "proposal_references"]);
+
+const pointsAtMoved = (edge: Edge) =>
+  `(${columns(edge.childColumns)}) IN (SELECT ${columns(edge.parentColumns)} FROM ${table(edge.parent)} WHERE organization_id = $1)`;
+const isPointedAtByMoved = (edge: Edge) =>
+  `(${columns(edge.parentColumns)}) IN (SELECT ${columns(edge.childColumns)} FROM ${table(edge.child)} WHERE organization_id = $1)`;
 
 const pinOtherOwnersProposalData = async (
   client: PoolClient,
@@ -149,6 +157,10 @@ const pinOtherOwnersProposalData = async (
     if (result.rowCount) pinnedTables.add(name);
     return result.rowCount ?? 0;
   };
+  // Rows of `other` in the source organization that are listed, as the given columns.
+  const listed = (other: string, otherColumns: string[]) =>
+    `SELECT ${otherColumns.map((column) => `other.${quoteIdent(column)}`).join(",")} FROM ${table(other)} other
+      WHERE other.organization_id = $1 AND EXISTS (SELECT 1 FROM ${PINNED} WHERE pinned_table = $3 AND pinned_key = ${keyOf(schema, other, "other")})`;
 
   await pin("proposal_references",
     `NOT EXISTS (SELECT 1 FROM rfpilot.users owning_user WHERE owning_user.id = owner_user_id AND owning_user.external_mongo_id = $3)`, [input.userMongoId]);
@@ -156,11 +168,13 @@ const pinOtherOwnersProposalData = async (
     if (pass > 50) throw new Error("Tenant move did not settle after 50 passes");
     added = 0;
     for (const edge of schema.edges) {
-      if (STAY_TABLES.has(edge.child) || STAY_TABLES.has(edge.parent) || !pinnedTables.has(edge.parent)) continue;
-      added += await pin(edge.child,
-        `(${columns(edge.childColumns)}) IN (SELECT ${edge.parentColumns.map((column) => `parent.${quoteIdent(column)}`).join(",")} FROM ${table(edge.parent)} parent
-           WHERE parent.organization_id = $1 AND EXISTS (SELECT 1 FROM ${PINNED} WHERE pinned_table = $3 AND pinned_key = ${keyOf(schema, edge.parent, "parent")}))`,
-        [edge.parent]);
+      if (STAY_TABLES.has(edge.child) || STAY_TABLES.has(edge.parent)) continue;
+      if (pinnedTables.has(edge.parent)) {
+        added += await pin(edge.child, `(${columns(edge.childColumns)}) IN (${listed(edge.parent, edge.parentColumns)})`, [edge.parent]);
+      }
+      if (edge.composite && pinnedTables.has(edge.child) && !ANCHOR_TABLES.has(edge.parent)) {
+        added += await pin(edge.parent, `(${columns(edge.parentColumns)}) IN (${listed(edge.child, edge.childColumns)})`, [edge.child]);
+      }
     }
     for (const reference of POLYMORPHIC_REFERENCES) {
       if (!schema.tables.includes(reference.table)) continue;
@@ -172,9 +186,12 @@ const pinOtherOwnersProposalData = async (
   return pinnedTables;
 };
 
-// Moves every row owned by one customer: their users row, their proposal references, rows they did,
-// then everything reachable along foreign keys, until nothing more moves. Rows under a proposal
-// reference another user owns never move (see pinOtherOwnersProposalData).
+// Moves every row owned by one customer, in three steps:
+// 1. their users row, their proposal references, and each reference's unit: the rows tied to it
+//    through organization_id in either direction, which the database won't let live apart;
+// 2. everything left that belongs with somebody else's proposal reference is set aside
+//    (pinOtherOwnersProposalData) and never moves here;
+// 3. rows they did, then everything reachable along foreign keys, until nothing more moves.
 export const moveCustomerRows = async (
   client: PoolClient,
   schema: TenantSchema,
@@ -183,7 +200,7 @@ export const moveCustomerRows = async (
 ): Promise<MoveCounts> => {
   const { fromOrganizationId: from, toOrganizationId: to, keys } = input;
   const counts: MoveCounts = {};
-  const pinnedTables = await pinOtherOwnersProposalData(client, schema, input);
+  let pinnedTables = new Set<string>();
   const update = async (name: string, where: string, params: unknown[]) => {
     if (STAY_TABLES.has(name)) return 0;
     const notPinned = pinnedTables.has(name)
@@ -200,6 +217,19 @@ export const moveCustomerRows = async (
 
   await update("users", `external_mongo_id = $3`, [input.userMongoId]);
   await update("proposal_references", `owner_user_id IN (SELECT id FROM rfpilot.users WHERE organization_id = $1 AND external_mongo_id = $3)`, [input.userMongoId]);
+  for (let moved = counts.proposal_references ?? 0, pass = 0; moved > 0; pass++) {
+    if (pass > 50) throw new Error("Tenant move did not settle after 50 passes");
+    moved = 0;
+    for (const edge of schema.edges) {
+      if (!edge.composite || STAY_TABLES.has(edge.child) || STAY_TABLES.has(edge.parent)) continue;
+      // Only tables this move has touched can hold a moved row.
+      if (counts[edge.parent]) moved += await update(edge.child, pointsAtMoved(edge), []);
+      if (counts[edge.child] && !ANCHOR_TABLES.has(edge.parent)) moved += await update(edge.parent, isPointedAtByMoved(edge), []);
+    }
+  }
+
+  pinnedTables = await pinOtherOwnersProposalData(client, schema, input);
+
   for (const [name, doers] of Object.entries(input.userMongoId ? schema.doerColumns : {})) {
     await update(name, doers.map((column) => `${quoteIdent(column)}::text = $3`).join(" OR "), [input.userMongoId]);
   }
@@ -210,13 +240,9 @@ export const moveCustomerRows = async (
     for (const edge of schema.edges) {
       if (STAY_TABLES.has(edge.child) || STAY_TABLES.has(edge.parent)) continue;
       // A row that points at a moved row is that customer's too.
-      moved += await update(edge.child,
-        `(${columns(edge.childColumns)}) IN (SELECT ${columns(edge.parentColumns)} FROM ${table(edge.parent)} WHERE organization_id = $1)`, []);
+      moved += await update(edge.child, pointsAtMoved(edge), []);
       // A parent a moved row points at through organization_id has to move with it.
-      if (edge.composite) {
-        moved += await update(edge.parent,
-          `(${columns(edge.parentColumns)}) IN (SELECT ${columns(edge.childColumns)} FROM ${table(edge.child)} WHERE organization_id = $1)`, []);
-      }
+      if (edge.composite) moved += await update(edge.parent, isPointedAtByMoved(edge), []);
     }
     const movedIds = (text: boolean) => schema.idTables
       .map((name) => `SELECT id${text ? "::text" : ""} FROM ${table(name)} WHERE organization_id = $1`).join(" UNION ALL ");
