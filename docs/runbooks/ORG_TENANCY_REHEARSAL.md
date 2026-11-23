@@ -37,6 +37,7 @@ runs these as child processes and times each one:
 |---|---|
 | 00 start-up | `npm run migrate:customer-organizations -- --help` (what starting the process costs) |
 | 01 snapshot | `npm run verify:customer-organizations -- --snapshot=<file>` |
+| 01b verify before the apply | `npm run verify:customer-organizations -- --from-slug=dxg`; exits 1 by design; its `preflight` goes into `summary.json` (added 2026-11-23, not in the timings below) |
 | 02 dry run | `npm run migrate:customer-organizations -- --run-id=<id> --from-slug=dxg` |
 | 03 apply | `npm run migrate:customer-organizations -- --apply --run-id=<id> --from-slug=dxg` |
 | 04 verify | `npm run verify:customer-organizations -- --before=<file> --from-slug=dxg` |
@@ -272,8 +273,9 @@ cross-acting customers in the fixture; they have not been repeated locally since
    three steps. (1) The customer's `users` row, the references they own, and each reference's
    unit: the rows tied to it through `organization_id`, which the database will not let live
    apart from it. (2) Everything still in the shared organization that belongs with a reference
-   somebody else owns is set aside for this move: those references, every row pointing at a
-   set-aside row by any foreign key or by id, and every parent a set-aside row is tied to
+   somebody else owns is set aside for this move: those references, every row hanging by a plain
+   foreign key off data that has already left for another customer's tenant, every row pointing
+   at a set-aside row by any foreign key or by id, and every parent a set-aside row is tied to
    through `organization_id`. (3) The rows the customer did and everything reachable from what
    has moved, as before, except that a set-aside row never moves. A reference is never moved as
    some row's parent, only by its owner. So a row A did under B's proposal stays in the shared
@@ -285,13 +287,16 @@ cross-acting customers in the fixture; they have not been repeated locally since
    **The verifier has a fourth check, `proposalDataFollowsProposal`**: it fails when a proposal
    that exists in MongoDB has its `proposal_references` row in another organization, when a
    reference's owner (`rfpilot.users`) is in another organization than the reference, or when
-   a row with a `proposal_reference_id` names a reference outside its own organization. It
+   any row is in another organization than the parent it hangs off by a plain foreign key (a
+   job apart from its reference, a message apart from its conversation, and so on). It
    reads every organization in turn, naming each to row-level security as the leftover check
    does, and reports what it read under `misplacedProposalData.checked`. The report lists up to
    50 of each kind with the proposal id and both organizations.
 
    Tests: `tests-integration/customer-organization-owner-wins.test.ts` (both processing orders,
-   as the table-owner role) and `tests/migration-verification.test.js`. The fixture now has
+   as the table-owner role; the reuse tie; the pre-flight), `tests/migration-verification.test.js`,
+   and for placement out of a holding tenant the old code filled,
+   `tests-integration/legacy-customer-placement.test.ts`. The fixture now has
    customers acting on another customer's proposal (about one in seven), and `rehearsal:run`
    records `dryRunDiffersFromApply`.
 
@@ -304,13 +309,48 @@ cross-acting customers in the fixture; they have not been repeated locally since
      organization; take the timings from the repeated rehearsal, not from the tables above.
      The migration role needs `TEMPORARY` on the database (PostgreSQL grants it to everyone by
      default); the dry run fails at once if it is missing.
-   - A row tied through `organization_id` to two owners' references cannot be placed at all.
-     Both customers then fail with a foreign-key error and stay in the shared organization
-     (nothing is moved wrongly); no such row was in the integration data.
-   - A row that hangs off two owners' proposals by plain foreign keys only stays in the shared
-     organization and is reported by `noCustomerRecordsInSharedOrganization`.
-   - A historical insight report on A's proposal that cites B's proposal: the citation row is
-     tied to B's reference and goes to B's tenant; the report stays with A.
+   - **Rows tied to two owners' proposals through `organization_id` stop both customers
+     (open, no remedy yet).** This is a real path, not a hypothetical one.
+     `source_extraction_runs.reused_from_run_id` is a composite foreign key
+     (`organization_id, reused_from_run_id`, migration 046), and the reuse lookup
+     (`postgresEvidenceExtractionRepository.ts`) searches the whole organization by checksum.
+     In the shared organization a run under A's reference can therefore reuse a run under B's.
+     A's move takes its own run, which takes the reused run as the parent it is tied to (with
+     that run's fragments, jobs and document sources); B's reference stays; the foreign-key
+     re-check raises `23503` and A's transaction rolls back. B fails the same way from the other
+     side. If the reused run is under a staff-owned proposal, A can never move. Nothing is
+     misplaced: each failure is confined to its own transaction, the customer is journaled
+     `failed`, their MongoDB documents do not move, and **the dry run reports the same
+     customers as failed**, so it is visible before any apply. Clearing the column is not a
+     remedy: intelligence reads `coalesce(reused_from_run_id, id)` and A's requirement evidence
+     mappings point at the reused run's fragments. A remedy (for example copying the reused
+     run's data under A's reference) has to be decided and built before the cutover if the
+     production copy has such rows.
+   - **The verifier's report now carries a pre-flight for this**, read in the shared
+     organization before the apply: `preflight.crossOwnerCompositeTies` (`rows`, `byTable`, up
+     to 20 samples with the owners' user ids, and `reusedExtractionRunsAcrossOwners`, the known
+     case counted directly) and `preflight.rowsUnderTwoOwners`, which counts every row that
+     hangs off two owners' proposals by any foreign key. It is information, not a check: it
+     does not change the exit code.
+   - A row that hangs off two owners' proposals without being tied to both through
+     `organization_id` moves, or stays, without an error, and the verifier then fails on it
+     (`proposalDataFollowsProposal`, under `rowsNotWithParent`):
+     - by plain foreign keys only (a clarification question under A's reference and B's
+       conversation): it stays in the shared organization whichever customer moves first, and
+       `noCustomerRecordsInSharedOrganization` reports it too;
+     - tied to one and hanging off the other (a historical insight report on A's proposal that
+       cites B's proposal): the citation row goes to B's tenant with B's reference, and the
+       report stays with A.
+     Both are counted by `preflight.rowsUnderTwoOwners` before the apply.
+   - The verifier compares every plain foreign key between customer tables (92 at the time of
+     writing, less the ones whose parent is DXG's shared corpus), per organization: a child whose
+     parent is not in the child's organization. That is one query per organization over every
+     such table; take its time from the repeated rehearsal. It judges every organization, so
+     run it before the apply as well (cutover step 3): a `false` there is a defect that exists
+     today, not one the migration made.
+   - `proposalDataFollowsProposal` is `false`, with the reason in
+     `misplacedProposalData.notRead`, when it found no organization in Postgres or read no
+     reference while MongoDB holds proposals. Reading nothing is not a pass.
    - Not changed: rows a customer did that are under nobody's proposal (assistant threads,
      audit events, knowledge retrieval queries) still move with whoever did them, and a parent
      tied to such a row still moves with it. A customer who wrote into another customer's
@@ -389,7 +429,10 @@ For cutover day, before the real run. It needs an isolated restore that nothing 
    `npm run rehearsal:run -- --run-id=prod-rehearsal-<date> --out=<private dir> --confirm-target=<mongo-host>/<db>,<postgres-host>/<db>`.
    It stops at the first step that exits unexpectedly and says which.
 7. Read `<out>/summary.json`. It passes when: `unchangedByDryRun`, `dryRunDiffersFromApply`,
-   `restoredByRollback`, `sameAsFirstApply` and `bystanderUntouched` are all `[]`; every verify
+   `restoredByRollback`, `sameAsFirstApply` and `bystanderUntouched` are all `[]`; the dry run reports no failed
+   customer; `preflight` (from the new step `01b-verify-before-apply`, which exits 1 by design)
+   shows `crossOwnerCompositeTies.rows` 0 and `rowsUnderTwoOwners.rows` 0, or a remedy for
+   exactly those rows has been decided; every verify
    report shows `proposalDataFollowsProposal: true` with `misplacedProposalData.checked.references`
    above 0; steps 04, 09 and 11 exit 0; step 07
    exits 1 with `visibilityUnchanged: true` (the runner stops if it does not); `customersConsideredOnRerun` is 0; and

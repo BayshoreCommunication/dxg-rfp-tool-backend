@@ -235,6 +235,12 @@ const main = async () => {
     // What starting the process costs (npm, ts-node, connecting): part of every step below.
     run("00-startup", "migrate:customer-organizations", ["--help"], 0, "process start-up only");
     run("01-snapshot", "verify:customer-organizations", [`--snapshot=${snapshotFile}`]);
+    // Customers are still in the shared organization, so the verifier exits 1. Its pre-flight
+    // counts the rows that hang off two owners' proposals (finding 9): the customers such a row
+    // ties together cannot be moved, so it has to read 0 before an apply means anything.
+    const baseline = run("01b-verify-before-apply", "verify:customer-organizations", [`--from-slug=${fromSlug}`], 1,
+      "exit 1 is expected: customers are still in the shared organization");
+    summary.preflight = baseline?.preflight ?? null;
     const dryRun = run("02-dry-run", "migrate:customer-organizations", [`--run-id=${runId}`, `--from-slug=${fromSlug}`]);
     summary.unchangedByDryRun = differences(before, await stateOf(sharedId, pool));
     const applied = run("03-apply", "migrate:customer-organizations", ["--apply", `--run-id=${runId}`, `--from-slug=${fromSlug}`]);

@@ -523,6 +523,11 @@ order, while the dry run double-counted and the verifier passed
 - Proven on the integration database only, in both processing orders. **Not run against
   production data. The production-copy rehearsal must be repeated with this fix before any
   cutover**; it also has to supply the timings, because the fix adds Postgres work per customer.
+- Known and open: a row the database ties to two customers' proposals (an extraction run that
+  reuses another customer's run) makes both customers' moves fail, dry run included, and a row
+  hanging off two customers' proposals by plain keys fails the verifier afterwards. The
+  verifier's report counts both before an apply (`preflight`); no remedy is built. If the
+  production copy has such rows the cutover is a no-go until one is decided.
 - The cutover stays blocked until that repeated rehearsal passes.
 
 ### Tenancy cutover runbook (ORG-502, 2026-11-11)

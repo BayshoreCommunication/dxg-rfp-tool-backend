@@ -124,6 +124,17 @@ Every line must be "yes" or a recorded decision. Any "no" is a no-go.
    any failed customer, and whether the Postgres leftover counts were non-empty before the
    apply. Note: `npm run rehearsal:run` needs a checkout with dev dependencies and network reach
    to the restore; the production image cannot run it. **OPERATOR TO CONFIRM** where it runs.
+   **No row hangs off two owners' proposals, or a remedy is decided first** (finding 9). On the
+   production copy, the verifier's report before the apply
+   (`node dist/scripts/verifyCustomerOrganizations.js --from-slug=dxg`) must show
+   `preflight.crossOwnerCompositeTies.rows` **0**, `reusedExtractionRunsAcrossOwners` **0** and
+   `preflight.rowsUnderTwoOwners.rows` **0**, and the dry run must report no failed customer.
+   A row tied to two owners' references through `organization_id` (the known case: an
+   extraction run that reuses a run made for another customer's proposal) makes both customers
+   fail on every attempt; they cannot leave the shared organization, and under a staff-owned
+   proposal the customer can never move. The other rows under two owners move or stay without
+   an error and then fail `proposalDataFollowsProposal`. The migration has no remedy for either:
+   if any count is above 0, this is a **no-go** until one is decided, built and rehearsed.
 2. **Decision: suspended and removed memberships** (finding 3). The apply makes every moved
    customer an active Planner in their holding tenant, including ones whose membership in the
    shared organization was suspended or removed, and the verifier cannot see it. Decide: accept,
@@ -227,6 +238,12 @@ reference for a rollback:
   customer records. After a rollback they must be exactly these again.
 - `orphans.total`: note it. Orphans that exist now (RFPs of suspended or membership-less
   accounts) are not caused by the migration.
+- `proposalDataFollowsProposal`: must already be `true` here, with
+  `misplacedProposalData.checked.references` above 0. `false` now means rows are apart from
+  their parents before anything has moved (or, with `notRead` set, that the verifier read
+  nothing): stop and find out why, because the same lines would fail the verify after the apply.
+- `preflight.crossOwnerCompositeTies.rows` and `preflight.rowsUnderTwoOwners.rows`: both 0, as
+  on the production copy (step 0.1). Above 0 → do not continue.
 
 ## 4. Dry run (takes the locks; about as long as the apply)
 
@@ -241,7 +258,8 @@ non-empty `postgres` counts for customers who have used AI features.
 Stop conditions (nothing has changed; go to step 7 to resume):
 
 - `failed` above 0. A permission error here means the task is not connecting as the table
-  owner.
+  owner. A `foreign key` error for a pair of customers is a row tied to both their proposals
+  (finding 9, step 0.1): they cannot be moved by this migration.
 - `"postgres": "skipped"`: the migration role is not configured.
 - `customers` far from `N`.
 - It runs much longer than the per-customer figure predicts, or customers fail with
@@ -269,7 +287,7 @@ compare against the snapshot. Three reports appear in the log, in order.
 | `visibilityUnchanged` | `true` (or exactly the differences decided in 0.3) |
 | `noCustomerRecordsInSharedOrganization` | `true`: `leftovers.mongo` and `leftovers.postgres` both `{}` (or exactly the RFPs decided in 0.4) |
 | `everyProposalHasAnActiveOwner` | `true`, `orphans.total` 0 |
-| `proposalDataFollowsProposal` | `true`: `misplacedProposalData.total` 0, and `misplacedProposalData.checked.references` is above 0 (it read the references it judged). `false` means a proposal's Postgres reference, its owner or rows naming it are in different organizations (rehearsal finding 9): **roll back** |
+| `proposalDataFollowsProposal` | `true`: `misplacedProposalData.total` 0, and `misplacedProposalData.checked.references` is above 0 (it read the references it judged) and `notRead` is `null`. `false` means a proposal's Postgres reference, its owner, or a row and the parent it hangs off are in different organizations, or that the check read nothing (rehearsal finding 9): **roll back** |
 | exit code | 0 |
 
 If the apply reported failed customers: re-run it alone with the same run id. It skips
