@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-11-23 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
+**Last updated:** 2026-11-24 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -508,6 +508,17 @@ production or staging copy was available. Results, timings, findings and the ste
 - Open for ORG-502 and the owner: the migration alters every tenant table once per customer
   (dry run included), so it cannot share the database with a serving API, and a suspended
   customer becomes an active Planner in their holding tenant.
+
+### Proposal edit and create no longer accept server-owned fields (2026-11-24, in review)
+
+`PUT /api/proposals/:id` and `POST /api/proposals` wrote any field a client sent, including
+`organizationId`, `isArchived`/`archivedAt` and (through dotted keys) `lifecycle.*`. Client
+payloads now pass an allow-list (`proposalFieldOwnership.ts`; `DECISIONS.md`, 2026-11-24), a
+payload naming another organization is refused with 400 and audited, and the write repository
+refuses such updates whatever its caller passes. Not deployed until this merges and is released.
+Open: whether production was affected has not been checked (read-only queries are in the pull
+request); `PATCH /api/proposals/:id/meta` still accepts `viewsCount`; the settings update route
+has the same body-to-`$set` shape and is not fixed here.
 
 ### Tenancy migration: production-copy rehearsal failed, fix in review (2026-11-23)
 

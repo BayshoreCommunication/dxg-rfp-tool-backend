@@ -24,6 +24,43 @@ import { ProposalTeamNotAssignableError } from "../src/modules/proposals/applica
 import { respondIfProposalAccessDenied } from "../src/modules/identity/application/proposalAccess";
 import { respondIfPlanError } from "../src/modules/entitlements/http/planGate";
 import { recordFirstRfpOpened } from "../src/modules/launchMetrics/firstRfpOpened";
+import { ProposalPayloadTooDeepError, ProposalTenancyChangeRefusedError, refusedTenancyWriteAuditMetadata } from "../src/modules/proposals/domain/proposalFieldOwnership";
+import { mongoSecurityAuditWriter } from "../src/modules/auth/infrastructure/audit/mongoSecurityAuditWriter";
+import { randomUUID } from "node:crypto";
+
+// A proposal write that named another organization: 400, and a denied event in the caller's
+// organization. The refusal fires before any lookup, so the event has no target: the proposal id
+// is recorded as the one the request claimed. The audit write never changes the answer.
+// A payload nested too deep is the other refused write: 400, no event.
+const respondIfTenancyChangeRefused = async (req: AuthRequest, res: Response, error: unknown, claimedProposalId?: string): Promise<boolean> => {
+  if (error instanceof ProposalPayloadTooDeepError) {
+    res.status(error.status).json({ success: false, code: error.code, message: error.message });
+    return true;
+  }
+  if (!(error instanceof ProposalTenancyChangeRefusedError)) return false;
+  const attempted = (req.body as Record<string, unknown> | undefined)?.[error.field];
+  try {
+    await mongoSecurityAuditWriter.append({
+      organizationId: req.user?.organizationId,
+      actorUserId: req.user?.userId,
+      action: "proposal.tenancy_field_write.refused",
+      targetType: "proposal",
+      decision: "denied",
+      reason: "organization_change_in_payload",
+      correlationId: (req as AuthRequest & { correlationId?: string }).correlationId ?? randomUUID(),
+      metadata: refusedTenancyWriteAuditMetadata({
+        field: error.field,
+        attempted,
+        claimedProposalId,
+        route: `${req.method} ${req.baseUrl}${req.route?.path ?? ""}`,
+      }),
+    });
+  } catch (auditError) {
+    console.error("Proposal tenancy refusal audit error:", auditError instanceof Error ? auditError.message : auditError);
+  }
+  res.status(error.status).json({ success: false, code: error.code, message: error.message });
+  return true;
+};
 
 const isValidProposalId = (id?: string) =>
   typeof id === "string" && mongoose.isValidObjectId(id);
@@ -206,7 +243,8 @@ export const createProposal = async (
     }
     const proposal = await createOwnedProposal({
       ownerUserId: userId,
-      proposal: req.body as Record<string, unknown>,
+      proposal: (req.body ?? {}) as Record<string, unknown>,
+      actorOrganizationId: req.user?.organizationId,
     });
 
     res.status(201).json({
@@ -216,6 +254,7 @@ export const createProposal = async (
     });
   } catch (error: any) {
     if (respondIfProposalAccessDenied(res, error)) return;
+    if (await respondIfTenancyChangeRefused(req, res, error)) return;
     // The organization's plan has no RFP slot left (ORG-601).
     if (respondIfPlanError(res, error)) return;
     console.error("Create proposal error:", error);
@@ -261,7 +300,8 @@ export const updateProposal = async (
     const result = await updateOwnedProposal({
       proposalId: id,
       ownerUserId: userId,
-      updates: req.body as Record<string, unknown>,
+      updates: (req.body ?? {}) as Record<string, unknown>,
+      actorOrganizationId: req.user?.organizationId,
     });
 
     if (result.kind === "not_found") {
@@ -279,6 +319,7 @@ export const updateProposal = async (
     });
   } catch (error: any) {
     if (respondIfProposalAccessDenied(res, error)) return;
+    if (await respondIfTenancyChangeRefused(req, res, error, req.params.id)) return;
     if (error instanceof ProposalTeamNotAssignableError) {
       res.status(error.status).json({ success: false, code: error.code, message: error.message });
       return;
