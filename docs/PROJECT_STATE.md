@@ -250,20 +250,31 @@ wrote `deleted` directly, which the transition trigger rejects, so the row
 stayed `ready`, the conversation stayed active and no audit event was written.
 Details and failure states: `docs/architecture/PRIVATE_DOCUMENT_INGESTION.md`.
 
+- A proposal is marked (`purgeStarted`) before its first document is
+  touched. A marked proposal cannot be restored (409
+  `PROPOSAL_BEING_DELETED`) or edited; it stays visible in the archive until
+  it is deleted. The dashboard does not yet hide Restore for it: the planner
+  sees the refusal message.
+- The 30-day sweep keeps a proposal whose documents could not all be removed
+  and retries it the next day, so an archived proposal can outlive 30 days.
+- The daily archive job also finishes purges whose proposal MongoDB no longer
+  has (a planner's delete whose storage step failed).
+
 Open after this change:
 
 - Proposals permanently deleted before the fix have source rows still marked
   `ready` whose objects are already gone. A one-off repair has not been done.
-- Nothing retries a `deletion_pending` source after a planner's permanent
-  delete whose storage step failed; the failure is logged
-  (`proposal_artifacts_purge_failed`). The sweep and `purgeOldProposals` do
-  retry, because they keep the MongoDB record until the purge completes.
 - The same direct write of `deleted` is still in two other places, found by
   reading the code and not yet fixed: the planner's vendor-response deletion
   (`purgeVendorResponseArtifacts`, so the "registered document sources are
   tombstoned" statement above does not hold for a source that is not already
   `deletion_pending`) and the retention sweep (`retentionSweeper`, which only
   acts with `RETENTION_SWEEP_APPLY=true`).
+- A single-document delete whose storage step failed is not retried by
+  anything; an upload link issued earlier can put an object back after the
+  tombstone; object versions are not removed on a versioned bucket.
+- `PUT /api/proposals/:id` accepts `isArchived`, so an edit can un-archive a
+  proposal that is not being deleted. Pre-existing, not changed here.
 - A permanent delete still leaves the proposal's other MongoDB documents
   (vendor responses, public access grants, email campaigns, status
   transitions).

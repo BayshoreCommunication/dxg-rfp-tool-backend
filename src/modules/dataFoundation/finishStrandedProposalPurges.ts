@@ -20,7 +20,7 @@ import { purgeProposalArtifacts } from "./purgeProposalArtifacts";
 //   - Within one organization it takes proposal references that have a live
 //     `deletion_pending` source which is not under legal hold or retention.
 //   - MongoDB then decides. A proposal that still exists and does NOT carry
-//     `purgeStartedAt` is left alone: its `deletion_pending` document came from
+//     `purgeStarted` is left alone: its `deletion_pending` document came from
 //     a single-document delete (requestDeletion), which is not this job's to
 //     finish. A proposal that carries the marker gets the full purge. A
 //     proposal MongoDB no longer has gets only its already-pending sources
@@ -83,10 +83,11 @@ export const finishStrandedProposalPurges = async (input: {
       run.organizations += 1;
       // A failed read here throws and skips the organization: "could not ask"
       // is never taken for "the proposal is gone".
+      // scope-exempt: read by id on purpose. A proposal that now belongs to another organization still exists, and must not be read as gone.
       const known = await Proposal.find({ _id: { $in: candidates } })
-        .select("_id purgeStartedAt")
-        .lean<{ _id: unknown; purgeStartedAt?: Date | null }[]>();
-      const marker = new Map(known.map((doc) => [String(doc._id), Boolean(doc.purgeStartedAt)]));
+        .select("_id purgeStarted")
+        .lean<{ _id: unknown; purgeStarted?: boolean }[]>();
+      const marker = new Map(known.map((doc) => [String(doc._id), doc.purgeStarted === true]));
       const beingDeleted = candidates.filter((id) => marker.get(id) === true);
       const gone = candidates.filter((id) => !marker.has(id));
       run.leftAlone += candidates.length - beingDeleted.length - gone.length;

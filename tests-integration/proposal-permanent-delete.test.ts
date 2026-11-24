@@ -71,7 +71,7 @@ const goneProposal = async (label: string, organizationId = orgA): Promise<Fixtu
   return seedProposal(label, existing ? { organizationId: existing.id, organizationMongoId: String(organizationId) } : undefined, { organizationMongoId: String(organizationId) });
 };
 const mongoProposal = (id: string) =>
-  Proposal.collection.findOne({ _id: new mongoose.Types.ObjectId(id) }) as Promise<{ isArchived?: boolean; purgeStartedAt?: Date | null } | null>;
+  Proposal.collection.findOne({ _id: new mongoose.Types.ObjectId(id) }) as Promise<{ isArchived?: boolean; purgeStarted?: boolean; purgeStartedAt?: Date | null } | null>;
 
 before(async () => {
   await startPurgeEnvironment();
@@ -120,6 +120,7 @@ test('a proposal the archive sweep had to keep cannot be restored or edited back
   const kept = await mongoProposal(proposal.id);
   assert.ok(kept, 'the sweep keeps the MongoDB record');
   assert.equal(kept.isArchived, true);
+  assert.equal(kept.purgeStarted, true);
   assert.ok(kept.purgeStartedAt instanceof Date);
   assert.equal((await sourceRow(failing.id)).status, 'deletion_pending');
   assert.equal((await sourceRow(fine.id)).status, 'deleted');
@@ -138,11 +139,11 @@ test('a proposal the archive sweep had to keep cannot be restored or edited back
     message: 'This Proposal is being permanently deleted and can no longer be restored.',
   });
   // Nor through an edit that sets the archived flag itself.
-  const edit = await call('PUT', `/api/proposals/${proposal.id}`, { isArchived: false, archivedAt: null });
+  const edit = await call('PUT', `/api/proposals/${proposal.id}`, { isArchived: false, archivedAt: null, purgeStarted: false });
   assert.equal(edit.status, 404, JSON.stringify(edit.body));
   const still = await mongoProposal(proposal.id);
   assert.equal(still?.isArchived, true);
-  assert.ok(still?.purgeStartedAt instanceof Date);
+  assert.equal(still?.purgeStarted, true);
 
   storage.denied.delete(failing.objectKey);
   await purgeArchivedProposals();
@@ -193,7 +194,7 @@ test('a restore racing a permanent delete either wins outright or loses outright
       outcomes.add('restored');
       assert.equal(deleted.status, 404, `round ${round}: ${JSON.stringify(deleted.body)}`);
       assert.equal(after?.isArchived, false, `round ${round}`);
-      assert.equal(after?.purgeStartedAt ?? null, null, `round ${round}`);
+      assert.notEqual(after?.purgeStarted, true, `round ${round}`);
       assert.equal(row.status, 'ready', `round ${round}`);
       assert.equal(deleteRequests(source.objectKey), 0, `round ${round}`);
       assert.equal(await conversationStatus(proposal), 'active', `round ${round}`);
@@ -265,7 +266,7 @@ test('the daily pass finishes only proposals that are being deleted, in organiza
 
   // A proposal that carries the marker (a sweep kept it): the whole purge is run again.
   const marked = await archivedProposal('marked', 5);
-  await Proposal.collection.updateOne({ _id: new mongoose.Types.ObjectId(marked.id) }, { $set: { purgeStartedAt: new Date() } });
+  await Proposal.collection.updateOne({ _id: new mongoose.Types.ObjectId(marked.id) }, { $set: { purgeStarted: true, purgeStartedAt: new Date() } });
   const markedPending = await seedSource(marked, 'deletion_pending');
   const markedReady = await seedSource(marked, 'ready');
 

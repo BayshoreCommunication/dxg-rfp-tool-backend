@@ -13,8 +13,10 @@ export interface IProposal extends Document {
   isOpen: boolean;
   isArchived: boolean;
   archivedAt?: Date | null;
-  /** Set when a permanent delete of this proposal began removing its source documents, and never
+  /** True once a permanent delete of this proposal began removing its source documents, and never
       cleared: from then on the proposal cannot be restored or edited, only deleted. */
+  purgeStarted?: boolean;
+  /** When `purgeStarted` was set. */
   purgeStartedAt?: Date | null;
   isCopy: boolean;
   viewsCount: number;
@@ -125,6 +127,7 @@ const proposalSchema = new Schema<IProposal>(
     isOpen: { type: Boolean, default: true },
     isArchived: { type: Boolean, default: false, index: true },
     archivedAt: { type: Date, default: null },
+    purgeStarted: { type: Boolean, default: false },
     purgeStartedAt: { type: Date, default: null },
     isCopy: { type: Boolean, default: false, index: true },
     viewsCount: { type: Number, default: 0, min: 0 },

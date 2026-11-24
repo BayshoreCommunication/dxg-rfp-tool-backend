@@ -65,7 +65,7 @@ export const mongoProposalWriteRepository: ProposalWriteRepository = {
     // A proposal whose permanent delete has started is no longer editable: an
     // edit could otherwise un-archive it (isArchived is an ordinary field here).
     const proposal = await Proposal.findOneAndUpdate(
-      scoped(ownerUserId, "edit", { _id: proposalId, purgeStartedAt: null }),
+      scoped(ownerUserId, "edit", { _id: proposalId, purgeStarted: { $ne: true } }),
       { $set: updates },
       // context:"query" binds conditional validators to the query so they can
       // read the pending update; without it they see no lifecycle fields at all.
@@ -100,18 +100,17 @@ export const mongoProposalWriteRepository: ProposalWriteRepository = {
   },
 
   async restoreOwnedById({ proposalId, ownerUserId }) {
-    // `purgeStartedAt: null` also matches a proposal that never had the field.
     // The condition and the write are one atomic update, so a restore and the
     // start of a permanent delete cannot both win.
     const proposal = await Proposal.findOneAndUpdate(
-      scoped(ownerUserId, "archive", { _id: proposalId, isArchived: true, purgeStartedAt: null }),
+      scoped(ownerUserId, "archive", { _id: proposalId, isArchived: true, purgeStarted: { $ne: true } }),
       { $set: { isArchived: false }, $unset: { archivedAt: "" } },
       { new: true },
     ).select("_id");
     if (proposal) return true;
-    const beingDeleted = await Proposal.exists(
-      scoped(ownerUserId, "archive", { _id: proposalId, isArchived: true, purgeStartedAt: { $ne: null } }),
-    );
+    const beingDeleted = await Proposal.findOne(
+      scoped(ownerUserId, "archive", { _id: proposalId, isArchived: true, purgeStarted: true }),
+    ).select("_id").lean();
     if (beingDeleted) return "being_deleted";
     await explainMiss(ownerUserId, proposalId, "archive");
     return false;
@@ -132,16 +131,17 @@ export const mongoProposalWriteRepository: ProposalWriteRepository = {
   },
 
   async markOwnedArchivedPurgeStartedById({ proposalId, ownerUserId }) {
-    const filter = (extra: Record<string, unknown>) =>
-      scoped(ownerUserId, "delete", { _id: proposalId, isArchived: true, ...extra });
     // The first start time is kept; `timestamps: false` leaves updatedAt alone.
-    const started = await Proposal.updateOne(
-      filter({ purgeStartedAt: null }),
-      { $set: { purgeStartedAt: new Date() } },
-      { timestamps: false },
-    );
-    if (started.matchedCount > 0) return true;
-    return (await Proposal.exists(filter({ purgeStartedAt: { $ne: null } }))) !== null;
+    const started = await Proposal.findOneAndUpdate(
+      scoped(ownerUserId, "delete", { _id: proposalId, isArchived: true, purgeStarted: { $ne: true } }),
+      { $set: { purgeStarted: true, purgeStartedAt: new Date() } },
+      { new: true, timestamps: false },
+    ).select("_id");
+    if (started) return true;
+    const already = await Proposal.findOne(
+      scoped(ownerUserId, "delete", { _id: proposalId, isArchived: true, purgeStarted: true }),
+    ).select("_id").lean();
+    return already !== null;
   },
 
   async permanentlyDeleteOwnedArchivedById({ proposalId, ownerUserId }) {

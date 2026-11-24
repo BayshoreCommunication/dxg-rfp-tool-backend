@@ -338,21 +338,23 @@ test("the marker is written and read where the access policy scopes it, and neve
 
   // Set under the same policy action as the delete itself, on an archived proposal only.
   const mark = method("markOwnedArchivedPurgeStartedById", "permanentlyDeleteOwnedArchivedById");
-  assert.match(mark, /scoped\(ownerUserId, "delete", \{ _id: proposalId, isArchived: true, \.\.\.extra \}\)/);
-  assert.match(mark, /\$set: \{ purgeStartedAt: new Date\(\) \}/);
+  assert.match(mark, /scoped\(ownerUserId, "delete", \{ _id: proposalId, isArchived: true, purgeStarted: \{ \$ne: true \} \}\)/);
+  assert.match(mark, /\$set: \{ purgeStarted: true, purgeStartedAt: new Date\(\) \}/);
   // Restore and edit both carry the condition in the same atomic update as their write.
   const restore = method("restoreOwnedById", "findOwnedArchivedPurgeTargetById");
-  assert.match(restore, /scoped\(ownerUserId, "archive", \{ _id: proposalId, isArchived: true, purgeStartedAt: null \}\)/);
+  assert.match(restore, /Proposal\.findOneAndUpdate\(\s+scoped\(ownerUserId, "archive", \{ _id: proposalId, isArchived: true, purgeStarted: \{ \$ne: true \} \}\)/);
   assert.match(restore, /return "being_deleted";/);
   const update = method("updateOwnedById", "incrementOwnedViews");
-  assert.match(update, /scoped\(ownerUserId, "edit", \{ _id: proposalId, purgeStartedAt: null \}\)/);
-  // Nothing else in the application writes or clears it.
-  assert.equal((repository.match(/purgeStartedAt: new Date\(\)/g) ?? []).length, 1);
-  assert.doesNotMatch(repository, /\$unset: \{[^}]*purgeStartedAt/);
+  assert.match(update, /Proposal\.findOneAndUpdate\(\s+scoped\(ownerUserId, "edit", \{ _id: proposalId, purgeStarted: \{ \$ne: true \} \}\)/);
+  // Nothing else in the application sets it, and nothing clears it.
+  assert.equal((repository.match(/purgeStarted: true, purgeStartedAt: new Date\(\)/g) ?? []).length, 1);
+  assert.doesNotMatch(repository, /purgeStarted: false|\$unset: \{[^}]*purgeStarted/);
   // A copy and a client payload cannot carry it.
-  assert.match(read("src/modules/proposals/application/authorOwnedProposal.ts"), /delete proposal\.purgeStartedAt;/);
+  const author = read("src/modules/proposals/application/authorOwnedProposal.ts");
+  assert.match(author, /delete proposal\.purgeStarted;/);
+  assert.match(author, /delete proposal\.purgeStartedAt;/);
   // The archive list still shows the proposal: no read filters on the marker.
-  assert.doesNotMatch(read("src/modules/proposals/infrastructure/mongo/mongoProposalReadRepository.ts"), /purgeStartedAt/);
+  assert.doesNotMatch(read("src/modules/proposals/infrastructure/mongo/mongoProposalReadRepository.ts"), /purgeStarted/);
   // The refusal the planner sees.
   const controller = read("controller/proposalsController.ts");
   assert.match(controller, /res\.status\(409\)\.json\(\{\s+success: false,\s+code: "PROPOSAL_BEING_DELETED",\s+message: "This Proposal is being permanently deleted and can no longer be restored\.",/);

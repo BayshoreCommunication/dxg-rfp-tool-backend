@@ -160,8 +160,8 @@ const statusFilter = (status: Status): Record<string, unknown> => {
   // for deletion the proposal cannot be restored or edited, and the daily job finishes a
   // purge that this run leaves incomplete.
   await Proposal.updateMany(
-    { _id: { $in: matched.map((proposal) => proposal._id) }, purgeStartedAt: null },
-    { $set: { purgeStartedAt: new Date() } },
+    { _id: { $in: matched.map((proposal) => proposal._id) }, purgeStarted: { $ne: true } },
+    { $set: { purgeStarted: true, purgeStartedAt: new Date() } },
     { timestamps: false },
   );
   console.log("\nPurging cross-store artifacts…");

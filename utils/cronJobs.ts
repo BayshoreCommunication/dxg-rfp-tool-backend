@@ -117,8 +117,8 @@ export const purgeArchivedProposals = async () => {
       // filter repeats "archived", so a proposal restored since the read above is not marked,
       // and only the ones that are marked go any further.
       const stillArchived = { _id: { $in: candidates.map((doc) => doc._id) }, isArchived: true };
-      await Proposal.updateMany({ ...stillArchived, purgeStartedAt: null }, { $set: { purgeStartedAt: new Date() } }, { timestamps: false });
-      const doomed = await Proposal.find({ ...stillArchived, purgeStartedAt: { $ne: null } })
+      await Proposal.updateMany({ ...stillArchived, purgeStarted: { $ne: true } }, { $set: { purgeStarted: true, purgeStartedAt: new Date() } }, { timestamps: false });
+      const doomed = await Proposal.find({ ...stillArchived, purgeStarted: true })
         .select("_id organizationId")
         .lean<{ _id: unknown; organizationId?: unknown }[]>();
       // Propagate to private storage and Postgres source rows BEFORE the Mongo
@@ -134,7 +134,7 @@ export const purgeArchivedProposals = async () => {
         console.error(`[Cron] Archive purge kept ${unfinished.size} proposal(s) whose source documents were not fully removed; they are retried on the next run`);
       }
       if (ids.length) {
-        const result = await Proposal.deleteMany({ _id: { $in: ids }, isArchived: true, purgeStartedAt: { $ne: null } });
+        const result = await Proposal.deleteMany({ _id: { $in: ids }, isArchived: true, purgeStarted: true });
         if (result.deletedCount > 0) {
           console.log(`[Cron] Purged ${result.deletedCount} archived proposal(s) older than 30 days`);
         }
