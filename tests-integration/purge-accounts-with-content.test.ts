@@ -303,7 +303,7 @@ test('the dry run reports every account and writes nothing to MongoDB, PostgreSQ
   const run = await purge(targets, '--with-content');
   assert.equal(run.status, 0, explain(run));
   const report = run.report!;
-  assert.equal(report.mode, 'dry-run');
+  assert.equal(report.mode, 'dry-run', explain(run));
   assert.equal(report.database, TEST_MONGODB_DB_NAME);
   assert.equal(report.privateSourceDocuments, 1, "Ana's, read from PostgreSQL");
   assert.deepEqual(report.users.sort(), [email.ana, email.ben].sort(), 'matched whatever the stored capitals');
@@ -368,9 +368,9 @@ test('when a stored file cannot be deleted the run stops and no account is remov
   const run = await purge(targets, '--with-content', '--apply');
   storage.deny = false;
   assert.equal(run.status, 1, explain(run));
-  assert.equal(run.report?.mode, 'failed');
-  assert.equal(run.report!.failed.email, email.ana);
-  assert.equal(run.report!.failed.step, 'deleting a stored support attachment');
+  assert.equal(run.report?.mode, 'failed', explain(run));
+  assert.equal(run.report!.failed.email, email.ana, explain(run));
+  assert.equal(run.report!.failed.step, 'deleting a stored support attachment', explain(run));
   assert.deepEqual(run.report!.accountsRemoved, []);
   // Ana's proposals went through the product before the file failed; her account and her ticket did not go.
   assert.equal(await db().collection('proposals').countDocuments({ userId: user.ana }), 0);
@@ -387,11 +387,11 @@ test('apply removes exactly the purged accounts and their content', async () => 
   const run = await purge(targets, '--with-content', '--apply');
   assert.equal(run.status, 0, explain(run));
   const report = run.report!;
-  assert.equal(report.mode, 'applied');
-  assert.equal(report.deleted.accounts.users, 2);
+  assert.equal(report.mode, 'applied', explain(run));
+  assert.equal(report.deleted.accounts.users, 2, explain(run));
   assert.equal(report.deleted.accounts.organizationMemberships, 2);
   assert.equal(report.deleted.accounts.organizations, 0);
-  assert.equal(report.deleted.content.proposals, 1, "Ben's; Ana's two went in the run that stopped");
+  assert.equal(report.deleted.content.proposals, 1, `Ben's; Ana's two went in the run that stopped\n${explain(run)}`);
   assert.equal(report.deleted.content.supporttickets, 1);
   assert.equal(report.deleted.content.storedSupportFiles, 3);
   assert.deepEqual(report.ownerCheck.newlyWithoutActiveOwner, []);
@@ -441,7 +441,7 @@ test('storage was asked to delete the purged files and no others', async () => {
 test('PostgreSQL keeps its rows: the source is tombstoned, the conversation archived, the rest as it was', async () => {
   const pool = postgresPool();
   const source = async (id: string) => (await pool.query('SELECT status, deleted_at FROM rfpilot.document_sources WHERE id=$1', [id])).rows[0];
-  assert.equal((await source(pg.anaSource)).status, 'deleted');
+  assert.equal((await source(pg.anaSource)).status, 'deleted', `audit events: ${(await postgresSnapshot()).audit}`);
   assert.ok((await source(pg.anaSource)).deleted_at);
   assert.equal((await source(pg.carolSource)).status, 'ready');
   assert.equal((await source(pg.carolSource)).deleted_at, null);
