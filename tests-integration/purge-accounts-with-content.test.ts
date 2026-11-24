@@ -73,9 +73,13 @@ const purge = (...args: string[]): Promise<Run> => new Promise((resolve, reject)
   child.on('error', reject);
   child.on('close', (status) => {
     clearTimeout(timer);
-    const start = stdout.indexOf('{\n  "mode"');
+    // The report is the pretty-printed object that starts with "mode"; other lines may surround it.
+    const start = stdout.search(/\{\r?\n\s+"mode"/);
     let report: Run['report'] = null;
-    try { report = start >= 0 ? JSON.parse(stdout.slice(start)) : null; } catch { report = null; }
+    for (let end = stdout.lastIndexOf('}'); start >= 0 && end > start && !report; end = stdout.lastIndexOf('}', end - 1)) {
+      try { report = JSON.parse(stdout.slice(start, end + 1)); } catch { report = null; }
+    }
+    if (!report) process.stderr.write(`purgeTestAccounts ${args.join(' ')} printed no report:\n--- stdout\n${stdout}\n--- stderr\n${stderr}\n`);
     resolve({ status, stdout, stderr, report });
   });
 });
@@ -169,7 +173,9 @@ before(async () => {
 
   // A staff account in the admins collection with Ana's email, its membership and its session.
   const admin = await Admin.create({ _id: user.admin, organizationId: org.shared, name: 'Ana (staff)', email: email.ana.toLowerCase(), password: `staff-secret-${tag}`, role: 'admin' });
-  adminPasswordHash = String(admin.password);
+  adminPasswordHash = String((await db().collection('admins').findOne({ _id: user.admin }))!.password);
+  assert.match(adminPasswordHash, /^\$2/);
+  void admin;
   await insert('organizationmemberships', member(user.admin, ['dxg_admin']), false);
   const session = (userId: mongoose.Types.ObjectId, label: string) =>
     ({ organizationId: org.shared, userId, sessionId: `s-${label}-${tag}`, familyId: `f-${label}-${tag}`, tokenId: `t-${label}-${tag}`, tokenHash: `h-${label}-${tag}`, expiresAt: new Date(now.getTime() + 86_400_000), createdAt: now, updatedAt: now });
@@ -383,7 +389,7 @@ test('apply removes exactly the purged accounts and their content', async () => 
 });
 
 test('the staff account with the same email is untouched and can still sign in', async () => {
-  const admin = await Admin.findOne({ email: email.ana.toLowerCase() });
+  const admin = await Admin.findOne({ email: email.ana.toLowerCase() }).select('+password');
   assert.ok(admin);
   assert.equal(String(admin._id), String(user.admin));
   assert.equal(String(admin.password), adminPasswordHash);
