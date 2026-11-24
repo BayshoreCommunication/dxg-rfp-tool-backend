@@ -273,8 +273,13 @@ Open after this change:
 - A single-document delete whose storage step failed is not retried by
   anything; an upload link issued earlier can put an object back after the
   tombstone; object versions are not removed on a versioned bucket.
-- `PUT /api/proposals/:id` accepts `isArchived`, so an edit can un-archive a
-  proposal that is not being deleted. Pre-existing, not changed here.
+- **Do not run `scripts/purgeOldProposals.ts` until the follow-up lands.** It
+  marks every matched proposal, including ones that are not archived; when a
+  purge does not complete the proposal is kept live but marked, so its owner
+  can no longer edit it and nothing clears the mark.
+- Follow-up PR, from the second review: that script marker; the daily pass can
+  be starved by a batch of proposals that keep failing; lock strength on the
+  proposal reference; further spellings the status-write guard does not read.
 - A permanent delete still leaves the proposal's other MongoDB documents
   (vendor responses, public access grants, email campaigns, status
   transitions).

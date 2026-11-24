@@ -65,8 +65,8 @@ export const mongoProposalWriteRepository: ProposalWriteRepository = {
   }) {
     // Backstop: this update can't move the proposal to another organization or owner, change its
     // archive state or lifecycle, or carry an operator, whatever the caller built.
+    // The filter below adds: a proposal whose permanent delete has started is no longer editable.
     assertEditUpdateIsSafe(updates);
-    // A proposal whose permanent delete has started is no longer editable.
     const proposal = await Proposal.findOneAndUpdate(
       scoped(ownerUserId, "edit", { _id: proposalId, purgeStarted: { $ne: true } }),
       { $set: updates },

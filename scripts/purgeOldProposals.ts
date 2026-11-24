@@ -1,4 +1,10 @@
 /**
+ * DO NOT RUN until the follow-up to PR #156 lands. This script marks every
+ * matched proposal as being permanently deleted (purgeStarted) before it
+ * purges, and it matches proposals that are NOT archived. When a purge does
+ * not complete the proposal is kept, still live and still marked: its owner
+ * can no longer edit it and nothing clears the mark.
+ *
  * Permanently remove proposals and their cross-store artifacts.
  *
  * Dry run by default: it prints exactly what it would delete and changes
@@ -34,6 +40,12 @@ type Options = {
 };
 
 const usage = `
+WARNING: DO NOT RUN THIS SCRIPT until the follow-up to PR #156 lands.
+  It marks every matched proposal as being permanently deleted before it
+  purges, including proposals that are not archived. If a purge does not
+  complete, the proposal is kept live but marked: its owner can no longer
+  edit it, and nothing clears the mark.
+
 Usage: npx ts-node scripts/purgeOldProposals.ts [options]
 
   --dry-run                 Default. Report only; change nothing.

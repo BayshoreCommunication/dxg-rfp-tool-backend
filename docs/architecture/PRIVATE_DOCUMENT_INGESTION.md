@@ -19,7 +19,9 @@ It is never cleared. From that write on:
 - restore answers `409 PROPOSAL_BEING_DELETED` ("This Proposal is being
   permanently deleted and can no longer be restored.");
 - an edit (`PUT /api/proposals/:id`, status and metadata updates) no longer
-  matches the proposal and answers 404, so it cannot be un-archived that way;
+  matches the proposal and answers 404;
+- the marker is a server-owned field (`proposalFieldOwnership.ts`): a client
+  payload that carries it on create or edit has it dropped;
 - the proposal still shows in its owner's archive, and can still be copied or
   saved as a template: both read only its MongoDB content and create a new,
   unmarked proposal with no source documents;
@@ -85,6 +87,11 @@ MongoDB about each:
 
 Nothing finishes a single-document delete (`DELETE /api/v1/sources/:id`) whose
 storage step failed; the planner can repeat that delete.
+
+**Do not run `scripts/purgeOldProposals.ts` until the follow-up to this change
+lands.** It marks every proposal it matches, including ones that are not
+archived. When a purge does not complete, the proposal is kept live but
+marked: its owner can no longer edit it and nothing clears the mark.
 
 Known limits, not addressed here: an upload link issued before the delete can
 still be used to put an object back after the tombstone; object versions are

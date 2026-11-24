@@ -138,9 +138,11 @@ test('a proposal the archive sweep had to keep cannot be restored or edited back
     code: 'PROPOSAL_BEING_DELETED',
     message: 'This Proposal is being permanently deleted and can no longer be restored.',
   });
-  // Nor through an edit that sets the archived flag itself.
-  const edit = await call('PUT', `/api/proposals/${proposal.id}`, { isArchived: false, archivedAt: null, purgeStarted: false });
+  // Nor through an edit: the update no longer matches it, whatever it carries. The content
+  // field makes this a real edit (server-owned fields in the payload are dropped before it).
+  const edit = await call('PUT', `/api/proposals/${proposal.id}`, { isArchived: false, archivedAt: null, purgeStarted: false, event: { eventName: 'Edited while being deleted' } });
   assert.equal(edit.status, 404, JSON.stringify(edit.body));
+  assert.equal(((await mongoProposal(proposal.id)) as { event?: { eventName?: string } } | null)?.event?.eventName, 'Purge sweep-kept');
   const still = await mongoProposal(proposal.id);
   assert.equal(still?.isArchived, true);
   assert.equal(still?.purgeStarted, true);
@@ -327,4 +329,38 @@ test('the daily pass finishes only proposals that are being deleted, in organiza
     orgAAudit: (await admin.query('SELECT count(*)::int AS n FROM rfpilot.audit_events WHERE organization_id=$1', [gone.organizationId])).rows[0].n,
     requests: storage.requests.length,
   }, afterFirst);
+});
+
+test('a client cannot mark a proposal as being deleted: the marker in a create or an edit is ignored', async () => {
+  const forged = { purgeStarted: true, purgeStartedAt: '2020-01-01T00:00:00.000Z' };
+  const stored = (id: string) =>
+    Proposal.collection.findOne({ _id: new mongoose.Types.ObjectId(id) }) as Promise<Record<string, any> | null>; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const unmarked = async (id: string, step: string) => {
+    const row = await stored(id);
+    assert.ok(row, `${step}: the proposal exists`);
+    assert.notEqual(row.purgeStarted, true, `${step}: purgeStarted was not taken from the client`);
+    assert.equal(row.purgeStartedAt ?? null, null, `${step}: purgeStartedAt was not taken from the client`);
+    return row;
+  };
+
+  // Through create.
+  const created = await call('POST', '/api/proposals', { ...forged, event: { eventName: 'Forged marker' } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const id = String(created.body.data._id);
+  await unmarked(id, 'create');
+
+  // Through an edit of an unmarked proposal.
+  const edited = await call('PUT', `/api/proposals/${id}`, { ...forged, event: { eventName: 'Forged marker, edited' } });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  assert.equal((await unmarked(id, 'edit')).event.eventName, 'Forged marker, edited');
+
+  // It is still an ordinary proposal: it can be archived, restored and edited again.
+  assert.equal((await call('DELETE', `/api/proposals/${id}`)).status, 200);
+  const restore = await call('PATCH', `/api/proposals/${id}/restore`);
+  assert.equal(restore.status, 200, JSON.stringify(restore.body));
+  const after = await unmarked(id, 'restore');
+  assert.equal(after.isArchived, false);
+  const again = await call('PUT', `/api/proposals/${id}`, { event: { eventName: 'Still editable' } });
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+  assert.equal((await stored(id))?.event.eventName, 'Still editable');
 });
