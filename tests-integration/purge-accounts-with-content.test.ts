@@ -191,10 +191,10 @@ before(async () => {
     const base = { organizationId: org.shared, proposalId, createdAt: now, updatedAt: now };
     const response = await insert('vendorresponses', { ...base, proposalOwnerId: owner, vendorName: 'AV Co', submittedBy: 'Vic', email: `vendor-${label}@example.test`, emailTrackingId: `track-${label}-${tag}` }, goes);
     const grant = await insert('publicaccessgrants', { organizationId: org.shared, resourceType: 'proposal', resourceId: proposalId, purpose: 'vendor_response', tokenHash: `grant-${label}-${tag}`, createdByUserId: owner, policyVersion: 'public-access.v1', expiresAt: new Date(now.getTime() + 86_400_000), useCount: 0, createdAt: now, updatedAt: now }, goes);
-    const submission = await insert('vendorsubmissions', { ...base, proposalOwnerId: owner, vendorIdentityKey: `vendor-${label}`, currentResponseId: response, grantIds: [grant] }, goes);
+    const submission = await insert('vendorsubmissions', { ...base, proposalOwnerId: owner, vendorIdentityKey: `vendor-${label}`, legacyVendorResponseId: response, publicGrantIds: [grant] }, goes);
     const version = await insert('vendorsubmissionversions', { ...base, submissionId: submission, responseId: response, versionNumber: 1, idempotencyKey: `idem-${label}-${tag}`, receivedAt: now }, goes);
     await insert('vendorsubmissiondrafts', { ...base, grantId: grant, status: 'active', draftVersion: 1 }, goes);
-    await insert('vendorconfirmationdeliveries', { ...base, submissionId: submission, submissionVersionId: version, status: 'sent' }, goes);
+    await insert('vendorconfirmationdeliveries', { ...base, submissionId: submission, versionId: version, status: 'accepted', attemptedAt: now }, goes);
     await insert('vendorresponsequestionnaireversions', { ...base, questionnaireVersion: 1, sourceChecksum: `sum-${label}`, status: 'published', questionnaire: { sections: [] } }, goes);
     await insert('proposalcanonicalsnapshots', { organizationId: org.shared, legacyProposalId: proposalId, ownerUserId: String(owner), legacyHash: `hash-${label}`, migrationRelease: `r-${tag}`, createdAt: now, updatedAt: now }, goes);
     await insert('proposalstatustransitions', { organizationId: org.shared, proposalId, fromStage: null, toStage: 'draft', fromStatus: null, toStatus: 'unsubmitted', actorType: 'user', actorUserId: owner, reason: 'created', at: now }, goes);
