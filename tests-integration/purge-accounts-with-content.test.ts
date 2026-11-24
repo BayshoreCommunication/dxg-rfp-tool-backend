@@ -198,7 +198,7 @@ before(async () => {
     await insert('vendorresponsequestionnaireversions', { ...base, questionnaireVersion: 1, sourceChecksum: `sum-${label}`, status: 'published', questionnaire: { sections: [] } }, goes);
     await insert('proposalcanonicalsnapshots', { organizationId: org.shared, legacyProposalId: proposalId, ownerUserId: String(owner), legacyHash: `hash-${label}`, migrationRelease: `r-${tag}`, createdAt: now, updatedAt: now }, goes);
     await insert('proposalstatustransitions', { organizationId: org.shared, proposalId, fromStage: null, toStage: 'draft', fromStatus: null, toStatus: 'unsubmitted', actorType: 'user', actorUserId: owner, reason: 'created', at: now }, goes);
-    await insert('emailcampaigns', { organizationId: org.shared, userId: owner, proposalId, subject: 'RFP', trackingId: `campaign-${label}-${tag}`, recipients: [], createdAt: now, updatedAt: now }, goes);
+    await insert('emailcampaigns', { organizationId: org.shared, userId: owner, proposalId, subject: 'RFP', recipients: [{ email: 'vendor@example.test', trackingId: `campaign-${label}-${tag}`, status: 'sent' }], createdAt: now, updatedAt: now }, goes);
   };
   await dependents(proposal.ana1, user.ana, 'ana1', true);
   await dependents(proposal.ben1, user.ben, 'ben1', true);
@@ -211,7 +211,7 @@ before(async () => {
   await insert('rfpshares', share(proposal.ana1, user.carol, user.ana), true);
   await insert('rfpshares', share(proposal.carol1, user.ana, user.carol), true);
   // A campaign Ana sent for Carol's proposal is Ana's.
-  await insert('emailcampaigns', { organizationId: org.shared, userId: user.ana, proposalId: proposal.carol1, subject: 'From Ana', trackingId: `campaign-ana-on-carol-${tag}`, recipients: [], createdAt: now, updatedAt: now }, true);
+  await insert('emailcampaigns', { organizationId: org.shared, userId: user.ana, proposalId: proposal.carol1, subject: 'From Ana', recipients: [{ email: 'vendor@example.test', trackingId: `campaign-ana-on-carol-${tag}`, status: 'sent' }], createdAt: now, updatedAt: now }, true);
   // Carol's notification about Ana's proposal is Carol's and stays; Ana's own goes.
   await insert('notifications', { organizationId: org.shared, userId: user.carol, proposalId: proposal.ana1, type: 'proposal_shared', title: 'Shared with you', message: 'x', createdAt: now, updatedAt: now }, false);
   await insert('notifications', { organizationId: org.shared, userId: user.ana, proposalId: proposal.carol1, type: 'proposal_shared', title: 'Shared with you', message: 'x', createdAt: now, updatedAt: now }, true);
