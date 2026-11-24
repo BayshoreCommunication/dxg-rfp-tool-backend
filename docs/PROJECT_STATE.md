@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-11-23 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
+**Last updated:** 2026-11-24 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -239,6 +239,36 @@ single or selected operation and refreshes counts and lists after success. The
 proposal-summary read exposes the exact owned response IDs for each paginated
 group, allowing the main inbox to select proposal groups without restoring a
 global delete-all operation.
+
+### Permanent delete tombstones source documents (2026-11-24)
+
+Permanently deleting a proposal (and the 30-day sweep of archived proposals)
+now really tombstones its source documents: each source is marked
+`deletion_pending`, its object is deleted from private storage, and the row is
+then marked `deleted`. Until this fix the purge deleted the object and then
+wrote `deleted` directly, which the transition trigger rejects, so the row
+stayed `ready`, the conversation stayed active and no audit event was written.
+Details and failure states: `docs/architecture/PRIVATE_DOCUMENT_INGESTION.md`.
+
+Open after this change:
+
+- Proposals permanently deleted before the fix have source rows still marked
+  `ready` whose objects are already gone. A one-off repair has not been done.
+- Nothing retries a `deletion_pending` source after a planner's permanent
+  delete whose storage step failed; the failure is logged
+  (`proposal_artifacts_purge_failed`). The sweep and `purgeOldProposals` do
+  retry, because they keep the MongoDB record until the purge completes.
+- The same direct write of `deleted` is still in two other places, found by
+  reading the code and not yet fixed: the planner's vendor-response deletion
+  (`purgeVendorResponseArtifacts`, so the "registered document sources are
+  tombstoned" statement above does not hold for a source that is not already
+  `deletion_pending`) and the retention sweep (`retentionSweeper`, which only
+  acts with `RETENTION_SWEEP_APPLY=true`).
+- A permanent delete still leaves the proposal's other MongoDB documents
+  (vendor responses, public access grants, email campaigns, status
+  transitions).
+- MongoDB production has no backup: Atlas free tier, operator-run `mongodump`
+  only (`docs/operations/database-migrations.md`).
 
 ### The DXG pricing engine (client workbook)
 

@@ -6,6 +6,43 @@ Slice 1D provides the quarantine and safety boundary for future document process
 
 `pending_upload → uploaded → scanning → ready` is the successful path. Infected scans become `blocked`; scanner errors become `scan_failed` and may be retried. Deletion uses `deletion_pending → deleted` and fails when retention or legal hold applies. PostgreSQL enforces allowed state transitions. Only `ready` is eligible for a later parsing workflow.
 
+### Deletion with the proposal (2026-11-24)
+
+Permanently deleting a proposal, and the 30-day sweep of archived proposals,
+run `purgeProposalArtifacts` for it. For every live source of the proposal it:
+
+1. marks the source `deletion_pending` and commits. A source that is being
+   scanned goes `scanning → scan_failed → deletion_pending`: the scan is
+   abandoned, and `finishScan` ignores a source that is no longer `scanning`;
+2. deletes the object from private storage;
+3. marks the source `deleted` with `deleted_at`. When no live source is left
+   it archives the proposal's conversation and writes one
+   `proposal_artifacts_purged` audit event.
+
+A source whose object could not be deleted stays `deletion_pending` and is not
+tombstoned; the conversation is not archived and no audit event is written.
+Calling the function again for the same proposal finishes it. The function
+returns, per proposal, whether it completed.
+
+- The 30-day sweep and `scripts/purgeOldProposals.ts` keep the MongoDB record
+  of a proposal that did not complete, so their next run retries it.
+- The planner's "permanently delete" always removes the proposal and answers
+  200. If the purge did not complete it logs `proposal_artifacts_purge_failed`
+  with an error code, and **nothing retries those sources automatically**:
+  there is no sweeper for `deletion_pending` rows.
+- A source under legal hold or unexpired `retention_until`, and a source in
+  `expired` (the trigger has no transition out of it), is left untouched and
+  reported as not completed.
+- `sourceDeletionTransitions.ts` is the shared way to a tombstone.
+  `tests/document-source-tombstone-guard.test.js` fails when another statement
+  writes `status='deleted'` itself.
+
+Before this fix the purge wrote `deleted` straight onto the row, which the
+transition trigger rejects, after it had already deleted the object. Proposals
+permanently deleted before the fix therefore have source rows still marked
+`ready` (or whatever status they had) whose objects are gone, with no audit
+event. Repairing those rows is a one-off that is not part of this change.
+
 ## Storage boundary
 
 - The API creates `quarantine/<organization>/<source>/original.<extension>` server-side.

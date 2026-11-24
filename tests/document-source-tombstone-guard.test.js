@@ -22,11 +22,16 @@ const ALLOWED = {
   "src/modules/documentIngestion/postgresDocumentRepository.ts": 1,
   // Vendor response purge: marks `deletion_pending` and tombstones in one transaction.
   "scripts/purgeVendorResponses.ts": 1,
-  // KNOWN DEFECT, not a model to copy: the retention sweep tombstones a source
-  // from whatever status it is in, which the trigger rejects for anything but
-  // `deletion_pending`. Listed so this guard is green today and so a second
-  // statement here still fails. Remove this line when the sweep uses the helper.
+  // KNOWN DEFECTS, not models to copy. Both delete the object first and then
+  // tombstone a source from whatever status it is in, which the trigger
+  // rejects for anything but `deletion_pending`: the same failure permanent
+  // delete had. They are listed so this guard is green today and so a second
+  // statement in either file still fails. Remove each line when that file
+  // uses the helper.
+  //   - the retention sweep (only acts with RETENTION_SWEEP_APPLY=true)
   "src/modules/dataFoundation/retentionSweeper.ts": 1,
+  //   - a planner permanently deleting vendor responses
+  "src/modules/vendorResponses/infrastructure/postgres/purgeVendorResponseArtifacts.ts": 1,
 };
 
 const DIRECT_TOMBSTONE = /UPDATE\s+rfpilot\.document_sources\s+SET\b[^;`"]*?\bstatus\s*=\s*'deleted'/g;
