@@ -42,7 +42,7 @@ export type ProposalArtifactPurgeResult = {
     /** Left `deletion_pending` because the object delete or the last step failed. */
     pending: number;
     /** Not touched: under legal hold or retention, or in a status with no way to `deleted`. */
-    blocked: number;
+    notDeletable: number;
   };
   /** First failure's code when `complete` is false. */
   errorCode?: string;
@@ -90,7 +90,7 @@ const purgeOne = async (
     proposalMongoId,
     organizationMongoId,
     complete: false,
-    sources: { tombstoned: 0, pending: 0, blocked: 0 },
+    sources: { tombstoned: 0, pending: 0, notDeletable: 0 },
   };
 
   // Step 1: mark, and commit, before anything leaves storage.
@@ -115,12 +115,12 @@ const purgeOne = async (
     const outcome = await markSourcesDeletionPending(c, candidates.map((source) => source.id));
     return {
       pending: candidates.filter((source) => outcome.pending.includes(source.id)),
-      blocked: sources.rows.length - outcome.pending.length,
+      notDeletable: sources.rows.length - outcome.pending.length,
     };
   });
   if (typeof marked === "string") return { ...result, complete: true, skipped: marked };
-  result.sources.blocked = marked.blocked;
-  if (marked.blocked > 0) result.errorCode = "SOURCE_NOT_DELETABLE";
+  result.sources.notDeletable = marked.notDeletable;
+  if (marked.notDeletable > 0) result.errorCode = "SOURCE_NOT_DELETABLE";
 
   // Step 2: storage. A source whose object could not be deleted stays
   // `deletion_pending`; it is never tombstoned over a file that may still exist.
@@ -168,7 +168,7 @@ const purgeOne = async (
   });
 
   result.sources.tombstoned = closed.tombstoned;
-  result.sources.pending = Math.max(0, closed.remaining - marked.blocked);
+  result.sources.pending = Math.max(0, closed.remaining - marked.notDeletable);
   result.complete = closed.remaining === 0;
   if (result.complete) delete result.errorCode;
   else result.errorCode ??= "SOURCES_REMAIN";
@@ -180,7 +180,7 @@ export const purgeProposalArtifacts = async (
 ): Promise<ProposalArtifactPurgeResult[]> => {
   const results: ProposalArtifactPurgeResult[] = [];
   for (const { proposalMongoId, organizationMongoId } of proposals) {
-    const empty = { tombstoned: 0, pending: 0, blocked: 0 };
+    const empty = { tombstoned: 0, pending: 0, notDeletable: 0 };
     if (!postgresEnabled()) {
       results.push({ proposalMongoId, organizationMongoId, complete: true, skipped: "postgres_disabled", sources: empty });
       continue;
@@ -203,7 +203,7 @@ export const purgeProposalArtifacts = async (
       safeLog("error", "proposal_artifacts_purge_failed", {
         outcome: "failure",
         errorCode: result.errorCode ?? "UNKNOWN",
-        count: result.sources.pending + result.sources.blocked,
+        count: result.sources.pending + result.sources.notDeletable,
       });
     }
   }

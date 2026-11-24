@@ -57,7 +57,7 @@ const seedSource = async (fixture: Fixture, status: string, options: SourceOptio
   const id = crypto.randomUUID();
   await admin.query(
     `INSERT INTO rfpilot.document_sources(id,organization_id,proposal_reference_id,uploader_external_user_id,status,legal_hold,retention_until,deleted_at)
-     VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $7::int IS NULL THEN NULL ELSE now() + make_interval(days => $7::int) END,CASE WHEN $5='deleted' THEN now() - interval '1 day' ELSE NULL END)`,
+     VALUES($1,$2,$3,$4,$5::text,$6::boolean,CASE WHEN $7::int IS NULL THEN NULL ELSE now() + make_interval(days => $7::int) END,CASE WHEN $5::text='deleted' THEN now() - interval '1 day' ELSE NULL END)`,
     [id, fixture.organizationId, fixture.referenceId, randomMongoId(), status, options.legalHold ?? false, options.retentionDays ?? null],
   );
   const objectKey = `quarantine/${fixture.organizationMongoId}/${id}/original.pdf`;
@@ -167,7 +167,7 @@ test('a ready source is tombstoned, its object deleted once, the conversation ar
     proposalMongoId: fixture.proposalMongoId,
     organizationMongoId: fixture.organizationMongoId,
     complete: true,
-    sources: { tombstoned: 1, pending: 0, blocked: 0 },
+    sources: { tombstoned: 1, pending: 0, notDeletable: 0 },
   });
   const row = await sourceRow(source.id);
   assert.equal(row.status, 'deleted');
@@ -193,7 +193,7 @@ test('a source in every other live status is tombstoned, including one that is b
   const result = await purge(fixture);
 
   assert.equal(result.complete, true);
-  assert.deepEqual(result.sources, { tombstoned: statuses.length + 1, pending: 0, blocked: 0 });
+  assert.deepEqual(result.sources, { tombstoned: statuses.length + 1, pending: 0, notDeletable: 0 });
   for (const [status, source] of sources) {
     const row = await sourceRow(source.id);
     assert.equal(row.status, 'deleted', `${status} source is tombstoned`);
@@ -218,7 +218,7 @@ test('a storage failure leaves the source deletion_pending and unaudited, and a 
 
   assert.equal(first.complete, false);
   assert.equal(first.errorCode, 'AccessDenied');
-  assert.deepEqual(first.sources, { tombstoned: 1, pending: 1, blocked: 0 });
+  assert.deepEqual(first.sources, { tombstoned: 1, pending: 1, notDeletable: 0 });
   const stuck = await sourceRow(failing.id);
   assert.equal(stuck.status, 'deletion_pending', 'never "file may still exist, row says deleted", never "row still ready"');
   assert.equal(stuck.deleted_at, null);
@@ -233,7 +233,7 @@ test('a storage failure leaves the source deletion_pending and unaudited, and a 
 
   assert.equal(second.complete, true);
   assert.equal(second.errorCode, undefined);
-  assert.deepEqual(second.sources, { tombstoned: 1, pending: 0, blocked: 0 });
+  assert.deepEqual(second.sources, { tombstoned: 1, pending: 0, notDeletable: 0 });
   const finished = await sourceRow(failing.id);
   assert.equal(finished.status, 'deleted');
   assert.ok(finished.deleted_at instanceof Date);
@@ -255,7 +255,7 @@ test('a source under legal hold or retention, or with no allowed way to deleted,
 
   assert.equal(result.complete, false);
   assert.equal(result.errorCode, 'SOURCE_NOT_DELETABLE');
-  assert.deepEqual(result.sources, { tombstoned: 1, pending: 0, blocked: 3 });
+  assert.deepEqual(result.sources, { tombstoned: 1, pending: 0, notDeletable: 3 });
   assert.deepEqual({ held: await sourceRow(held.id), retained: await sourceRow(retained.id), expired: await sourceRow(expired.id) }, before);
   for (const source of [held, retained, expired]) assert.equal(deleteRequests(source.objectKey), 0);
   assert.equal((await sourceRow(ordinary.id)).status, 'deleted');
@@ -271,7 +271,7 @@ test('a proposal with no sources is closed out: conversation archived, one audit
   const result = await purge(fixture);
 
   assert.equal(result.complete, true);
-  assert.deepEqual(result.sources, { tombstoned: 0, pending: 0, blocked: 0 });
+  assert.deepEqual(result.sources, { tombstoned: 0, pending: 0, notDeletable: 0 });
   assert.equal(storage.requests.length, requestsBefore);
   assert.equal(await conversationStatus(fixture), 'archived');
   assert.deepEqual((await purgeEvents(fixture)).map((event) => event.metadata), [{ count: 0 }]);
@@ -301,7 +301,7 @@ test('another organization, and another proposal of the same organization, are u
   const crossed = await purgeProposalArtifacts([{ proposalMongoId: foreign.proposalMongoId, organizationMongoId: mine.organizationMongoId }]);
   assert.deepEqual(crossed, [{
     proposalMongoId: foreign.proposalMongoId, organizationMongoId: mine.organizationMongoId,
-    complete: true, skipped: 'proposal_reference_not_found', sources: { tombstoned: 0, pending: 0, blocked: 0 },
+    complete: true, skipped: 'proposal_reference_not_found', sources: { tombstoned: 0, pending: 0, notDeletable: 0 },
   }]);
   assert.deepEqual(await untouched(), before);
   assert.equal(deleteRequests(siblingSource.objectKey), 0);
@@ -324,7 +324,7 @@ test('calling it a second time changes nothing', async () => {
   const second = await purge(fixture);
 
   assert.equal(second.complete, true);
-  assert.deepEqual(second.sources, { tombstoned: 0, pending: 0, blocked: 0 });
+  assert.deepEqual(second.sources, { tombstoned: 0, pending: 0, notDeletable: 0 });
   assert.deepEqual(await snapshot(), afterFirst);
   assert.equal(deleteRequests(source.objectKey), 1);
 });

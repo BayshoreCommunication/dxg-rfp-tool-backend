@@ -167,7 +167,7 @@ const statusFilter = (status: Status): Record<string, unknown> => {
   const unfinished = purged.filter((row) => !row.complete);
   const unfinishedIds = new Set(unfinished.map((row) => row.proposalMongoId));
   for (const row of unfinished) {
-    console.error(`  ✗ ${row.proposalMongoId}  kept: ${row.sources.pending} source(s) deletion_pending, ${row.sources.blocked} not deletable (${row.errorCode ?? "UNKNOWN"})`);
+    console.error(`  ✗ ${row.proposalMongoId}  kept: ${row.sources.pending} source(s) deletion_pending, ${row.sources.notDeletable} not deletable (${row.errorCode ?? "UNKNOWN"})`);
   }
 
   console.log("Deleting proposals…");
