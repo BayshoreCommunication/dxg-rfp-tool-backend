@@ -111,13 +111,21 @@ export const purgeArchivedProposals = async () => {
       .lean<{ _id: unknown; organizationId?: unknown }[]>())
       .filter((doc) => !blocked.has(String(doc.organizationId ?? "")));
     if (!doomed.length) return;
-    const ids = doomed.map((doc) => String(doc._id));
     // Propagate to private storage and Postgres source rows BEFORE the Mongo
     // delete. Done the other way round, a crash between the two steps strands
     // document bytes with nothing left to identify them; this order leaves the
     // authoritative record in place so the next run retries.
     const { purgeProposalArtifacts } = await import("../src/modules/dataFoundation/purgeProposalArtifacts");
-    await purgeProposalArtifacts(doomed.map((doc) => ({ proposalMongoId: String(doc._id), organizationMongoId: String(doc.organizationId ?? "") })).filter((row) => row.organizationMongoId));
+    const purged = await purgeProposalArtifacts(doomed.map((doc) => ({ proposalMongoId: String(doc._id), organizationMongoId: String(doc.organizationId ?? "") })).filter((row) => row.organizationMongoId));
+    // A proposal whose sources could not all be tombstoned keeps its Mongo
+    // record, which is what makes the next run retry it: once the record is
+    // gone nothing identifies the proposal to this sweep again.
+    const unfinished = new Set(purged.filter((row) => !row.complete).map((row) => row.proposalMongoId));
+    const ids = doomed.map((doc) => String(doc._id)).filter((id) => !unfinished.has(id));
+    if (unfinished.size > 0) {
+      console.error(`[Cron] Archive purge kept ${unfinished.size} proposal(s) whose source documents were not fully removed; they are retried on the next run`);
+    }
+    if (!ids.length) return;
     const result = await Proposal.deleteMany({ _id: { $in: ids } });
     if (result.deletedCount > 0) {
       console.log(`[Cron] Purged ${result.deletedCount} archived proposal(s) older than 30 days`);

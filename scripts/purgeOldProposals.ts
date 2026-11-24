@@ -157,15 +157,26 @@ const statusFilter = (status: Status): Record<string, unknown> => {
   // Artifacts first: a failure here leaves the Mongo record in place, so the
   // proposal remains identifiable and the run can simply be repeated.
   console.log("\nPurging cross-store artifacts…");
-  await purgeProposalArtifacts(
+  const purged = await purgeProposalArtifacts(
     matched
       .map((proposal) => ({ proposalMongoId: String(proposal._id), organizationMongoId: String(proposal.organizationId ?? "") }))
       .filter((row) => row.organizationMongoId),
   );
+  // A proposal whose source documents were not all removed is kept, so the
+  // same command can be run again for it once the cause is fixed.
+  const unfinished = purged.filter((row) => !row.complete);
+  const unfinishedIds = new Set(unfinished.map((row) => row.proposalMongoId));
+  for (const row of unfinished) {
+    console.error(`  ✗ ${row.proposalMongoId}  kept: ${row.sources.pending} source(s) deletion_pending, ${row.sources.blocked} not deletable (${row.errorCode ?? "UNKNOWN"})`);
+  }
 
   console.log("Deleting proposals…");
-  const result = await Proposal.deleteMany({ _id: { $in: matched.map((proposal) => proposal._id) } });
+  const result = await Proposal.deleteMany({ _id: { $in: matched.filter((proposal) => !unfinishedIds.has(String(proposal._id))).map((proposal) => proposal._id) } });
   console.log(`\nDeleted ${result.deletedCount} proposal(s).`);
+  if (unfinished.length) {
+    console.error(`Kept ${unfinished.length} proposal(s) whose source documents were not fully removed. Re-run to retry them.`);
+    process.exitCode = 1;
+  }
   console.log("Immutable AI evidence and audit rows are retained until their own retention windows expire.\n");
 
   await mongoose.disconnect();

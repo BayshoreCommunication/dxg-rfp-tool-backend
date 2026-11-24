@@ -259,3 +259,22 @@ test("a proposal with no organization is still deleted, with nothing to purge", 
   assert.equal(result.kind, "deleted");
   assert.deepEqual(purgeCalls, [[]]);
 });
+
+test("permanent delete still removes the proposal when the purge did not finish, and says so", async () => {
+  // A storage failure is not the planner's to retry: the proposal goes, the
+  // response stays a success, and the unfinished purge is visible to a caller.
+  const proposals = {
+    findOwnedArchivedPurgeTargetById: async () => ({
+      proposalMongoId: "proposal-001",
+      organizationMongoId: "org-001",
+    }),
+    permanentlyDeleteOwnedArchivedById: async () => true,
+  };
+  const input = { proposalId: "proposal-001", ownerUserId: "user-001" };
+
+  const unfinished = await createPermanentlyDeleteOwnedProposal(proposals, async () => [{ complete: false }])(input);
+  assert.deepEqual(unfinished, { kind: "deleted", artifactsPurged: false });
+
+  const finished = await createPermanentlyDeleteOwnedProposal(proposals, async () => [{ complete: true }])(input);
+  assert.deepEqual(finished, { kind: "deleted", artifactsPurged: true });
+});
