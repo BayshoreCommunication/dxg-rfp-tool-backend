@@ -338,8 +338,8 @@ test('a client cannot mark a proposal as being deleted: the marker in a create o
   const unmarked = async (id: string, step: string) => {
     const row = await stored(id);
     assert.ok(row, `${step}: the proposal exists`);
-    assert.notEqual(row.purgeStarted, true, `${step}: purgeStarted was not taken from the client`);
-    assert.equal(row.purgeStartedAt ?? null, null, `${step}: purgeStartedAt was not taken from the client`);
+    assert.equal('purgeStarted' in row, false, `${step}: purgeStarted was not taken from the client`);
+    assert.equal('purgeStartedAt' in row, false, `${step}: purgeStartedAt was not taken from the client`);
     return row;
   };
 

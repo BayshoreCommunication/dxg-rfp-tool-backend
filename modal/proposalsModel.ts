@@ -127,8 +127,9 @@ const proposalSchema = new Schema<IProposal>(
     isOpen: { type: Boolean, default: true },
     isArchived: { type: Boolean, default: false, index: true },
     archivedAt: { type: Date, default: null },
-    purgeStarted: { type: Boolean, default: false },
-    purgeStartedAt: { type: Date, default: null },
+    // No defaults: both are absent until a permanent delete starts, on new documents as on old.
+    purgeStarted: { type: Boolean },
+    purgeStartedAt: { type: Date },
     isCopy: { type: Boolean, default: false, index: true },
     viewsCount: { type: Number, default: 0, min: 0 },
     version: { type: Number, default: 1, min: 1 },
