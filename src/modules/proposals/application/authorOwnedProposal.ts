@@ -6,6 +6,7 @@ import type { ProposalLifecycleRecorder } from "../domain/ports/proposalLifecycl
 import { withLiveSettings } from "./proposalPresentation";
 import { activeProposalWorkflowContent } from "../domain/workflowSections";
 import { templateContentOf } from "../domain/templateSnapshot";
+import { assertNoOrganizationChange, clientProposalFields } from "../domain/proposalFieldOwnership";
 
 type AuthorDependencies = {
   proposals: ProposalWriteRepository;
@@ -55,6 +56,14 @@ const removeSystemFields = (input: Record<string, unknown>) => {
   return proposal;
 };
 
+// What a client payload may contribute to a proposal write: the allow-list in
+// proposalFieldOwnership.ts, after the explicit removals above. A payload naming another
+// organization is refused (ProposalTenancyChangeRefusedError) before anything is written.
+const clientPayload = (input: Record<string, unknown>, actorOrganizationId: string | undefined) => {
+  assertNoOrganizationChange(input, actorOrganizationId);
+  return clientProposalFields(removeSystemFields(input));
+};
+
 const recordIdOf = (proposal: object) => String((proposal as { _id?: unknown })._id ?? "");
 
 const settingsForResponse = (
@@ -66,9 +75,10 @@ export const createCreateOwnedProposal = (dependencies: AuthorDependencies) =>
   async (input: {
     ownerUserId: string;
     proposal: Record<string, unknown>;
+    actorOrganizationId?: string;
   }) => {
     const proposalData = activeProposalWorkflowContent(
-      removeSystemFields(input.proposal),
+      clientPayload(input.proposal, input.actorOrganizationId),
     );
     if (typeof proposalData.isDraft !== "boolean") {
       proposalData.isDraft =
@@ -95,12 +105,13 @@ export const createUpdateOwnedProposal = (dependencies: AuthorDependencies) =>
     proposalId: string;
     ownerUserId: string;
     updates: Record<string, unknown>;
+    actorOrganizationId?: string;
   }) => {
     // Omit the dormant root from $set. Existing stored data is deliberately
     // left in place for a future flag restoration, while disabled clients
     // cannot create or replace it.
     const updates = activeProposalWorkflowContent(
-      removeSystemFields(input.updates),
+      clientPayload(input.updates, input.actorOrganizationId),
     );
     delete updates.isCopy;
     await resolveTeamChange(dependencies, input.proposalId, updates);
