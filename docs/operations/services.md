@@ -130,3 +130,80 @@ the exit code**):
 | `migrateAssetUrls.js --from=<url> --to=<url>` | Rewrite stored absolute asset URLs |
 | `migratePostgres.js up\|rollback` | Schema migrations (also fine on the migrate task def) |
 | `purgeTestAccounts.js --domain=<domain>` / `--emails=<a>,<b>` | List accounts on a domain / remove test sign-ups (accounts, and organizations whose every member is removed) so they can sign up fresh. Refuses organizations with RFPs or whose Owner leaves others behind. Leaves audit events and Postgres rows |
+| `purgeTestAccounts.js --emails=<a>,<b> --with-content` | The same, and everything those accounts own: see "Purging test accounts with their content" below. **Irreversible** |
+
+### Purging test accounts with their content
+
+`purgeTestAccounts.js --emails=<a>,<b> --with-content` removes the accounts **and
+what they own**. Without the flag the script is unchanged: accounts only, and
+proposals are left where they are.
+
+It is **irreversible**, and production MongoDB has **no backup** to restore
+from. Take a MongoDB backup first and check that it can be read. PostgreSQL has
+its 7-day automated backups, but this tool deletes nothing there.
+
+Procedure, always in this order:
+
+1. Take the MongoDB backup.
+2. Dry run (no `--apply`). It reads MongoDB only: no write, no PostgreSQL
+   connection, no storage call.
+   `node dist/scripts/purgeTestAccounts.js --emails=<a>,<b> --with-content`
+3. Read the report in the task log. Per account it lists the email, its
+   organizations, the ids of its proposals and a count per collection. Check
+   the proposal count against what you expect and that `refused` is empty.
+4. Apply with the same emails:
+   `node dist/scripts/purgeTestAccounts.js --emails=<a>,<b> --with-content --apply`
+5. Read the report: `mode` must be `applied` and
+   `ownerCheck.newlyWithoutActiveOwner` empty. The exit code is 1 for
+   `refused` and `failed`.
+
+It runs on the API task definition like the other scripts (application
+PostgreSQL role, the task's storage permissions). It does not need the
+migration role.
+
+What it does, per account:
+
+- **Proposals** the account owns, in every organization: archived, then
+  permanently deleted through the same functions as the product's own routes,
+  as the owner. That deletes the private source documents from storage,
+  tombstones `document_sources`, archives the conversation and writes a
+  `proposal_artifacts_purged` audit event.
+- **What the product leaves behind** when it deletes a proposal, removed here:
+  vendor responses, submissions, submission versions, drafts, confirmation
+  deliveries, questionnaire versions, public access grants, canonical
+  snapshots, status transitions, shares and email campaigns of that proposal.
+- **The account's own content**: email campaigns it sent, its personal
+  templates, the support tickets it opened with every message and attachment,
+  and the attachments' stored files.
+- **The account**, as without the flag.
+
+What stays, and why:
+
+| Stays | Why |
+|---|---|
+| PostgreSQL `rfpilot.users`, `rfpilot.proposal_references`, AI runs, evidence, `audit_events` | Immutable by design and keyed by MongoDB ids, never by email. The product's own delete leaves the same rows |
+| MongoDB security audit events, support access grants | Append-only history |
+| Files in the public asset bucket (proposal uploads, vendor documents) | The product does not delete them either |
+| Invitations the account sent, vendor-list entries, teams and organization templates it created | They belong to the organization; other members use them |
+| Another member's notification about a deleted proposal | It is theirs |
+| A staff account with the same email | The `admins` collection is never read or written |
+
+Safety rules:
+
+- Only proposals **owned** by a listed account are deleted. A proposal a listed
+  account can merely see or edit (shared, team, organization role) stays.
+- The whole run is refused, with nothing deleted, when: an account is in a
+  legacy holding organization, an Owner would leave members behind, a proposal
+  has no organization, or PostgreSQL is off (the private source documents
+  could not be purged).
+- If anything fails for one proposal or one stored file, the run stops there,
+  removes no account and reports the proposal. Run the same command again:
+  what is already gone is skipped.
+- An account is removed only when it owns no proposal.
+- A second apply with the same emails reports `nothing-found`.
+
+Retained PostgreSQL rows of an account purged from the shared `dxg`
+organization are counted by `verify:customer-organizations`
+(`noCustomerRecordsInSharedOrganization`) as customer leftovers, because the
+migration finds customers through their MongoDB user and these no longer have
+one. Expect that check to name them after a purge.
