@@ -158,6 +158,23 @@ export const contentRefusals = (input: {
   return refused;
 };
 
+// A private source document of a proposal, still live in Postgres (not tombstoned).
+export type LiveSource = { proposalId: string; status: string; count: number };
+
+// The only status the product's artifact purge can tombstone. purgeProposalArtifacts sets
+// status='deleted' in one step, and the database (rfpilot.enforce_document_source_transition,
+// migration 003) allows 'deleted' only from 'deletion_pending'. For a source in any other status,
+// 'ready' included, the update raises, the purge swallows it, and what is left is a stored file
+// already deleted with a row that still says it exists, no audit event and a live conversation.
+// So such a proposal refuses the run until the product's purge is fixed.
+// tests/purge-accounts-with-content.test.js fails when either side of this changes.
+export const TOMBSTONABLE_SOURCE_STATUSES: readonly string[] = ["deletion_pending"];
+
+export const sourceRefusals = (sources: LiveSource[]): string[] =>
+  sources
+    .filter((source) => !TOMBSTONABLE_SOURCE_STATUSES.includes(source.status))
+    .map((source) => `proposal ${source.proposalId}: ${source.count} private source document(s) in status ${source.status}; the product's artifact purge cannot tombstone them (it would delete the stored file and leave the row), so the proposal cannot be purged completely`);
+
 export type AccountContent = {
   userId: string;
   email: string;

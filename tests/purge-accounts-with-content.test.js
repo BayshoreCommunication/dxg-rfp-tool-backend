@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   ACCOUNT_CONTENT, BEYOND_PRODUCT_PATH, COLLECTION_DECISIONS, ContentPurgeError, PROPOSAL_DEPENDENTS,
-  contentRefusals, contentTotals, describeAccounts, doomedProposalIds, ownerOnlyActor, ownershipViolations, runContentPurge,
+  TOMBSTONABLE_SOURCE_STATUSES, contentRefusals, contentTotals, describeAccounts, doomedProposalIds, ownerOnlyActor, ownershipViolations, runContentPurge, sourceRefusals,
 } = require("../src/modules/accountPurge/purgeAccountContent");
 const { MOVABLE_COLLECTIONS } = require("../src/modules/tenancy/mongoTenantMove");
 const { canAccessRfp, rfpListScope } = require("../src/modules/identity/domain/rfpAccessPolicy");
@@ -107,6 +107,32 @@ test("the run is refused when the artifact purge would be skipped", () => {
   const input = { targetedUserIds: new Set(["ana"]), organizations: [customer], postgresEnabled: false };
   assert.match(contentRefusals({ ...input, proposals: [proposal("p1", "ana")] })[0], /PostgreSQL is not enabled/);
   assert.deepEqual(contentRefusals({ ...input, proposals: [] }), [], "an account with no proposal needs no artifact purge");
+});
+
+test("a proposal whose source documents the product cannot tombstone refuses the run", () => {
+  assert.deepEqual(sourceRefusals([]), []);
+  assert.deepEqual(sourceRefusals([{ proposalId: "p1", status: "deletion_pending", count: 2 }]), []);
+  const refused = sourceRefusals([{ proposalId: "p1", status: "ready", count: 3 }, { proposalId: "p2", status: "uploaded", count: 1 }, { proposalId: "p2", status: "deletion_pending", count: 1 }]);
+  assert.equal(refused.length, 2);
+  assert.match(refused[0], /^proposal p1: 3 private source document\(s\) in status ready; the product's artifact purge cannot tombstone them/);
+  assert.match(refused[1], /^proposal p2: 1 private source document\(s\) in status uploaded/);
+});
+
+// The refusal above mirrors two facts about the product. When either changes (the purge learns
+// to go through deletion_pending, or a migration relaxes the trigger), this fails: update
+// TOMBSTONABLE_SOURCE_STATUSES, or drop the refusal, to match.
+test("the product's artifact purge still sets 'deleted' in one step, which the database allows only from deletion_pending", () => {
+  const purge = fs.readFileSync(path.join(root, "src/modules/dataFoundation/purgeProposalArtifacts.ts"), "utf8");
+  assert.match(purge, /UPDATE rfpilot\.document_sources SET deleted_at=now\(\),status='deleted',updated_at=now\(\) WHERE id=\$1/);
+  assert.doesNotMatch(purge, /deletion_pending/);
+  const migrations = fs.readdirSync(path.join(root, "migrations/postgres")).filter((file) => file.endsWith(".up.sql"))
+    .map((file) => [file, fs.readFileSync(path.join(root, "migrations/postgres", file), "utf8")]);
+  const defining = migrations.filter(([, sql]) => /FUNCTION rfpilot\.enforce_document_source_transition/.test(sql)).map(([file]) => file);
+  assert.deepEqual(defining, ["003_private_document_ingestion.up.sql"], "the transition rule was redefined: re-read it");
+  const rule = migrations.find(([file]) => file === defining[0])[1];
+  const intoDeleted = [...rule.matchAll(/OLD\.status (?:= '([a-z_]+)'|IN \(([^)]*)\)) AND NEW\.status (?:= 'deleted'|IN \([^)]*'deleted'[^)]*\))/g)]
+    .flatMap((match) => (match[1] ? [match[1]] : match[2].split(",").map((status) => status.trim().replace(/'/g, ""))));
+  assert.deepEqual(intoDeleted, [...TOMBSTONABLE_SOURCE_STATUSES]);
 });
 
 // ---- the actor the product path is given -------------------------------------------------------
@@ -277,13 +303,19 @@ test("without --with-content the script takes none of the new code", () => {
   assert.doesNotMatch(top, /accountPurge|proposals\/composition|s3PrivateDocumentStorage|config\/postgres/);
 });
 
-test("a dry run returns before the product, storage or Postgres are even loaded", () => {
+test("a dry run returns before the product or storage are even loaded, and reads Postgres in a read-only transaction", () => {
   const branch = scriptSource.slice(scriptSource.indexOf("const purgeWithContent"), scriptSource.indexOf("const main = async () => {"));
   const dryRunReturn = branch.indexOf('if (!apply) return print({ mode: "dry-run"');
   assert.ok(dryRunReturn > 0);
   for (const loaded of ["proposals/composition", "s3PrivateDocumentStorage", "migrationVerification", "withPostgresTransaction(async", "runContentPurge(", ".run()"]) {
     assert.ok(branch.indexOf(loaded, 0) > dryRunReturn || (loaded === "withPostgresTransaction(async" && branch.indexOf(loaded) > dryRunReturn), `${loaded} is reachable in a dry run`);
   }
+  // The one Postgres read before that point cannot write.
+  const beforeDryRun = branch.slice(0, dryRunReturn);
+  assert.equal([...beforeDryRun.matchAll(/\.query(<[^(]*>)?\(/g)].length, 6);
+  assert.ok(beforeDryRun.indexOf('client.query("BEGIN READ ONLY")') > 0);
+  assert.ok(beforeDryRun.indexOf('client.query("BEGIN READ ONLY")') < beforeDryRun.indexOf("set_config"));
+  assert.doesNotMatch(beforeDryRun, /INSERT|UPDATE|DELETE|COMMIT|withPostgresTransaction\(/);
   // Refusal and nothing-found return even earlier.
   assert.ok(branch.indexOf('mode: "refused"') < dryRunReturn);
   assert.ok(branch.indexOf('mode: "nothing-found"') < dryRunReturn);

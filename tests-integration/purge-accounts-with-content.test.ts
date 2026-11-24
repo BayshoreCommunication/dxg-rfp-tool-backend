@@ -22,16 +22,16 @@ const db = () => mongoose.connection.db!;
 const { EJSON } = mongoose.mongo.BSON;
 
 const org = { shared: oid(), ownerLed: oid(), holding: oid() };
-const user = { ana: oid(), ben: oid(), carol: oid(), staff: oid(), admin: oid(), dora: oid(), eve: oid(), fay: oid() };
-const proposal = { ana1: oid(), ana2: oid(), ben1: oid(), carol1: oid(), fay1: oid() };
+const user = { ana: oid(), ben: oid(), carol: oid(), staff: oid(), admin: oid(), dora: oid(), eve: oid(), fay: oid(), gil: oid() };
+const proposal = { ana1: oid(), ana2: oid(), ben1: oid(), carol1: oid(), fay1: oid(), gil1: oid() };
 const email = {
   // Stored with capitals; the command line passes lower case.
   ana: `Ana.Purge-${tag}@Example.test`, ben: `ben.purge-${tag}@example.test`, carol: `carol.stays-${tag}@example.test`,
-  dora: `dora-${tag}@example.test`, eve: `eve-${tag}@example.test`, fay: `fay-${tag}@example.test`,
+  dora: `dora-${tag}@example.test`, eve: `eve-${tag}@example.test`, fay: `fay-${tag}@example.test`, gil: `gil-${tag}@example.test`,
   ghost: `nobody-${tag}@example.test`,
 };
 const key = {
-  anaDocument: `org/${tag}/sources/ana-brief.pdf`, carolDocument: `org/${tag}/sources/carol-brief.pdf`,
+  anaDocument: `org/${tag}/sources/ana-brief.pdf`, carolDocument: `org/${tag}/sources/carol-brief.pdf`, gilDocument: `org/${tag}/sources/gil-brief.pdf`,
   anaAttached: `support/${tag}/ana-attached.png`, anaPending: `support/${tag}/ana-pending.png`, anaStaffReply: `support/${tag}/staff-reply.png`,
   carolAttached: `support/${tag}/carol-attached.png`,
 };
@@ -116,7 +116,7 @@ const assertSameDocuments = (actual: Map<string, string>, expected: Map<string, 
 };
 
 let pgShared = '';
-const pg = { anaSource: crypto.randomUUID(), carolSource: crypto.randomUUID(), anaConversation: crypto.randomUUID(), carolConversation: crypto.randomUUID() };
+const pg = { anaSource: crypto.randomUUID(), carolSource: crypto.randomUUID(), gilSource: crypto.randomUUID(), anaConversation: crypto.randomUUID(), carolConversation: crypto.randomUUID(), gilConversation: crypto.randomUUID() };
 const postgresSnapshot = async () => {
   const pool = postgresPool();
   const rows = async (sql: string) => JSON.stringify((await pool.query(sql, [pgShared])).rows);
@@ -191,6 +191,10 @@ before(async () => {
   await insert('proposals', rfp(proposal.ana2, user.ana, 'Ana two', { isArchived: true, archivedAt: now }), true);
   await insert('proposals', rfp(proposal.ben1, user.ben, 'Ben one', { status: 'submitted', isDraft: false }), true);
   await insert('proposals', rfp(proposal.carol1, user.carol, 'Carol one'), false);
+  // Gil is refused: his proposal has a source document the product's purge cannot tombstone.
+  await insert('users', person(user.gil, 'Gil', email.gil), false);
+  await insert('organizationmemberships', member(user.gil, ['planner']), false);
+  await insert('proposals', rfp(proposal.gil1, user.gil, 'Gil one'), false);
 
   // Every kind of document that hangs off a proposal: once for a proposal that goes, once for Carol's.
   const dependents = async (proposalId: mongoose.Types.ObjectId, owner: mongoose.Types.ObjectId, label: string, goes: boolean) => {
@@ -258,17 +262,20 @@ before(async () => {
   await insert('organizationmemberships', member(user.fay, ['planner'], org.holding), false);
   await insert('proposals', rfp(proposal.fay1, user.fay, 'Fay one', {}, org.holding), false);
 
-  // ---- PostgreSQL: Ana's and Carol's first proposals have a reference, a private source
+  // ---- PostgreSQL: Ana's, Carol's and Gil's proposals have a reference, a private source
   // document and a conversation. Ana's second proposal and Ben's have no reference at all.
+  // Ana's source is already marked for deletion: the only state the product's purge can tombstone
+  // (see TOMBSTONABLE_SOURCE_STATUSES). Gil's is an ordinary ingested document.
   const pool = postgresPool();
   pgShared = (await pool.query<{ id: string }>('INSERT INTO rfpilot.organizations(external_mongo_id,name) VALUES($1,$2) RETURNING id', [String(org.shared), `Shared ${tag}`])).rows[0].id;
-  for (const [owner, proposalId, source, objectKey, conversation] of [
-    [user.ana, proposal.ana1, pg.anaSource, key.anaDocument, pg.anaConversation],
-    [user.carol, proposal.carol1, pg.carolSource, key.carolDocument, pg.carolConversation],
+  for (const [owner, proposalId, source, objectKey, conversation, status] of [
+    [user.ana, proposal.ana1, pg.anaSource, key.anaDocument, pg.anaConversation, 'deletion_pending'],
+    [user.carol, proposal.carol1, pg.carolSource, key.carolDocument, pg.carolConversation, 'ready'],
+    [user.gil, proposal.gil1, pg.gilSource, key.gilDocument, pg.gilConversation, 'ready'],
   ] as const) {
     const pgUser = (await pool.query<{ id: string }>('INSERT INTO rfpilot.users(organization_id,external_mongo_id) VALUES($1,$2) RETURNING id', [pgShared, String(owner)])).rows[0].id;
     const reference = (await pool.query<{ id: string }>('INSERT INTO rfpilot.proposal_references(organization_id,owner_user_id,external_mongo_id) VALUES($1,$2,$3) RETURNING id', [pgShared, pgUser, String(proposalId)])).rows[0].id;
-    await pool.query("INSERT INTO rfpilot.document_sources(id,organization_id,proposal_reference_id,uploader_external_user_id,status) VALUES($1,$2,$3,$4,'ready')", [source, pgShared, reference, String(owner)]);
+    await pool.query("INSERT INTO rfpilot.document_sources(id,organization_id,proposal_reference_id,uploader_external_user_id,status) VALUES($1,$2,$3,$4,$5)", [source, pgShared, reference, String(owner), status]);
     await pool.query("INSERT INTO rfpilot.document_objects(id,organization_id,source_id,object_key,original_filename,safe_filename,declared_mime_type,expected_size_bytes) VALUES($1,$2,$3,$4,'brief.pdf','brief.pdf','application/pdf',10)", [crypto.randomUUID(), pgShared, source, objectKey]);
     await pool.query('INSERT INTO rfpilot.conversations(id,organization_id,proposal_reference_id,owner_external_user_id) VALUES($1,$2,$3,$4)', [conversation, pgShared, reference, String(owner)]);
   }
@@ -298,6 +305,7 @@ test('the dry run reports every account and writes nothing to MongoDB, PostgreSQ
   const report = run.report!;
   assert.equal(report.mode, 'dry-run');
   assert.equal(report.database, TEST_MONGODB_DB_NAME);
+  assert.equal(report.privateSourceDocuments, 1, "Ana's, read from PostgreSQL");
   assert.deepEqual(report.users.sort(), [email.ana, email.ben].sort(), 'matched whatever the stored capitals');
   assert.deepEqual(report.withoutAccount, [email.ghost], 'an address with no account is reported, not an error');
   assert.deepEqual(report.refused, []);
@@ -330,6 +338,7 @@ test('the dry run reports every account and writes nothing to MongoDB, PostgreSQ
 });
 
 test('an Owner who would leave members behind, and a legacy holding organization, refuse the whole run', async () => {
+  const postgresBeforeRefusals = await postgresSnapshot();
   const ownerLed = await purge(`--emails=${email.dora},${email.ana.toLowerCase()}`, '--with-content', '--apply');
   assert.equal(ownerLed.status, 1, explain(ownerLed));
   assert.equal(ownerLed.report?.mode, 'refused');
@@ -340,9 +349,18 @@ test('an Owner who would leave members behind, and a legacy holding organization
   assert.equal(holding.report?.mode, 'refused');
   assert.match(holding.report!.refused.join('\n'), /kind legacy_holding/);
 
+  // A source document the product's purge cannot tombstone: refused in the dry run and in apply.
+  for (const flags of [[], ['--apply']]) {
+    const source = await purge(`--emails=${email.gil},${email.ben}`, '--with-content', ...flags);
+    assert.equal(source.status, 1, explain(source));
+    assert.equal(source.report?.mode, 'refused');
+    assert.match(source.report!.refused.join('\n'), new RegExp(`proposal ${proposal.gil1}: 1 private source document\\(s\\) in status ready`));
+  }
+
   // Refused means nothing at all was deleted, for the accounts that were fine too.
   assertSameDocuments(await mongoSnapshot(), beforeEverything, 'a refused run wrote to MongoDB');
   assert.deepEqual(storage.requests, []);
+  assert.deepEqual(await postgresSnapshot(), postgresBeforeRefusals, 'a refused run wrote to PostgreSQL');
 });
 
 test('when a stored file cannot be deleted the run stops and no account is removed', async () => {
@@ -412,7 +430,7 @@ test("a proposal the purged account could edit, but did not own, is still there 
 test('no proposal in the organization is left without an active owner', async () => {
   const orphans = await findOrphanedProposals({ organizationId: String(org.shared) });
   assert.equal(orphans.total, 0);
-  assert.equal(await db().collection('proposals').countDocuments({ organizationId: org.shared }), 1);
+  assert.equal(await db().collection('proposals').countDocuments({ organizationId: org.shared }), 2, "Carol's and Gil's");
 });
 
 test('storage was asked to delete the purged files and no others', async () => {
@@ -427,12 +445,13 @@ test('PostgreSQL keeps its rows: the source is tombstoned, the conversation arch
   assert.ok((await source(pg.anaSource)).deleted_at);
   assert.equal((await source(pg.carolSource)).status, 'ready');
   assert.equal((await source(pg.carolSource)).deleted_at, null);
+  assert.equal((await source(pg.gilSource)).status, 'ready');
   const conversation = async (id: string) => (await pool.query('SELECT status FROM rfpilot.conversations WHERE id=$1', [id])).rows[0].status;
   assert.equal(await conversation(pg.anaConversation), 'archived');
   assert.equal(await conversation(pg.carolConversation), 'active');
   // The retained rows the report promises: both users and both references are still there.
-  assert.equal(Number((await pool.query('SELECT count(*) FROM rfpilot.users WHERE organization_id=$1', [pgShared])).rows[0].count), 2);
-  assert.equal(Number((await pool.query('SELECT count(*) FROM rfpilot.proposal_references WHERE organization_id=$1', [pgShared])).rows[0].count), 2);
+  assert.equal(Number((await pool.query('SELECT count(*) FROM rfpilot.users WHERE organization_id=$1', [pgShared])).rows[0].count), 3);
+  assert.equal(Number((await pool.query('SELECT count(*) FROM rfpilot.proposal_references WHERE organization_id=$1', [pgShared])).rows[0].count), 3);
   const audit = (await pool.query("SELECT count(*) FROM rfpilot.audit_events WHERE organization_id=$1 AND action='proposal_artifacts_purged'", [pgShared])).rows[0].count;
   assert.equal(Number(audit), 1, 'one audit event, for the one proposal that had a reference');
 });

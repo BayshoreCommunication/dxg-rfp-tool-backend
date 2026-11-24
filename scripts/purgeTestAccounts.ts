@@ -151,11 +151,39 @@ const purgeWithContent = async () => {
   const contentPlan = await content.planAccountContent({ emails, postgresEnabled: postgresEnabled() });
   const going = content.doomedProposalIds(contentPlan);
   const p = await plan(going.map((id) => new mongoose.Types.ObjectId(id)));
-  const refused = [...p.refused, ...contentPlan.refused];
+  // The proposals' private source documents, read from Postgres in a READ ONLY transaction with
+  // the tenant settings the product's artifact purge uses (so the app role reads under RLS).
+  const liveSources: Array<{ proposalId: string; status: string; count: number }> = [];
+  if (going.length && postgresEnabled() && contentPlan.refused.length === 0) {
+    const { postgresPool } = await import("../config/postgres");
+    const client = await postgresPool().connect();
+    try {
+      await client.query("BEGIN READ ONLY");
+      const byOrganization = new Map<string, string[]>();
+      for (const account of contentPlan.accounts) for (const proposal of account.proposals) byOrganization.set(String(proposal.organizationId), [...(byOrganization.get(String(proposal.organizationId)) ?? []), proposal.id]);
+      for (const [organizationId, proposalIds] of byOrganization) {
+        await client.query("SELECT set_config('app.organization_mongo_id',$1,true)", [organizationId]);
+        const org = await client.query<{ id: string }>("SELECT id FROM rfpilot.organizations WHERE external_mongo_id=$1", [organizationId]);
+        if (!org.rows[0]) continue;
+        await client.query("SELECT set_config('app.organization_id',$1,true)", [org.rows[0].id]);
+        const rows = await client.query<{ proposal_id: string; status: string; n: string }>(
+          "SELECT p.external_mongo_id AS proposal_id, s.status, count(*) AS n FROM rfpilot.document_sources s JOIN rfpilot.proposal_references p ON p.id = s.proposal_reference_id WHERE p.external_mongo_id = ANY($1) AND s.deleted_at IS NULL GROUP BY 1, 2 ORDER BY 1, 2",
+          [proposalIds],
+        );
+        for (const row of rows.rows) liveSources.push({ proposalId: row.proposal_id, status: row.status, count: Number(row.n) });
+      }
+      await client.query("ROLLBACK");
+    } finally {
+      client.release();
+      await closePostgres();
+    }
+  }
+  const refused = [...p.refused, ...contentPlan.refused, ...content.sourceRefusals(liveSources)];
   const contentCounts = content.contentTotals(contentPlan);
   const summary = {
     database: DATABASE_NAME, withContent: true, users: p.users, withoutAccount: p.withoutAccount, organizationsRemoved: p.organizations, refused,
     accounts: content.describeAccounts(contentPlan),
+    privateSourceDocuments: liveSources.reduce((sum, row) => sum + row.count, 0),
   };
   const footer = { removedBeyondTheProductPath: content.BEYOND_PRODUCT_PATH, stays: content.RETAINED };
   const total = [...Object.values(p.counts), ...Object.values(contentCounts)].reduce((a, b) => a + b, 0);
@@ -167,8 +195,8 @@ const purgeWithContent = async () => {
   }
   if (!apply) return print({ mode: "dry-run", ...summary, wouldDelete, ...footer });
 
-  // Everything below writes. The product modules, storage and Postgres are loaded only here, so
-  // a dry run cannot reach S3 or Postgres at all.
+  // Everything below writes. The product modules and storage are loaded only here, so a dry run
+  // cannot reach S3 at all, and the only Postgres statements it runs are the read above.
   const { archiveOwnedProposal, permanentlyDeleteOwnedProposal } = await import("../src/modules/proposals/composition");
   const { runWithTenant } = await import("../src/modules/shared/tenancy/tenantContext");
   const { s3PrivateDocumentStorage } = await import("../src/modules/documentIngestion/s3PrivateDocumentStorage");

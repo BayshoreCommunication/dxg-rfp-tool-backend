@@ -145,8 +145,9 @@ its 7-day automated backups, but this tool deletes nothing there.
 Procedure, always in this order:
 
 1. Take the MongoDB backup.
-2. Dry run (no `--apply`). It reads MongoDB only: no write, no PostgreSQL
-   connection, no storage call.
+2. Dry run (no `--apply`). It reads MongoDB, and the proposals' source
+   documents in PostgreSQL inside a read-only transaction. It writes nothing
+   and makes no storage call.
    `node dist/scripts/purgeTestAccounts.js --emails=<a>,<b> --with-content`
 3. Read the report in the task log. Per account it lists the email, its
    organizations, the ids of its proposals and a count per collection. Check
@@ -194,13 +195,24 @@ Safety rules:
   account can merely see or edit (shared, team, organization role) stays.
 - The whole run is refused, with nothing deleted, when: an account is in a
   legacy holding organization, an Owner would leave members behind, a proposal
-  has no organization, or PostgreSQL is off (the private source documents
-  could not be purged).
+  has no organization, PostgreSQL is off (the private source documents could
+  not be purged), or a proposal has a private source document the product's
+  artifact purge cannot tombstone (see below).
 - If anything fails for one proposal or one stored file, the run stops there,
   removes no account and reports the proposal. Run the same command again:
   what is already gone is skipped.
 - An account is removed only when it owns no proposal.
 - A second apply with the same emails reports `nothing-found`.
+
+Known limit, a product defect this tool refuses to walk into:
+`purgeProposalArtifacts` sets a source document to `deleted` in one step, and
+the database allows `deleted` only from `deletion_pending`
+(`rfpilot.enforce_document_source_transition`). For an ordinary ingested
+document (`ready`) the update raises, the purge swallows the error, and the
+stored file is gone while its row still says `ready`, with no audit event and
+the conversation still active. The product's own permanent delete and the
+30-day archive sweep have the same defect today. Until it is fixed, a proposal
+with such a document is listed under `refused` and nothing is deleted.
 
 Retained PostgreSQL rows of an account purged from the shared `dxg`
 organization are counted by `verify:customer-organizations`
