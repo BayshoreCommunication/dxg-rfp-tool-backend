@@ -1,147 +1,27 @@
 // purgeProposalArtifacts, the step behind "permanently delete" and the 30-day archive sweep, run
 // the way the API runs it: as the application role under forced row-level security, with the
 // real transition trigger on rfpilot.document_sources, and with storage pointed at a local
-// stand-in that records every request it receives.
-import { TEST_APP_ROLE_URL, TEST_POSTGRES_URL } from './env';
-import { ensureAppRole, ensureMigrated, randomMongoId } from './setup';
+// stand-in that records every request it receives and knows which objects exist.
+import './env';
+import { randomMongoId } from './setup';
+import {
+  SYSTEM_ACTOR, admin, conversationStatus, deleteRequests, purgeEvents, seedProposal, seedSource, sourceRow,
+  startPurgeEnvironment, stopPurgeEnvironment, storage, type Fixture,
+} from './purgeFixtures';
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { after, before, test } from 'node:test';
-import { Pool } from 'pg';
-import { closePostgres, postgresPool, withPostgresTransaction } from '../config/postgres';
+import { withPostgresTransaction } from '../config/postgres';
 import { purgeProposalArtifacts } from '../src/modules/dataFoundation/purgeProposalArtifacts';
+import { postgresDocumentRepository } from '../src/modules/documentIngestion/postgresDocumentRepository';
 
-const tag = randomMongoId().slice(0, 10);
-const SYSTEM_ACTOR = '000000000000000000000000';
-
-// ---- storage stand-in ---------------------------------------------------------------------------
-const bucket = `purge-artifacts-${tag}`;
-const storage = { requests: [] as string[], denied: new Set<string>(), server: null as http.Server | null };
-const deleteRequests = (objectKey: string) => storage.requests.filter((request) => request === `DELETE ${objectKey}`).length;
-
-// ---- fixtures (written by the migration role, which is not subject to row-level security) -------
-let admin: Pool;
-
-type Fixture = { organizationId: string; organizationMongoId: string; referenceId: string; proposalMongoId: string; conversationId: string };
-
-const seedProposal = async (label: string, existing?: Fixture): Promise<Fixture> => {
-  const organizationMongoId = existing?.organizationMongoId ?? randomMongoId();
-  const proposalMongoId = randomMongoId();
-  let organizationId = existing?.organizationId;
-  if (!organizationId) {
-    organizationId = (await admin.query<{ id: string }>(
-      'INSERT INTO rfpilot.organizations(external_mongo_id,name) VALUES($1,$2) RETURNING id',
-      [organizationMongoId, `Purge ${label} ${tag}`],
-    )).rows[0].id;
-  }
-  const userId = (await admin.query<{ id: string }>(
-    'INSERT INTO rfpilot.users(organization_id,external_mongo_id) VALUES($1,$2) RETURNING id',
-    [organizationId, randomMongoId()],
-  )).rows[0].id;
-  const referenceId = (await admin.query<{ id: string }>(
-    'INSERT INTO rfpilot.proposal_references(organization_id,owner_user_id,external_mongo_id) VALUES($1,$2,$3) RETURNING id',
-    [organizationId, userId, proposalMongoId],
-  )).rows[0].id;
-  const conversationId = crypto.randomUUID();
-  await admin.query(
-    'INSERT INTO rfpilot.conversations(id,organization_id,proposal_reference_id,owner_external_user_id) VALUES($1,$2,$3,$4)',
-    [conversationId, organizationId, referenceId, randomMongoId()],
-  );
-  return { organizationId, organizationMongoId, referenceId, proposalMongoId, conversationId };
-};
-
-type SourceOptions = { withObject?: boolean; legalHold?: boolean; retentionDays?: number };
-const seedSource = async (fixture: Fixture, status: string, options: SourceOptions = {}) => {
-  const id = crypto.randomUUID();
-  await admin.query(
-    `INSERT INTO rfpilot.document_sources(id,organization_id,proposal_reference_id,uploader_external_user_id,status,legal_hold,retention_until,deleted_at)
-     VALUES($1,$2,$3,$4,$5::text,$6::boolean,CASE WHEN $7::int IS NULL THEN NULL ELSE now() + make_interval(days => $7::int) END,CASE WHEN $5::text='deleted' THEN now() - interval '1 day' ELSE NULL END)`,
-    [id, fixture.organizationId, fixture.referenceId, randomMongoId(), status, options.legalHold ?? false, options.retentionDays ?? null],
-  );
-  const objectKey = `quarantine/${fixture.organizationMongoId}/${id}/original.pdf`;
-  if (options.withObject !== false) {
-    await admin.query(
-      `INSERT INTO rfpilot.document_objects(id,organization_id,source_id,object_key,original_filename,safe_filename,declared_mime_type,expected_size_bytes)
-       VALUES($1,$2,$3,$4,'brief.pdf','brief.pdf','application/pdf',1024)`,
-      [crypto.randomUUID(), fixture.organizationId, id, objectKey],
-    );
-  }
-  return { id, objectKey };
-};
-
-const sourceRow = async (id: string) =>
-  (await admin.query<{ status: string; deleted_at: Date | null; updated_at: Date }>(
-    'SELECT status, deleted_at, updated_at FROM rfpilot.document_sources WHERE id=$1', [id],
-  )).rows[0];
-const conversationStatus = async (fixture: Fixture) =>
-  (await admin.query<{ status: string }>('SELECT status FROM rfpilot.conversations WHERE id=$1', [fixture.conversationId])).rows[0].status;
-const purgeEvents = async (fixture: Fixture) =>
-  (await admin.query<{ actor_external_user_id: string; target_type: string; target_id: string; decision: string; metadata: Record<string, unknown> }>(
-    `SELECT actor_external_user_id, target_type, target_id, decision, metadata FROM rfpilot.audit_events
-      WHERE organization_id=$1 AND action='proposal_artifacts_purged' AND target_id=$2 ORDER BY occurred_at, id`,
-    [fixture.organizationId, fixture.referenceId],
-  )).rows;
 const purge = async (fixture: Fixture) => {
   const results = await purgeProposalArtifacts([{ proposalMongoId: fixture.proposalMongoId, organizationMongoId: fixture.organizationMongoId }]);
   assert.equal(results.length, 1);
   return results[0];
 };
 
-before(async () => {
-  admin = new Pool({ connectionString: TEST_POSTGRES_URL, max: 2 });
-  try {
-    await admin.query('SELECT 1');
-  } catch (error) {
-    throw new Error(`integration services are not reachable; start them with \`npm run integration:up\`. ${String(error)}`);
-  }
-  ensureMigrated();
-  await ensureAppRole(admin);
-
-  // From here on the code under test connects as the application role.
-  await closePostgres();
-  process.env.POSTGRES_URL = TEST_APP_ROLE_URL;
-  const role = (await postgresPool().query<{ role: string; rolsuper: boolean; rolbypassrls: boolean }>(
-    'SELECT current_user AS role, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user',
-  )).rows[0];
-  assert.deepEqual(role, { role: 'rfpilot_app', rolsuper: false, rolbypassrls: false });
-  const guards = (await admin.query<{ forced: boolean; triggers: number }>(
-    `SELECT c.relforcerowsecurity AS forced,
-            (SELECT count(*)::int FROM pg_trigger t WHERE t.tgrelid = c.oid AND t.tgname = 'document_source_transition' AND t.tgenabled <> 'D') AS triggers
-       FROM pg_class c WHERE c.oid = 'rfpilot.document_sources'::regclass`,
-  )).rows[0];
-  assert.deepEqual(guards, { forced: true, triggers: 1 });
-
-  storage.server = http.createServer((request, response) => {
-    const objectKey = decodeURIComponent(new URL(request.url ?? '/', 'http://storage').pathname).replace(`/${bucket}/`, '');
-    storage.requests.push(`${request.method} ${objectKey}`);
-    request.resume();
-    if (storage.denied.has(objectKey)) {
-      response.writeHead(403, { 'content-type': 'application/xml' });
-      response.end('<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>');
-    } else {
-      response.writeHead(204);
-      response.end();
-    }
-  });
-  await new Promise<void>((resolve) => storage.server!.listen(0, '127.0.0.1', resolve));
-  Object.assign(process.env, {
-    DOCUMENT_STORAGE_BUCKET: bucket,
-    DOCUMENT_STORAGE_REGION: 'us-east-1',
-    DOCUMENT_STORAGE_ENDPOINT: `http://127.0.0.1:${(storage.server.address() as AddressInfo).port}`,
-    DOCUMENT_STORAGE_FORCE_PATH_STYLE: 'true',
-    DOCUMENT_STORAGE_KEY: 'test',
-    DOCUMENT_STORAGE_SECRET: 'test',
-  });
-});
-
-after(async () => {
-  storage.server?.closeAllConnections();
-  storage.server?.close();
-  await admin?.end();
-  await closePostgres();
-});
+before(startPurgeEnvironment);
+after(stopPurgeEnvironment);
 
 test('the database refuses a ready source written straight to deleted, also for the application role', async () => {
   // The statement the purge used to run. This is why it never tombstoned anything.
@@ -205,7 +85,8 @@ test('a source in every other live status is tombstoned, including one that is b
   assert.deepEqual(await sourceRow(alreadyDeleted.id), deletedBefore);
   assert.equal(deleteRequests(alreadyDeleted.objectKey), 0);
   assert.equal(await conversationStatus(fixture), 'archived');
-  assert.deepEqual((await purgeEvents(fixture)).map((event) => event.metadata), [{ count: statuses.length + 1 }]);
+  // Every tombstoned source of the proposal, the one its owner deleted earlier included.
+  assert.deepEqual((await purgeEvents(fixture)).map((event) => event.metadata), [{ count: statuses.length + 2 }]);
 });
 
 test('a storage failure leaves the source deletion_pending and unaudited, and a second run finishes it', async () => {
@@ -240,7 +121,8 @@ test('a storage failure leaves the source deletion_pending and unaudited, and a 
   assert.equal(deleteRequests(failing.objectKey), 2);
   assert.equal(deleteRequests(fine.objectKey), 1, 'the source finished by the first run is not touched again');
   assert.equal(await conversationStatus(fixture), 'archived');
-  assert.deepEqual((await purgeEvents(fixture)).map((event) => event.metadata), [{ count: 1 }]);
+  // Both sources, although the first run tombstoned one of them.
+  assert.deepEqual((await purgeEvents(fixture)).map((event) => event.metadata), [{ count: 2 }]);
 });
 
 test('a source under legal hold or retention, or with no allowed way to deleted, is left alone and reported', async () => {
@@ -327,4 +209,143 @@ test('calling it a second time changes nothing', async () => {
   assert.deepEqual(second.sources, { tombstoned: 0, pending: 0, notDeletable: 0 });
   assert.deepEqual(await snapshot(), afterFirst);
   assert.equal(deleteRequests(source.objectKey), 1);
+});
+
+test('an object that is already missing from storage counts as deleted', async () => {
+  const fixture = await seedProposal('missing-object');
+  const source = await seedSource(fixture, 'ready', { inStorage: false });
+
+  const result = await purge(fixture);
+
+  assert.equal(deleteRequests(source.objectKey), 1, 'the stand-in answered 404 NoSuchKey');
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.sources, { tombstoned: 1, pending: 0, notDeletable: 0 });
+  assert.equal((await sourceRow(source.id)).status, 'deleted');
+});
+
+test('a 5xx from storage leaves the source deletion_pending, and the next run finishes it', async () => {
+  const fixture = await seedProposal('storage-5xx');
+  const source = await seedSource(fixture, 'ready');
+  storage.failing.add(source.objectKey);
+
+  const first = await purge(fixture);
+
+  assert.equal(first.complete, false);
+  assert.equal(first.errorCode, 'InternalError');
+  assert.deepEqual(first.sources, { tombstoned: 0, pending: 1, notDeletable: 0 });
+  assert.equal((await sourceRow(source.id)).status, 'deletion_pending');
+  assert.ok(deleteRequests(source.objectKey) >= 1);
+  assert.deepEqual(await purgeEvents(fixture), []);
+  assert.equal(await conversationStatus(fixture), 'active');
+
+  storage.failing.delete(source.objectKey);
+  assert.equal((await purge(fixture)).complete, true);
+  assert.equal((await sourceRow(source.id)).status, 'deleted');
+  assert.deepEqual((await purgeEvents(fixture)).map((event) => event.metadata), [{ count: 1 }]);
+});
+
+test('a failure of the last step, after the object is gone, leaves deletion_pending and a rerun completes', async () => {
+  const fixture = await seedProposal('step-three');
+  const source = await seedSource(fixture, 'ready');
+  // While the object is being deleted, another session takes the source row and keeps it, so
+  // the tombstone that follows waits for the lock and gives up (lock_timeout is 5 seconds).
+  const blocker = await admin.connect();
+  let released = false;
+  const release = async () => {
+    if (released) return;
+    released = true;
+    await blocker.query('ROLLBACK');
+    blocker.release();
+  };
+  storage.onDelete.set(source.objectKey, async () => {
+    await blocker.query('BEGIN');
+    await blocker.query('SELECT id FROM rfpilot.document_sources WHERE id=$1 FOR UPDATE', [source.id]);
+  });
+  try {
+    const first = await purge(fixture);
+
+    assert.equal(first.complete, false);
+    assert.equal(first.errorCode, '55P03', 'lock_not_available from the tombstone step');
+    assert.equal(storage.objects.has(source.objectKey), false, 'the object is gone');
+    const stuck = await sourceRow(source.id);
+    assert.equal(stuck.status, 'deletion_pending');
+    assert.equal(stuck.deleted_at, null);
+    assert.equal(await conversationStatus(fixture), 'active');
+    assert.deepEqual(await purgeEvents(fixture), []);
+  } finally {
+    storage.onDelete.delete(source.objectKey);
+    await release();
+  }
+
+  const second = await purge(fixture);
+
+  assert.equal(second.complete, true);
+  assert.deepEqual(second.sources, { tombstoned: 1, pending: 0, notDeletable: 0 });
+  assert.equal(deleteRequests(source.objectKey), 2, 'asked again; the object was already gone');
+  assert.equal((await sourceRow(source.id)).status, 'deleted');
+  assert.equal(await conversationStatus(fixture), 'archived');
+  assert.deepEqual((await purgeEvents(fixture)).map((event) => event.metadata), [{ count: 1 }]);
+});
+
+test('two purges of the same proposal at once tombstone each source once and write one audit event', async () => {
+  const fixture = await seedProposal('concurrent');
+  const sources = [await seedSource(fixture, 'ready'), await seedSource(fixture, 'uploaded'), await seedSource(fixture, 'scanning')];
+
+  const [one, two] = await Promise.all([purge(fixture), purge(fixture)]);
+
+  assert.equal(one.complete, true);
+  assert.equal(two.complete, true);
+  assert.equal(one.sources.tombstoned + two.sources.tombstoned, sources.length);
+  for (const source of sources) assert.equal((await sourceRow(source.id)).status, 'deleted');
+  assert.equal(await conversationStatus(fixture), 'archived');
+  assert.deepEqual((await purgeEvents(fixture)).map((event) => event.metadata), [{ count: sources.length }]);
+
+  // With no sources at all there is still exactly one event.
+  const empty = await seedProposal('concurrent-empty');
+  const results = await Promise.all([purge(empty), purge(empty), purge(empty)]);
+  assert.deepEqual(results.map((result) => result.complete), [true, true, true]);
+  assert.deepEqual((await purgeEvents(empty)).map((event) => event.metadata), [{ count: 0 }]);
+});
+
+test('a scan that finishes while the purge is running changes nothing', async () => {
+  const fixture = await seedProposal('scan-mid-purge');
+  const source = await seedSource(fixture, 'scanning');
+  const scan = { answer: null as { status: string } | null };
+  // The scanner comes back clean at the moment the object is being deleted.
+  storage.onDelete.set(source.objectKey, async () => {
+    scan.answer = await postgresDocumentRepository.finishScan({
+      organizationMongoId: fixture.organizationMongoId, sourceId: source.id, scanner: 'test-signature', status: 'clean',
+      startedAt: new Date(), actorUserMongoId: randomMongoId(), correlationId: randomMongoId(),
+    });
+  });
+  try {
+    const result = await purge(fixture);
+
+    assert.equal(scan.answer?.status, 'deletion_pending', 'finishScan saw a source that is no longer scanning and left it');
+    assert.equal(result.complete, true);
+    assert.equal((await sourceRow(source.id)).status, 'deleted');
+    const scans = await admin.query('SELECT count(*)::int AS n FROM rfpilot.document_scan_results WHERE object_id=$1', [source.objectId]);
+    assert.equal(scans.rows[0].n, 0, 'no scan result was recorded for the abandoned scan');
+  } finally {
+    storage.onDelete.delete(source.objectKey);
+  }
+});
+
+test('an organization that is not active in Postgres is reported, not passed off as nothing to do', async () => {
+  const fixture = await seedProposal('inactive');
+  const source = await seedSource(fixture, 'ready');
+  await admin.query("UPDATE rfpilot.organizations SET status='suspended' WHERE id=$1", [fixture.organizationId]);
+
+  const result = await purge(fixture);
+
+  assert.equal(result.complete, false);
+  assert.equal(result.errorCode, 'ORGANIZATION_INACTIVE');
+  assert.equal(result.skipped, undefined);
+  assert.equal((await sourceRow(source.id)).status, 'ready');
+  assert.equal(deleteRequests(source.objectKey), 0);
+
+  // An organization Postgres has never heard of has nothing there to purge.
+  const unknown = await purgeProposalArtifacts([{ proposalMongoId: randomMongoId(), organizationMongoId: randomMongoId() }]);
+  assert.equal(unknown[0].complete, true);
+  assert.equal(unknown[0].skipped, 'organization_not_in_postgres');
 });
