@@ -259,3 +259,29 @@ test("an edit to a team that isn't assignable is refused before writing", async 
   }
   assert.equal(capture.update, undefined);
 });
+
+test("a copy, a new proposal and an edit never carry the permanent-delete marker", async () => {
+  // purgeStartedAt is written only when a permanent delete starts. A copy of a
+  // proposal that is being deleted is a new proposal of its own, and a client
+  // must not be able to set or clear the marker through a create or an edit.
+  const capture = {};
+  const dependencies = createDependencies(capture);
+  const source = dependencies.proposals.findOwnedCopySourceById;
+  dependencies.proposals.findOwnedCopySourceById = async (input) => ({
+    ...(await source(input)),
+    isArchived: true,
+    archivedAt: "2026-10-01T00:00:00.000Z",
+    purgeStartedAt: "2026-11-24T00:00:00.000Z",
+  });
+
+  await createCopyOwnedProposal(dependencies)({ proposalId: "source-001", ownerUserId: "user-001", overrides: {} });
+  assert.equal("purgeStartedAt" in capture.create.proposal, false);
+  assert.equal(capture.create.proposal.isArchived, false);
+  assert.equal(capture.create.proposal.archivedAt, null);
+
+  await createCreateOwnedProposal(dependencies)({ ownerUserId: "user-001", proposal: { event: { eventName: "New" }, purgeStartedAt: "2026-11-24T00:00:00.000Z" } });
+  assert.equal("purgeStartedAt" in capture.create.proposal, false);
+
+  await createUpdateOwnedProposal(dependencies)({ proposalId: "proposal-001", ownerUserId: "user-001", updates: { purgeStartedAt: null, event: { eventName: "Edited" } } });
+  assert.equal("purgeStartedAt" in capture.update.updates, false);
+});
