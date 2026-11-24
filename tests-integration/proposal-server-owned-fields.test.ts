@@ -124,7 +124,7 @@ test('an ordinary content edit still works, with whole sections, a dotted path a
 });
 
 test('an edit naming another organization is refused, recorded, and moves nothing', async () => {
-  const before = await stored(proposalId);
+  const original = await stored(proposalId);
   const res = await call('planner', 'PUT', `/api/proposals/${proposalId}`, {
     organizationId: String(orgB),
     event: { eventName: `${MARKER} moved` },
@@ -133,16 +133,23 @@ test('an edit naming another organization is refused, recorded, and moves nothin
   assert.equal(res.body.code, 'PROPOSAL_TENANCY_FIELD_NOT_WRITABLE');
   const row = await stored(proposalId);
   assert.equal(String(row.organizationId), String(orgA));
-  assert.equal(row.event.eventName, before.event.eventName, 'a refused request writes nothing');
+  assert.equal(row.event.eventName, original.event.eventName, 'a refused request writes nothing');
   assert.equal((await listedIds('foreignOwner')).includes(proposalId), false, "organization B's list must not show it");
   assert.equal((await call('foreignOwner', 'GET', `/api/proposals/${proposalId}`)).status, 404);
   assert.equal((await listedIds('planner')).includes(proposalId), true);
-  const events = await SecurityAuditEvent.find({ organizationId: orgA, action: 'proposal.tenancy_field_write.refused', targetId: proposalId }).lean();
+  // The event names the proposal as the id the request claimed (no lookup happened), never as its target.
+  const events = await SecurityAuditEvent.find({ organizationId: orgA, action: 'proposal.tenancy_field_write.refused', 'metadata.claimedProposalId': proposalId }).lean();
   assert.equal(events.length, 1);
   assert.deepEqual(
-    [events[0].decision, String(events[0].actorUserId), events[0].metadata.field, events[0].metadata.attemptedOrganizationId],
-    ['denied', userIds.planner, 'organizationId', String(orgB)],
+    [events[0].decision, String(events[0].actorUserId), events[0].targetId ?? null, events[0].metadata.field, events[0].metadata.attemptedOrganizationId],
+    ['denied', userIds.planner, null, 'organizationId', String(orgB)],
   );
+
+  // A value that is not a 24-hex id is refused too, and recorded as a fixed marker, not as sent.
+  const malformed = await call('planner', 'PUT', `/api/proposals/${proposalId}`, { organizationId: 'twelve chars', event: { eventName: `${MARKER} moved` } });
+  assert.equal(malformed.status, 400, malformed.text);
+  const recorded = await SecurityAuditEvent.find({ organizationId: orgA, action: 'proposal.tenancy_field_write.refused', 'metadata.claimedProposalId': proposalId }).sort({ createdAt: 1, _id: 1 }).lean();
+  assert.deepEqual(recorded.map((event) => event.metadata.attemptedOrganizationId), [String(orgB), 'malformed']);
 });
 
 test("the caller's own organization echoed back is ignored, and the owner can't be changed", async () => {
@@ -177,7 +184,7 @@ test("an edit can't archive a proposal or back-date its archive time", async () 
 });
 
 test("an edit can't forge lifecycle, counters, copy state, version, timestamps or deletion markers, as keys, dotted paths or operators", async () => {
-  const before = await stored(proposalId);
+  const original = await stored(proposalId);
   const res = await call('planner', 'PUT', `/api/proposals/${proposalId}`, {
     lifecycle: { stage: 'awarded', awardedAt: BACK_DATED, vendorsResponded: 9, vendorsInvited: 9, revision: 500 },
     'lifecycle.stage': 'awarded',
@@ -205,7 +212,7 @@ test("an edit can't forge lifecycle, counters, copy state, version, timestamps o
     [row.viewsCount, row.version, row.isCopy, row.candidateApplicationIds ?? [], row.isArchived, String(row.organizationId)],
     [0, 1, false, [], false, String(orgA)],
   );
-  assert.equal(new Date(row.createdAt).getTime(), new Date(before.createdAt).getTime());
+  assert.equal(new Date(row.createdAt).getTime(), new Date(original.createdAt).getTime());
   for (const marker of ['purgeStarted', 'purgeStartedAt', 'deletedAt', '$set', '$unset', '$inc']) assert.equal(marker in row, false, marker);
   assert.deepEqual(row.venue, { riggingRequired: 'YES' });
   assert.equal(row.event.eventName, `${MARKER} unforged`);
@@ -241,6 +248,16 @@ test('an archived proposal is not un-archived or re-dated through an edit; resto
   const restored = await stored(proposalId);
   assert.equal(restored.isArchived, false);
   assert.equal(restored.archivedAt ?? null, null);
+});
+
+test('content nested beyond the limit is refused with 400, not a 500, and writes nothing', async () => {
+  const original = await stored(proposalId);
+  let deep: unknown = 'leaf';
+  for (let level = 0; level < 500; level += 1) deep = { a: deep };
+  const res = await call('planner', 'PUT', `/api/proposals/${proposalId}`, { venue: deep, event: { eventName: `${MARKER} deep` } });
+  assert.equal(res.status, 400, res.text);
+  assert.equal(res.body.code, 'PROPOSAL_PAYLOAD_TOO_DEEP');
+  assert.equal((await stored(proposalId)).event.eventName, original.event.eventName);
 });
 
 test("a create takes no server-owned field from the payload, and can't name another organization", async () => {

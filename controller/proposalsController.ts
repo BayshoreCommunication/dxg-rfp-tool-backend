@@ -24,13 +24,19 @@ import { ProposalTeamNotAssignableError } from "../src/modules/proposals/applica
 import { respondIfProposalAccessDenied } from "../src/modules/identity/application/proposalAccess";
 import { respondIfPlanError } from "../src/modules/entitlements/http/planGate";
 import { recordFirstRfpOpened } from "../src/modules/launchMetrics/firstRfpOpened";
-import { ProposalTenancyChangeRefusedError } from "../src/modules/proposals/domain/proposalFieldOwnership";
+import { ProposalPayloadTooDeepError, ProposalTenancyChangeRefusedError, refusedTenancyWriteAuditMetadata } from "../src/modules/proposals/domain/proposalFieldOwnership";
 import { mongoSecurityAuditWriter } from "../src/modules/auth/infrastructure/audit/mongoSecurityAuditWriter";
 import { randomUUID } from "node:crypto";
 
 // A proposal write that named another organization: 400, and a denied event in the caller's
-// organization. The audit write never changes the answer.
-const respondIfTenancyChangeRefused = async (req: AuthRequest, res: Response, error: unknown, proposalId?: string): Promise<boolean> => {
+// organization. The refusal fires before any lookup, so the event has no target: the proposal id
+// is recorded as the one the request claimed. The audit write never changes the answer.
+// A payload nested too deep is the other refused write: 400, no event.
+const respondIfTenancyChangeRefused = async (req: AuthRequest, res: Response, error: unknown, claimedProposalId?: string): Promise<boolean> => {
+  if (error instanceof ProposalPayloadTooDeepError) {
+    res.status(error.status).json({ success: false, code: error.code, message: error.message });
+    return true;
+  }
   if (!(error instanceof ProposalTenancyChangeRefusedError)) return false;
   const attempted = (req.body as Record<string, unknown> | undefined)?.[error.field];
   try {
@@ -39,15 +45,15 @@ const respondIfTenancyChangeRefused = async (req: AuthRequest, res: Response, er
       actorUserId: req.user?.userId,
       action: "proposal.tenancy_field_write.refused",
       targetType: "proposal",
-      ...(proposalId ? { targetId: proposalId } : {}),
       decision: "denied",
       reason: "organization_change_in_payload",
       correlationId: (req as AuthRequest & { correlationId?: string }).correlationId ?? randomUUID(),
-      metadata: {
+      metadata: refusedTenancyWriteAuditMetadata({
         field: error.field,
+        attempted,
+        claimedProposalId,
         route: `${req.method} ${req.baseUrl}${req.route?.path ?? ""}`,
-        ...(typeof attempted === "string" && mongoose.isValidObjectId(attempted) ? { attemptedOrganizationId: attempted } : {}),
-      },
+      }),
     });
   } catch (auditError) {
     console.error("Proposal tenancy refusal audit error:", auditError instanceof Error ? auditError.message : auditError);
