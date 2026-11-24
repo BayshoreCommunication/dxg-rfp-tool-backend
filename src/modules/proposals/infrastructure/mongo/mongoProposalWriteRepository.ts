@@ -3,6 +3,7 @@ import Proposal from "../../../../../modal/proposalsModel";
 import type { ProposalWriteRepository } from "../../domain/ports/proposalWriteRepository";
 import { tenantFilter } from "../../../shared/tenancy/tenantContext";
 import { claimProposalSlot } from "../../../entitlements/infrastructure/mongoOrganizationEntitlements";
+import { assertEditUpdateIsSafe, withoutTenancyFields } from "../../domain/proposalFieldOwnership";
 import type { RfpAction } from "../../../identity/domain/rfpAccessPolicy";
 import {
   assertProposalMissIsNotFound,
@@ -32,7 +33,7 @@ export const mongoProposalWriteRepository: ProposalWriteRepository = {
       const created = await session.withTransaction(async () => {
         await claimProposalSlot(tenant.organizationId, session);
         // A fresh document per attempt: the driver re-runs this callback on a write conflict.
-        const document = new Proposal({ ...proposal, userId: ownerUserId, ...tenant });
+        const document = new Proposal({ ...withoutTenancyFields(proposal), userId: ownerUserId, ...tenant });
         await document.save({ session });
         return document;
       });
@@ -62,8 +63,10 @@ export const mongoProposalWriteRepository: ProposalWriteRepository = {
     updates,
     runValidators,
   }) {
-    // A proposal whose permanent delete has started is no longer editable: an
-    // edit could otherwise un-archive it (isArchived is an ordinary field here).
+    // Backstop: this update can't move the proposal to another organization or owner, change its
+    // archive state or lifecycle, or carry an operator, whatever the caller built.
+    assertEditUpdateIsSafe(updates);
+    // A proposal whose permanent delete has started is no longer editable.
     const proposal = await Proposal.findOneAndUpdate(
       scoped(ownerUserId, "edit", { _id: proposalId, purgeStarted: { $ne: true } }),
       { $set: updates },

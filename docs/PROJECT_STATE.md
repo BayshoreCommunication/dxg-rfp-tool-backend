@@ -550,6 +550,17 @@ production or staging copy was available. Results, timings, findings and the ste
   (dry run included), so it cannot share the database with a serving API, and a suspended
   customer becomes an active Planner in their holding tenant.
 
+### Proposal edit and create no longer accept server-owned fields (2026-11-24, in review)
+
+`PUT /api/proposals/:id` and `POST /api/proposals` wrote any field a client sent, including
+`organizationId`, `isArchived`/`archivedAt` and (through dotted keys) `lifecycle.*`. Client
+payloads now pass an allow-list (`proposalFieldOwnership.ts`; `DECISIONS.md`, 2026-11-24), a
+payload naming another organization is refused with 400 and audited, and the write repository
+refuses such updates whatever its caller passes. Not deployed until this merges and is released.
+Open: whether production was affected has not been checked (read-only queries are in the pull
+request); `PATCH /api/proposals/:id/meta` still accepts `viewsCount`; the settings update route
+has the same body-to-`$set` shape and is not fixed here.
+
 ### Tenancy migration: production-copy rehearsal failed, fix in review (2026-11-23)
 
 The first rehearsal of the ORG-107 migration on a copy of production (2026-11-23) found a
