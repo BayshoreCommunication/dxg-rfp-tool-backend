@@ -156,6 +156,14 @@ const statusFilter = (status: Status): Record<string, unknown> => {
 
   // Artifacts first: a failure here leaves the Mongo record in place, so the
   // proposal remains identifiable and the run can simply be repeated.
+  // Marked before anything is removed, and never unmarked: once source documents are marked
+  // for deletion the proposal cannot be restored or edited, and the daily job finishes a
+  // purge that this run leaves incomplete.
+  await Proposal.updateMany(
+    { _id: { $in: matched.map((proposal) => proposal._id) }, purgeStartedAt: null },
+    { $set: { purgeStartedAt: new Date() } },
+    { timestamps: false },
+  );
   console.log("\nPurging cross-store artifacts…");
   const purged = await purgeProposalArtifacts(
     matched

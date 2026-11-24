@@ -106,29 +106,46 @@ export const purgeArchivedProposals = async () => {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     // organization-block: an archived proposal of a blocked organization is not purged.
     const blocked = await blockedOrganizationIds();
-    const doomed = (await Proposal.find({ isArchived: true, archivedAt: { $lte: thirtyDaysAgo } })
+    const { purgeProposalArtifacts, finishStrandedProposalPurges } = await import("../src/modules/dataFoundation/purgeProposalArtifacts");
+    const candidates = (await Proposal.find({ isArchived: true, archivedAt: { $lte: thirtyDaysAgo } })
       .select("_id organizationId")
       .lean<{ _id: unknown; organizationId?: unknown }[]>())
       .filter((doc) => !blocked.has(String(doc.organizationId ?? "")));
-    if (!doomed.length) return;
-    // Propagate to private storage and Postgres source rows BEFORE the Mongo
-    // delete. Done the other way round, a crash between the two steps strands
-    // document bytes with nothing left to identify them; this order leaves the
-    // authoritative record in place so the next run retries.
-    const { purgeProposalArtifacts } = await import("../src/modules/dataFoundation/purgeProposalArtifacts");
-    const purged = await purgeProposalArtifacts(doomed.map((doc) => ({ proposalMongoId: String(doc._id), organizationMongoId: String(doc.organizationId ?? "") })).filter((row) => row.organizationMongoId));
-    // A proposal whose sources could not all be tombstoned keeps its Mongo
-    // record, which is what makes the next run retry it: once the record is
-    // gone nothing identifies the proposal to this sweep again.
-    const unfinished = new Set(purged.filter((row) => !row.complete).map((row) => row.proposalMongoId));
-    const ids = doomed.map((doc) => String(doc._id)).filter((id) => !unfinished.has(id));
-    if (unfinished.size > 0) {
-      console.error(`[Cron] Archive purge kept ${unfinished.size} proposal(s) whose source documents were not fully removed; they are retried on the next run`);
+    if (candidates.length) {
+      // Marked BEFORE anything is removed, and never unmarked: the first purge step cannot be
+      // undone, so from this write on the proposal can be deleted but not restored or edited. The
+      // filter repeats "archived", so a proposal restored since the read above is not marked,
+      // and only the ones that are marked go any further.
+      const stillArchived = { _id: { $in: candidates.map((doc) => doc._id) }, isArchived: true };
+      await Proposal.updateMany({ ...stillArchived, purgeStartedAt: null }, { $set: { purgeStartedAt: new Date() } }, { timestamps: false });
+      const doomed = await Proposal.find({ ...stillArchived, purgeStartedAt: { $ne: null } })
+        .select("_id organizationId")
+        .lean<{ _id: unknown; organizationId?: unknown }[]>();
+      // Propagate to private storage and Postgres source rows BEFORE the Mongo
+      // delete. Done the other way round, a crash between the two steps strands
+      // document bytes with nothing left to identify them; this order leaves the
+      // authoritative record in place so the next run retries.
+      const purged = await purgeProposalArtifacts(doomed.map((doc) => ({ proposalMongoId: String(doc._id), organizationMongoId: String(doc.organizationId ?? "") })).filter((row) => row.organizationMongoId));
+      // A proposal whose sources could not all be tombstoned keeps its Mongo
+      // record, which is what makes the next run retry it.
+      const unfinished = new Set(purged.filter((row) => !row.complete).map((row) => row.proposalMongoId));
+      const ids = doomed.filter((doc) => !unfinished.has(String(doc._id))).map((doc) => doc._id);
+      if (unfinished.size > 0) {
+        console.error(`[Cron] Archive purge kept ${unfinished.size} proposal(s) whose source documents were not fully removed; they are retried on the next run`);
+      }
+      if (ids.length) {
+        const result = await Proposal.deleteMany({ _id: { $in: ids }, isArchived: true, purgeStartedAt: { $ne: null } });
+        if (result.deletedCount > 0) {
+          console.log(`[Cron] Purged ${result.deletedCount} archived proposal(s) older than 30 days`);
+        }
+      }
     }
-    if (!ids.length) return;
-    const result = await Proposal.deleteMany({ _id: { $in: ids } });
-    if (result.deletedCount > 0) {
-      console.log(`[Cron] Purged ${result.deletedCount} archived proposal(s) older than 30 days`);
+    // Purges that stopped half way and whose proposal this sweep can no longer see (a planner's
+    // permanent delete removes the MongoDB record even when storage failed). Blocked
+    // organizations are left out here as above.
+    const stranded = await finishStrandedProposalPurges({ excludedOrganizationMongoIds: blocked });
+    if (stranded.completed > 0 || stranded.incomplete > 0) {
+      console.log(`[Cron] Stranded proposal purges: ${stranded.completed} finished, ${stranded.incomplete} still pending`);
     }
   } catch (error) {
     console.error("[Cron] Archive purge error:", error);

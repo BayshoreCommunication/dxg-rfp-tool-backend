@@ -52,6 +52,8 @@ const removeSystemFields = (input: Record<string, unknown>) => {
   delete proposal.proposalSetting;
   // Derived by the lifecycle module (ORG-403); a client can't set its own stage or award.
   delete proposal.lifecycle;
+  // Written only by the start of a permanent delete; never copied or client-set.
+  delete proposal.purgeStartedAt;
   return proposal;
 };
 

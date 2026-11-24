@@ -129,7 +129,11 @@ export const createArchiveOwnedProposal = (proposals: ProposalWriteRepository, l
 
 export const createRestoreOwnedProposal = (proposals: ProposalWriteRepository, lifecycle?: ProposalLifecycleRecorder) =>
   async (input: { proposalId: string; ownerUserId: string }) => {
-    if (!(await proposals.restoreOwnedById(input))) return { kind: "not_found" as const };
+    const restored = await proposals.restoreOwnedById(input);
+    // Its permanent delete has started: source documents are already marked for
+    // deletion or gone, which cannot be undone, so it must not come back.
+    if (restored === "being_deleted") return { kind: "being_deleted" as const };
+    if (!restored) return { kind: "not_found" as const };
     await lifecycle?.recordChange({ proposalId: input.proposalId, actorUserId: input.ownerUserId, reason: "restored" });
     return { kind: "restored" as const };
   };
@@ -162,6 +166,10 @@ export const createPermanentlyDeleteOwnedProposal = (
 ) => async (input: { proposalId: string; ownerUserId: string }) => {
   const target = await proposals.findOwnedArchivedPurgeTargetById(input);
   if (!target) return { kind: "not_found" as const };
+
+  // Before anything irreversible: from this write on, restore and edit refuse
+  // the proposal. A restore that got in first leaves nothing archived to mark.
+  if (!(await proposals.markOwnedArchivedPurgeStartedById(input))) return { kind: "not_found" as const };
 
   // A proposal with no organization cannot resolve the tenant GUC the purge
   // needs, so it is skipped there rather than failing the delete — matching
