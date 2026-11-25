@@ -116,6 +116,9 @@ const assertSameDocuments = (actual: Map<string, string>, expected: Map<string, 
   assert.deepEqual(differences, [], message);
 };
 
+// A raw read: whether the shared organization's stored document has a `kind` key.
+const sharedOrganizationHasKind = async () => Object.prototype.hasOwnProperty.call((await db().collection('organizations').findOne({ _id: org.shared }))!, 'kind');
+
 let pgShared = '';
 const pg = { anaSource: crypto.randomUUID(), carolSource: crypto.randomUUID(), gilSource: crypto.randomUUID(), halSource: crypto.randomUUID(), anaConversation: crypto.randomUUID(), carolConversation: crypto.randomUUID(), gilConversation: crypto.randomUUID(), halConversation: crypto.randomUUID() };
 const postgresSnapshot = async () => {
@@ -158,7 +161,10 @@ before(async () => {
 
   const now = new Date();
   // ---- the shared organization: Ana and Ben go, Carol and the staff stay --------------------
-  await insert('organizations', { _id: org.shared, name: `Shared ${tag}`, slug: `intg-purge-${tag}`, status: 'active', kind: 'customer', plan: 'free_trial' }, false);
+  // Stored with no `kind` key at all, like an organization created before the field existed
+  // (production's shared organization): the schema default, customer, is what it means.
+  await insert('organizations', { _id: org.shared, name: `Shared ${tag}`, slug: `intg-purge-${tag}`, status: 'active', plan: 'free_trial' }, false);
+  assert.equal(await sharedOrganizationHasKind(), false, 'the fixture organization must have no stored kind');
   const person = (id: mongoose.Types.ObjectId, name: string, address: string, organizationId = org.shared) =>
     ({ _id: id, organizationId, name, email: address, password: 'x'.repeat(10), role: 'customer', createdAt: now, updatedAt: now });
   await insert('users', person(user.ana, 'Ana', email.ana), true);
@@ -300,7 +306,31 @@ test('without --with-content the script still refuses nothing new and removes no
   assert.equal(run.report?.mode, 'dry-run');
   assert.deepEqual(Object.keys(run.report!), ['mode', 'database', 'users', 'withoutAccount', 'organizationsRemoved', 'refused', 'wouldDelete']);
   assert.equal(run.report!.wouldDelete.users, 2);
+  // The shared organization has no stored kind: that is a customer, not a reason to refuse.
+  assert.deepEqual(run.report!.refused, []);
   assertSameDocuments(await mongoSnapshot(), beforeEverything, 'the old dry run wrote to MongoDB');
+  assert.equal(await sharedOrganizationHasKind(), false, 'the script wrote a kind to the organization');
+});
+
+test('an organization stored with kind legacy_holding is still refused, with and without --with-content', async () => {
+  const plain = await purge(`--emails=${email.fay}`);
+  assert.equal(plain.report?.mode, 'refused', explain(plain));
+  assert.match(plain.report!.refused.join('\n'), new RegExp(`\\(${org.holding}\\): kind legacy_holding is never removed`));
+  const withContent = await purge(`--emails=${email.fay}`, '--with-content');
+  assert.equal(withContent.status, 1, explain(withContent));
+  assert.equal(withContent.report?.mode, 'refused', explain(withContent));
+  assert.match(withContent.report!.refused.join('\n'), new RegExp(`\\(${org.holding}\\): kind legacy_holding is never removed`));
+  assert.match(withContent.report!.refused.join('\n'), new RegExp(`\\(${org.holding}\\): kind legacy_holding holds a customer waiting to be placed`));
+  assertSameDocuments(await mongoSnapshot(), beforeEverything, 'a refused run wrote to MongoDB');
+});
+
+test('a mistyped flag is refused before anything is read: --with-contnet --apply removes nothing', async () => {
+  const run = await purge(targets, '--with-contnet', '--apply');
+  assert.equal(run.status, 1, explain(run));
+  assert.equal(run.report, null, explain(run));
+  assert.match(run.stderr, /Unknown argument\(s\): --with-contnet/);
+  assert.match(run.stdout, /^Usage:/m);
+  assertSameDocuments(await mongoSnapshot(), beforeEverything, 'a refused command line wrote to MongoDB');
 });
 
 test('the dry run reports every account and writes nothing to MongoDB, PostgreSQL or storage', async () => {
@@ -313,7 +343,7 @@ test('the dry run reports every account and writes nothing to MongoDB, PostgreSQ
   assert.equal(report.privateSourceDocuments, 1, "Ana's, read from PostgreSQL");
   assert.deepEqual(report.users.sort(), [email.ana, email.ben].sort(), 'matched whatever the stored capitals');
   assert.deepEqual(report.withoutAccount, [email.ghost], 'an address with no account is reported, not an error');
-  assert.deepEqual(report.refused, []);
+  assert.deepEqual(report.refused, [], 'an organization with no stored kind is a customer');
   assert.deepEqual(report.organizationsRemoved, [], 'Carol and the staff keep the organization');
 
   const ana = report.accounts.find((a: { email: string }) => a.email === email.ana);
@@ -455,6 +485,7 @@ test('apply removes exactly the purged accounts and their content', async () => 
   for (const [collection, ids] of going) {
     assert.equal(await db().collection(collection).countDocuments({ _id: { $in: [...ids].map((id) => new mongoose.Types.ObjectId(id)) } }), 0, collection);
   }
+  assert.equal(await sharedOrganizationHasKind(), false, 'the purge ran against an organization with no stored kind, and stored none');
 });
 
 test('the staff account with the same email is untouched and can still sign in', async () => {
