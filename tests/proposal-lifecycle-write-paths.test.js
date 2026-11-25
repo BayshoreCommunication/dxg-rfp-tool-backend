@@ -17,12 +17,12 @@ const WRITERS = {
     how: "the lifecycle itself: compare-and-set of Proposal.lifecycle plus the transition insert",
   },
   "src/modules/proposals/infrastructure/mongo/mongoProposalWriteRepository.ts": {
-    writes: 6,
-    how: "hooked in the application layer: create, copy, create from a template (ORG-604), update, status, meta, archive and restore call ProposalLifecycleRecorder after the write; view counts and permanent delete can't move the stage",
+    writes: 7,
+    how: "hooked in the application layer: create, copy, create from a template (ORG-604), update, status, meta, archive and restore call ProposalLifecycleRecorder after the write; view counts and permanent delete can't move the stage; the permanent-delete marker (purgeStartedAt) is set on an archived proposal only and can't move the stage",
   },
   "utils/cronJobs.ts": {
-    writes: 2,
-    how: "expiry (save) records reason expired with a system actor; the archive purge deletes rows whose history is kept",
+    writes: 3,
+    how: "expiry (save) records reason expired with a system actor; the archive purge deletes rows whose history is kept; the archive purge marks archived rows (purgeStartedAt) before deleting them, no stage effect",
   },
   "src/modules/candidateApplication/mongoProposalCandidateMutation.ts": {
     writes: 1,
