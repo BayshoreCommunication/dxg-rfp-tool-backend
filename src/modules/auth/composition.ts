@@ -296,3 +296,11 @@ export const { revokeOtherSessionsAfterMembershipChange, revokeInactiveMembershi
   audit: mongoSecurityAuditWriter,
   isValidId: (value) => /^[a-f0-9]{24}$/i.test(value),
 });
+
+/* The access path, for a request whose organization RFPilot staff blocked (owner decision,
+   2026-11-18; organizationBlock/domain.ts). The block already ended the organization's sessions
+   in its own transaction; this closes one that began while the block committed. Straight through
+   the repository, for the block's reason: the session manager would record it in the member's
+   organization, and customers see no staff activity. The staff-side record is the block's event. */
+export const endSessionsOfBlockedOrganization = (input: { userId: string; organizationId: string }) =>
+  mongoRefreshSessionRepository.revokeAll({ userId: input.userId, organizationId: input.organizationId, reason: ORGANIZATION_BLOCK_REVOKE_REASON, now: new Date() });
