@@ -403,7 +403,7 @@ test("while blocked: a queued job of A is deferred and not run; a job of B runs"
   assert.deepEqual(ofB.moves, [], "B's job goes on to be claimed and run");
 });
 
-test("while blocked: staff reads and staff member management on A keep working, and show A as blocked", async () => {
+test("while blocked: staff reads on A keep working, and show A as blocked; staff still change no member", async () => {
   const detail = await asStaff("GET", `${BASE}/${a.organizationId}`);
   assert.equal(detail.status, 200, detail.text);
   assert.deepEqual([detail.body.data.organization.blocked, detail.body.data.organization.blockedAt, detail.body.data.organization.status], [true, blockedAt, "active"]);
@@ -425,15 +425,16 @@ test("while blocked: staff reads and staff member management on A keep working, 
   const proposals = await asStaff("GET", `${BASE}/${a.organizationId}/proposals`);
   assert.equal(proposals.status, 200, proposals.text);
 
-  // Staff fix the organization while it is blocked: a role change on one of A's members.
+  // The read of one member of the blocked organization.
   const viewer = `${BASE}/${a.organizationId}/members/${a.members.viewer.userId}`;
   const read = await asStaff("GET", viewer);
   assert.equal(read.status, 200, read.text);
+  assert.deepEqual(read.body.data.member.roles, ["viewer"]);
+  // Staff do not change members (owner decision, 2026-11-24): the role route is gone, blocked or not.
   const changed = await asStaff("PATCH", `${viewer}/role`, { role: "planner", version: read.body.data.version, reason: REASON });
-  assert.equal(changed.status, 200, changed.text);
-  assert.deepEqual(changed.body.data.member.roles, ["planner"]);
-  const back = await asStaff("PATCH", `${viewer}/role`, { role: "viewer", version: changed.body.data.version, reason: REASON });
-  assert.equal(back.status, 200, back.text);
+  assert.deepEqual([changed.status, changed.body], [404, { success: false, message: "Route not found" }], changed.text);
+  const after = await asStaff("GET", viewer);
+  assert.deepEqual([after.status, after.body.data.member.roles, after.body.data.version], [200, ["viewer"], read.body.data.version]);
   assert.equal(await eventCount(aId), before_.aEvents);
 });
 
