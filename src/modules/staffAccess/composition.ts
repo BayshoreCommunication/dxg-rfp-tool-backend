@@ -5,12 +5,6 @@ import {
   mongoSupportAccessDirectory,
   mongoSupportTicketLookup,
 } from "../supportAccess/infrastructure/mongoSupportAccessRepository";
-import { staffMembershipSessions } from "../auth/composition";
-import { mongoMembershipStore, mongoRfpReassignmentStore } from "../organizationMembers/infrastructure/mongoMembershipStore";
-import { mongoStaffMemberTeams, mongoTeamDirectory } from "../organizationMembers/infrastructure/mongoTeamDirectory";
-import { proposalReferenceOwnershipMirror } from "../organizationMembers/infrastructure/proposalReferenceOwnershipMirror";
-import { createTeamAdministration } from "../teams/application/manageTeams";
-import { isValidTeamId, mongoOrganizationMemberDirectory, mongoTeamRepository } from "../teams/infrastructure/mongoTeamRepository";
 import { createStaffOrganizationBlock } from "./application/manageOrganizationBlock";
 import { createStaffMemberManagement } from "./application/manageOrganizationMembers";
 import { createStaffTeamManagement } from "./application/manageOrganizationTeams";
@@ -29,38 +23,17 @@ export const staffOrganizationContent = createStaffOrganizationContent({
   isValidId: isValidSupportAccessId,
 });
 
-// Staff member management (owner decision, 2026-11-18): the customer's own membership store and
-// reassignment store, with the staff session hook (no event in the customer organization).
+/* The staff reads of one member and one team (owner decision, 2026-11-24: staff view a customer
+   organization's members and teams and change neither). Each is given a read-only directory and
+   the staff-side audit writer, and nothing that can write to a customer organization. */
 export const staffMemberManagement = createStaffMemberManagement({
   directory: mongoStaffMemberDirectory,
-  store: mongoMembershipStore,
-  reassignments: mongoRfpReassignmentStore,
-  ownershipMirror: proposalReferenceOwnershipMirror,
-  sessions: staffMembershipSessions,
   audit: mongoSecurityAuditWriter,
-});
-
-/* Staff team management (owner decision, 2026-11-18): the customer's own team rules over the
-   customer's own team store. This instance of the team service has NO writer for the member
-   events (`team.*`): the service never writes one for a staff actor, and if it ever tried to,
-   the request would fail instead of leaving a row in the customer organization. */
-const staffTeamRules = createTeamAdministration({
-  teams: mongoTeamRepository,
-  directory: mongoOrganizationMemberDirectory,
-  audit: {
-    append: async () => {
-      throw new Error("A staff team change never writes an event in the customer organization.");
-    },
-  },
-  isValidId: isValidTeamId,
 });
 
 export const staffTeamManagement = createStaffTeamManagement({
   directory: mongoStaffMemberDirectory,
   teamDirectory: mongoStaffTeamDirectory,
-  teams: staffTeamRules,
-  members: mongoMembershipStore,
-  memberTeams: { activeTeamIds: mongoTeamDirectory.activeTeamIds, setMemberTeams: mongoStaffMemberTeams.setMemberTeams },
   audit: mongoSecurityAuditWriter,
 });
 

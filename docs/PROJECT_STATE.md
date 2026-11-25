@@ -780,44 +780,37 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
     customer audit log (list, filter options, CSV) no longer returns any
     support-access event, `organization.plan_changed`, or either legacy-customer
     placement event; stored rows are kept.
-  - Done in the backend (member management; owner's scope decision 2026-11-18,
-    `DECISIONS.md`; on `main` when its PR merges, **not released, awaiting
-    security review**): staff change a member's role, deactivate, reactivate,
-    reassign a member's proposals and transfer ownership under
-    `/api/v1/admin/organizations/:organizationId/` (`API.md`, "Staff member
-    management"). The customer's own rules apply; the Owner is transfer-only;
-    every write needs a reason; RFPilot's own organization and holding tenants
-    are refused. Every request leaves one event in the staff organization
-    (`platform.organization_member.*`), written in the same transaction as the
-    change, and nothing in the customer's audit trail. No email or notification
-    is sent (the customer flow sends none). The session events a member's own
-    later requests would write after a staff change ("Session reuse detected",
-    "Other sessions signed out", "All sessions signed out") are not written in
-    the customer organization either; the revocations are recorded on the
-    staff side (`DECISIONS.md`). Open for the owner: whether a member should
-    be told when staff change their role or deactivate them.
-    The admin app has no screen for any of this yet.
-  - Done in the backend (team management; owner's decision 2026-11-18,
-    `DECISIONS.md`; in its own PR after member management, **not released,
-    awaiting security review**): staff create, rename and archive a team, add
-    and remove a team member, set and unset a team manager, and set which teams
-    a member is on, under `/api/v1/admin/organizations/:organizationId/`
-    (`API.md`, "Staff team management"). The customer's own team rules and
-    store are used, through a deliberate staff actor that is not a member; a
-    reason is required; RFPilot's own organization and holding tenants are
-    refused. Every request leaves one event in the staff organization
-    (`platform.organization_team.*`, `platform.organization_member.teams_changed`),
-    written in the same transaction as the change, and nothing in the
-    customer's audit trail. Staff cannot change which team a proposal is on.
-    **Archiving a team changes no proposal:** proposals on it keep their team,
-    and its Team Managers lose their reach over them, exactly as when the
-    customer archives it. No session is ended and no email or notification is
-    sent (the customer flow does neither). A DELETE here carries its reason in
-    a JSON body, which the admin app's client must send.
+  - **Reversed 2026-11-24 (owner's decision, `DECISIONS.md`): staff view
+    members and teams and change neither.** Staff member management and staff
+    team management (built 2026-11-18, backend PRs #147 and #148, both on the
+    `production` branch) are removed: the twelve write routes under
+    `/api/v1/admin/organizations/:organizationId/` (role, deactivate,
+    reactivate, reassign-rfps, ownership transfer, a member's teams, and
+    create, rename, archive, add member, set manager and remove member for a
+    team) no longer exist and answer 404 to every caller (`API.md`, "Removed
+    on 2026-11-24"). The admin app removed its screens and actions for them
+    first (admin PRs #23 and #24), so nothing called them. Removed with the
+    routes: the staff manager in the member policy, the staff actor in the
+    team rules, the staff-side change events in the membership and team
+    stores, and the staff session hook. The customer's own member and team
+    routes are what they were before 2026-11-18. Kept: the reads of one
+    member and one team (`GET /members/:userId`, `GET /teams/:teamId`) with
+    their staff-side read events; the staff audit rows of that week and their
+    action names; and the readers of the session markers staff changes left
+    (`staff_membership_changed`, `sessionRevocationStaff`,
+    `suspendedByStaff`), so a member staff changed then still writes nothing
+    in their organization's audit log on a later request. Nothing sets those
+    markers any more; no data migration was run. A member staff deactivated
+    stays deactivated until the organization's own Owner or Admin reactivates
+    them through the customer route, which clears the marker.
+    `tests/staff-organization-routes-guard.test.js` fails if a staff route
+    under `/admin/organizations/:organizationId` other than `POST /block` and
+    `POST /reactivate` is not a GET. **Not released until its PR is merged to
+    `main` and `production`:** until then the twelve routes are still live.
   - Done in the backend (organization block; owner's decision 2026-11-18,
-    `DECISIONS.md` row of 2026-11-19; in its own draft PR, **not released, not
-    merged; security review done 2026-11-19 with no critical or high
-    finding, its fix round is in the same PR**): staff block a whole customer
+    `DECISIONS.md` row of 2026-11-19; backend PR #151, merged and on the
+    `production` branch as of 2026-11-25; security review done 2026-11-19 with
+    no critical or high finding, its fix round was in the same PR): staff block a whole customer
     organization and reactivate it with `POST
     /api/v1/admin/organizations/:organizationId/block` and `/reactivate`
     (`API.md`, "Staff organization block"). A block is a dedicated marker on
@@ -829,25 +822,27 @@ the dashboard row menu, the role guide on a phone, and company single sign-on.
     for access waits as pending with nothing sent into the organization; vendor links, shared proposal pages and invitation links
     answer as links that do not exist; durable jobs are deferred and scheduled
     jobs skip the organization; nothing is deleted. Reactivation removes the
-    marker and everything resumes; members sign in again. The staff
-    organization and holding tenants cannot be blocked. One event per request
+    marker and everything resumes; members sign in again. The block route
+    refuses the staff organization and holding tenants (an organization
+    blocked earlier and later made one of those keeps its marker until it is
+    reactivated; `API.md`). One event per request
     in the staff organization (`platform.organization.blocked` /
     `.reactivated`); nothing in the customer's audit trail, including no
     "sessions signed out" or "session reuse detected" row. Staff reads show
     blocked and since when. Both workers now require MongoDB and fail
     start-up without it. A job already running when the block commits
     finishes (accepted limit).
-    Not built: the dashboard message for `ORGANIZATION_BLOCKED` and the admin
-    app's block button. Known limits are listed in `API.md`.
+    The dashboard shows a message for `ORGANIZATION_BLOCKED` and the admin app
+    has block and reactivate screens (both on their `main` branches). Known
+    limits are listed in `API.md`.
   - Follows, not built: (a) the admin app's organization browser on the new
     routes (members, teams, templates, vendor list, proposals), replacing the
     Support access screens, whose wording ("granted", "time left", "recorded in
-    this organization's audit log") is now wrong, and screens for staff member
-    and team management, which have none yet; (b) the dashboard's
-    message for `ORGANIZATION_BLOCKED` and the admin app's block and reactivate
-    controls (the backend is built, see above); invitations, two-factor reset and
-    blocking an account are excluded (members, roles and teams are built, see
-    above; plan and placement exist). All of
+    this organization's audit log") is now wrong (staff member and team
+    management need no screen: staff only view members and teams, decision
+    2026-11-24); (b) invitations, two-factor reset and blocking an account are
+    excluded, and so, since 2026-11-24, is any staff change of members, roles
+    or teams (plan, placement, and block and reactivate exist). All of
     it is recorded on the staff side only and must not write a customer-visible
     action with a staff actor; (c) removal of the customer grant endpoints
     (`/api/v1/organization/support-grants*`), the `SupportAccessGrant` model and

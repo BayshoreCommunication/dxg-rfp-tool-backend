@@ -39,14 +39,17 @@ export interface IOrganizationMembership extends Document {
   sessionRevocationPending?: boolean;
   // The request currently revoking for the pending flag; the flag clears only after it succeeds.
   sessionRevocationClaim?: { sessionId: string; at: Date } | null;
-  // Staff member management (owner decision, 2026-11-18). Internal markers, never returned by an
-  // API: both name the RFPilot staff organization and account whose change caused a session
-  // revocation, so the revocation is recorded there and not in this organization's audit trail.
-  // sessionRevocationStaff: set with the pending flag by a staff role change; cleared when the
-  // flag is completed or a member of the organization sets it again.
+  // Markers of staff member management, which existed from 2026-11-18 until the owner removed it
+  // on 2026-11-24 (docs/DECISIONS.md). NOTHING SETS THEM ANY MORE; memberships changed by staff
+  // in that week may still carry one, so the fields and their readers
+  // (src/modules/auth/composition.ts) stay. Internal, never returned by an API: both name the
+  // RFPilot staff organization and account whose change caused a session revocation, so the
+  // revocation is recorded there and not in this organization's audit trail.
+  // sessionRevocationStaff: was set with the pending flag by a staff role change; cleared when
+  // the flag is completed or a member of the organization sets it again.
   sessionRevocationStaff?: { organizationId?: string | null; actorUserId?: string | null } | null;
-  // suspendedByStaff: set in the transaction of a staff deactivation; cleared by any later
-  // deactivation or reactivation.
+  // suspendedByStaff: was set in the transaction of a staff deactivation; cleared by any later
+  // deactivation or reactivation, which only the organization's own Owner and Admins now make.
   suspendedByStaff?: { organizationId?: string | null; actorUserId?: string | null } | null;
   migrationRunId?: string | null;
   createdAt: Date;

@@ -13,7 +13,12 @@ const { AUDIT_CATALOG, VISIBLE_ACTIONS, isStaffOnlyAction, catalogEntry } = requ
 /* Owner's rule (2026-11-18): customers see no RFPilot staff activity. A session revocation that a
    STAFF-made membership change causes leaves no event in the member's organization; the security
    outcome is unchanged. A change made by a member of the organization, and a genuine token reuse,
-   write exactly the events they always did. */
+   write exactly the events they always did.
+
+   Staff no longer change members (owner decision 2026-11-24): nothing sets a staff marker any
+   more. Memberships and sessions changed by staff before that still carry them, and must keep
+   behaving exactly as they did, so everything below about READING a marker stays. Where a test
+   needs a marker it writes one itself, the way the removed staff flow did. */
 
 const hex = (c) => c.repeat(24);
 const ORG = hex("a");
@@ -79,7 +84,7 @@ const sessionStore = (options = {}) => {
     deriveRefreshToken: (previous, key) => crypto.createHmac("sha256", "test-only").update(JSON.stringify([previous, key])).digest("base64url"),
     ...(options.inactiveMembershipReason ? { inactiveMembershipReason: options.inactiveMembershipReason } : {}),
   });
-  // What the staff hook does (auth/composition.ts, staffMembershipSessions): the repository, the staff reason, no event.
+  // What the removed staff hook did, and what the access path still does for a membership that carries a marker: the repository, the staff reason, no event.
   const staffRevoke = (exceptSessionId) => sessions.revokeAll({ userId: MEMBER, organizationId: ORG, reason: STAFF_MEMBERSHIP_REVOKE_REASON, now: NOW, exceptSessionId });
   const api = { manager, sessions, records, audit, calls, staffRevoke, events: (action) => audit.filter((e) => e.action === action) };
   return api;
@@ -348,31 +353,46 @@ test("trace 3, customer cause: a member deactivated by the organization writes a
 
 const read = (file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");
 
-test("the markers are set only by the staff flow and cleared by the organization's own changes", () => {
+test("nothing sets a marker any more (staff member management was removed 2026-11-24); the readers stay and the organization's own changes clear them", () => {
   const composition = read("src/modules/auth/composition.ts");
-  // The staff hook: every session it ends carries the staff reason, and its pending flag carries the staff cause.
-  const hook = composition.slice(composition.indexOf("export const staffMembershipSessions"));
-  assert.match(hook, /mongoRefreshSessionRepository\.revokeAll\(\{\s+userId: input\.userId, organizationId: input\.organizationId, reason: STAFF_MEMBERSHIP_REVOKE_REASON,/);
-  assert.match(hook, /\$set: \{ sessionRevocationStaff: \{ organizationId: staffOrganizationId \?\? null, actorUserId: actorUserId \?\? null \} \}/);
-  // ... and never takes over a flag a member of the organization already set.
-  assert.match(hook, /\$or: \[\{ sessionRevocationPending: \{ \$ne: true \} \}, \{ sessionRevocationStaff: \{ \$ne: null \} \}\]/);
-  // The staff reason is used nowhere else in the customer's session manager wiring.
+  // The staff hook, the only code that set `sessionRevocationStaff`, is gone.
+  assert.doesNotMatch(composition, /staffMembershipSessions/);
+  // Every write of `sessionRevocationStaff` left clears it; none sets a cause.
+  const pendingWrites = [...composition.matchAll(/\$set: \{[^}]*sessionRevocationStaff: ([^,}]+)/g)].map((match) => match[1].trim());
+  assert.deepEqual(pendingWrites, ["null", "null"], "completing the revocation, and a member of the organization setting the flag again");
+  assert.match(composition, /\$set: \{ sessionRevocationPending: true, sessionRevocationClaim: null, sessionRevocationStaff: null \}/);
+  assert.match(composition, /\$set: \{ sessionRevocationPending: false, sessionRevocationClaim: null, sessionRevocationStaff: null \}/);
+  // The readers stay, for memberships that already carry a marker: each flow claims only its own flag,
+  assert.match(composition, /sessionRevocationStaff: byStaff \? \{ \$ne: null \} : null,/);
+  assert.match(composition, /staffClaims: revocationClaims\(true\),/);
+  assert.match(composition, /\.select\("sessionRevocationStaff"\)/);
+  // ... and only a suspended membership is read for the deactivation's cause.
+  assert.match(composition, /OrganizationMembership\.findOne\(\{ organizationId: member\.organizationId, userId: member\.userId, status: "suspended" \}\)\s+\.select\("suspendedByStaff"\)/);
+  // The staff reason is given in exactly two places, both reached only for a membership that carries
+  // a marker: a refresh by a member staff deactivated, and the access path's revocation.
+  const code = composition.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.equal((code.match(/STAFF_MEMBERSHIP_REVOKE_REASON/g) ?? []).length, 3, "the import and the two uses");
+  assert.match(code, /inactiveMembershipReason: async \(member\) => \(\(await suspendedByStaff\(member\)\) \? STAFF_MEMBERSHIP_REVOKE_REASON : "membership_inactive"\),/);
+  assert.match(code, /const revokeForStaffChange = [\s\S]{0,200}reason: STAFF_MEMBERSHIP_REVOKE_REASON,/);
+  assert.equal((code.match(/revokeForStaffChange/g) ?? []).length, 2, "defined, and handed to the access path's handler only");
+  // The customer's session manager wiring does not use it.
   const customer = composition.slice(composition.indexOf("const membershipRevocationFlags"), composition.indexOf("const revokeForStaffChange"));
   assert.doesNotMatch(customer, /STAFF_MEMBERSHIP_REVOKE_REASON/);
-  // A change by a member of the organization clears the staff cause; so does completing the revocation.
-  assert.match(customer, /\$set: \{ sessionRevocationPending: true, sessionRevocationClaim: null, sessionRevocationStaff: null \}/);
-  assert.match(composition, /\$set: \{ sessionRevocationPending: false, sessionRevocationClaim: null, sessionRevocationStaff: null \}/);
-  // Each flow claims only its own flag.
-  assert.match(composition, /sessionRevocationStaff: byStaff \? \{ \$ne: null \} : null,/);
 
   const store = read("src/modules/organizationMembers/infrastructure/mongoMembershipStore.ts");
-  // Set in the transaction of a staff deactivation (one carrying an event), null for the organization's own.
-  assert.match(store, /const suspendedByStaff = input\.audit \? \{ organizationId: input\.audit\.organizationId, actorUserId: input\.audit\.actorUserId \} : null;\s+row = await updateVersioned\(input, \{ status: \{ \$ne: "removed" \} \}, \{ \$set: \{ status: "suspended", suspendedAt: input\.now, suspendedByStaff \} \}, session\);/);
-  // Cleared by reactivation and by the put-back.
-  assert.match(store, /const update = \{ \$set: \{ status: "active", suspendedAt: null, activatedAt: new Date\(\), suspendedByStaff: null \} \};/);
+  // The membership store never sets `suspendedByStaff` to a cause: every write of it is `null`.
+  const suspensionWrites = [...store.matchAll(/suspendedByStaff(?::\s*([^,}\s]+))?\s*[,}]/g)].map((match) => match[1]);
+  assert.deepEqual(suspensionWrites, ["null", "null", "null"], "the organization's own deactivation, the put-back and the reactivation");
+  assert.match(store, /\$set: \{ status: "suspended", suspendedAt: input\.now, suspendedByStaff: null \}/);
+  // Cleared by reactivation (how a member staff deactivated comes back: the organization's own Owner or Admin) and by the put-back.
+  assert.match(store, /\$set: \{ status: "active", suspendedAt: null, activatedAt: new Date\(\), suspendedByStaff: null \}/);
   assert.match(store, /\$set: \{ status: "active", suspendedAt: null, suspendedByStaff: null \}, \$inc: \{ version: 1 \}/);
-  // Only a suspended membership is read for it.
-  assert.match(composition, /OrganizationMembership\.findOne\(\{ organizationId: member\.organizationId, userId: member\.userId, status: "suspended" \}\)\s+\.select\("suspendedByStaff"\)/);
+  // No store or service takes an audit event to commit for staff any more.
+  assert.doesNotMatch(store, /input\.audit|appendAudit|revertAudit/);
+  // The fields stay on the model: rows written before the removal still carry them.
+  const model = read("modal/organizationMembershipModel.ts");
+  assert.match(model, /sessionRevocationStaff: \{ type: new Schema\(/);
+  assert.match(model, /suspendedByStaff: \{ type: new Schema\(/);
 });
 
 test("no marker is returned by an API or shown in the customer audit log", () => {

@@ -1,10 +1,11 @@
-// Owner decision 2026-11-18 (docs/DECISIONS.md): RFPilot staff (an `admins` account holding an
-// admin role) manage a customer organization's teams under the customer's own rules, and what
-// they do is recorded on the RFPilot side only. The sibling of staff-member-management.test.ts.
-// Through the real API on real MongoDB: two customer organizations (A and B), the staff
-// organization and a legacy holding tenant. Every action end to end in A; every event lands in
-// the staff organization; A and B gain no audit row; A's own audit endpoints (list, filters, CSV)
-// show none of it; nothing changes in B; and the organization's own Admin still gets the usual rows.
+// Owner decision 2026-11-24 (docs/DECISIONS.md): RFPilot staff (an `admins` account holding an
+// admin role) VIEW a customer organization's teams and change none of them. The sibling of
+// staff-member-management.test.ts. Through the real API on real MongoDB: two customer
+// organizations (A and B), the staff organization and a legacy holding tenant.
+// - The read of one team works and is recorded in the staff organization only.
+// - The seven staff team write routes are gone: 404 for everyone, nothing changed, nothing recorded.
+// - A's own audit endpoints (list, filters, CSV) never show a staff team action, even a stored one.
+// - The organization's own Admin still changes teams through the customer routes, with the usual rows.
 import { TEST_MONGODB_DB_NAME } from "./env";
 import { connectMongo, disconnectMongo, ensureMigrated, ensureServices, randomMongoId } from "./setup";
 import assert from "node:assert/strict";
@@ -23,9 +24,7 @@ import Team from "../modal/teamModel";
 import TeamMembership from "../modal/teamMembershipModel";
 import User from "../modal/userModel";
 import { beginAuthenticatedSession } from "../src/modules/auth/composition";
-import { mongoStaffMemberTeams } from "../src/modules/organizationMembers/infrastructure/mongoTeamDirectory";
 import { STAFF_MEMBER_AUDIT, STAFF_TEAM_AUDIT } from "../src/modules/staffAccess/domain";
-import { mongoTeamRepository } from "../src/modules/teams/infrastructure/mongoTeamRepository";
 import { closePostgres } from "../config/postgres";
 import { closeSecurityRateLimitRedis } from "../middleware/securityRateLimit";
 import { closeSupportRedis } from "../src/modules/supportDesk/infrastructure/redis/supportRedis";
@@ -35,7 +34,7 @@ const tag = randomMongoId().slice(0, 10);
 const oid = (value?: string) => new mongoose.Types.ObjectId(value);
 const BASE = "/api/v1/admin/organizations";
 const AUDIT_LOG = "/api/v1/organization/audit-events";
-const REASON = `Customer asked on the phone, ticket ${tag}`;
+const REASON = `Customer asked on the phone, ticket ${tag}`; // a body the removed write routes took; also text that must never show to a customer
 const STAFF_ACTIONS: string[] = Object.values(STAFF_TEAM_AUDIT);
 const CUSTOMER_TEAM_ACTIONS = ["team.created", "team.renamed", "team.archived", "team.member_added", "team.member_removed", "team.manager_changed", "organization.member.teams_changed"];
 const MEMBER_KEYS = ["email", "joinedAt", "lastSignedInAt", "name", "roles", "status", "teams", "userId"];
@@ -53,8 +52,7 @@ let baseline: { a: number; b: number; staff: number };
 let bBefore: string;
 // Requests made as staff to the team routes: each must leave exactly one staff-side event.
 let staffRequests = 0;
-// RFPilot's own organization: four staff accounts (the write limit is 60 per account per 15
-// minutes, so the requests of this suite are spread over them) and a `users` account holding a staff role.
+// RFPilot's own organization: four staff accounts (admins and super admins in turn) and a `users` account holding a staff role.
 const dxg = { org: oid(), staff: [oid(), oid(), oid(), oid()], impostor: oid(), team: oid() };
 const holding = { org: oid(), member: oid(), team: oid() };
 // Teams seeded directly: two in A, one in B.
@@ -92,9 +90,6 @@ const teamRows = async (organizationId: mongoose.Types.ObjectId) =>
 const teamMemberRows = async (organizationId: mongoose.Types.ObjectId, teamId?: string | mongoose.Types.ObjectId) =>
   (await TeamMembership.collection.find({ organizationId, ...(teamId ? { teamId: oid(String(teamId)) } : {}) }).sort({ teamId: 1, userId: 1 }).toArray())
     .map((row) => [String(row.teamId), String(row.userId), row.isManager]);
-// The teams a member is on, as stored.
-const teamsOf = async (organizationId: mongoose.Types.ObjectId, userId: string) =>
-  (await TeamMembership.collection.find({ organizationId, userId: oid(userId) }).sort({ teamId: 1 }).toArray()).map((row) => [String(row.teamId), row.isManager]);
 // Everything of an organization a staff team action could touch.
 const snapshot = async (organizationId: mongoose.Types.ObjectId) => JSON.stringify({
   teams: (await Team.collection.find({ organizationId }).sort({ _id: 1 }).toArray()).map((row) => [String(row._id), row.name, row.archived, row.archivedAt ?? null, row.updatedAt ?? null]),
@@ -183,17 +178,10 @@ after(async () => {
   await closeSupportRedis();
 });
 
-test("trust boundary: no customer role, no `users` account holding a staff role and no anonymous caller can use any route; nothing changes and nothing is recorded", async () => {
-  const planner = a.members.planner.userId;
+test("trust boundary: no customer role, no `users` account holding a staff role and no anonymous caller can read a team; nothing changes and nothing is recorded", async () => {
   const routes: Array<[string, string, unknown]> = [
-    ["POST", `${org()}/teams`, { name: "Intruder", reason: REASON }],
     ["GET", team(teams.aWest), undefined],
-    ["PATCH", team(teams.aWest), { name: "Intruder", reason: REASON }],
-    ["POST", `${team(teams.aWest)}/archive`, { reason: REASON }],
-    ["POST", `${team(teams.aWest)}/members`, { userId: a.members.viewer.userId, reason: REASON }],
-    ["PATCH", `${team(teams.aWest)}/members/${planner}`, { isManager: false, reason: REASON }],
-    ["DELETE", `${team(teams.aWest)}/members/${planner}`, { reason: REASON }],
-    ["PUT", `${org()}/members/${planner}/teams`, { teamIds: [], version: 1, reason: REASON }],
+    ["GET", team(teams.aOld), undefined],
   ];
   const beforeA = await snapshot(aId);
   for (const [method, path, body] of routes) {
@@ -242,229 +230,41 @@ test("team read: the team of the path's organization with its members and their 
   await noNewCustomerRows("team read");
 });
 
-let created: string;
-
-test("create and rename: under the customer's rules, with one staff-side event each; no creator is stored; names are unique in the organization only", async () => {
-  const res = await asStaff("POST", `${org()}/teams`, { name: "  South  ", reason: `  ${REASON}  ` });
-  assert.equal(res.status, 201, res.text);
-  created = res.body.data.team.id;
-  assert.deepEqual(Object.keys(res.body.data.team).sort(), TEAM_KEYS);
-  assert.deepEqual([res.body.data.organizationId, res.body.data.team.name, res.body.data.team.archived, res.body.data.team.memberCount, res.body.data.members], [a.organizationId, "South", false, 0, []]);
-  const row = (await teamDoc(created))!;
-  assert.deepEqual([String(row.organizationId), row.name, row.archived, row.createdBy], [a.organizationId, "South", false, null], "the team is A's and no staff account is stored on it");
-  let event = await lastStaffEvent();
-  assert.deepEqual([String(event.organizationId), event.action, event.decision, event.reason, event.targetType, event.targetId], [String(dxg.org), STAFF_TEAM_AUDIT.created, "allowed", "team_created", "team", created]);
-  assert.deepEqual([event.metadata.organizationId, event.metadata.teamId, event.metadata.changed, event.metadata.before, event.metadata.after, event.metadata.staffReason, event.metadata.agentAccountType], [a.organizationId, created, true, null, { name: "South" }, REASON, "admin"]);
-  // B's team name is free in A: uniqueness is per organization.
-  const north = await asStaff("POST", `${org()}/teams`, { name: "North", reason: REASON });
-  assert.equal(north.status, 201, north.text);
-  // An archived team's name is free too.
-  const old = await asStaff("POST", `${org()}/teams`, { name: "old", reason: REASON });
-  assert.equal(old.status, 201, old.text);
-
-  const renamed = await asStaff("PATCH", team(created), { name: "South Coast", reason: REASON });
-  assert.equal(renamed.status, 200, renamed.text);
-  assert.deepEqual([renamed.body.data.team.id, renamed.body.data.team.name], [created, "South Coast"]);
-  assert.equal((await teamDoc(created))!.name, "South Coast");
-  event = await lastStaffEvent();
-  assert.deepEqual([event.action, event.decision, event.reason, event.targetId, event.metadata.changed, event.metadata.before, event.metadata.after], [STAFF_TEAM_AUDIT.renamed, "allowed", "team_renamed", created, true, { name: "South" }, { name: "South Coast" }]);
-
-  const refusals: Array<[string, string, unknown, number, string, string]> = [
-    ["POST", `${org()}/teams`, { name: "WEST", reason: REASON }, 409, "TEAM_NAME_TAKEN", STAFF_TEAM_AUDIT.created],
-    ["POST", `${org()}/teams`, { name: "   ", reason: REASON }, 400, "INVALID_TEAM_NAME", STAFF_TEAM_AUDIT.created],
-    ["POST", `${org()}/teams`, { name: "x".repeat(121), reason: REASON }, 400, "INVALID_TEAM_NAME", STAFF_TEAM_AUDIT.created],
-    ["POST", `${org()}/teams`, { name: "No reason" }, 400, "INVALID_REASON", STAFF_TEAM_AUDIT.created],
-    ["POST", `${org()}/teams`, { name: "Short reason", reason: "too short" }, 400, "INVALID_REASON", STAFF_TEAM_AUDIT.created],
-    ["PATCH", team(created), { name: "west", reason: REASON }, 409, "TEAM_NAME_TAKEN", STAFF_TEAM_AUDIT.renamed],
-    ["PATCH", team(created), { reason: REASON }, 400, "INVALID_TEAM_NAME", STAFF_TEAM_AUDIT.renamed],
-    ["PATCH", team(teams.aOld), { name: "Revived", reason: REASON }, 409, "TEAM_ARCHIVED", STAFF_TEAM_AUDIT.renamed],
-    ["PATCH", team(teams.bNorth), { name: "Taken over", reason: REASON }, 404, "TEAM_NOT_FOUND", STAFF_TEAM_AUDIT.renamed],
-    ["PATCH", team(oid()), { name: "Nothing", reason: REASON }, 404, "TEAM_NOT_FOUND", STAFF_TEAM_AUDIT.renamed],
+test("the seven staff team write routes are gone: 404 for a staff admin, a super admin and everyone else, with nothing changed and nothing recorded anywhere", async () => {
+  const planner = a.members.planner.userId;
+  const removed: Array<[string, string, unknown]> = [
+    ["POST", `${org()}/teams`, { name: "Intruder", reason: REASON }],
+    ["PATCH", team(teams.aWest), { name: "Intruder", reason: REASON }],
+    ["POST", `${team(teams.aWest)}/archive`, { reason: REASON }],
+    ["POST", `${team(teams.aWest)}/members`, { userId: a.members.viewer.userId, reason: REASON }],
+    ["PATCH", `${team(teams.aWest)}/members/${planner}`, { isManager: true, reason: REASON }],
+    ["DELETE", `${team(teams.aWest)}/members/${planner}`, { reason: REASON }],
+    ["PUT", `${org()}/members/${planner}/teams`, { teamIds: [], version: 1, reason: REASON }],
   ];
-  const beforeRefusals = JSON.stringify(await teamRows(aId));
-  for (const [method, path, body, status, code, action] of refusals) {
-    const refused = await asStaff(method, path, body);
-    assert.deepEqual([refused.status, refused.body.code], [status, code], `${method} ${path} ${JSON.stringify(body).slice(0, 60)}: ${refused.text}`);
-    event = await lastStaffEvent();
-    assert.deepEqual([String(event.organizationId), event.action, event.decision, event.reason], [String(dxg.org), action, "denied", code.toLowerCase()]);
-    if (code === "INVALID_REASON") assert.deepEqual(refused.body.fields, { reason: "Give a reason of 10 to 500 characters." });
-  }
-  assert.equal(JSON.stringify(await teamRows(aId)), beforeRefusals, "a refusal changes nothing");
-  assert.equal((await teamDoc(teams.bNorth))!.name, "North");
-  await noNewCustomerRows("create and rename");
-});
-
-test("team members: add, set and unset the manager, remove; managers must hold the Team Manager role and members must be active members of that organization", async () => {
-  const manager = a.members.team_manager.userId;
-  const viewer = a.members.viewer.userId;
-  const added = await asStaff("POST", `${team(created)}/members`, { userId: manager, isManager: true, reason: REASON });
-  assert.equal(added.status, 201, added.text);
-  assert.deepEqual([added.body.data.team.memberCount, added.body.data.team.managers.map((m: any) => m.id), added.body.data.members.map((m: any) => [m.member.userId, m.isManager, m.version])], [1, [manager], [[manager, true, 1]]]);
-  assert.deepEqual(Object.keys(added.body.data.members[0].member).sort(), MEMBER_KEYS);
-  assert.deepEqual(await teamMemberRows(aId, created), [[created, manager, true]]);
-  let event = await lastStaffEvent();
-  assert.deepEqual([event.action, event.decision, event.reason, event.targetType, event.targetId, event.metadata.memberUserId, event.metadata.before, event.metadata.after, event.metadata.staffReason],
-    [STAFF_TEAM_AUDIT.memberAdded, "allowed", "team_member_added", "team", created, manager, null, { userId: manager, isManager: true }, REASON]);
-  assert.equal((await asStaff("POST", `${team(created)}/members`, { userId: viewer, reason: REASON })).status, 201);
-
-  const unset = await asStaff("PATCH", `${team(created)}/members/${manager}`, { isManager: false, reason: REASON });
-  assert.equal(unset.status, 200, unset.text);
-  assert.deepEqual(unset.body.data.team.managers, []);
-  event = await lastStaffEvent();
-  assert.deepEqual([event.action, event.reason, event.metadata.changed, event.metadata.before, event.metadata.after], [STAFF_TEAM_AUDIT.managerChanged, "team_manager_changed", true, { isManager: true }, { isManager: false }]);
-  const set = await asStaff("PATCH", `${team(created)}/members/${manager}`, { isManager: true, reason: REASON });
-  assert.deepEqual([set.status, set.body.data.team.managers.map((m: any) => m.id)], [200, [manager]]);
-
-  // A DELETE carries its reason in the JSON body.
-  const removed = await asStaff("DELETE", `${team(created)}/members/${viewer}`, { reason: REASON });
-  assert.equal(removed.status, 200, removed.text);
-  assert.deepEqual(removed.body.data.members.map((m: any) => m.member.userId), [manager]);
-  assert.deepEqual(await teamMemberRows(aId, created), [[created, manager, true]]);
-  event = await lastStaffEvent();
-  assert.deepEqual([event.action, event.reason, event.metadata.memberUserId, event.metadata.before, event.metadata.after], [STAFF_TEAM_AUDIT.memberRemoved, "team_member_removed", viewer, { userId: viewer, isManager: false }, null]);
-
-  const refusals: Array<[string, string, unknown, number, string, string]> = [
-    ["POST", `${team(created)}/members`, { userId: a.members.planner.userId, isManager: true, reason: REASON }, 422, "TEAM_MANAGER_ROLE_REQUIRED", STAFF_TEAM_AUDIT.memberAdded],
-    ["POST", `${team(created)}/members`, { userId: a.members.organization_admin.userId, isManager: true, reason: REASON }, 422, "TEAM_MANAGER_ROLE_REQUIRED", STAFF_TEAM_AUDIT.memberAdded],
-    ["POST", `${team(created)}/members`, { userId: manager, reason: REASON }, 409, "TEAM_MEMBER_EXISTS", STAFF_TEAM_AUDIT.memberAdded],
-    // B's Team Manager is not a member of A, and B's team is not A's.
-    ["POST", `${team(created)}/members`, { userId: b.members.team_manager.userId, isManager: true, reason: REASON }, 404, "MEMBER_NOT_FOUND", STAFF_TEAM_AUDIT.memberAdded],
-    ["POST", `${team(created)}/members`, { userId: String(dxg.staff[0]), reason: REASON }, 404, "MEMBER_NOT_FOUND", STAFF_TEAM_AUDIT.memberAdded],
-    ["POST", `${team(created)}/members`, { userId: "not-an-id", reason: REASON }, 404, "MEMBER_NOT_FOUND", STAFF_TEAM_AUDIT.memberAdded],
-    ["POST", `${team(created)}/members`, { userId: viewer }, 400, "INVALID_REASON", STAFF_TEAM_AUDIT.memberAdded],
-    ["POST", `${team(teams.bNorth)}/members`, { userId: viewer, reason: REASON }, 404, "TEAM_NOT_FOUND", STAFF_TEAM_AUDIT.memberAdded],
-    ["POST", `${team(teams.aOld)}/members`, { userId: viewer, reason: REASON }, 409, "TEAM_ARCHIVED", STAFF_TEAM_AUDIT.memberAdded],
-    ["PATCH", `${team(teams.aWest)}/members/${a.members.planner.userId}`, { isManager: true, reason: REASON }, 422, "TEAM_MANAGER_ROLE_REQUIRED", STAFF_TEAM_AUDIT.managerChanged],
-    ["PATCH", `${team(created)}/members/${manager}`, { isManager: "yes", reason: REASON }, 400, "INVALID_TEAM_MANAGER", STAFF_TEAM_AUDIT.managerChanged],
-    ["PATCH", `${team(created)}/members/${viewer}`, { isManager: false, reason: REASON }, 404, "TEAM_MEMBER_NOT_FOUND", STAFF_TEAM_AUDIT.managerChanged],
-    ["PATCH", `${team(teams.bNorth)}/members/${b.members.team_manager.userId}`, { isManager: false, reason: REASON }, 404, "TEAM_NOT_FOUND", STAFF_TEAM_AUDIT.managerChanged],
-    ["PATCH", `${team(created)}/members/${b.members.team_manager.userId}`, { isManager: true, reason: REASON }, 404, "MEMBER_NOT_FOUND", STAFF_TEAM_AUDIT.managerChanged],
-    ["PATCH", `${team(created)}/members/not-an-id`, { isManager: false, reason: REASON }, 400, "INVALID_MEMBER_ID", STAFF_TEAM_AUDIT.managerChanged],
-    ["DELETE", `${team(created)}/members/${viewer}`, { reason: REASON }, 404, "TEAM_MEMBER_NOT_FOUND", STAFF_TEAM_AUDIT.memberRemoved],
-    ["DELETE", `${team(teams.bNorth)}/members/${b.members.planner.userId}`, { reason: REASON }, 404, "TEAM_NOT_FOUND", STAFF_TEAM_AUDIT.memberRemoved],
-    ["DELETE", `${team(created)}/members/${b.members.planner.userId}`, { reason: REASON }, 404, "TEAM_MEMBER_NOT_FOUND", STAFF_TEAM_AUDIT.memberRemoved],
-    ["DELETE", `${team(teams.aOld)}/members/${a.members.planner.userId}`, { reason: REASON }, 409, "TEAM_ARCHIVED", STAFF_TEAM_AUDIT.memberRemoved],
-    ["DELETE", `${team(created)}/members/${manager}`, undefined, 400, "INVALID_REASON", STAFF_TEAM_AUDIT.memberRemoved],
-    // A reason in the URL is not a reason.
-    ["DELETE", `${team(created)}/members/${manager}?reason=${encodeURIComponent(REASON)}`, undefined, 400, "INVALID_REASON", STAFF_TEAM_AUDIT.memberRemoved],
+  const beforeA = await snapshot(aId);
+  const staffRowsBefore = await eventCount(dxg.org);
+  // The route does not exist, so the answer is the application's plain 404 for every caller: an
+  // RFPilot admin (staffTokens[0]), a super admin (staffTokens[1]), an anonymous caller, the
+  // organization's own Owner and Admin, and a `users` account holding a staff role.
+  const callers: Array<[string, string | null]> = [
+    ["staff admin", staffTokens[0]], ["super admin", staffTokens[1]], ["anonymous", null], ["A's Owner", a.members.owner.accessToken],
+    ["A's Admin", a.members.organization_admin.accessToken], ["B's Owner", b.members.owner.accessToken], ["a users account with a staff role", impostorToken],
   ];
-  const beforeRefusals = JSON.stringify([await teamMemberRows(aId), await teamMemberRows(bId)]);
-  for (const [method, path, body, status, code, action] of refusals) {
-    const refused = await asStaff(method, path, body);
-    assert.deepEqual([refused.status, refused.body.code], [status, code], `${method} ${path} ${JSON.stringify(body)}: ${refused.text}`);
-    event = await lastStaffEvent();
-    assert.deepEqual([String(event.organizationId), event.action, event.decision, event.reason, event.metadata.organizationId], [String(dxg.org), action, "denied", code.toLowerCase(), a.organizationId]);
-    for (const hidden of [b.members.team_manager.email, b.members.planner.email, "North"]) assert.equal(refused.text.includes(hidden), false, hidden);
+  for (const [method, path, body] of removed) {
+    for (const [label, token] of callers) {
+      const res = await call(token, method, path, body);
+      assert.equal(res.status, 404, `${method} ${path} as ${label}: ${res.text}`);
+      assert.deepEqual(res.body, { success: false, message: "Route not found" }, `${method} ${path} as ${label}`);
+    }
   }
-  assert.equal(JSON.stringify([await teamMemberRows(aId), await teamMemberRows(bId)]), beforeRefusals, "a refusal changes nothing in A or B");
-  // No staff account became a member of A or of a team of A.
-  assert.equal(await TeamMembership.countDocuments({ userId: { $in: dxg.staff } }), 0);
-  assert.equal(await OrganizationMembership.countDocuments({ organizationId: aId, userId: { $in: dxg.staff } }), 0);
-  // None of this touched a session or a membership of A.
-  for (const role of ROLES) {
-    const row = await membership(aId, a.members[role].userId);
-    assert.deepEqual([row.roles, row.status, row.version, row.sessionRevocationPending ?? false], [[role], "active", 1, false], role);
-    assert.equal((await RefreshSession.findOne({ sessionId: a.members[role].sessionId }).lean())?.status, "active", role);
-  }
-  await noNewCustomerRows("team members");
-});
-
-test("set a member's teams: exactly the active teams listed, in the member's own organization, with the version checked and moved in the same commit", async () => {
-  const planner = a.members.planner;
-  const path = `${org()}/members/${planner.userId}/teams`;
-  assert.deepEqual(await teamsOf(aId, planner.userId), [[String(teams.aWest), false], [String(teams.aOld), false]].sort());
-  const res = await asStaff("PUT", path, { teamIds: [created, String(teams.aWest), created], version: 1, reason: REASON });
-  assert.equal(res.status, 200, res.text);
-  assert.deepEqual(Object.keys(res.body.data).sort(), ["changed", "member", "organizationId", "version"]);
-  assert.deepEqual(Object.keys(res.body.data.member).sort(), MEMBER_KEYS);
-  assert.deepEqual([res.body.data.organizationId, res.body.data.changed, res.body.data.member.userId, res.body.data.version], [a.organizationId, true, planner.userId, 2]);
-  assert.deepEqual((await teamsOf(aId, planner.userId)).map(([id]) => id).sort(), [created, String(teams.aWest), String(teams.aOld)].sort(), "the archived team's membership is history and is kept");
-  assert.equal((await membership(aId, planner.userId)).version, 2);
-  let event = await lastStaffEvent();
-  assert.deepEqual([String(event.organizationId), event.action, event.decision, event.reason, event.targetType, event.targetId], [String(dxg.org), STAFF_TEAM_AUDIT.memberTeamsChanged, "allowed", "teams_changed", "organization_membership", planner.userId]);
-  assert.deepEqual([event.metadata.organizationId, event.metadata.memberUserId, event.metadata.changed, event.metadata.before, event.metadata.after, event.metadata.version, event.metadata.staffReason],
-    [a.organizationId, planner.userId, true, { teamIds: [String(teams.aWest)] }, { teamIds: [created, String(teams.aWest)].sort() }, 2, REASON]);
-
-  const refusals: Array<[string, unknown, number, string]> = [
-    [path, { teamIds: [String(teams.bNorth)], version: 2, reason: REASON }, 400, "UNKNOWN_TEAMS"],
-    [path, { teamIds: [created, String(teams.aOld)], version: 2, reason: REASON }, 400, "UNKNOWN_TEAMS"],
-    [path, { teamIds: [String(oid())], version: 2, reason: REASON }, 400, "UNKNOWN_TEAMS"],
-    [path, { teamIds: [created], version: 1, reason: REASON }, 409, "STALE_VERSION"],
-    [path, { teamIds: [created], reason: REASON }, 400, "VERSION_REQUIRED"],
-    [path, { teamIds: "all", version: 2, reason: REASON }, 400, "INVALID_TEAMS"],
-    [path, { teamIds: [created.toUpperCase()], version: 2, reason: REASON }, 400, "INVALID_TEAMS"],
-    [path, { teamIds: [created], version: 2 }, 400, "INVALID_REASON"],
-    [`${org()}/members/${b.members.planner.userId}/teams`, { teamIds: [created], version: 1, reason: REASON }, 404, "MEMBER_NOT_FOUND"],
-    [`${org()}/members/${dxg.staff[0]}/teams`, { teamIds: [created], version: 1, reason: REASON }, 404, "MEMBER_NOT_FOUND"],
-    [`${org()}/members/not-an-id/teams`, { teamIds: [created], version: 1, reason: REASON }, 400, "INVALID_MEMBER_ID"],
-  ];
-  const beforeRefusals = JSON.stringify([await teamMemberRows(aId), await teamMemberRows(bId), (await membership(aId, planner.userId)).version, (await membership(bId, b.members.planner.userId)).version]);
-  for (const [target, body, status, code] of refusals) {
-    const refused = await asStaff("PUT", target, body);
-    assert.deepEqual([refused.status, refused.body.code], [status, code], `${target} ${JSON.stringify(body)}: ${refused.text}`);
-    event = await lastStaffEvent();
-    assert.deepEqual([String(event.organizationId), event.action, event.decision, event.reason], [String(dxg.org), STAFF_TEAM_AUDIT.memberTeamsChanged, "denied", code.toLowerCase()]);
-    if (code === "STALE_VERSION") assert.equal(refused.body.currentVersion, 2);
-    assert.equal(refused.text.includes("North"), false);
-  }
-  // Only the ids the caller typed come back: B's team and a team that doesn't exist are told apart by nothing.
-  const unknown = await asStaff("PUT", path, { teamIds: [String(teams.bNorth), created], version: 2, reason: REASON });
-  assert.deepEqual([unknown.status, unknown.body.code, unknown.body.unknownTeamIds], [400, "UNKNOWN_TEAMS", [String(teams.bNorth)]]);
-  assert.equal(JSON.stringify([await teamMemberRows(aId), await teamMemberRows(bId), (await membership(aId, planner.userId)).version, (await membership(bId, b.members.planner.userId)).version]), beforeRefusals, "a refusal changes nothing, not even the version");
-
-  // Off every team; the planner is put back on West for what follows.
-  const none = await asStaff("PUT", path, { teamIds: [], version: 2, reason: REASON });
-  assert.deepEqual([none.status, none.body.data.changed, none.body.data.version], [200, true, 3]);
-  assert.deepEqual((await teamsOf(aId, planner.userId)).map(([id]) => id), [String(teams.aOld)]);
-  const back = await asStaff("PUT", path, { teamIds: [String(teams.aWest)], version: 3, reason: REASON });
-  assert.deepEqual([back.status, back.body.data.version], [200, 4]);
-  // The same list again: the version still moves, as on the customer route; the event says nothing changed.
-  const same = await asStaff("PUT", path, { teamIds: [String(teams.aWest)], version: 4, reason: REASON });
-  assert.deepEqual([same.status, same.body.data.changed, same.body.data.version, (await lastStaffEvent()).metadata.changed], [200, false, 5, false]);
-  // No session of the member ended and none is pending: a change of teams ends no session, as in the customer flow.
-  const row = await membership(aId, planner.userId);
-  assert.deepEqual([row.roles, row.status, row.sessionRevocationPending ?? false], [["planner"], "active", false]);
-  assert.equal((await RefreshSession.findOne({ sessionId: planner.sessionId }).lean())?.status, "active");
-  await noNewCustomerRows("a member's teams");
-});
-
-test("archive: the team is archived with its memberships kept; a proposal on the team is NOT changed and keeps its team; an archived team can't be changed", async () => {
-  // A proposal of A on the team, as the proposal routes would leave it.
-  const proposal = await Proposal.create({ organizationId: aId, userId: a.members.organization_admin.userId, event: { eventName: `Team proposal ${tag}` } });
-  await Proposal.collection.updateOne({ _id: proposal._id }, { $set: { teamId: oid(created) } });
-  const proposalBefore = JSON.stringify(await Proposal.collection.findOne({ _id: proposal._id }));
-  const membersBefore = await teamMemberRows(aId, created);
-
-  const res = await asStaff("POST", `${team(created)}/archive`, { reason: REASON });
-  assert.equal(res.status, 200, res.text);
-  assert.deepEqual([res.body.data.team.id, res.body.data.team.archived, typeof res.body.data.team.archivedAt, res.body.data.team.memberCount], [created, true, "string", membersBefore.length]);
-  const row = (await teamDoc(created))!;
-  assert.deepEqual([row.archived, row.archivedAt instanceof Date], [true, true]);
-  assert.deepEqual(await teamMemberRows(aId, created), membersBefore, "memberships are kept");
-  const after = (await Proposal.collection.findOne({ _id: proposal._id })) as Record<string, any>;
-  assert.equal(JSON.stringify(after), proposalBefore, "the proposal document is byte for byte what it was");
-  assert.equal(String(after.teamId), created, "the proposal keeps its team");
-  const event = await lastStaffEvent();
-  assert.deepEqual([String(event.organizationId), event.action, event.decision, event.reason, event.targetId, event.metadata.changed, event.metadata.before.archived, event.metadata.after.archived, event.metadata.staffReason],
-    [String(dxg.org), STAFF_TEAM_AUDIT.archived, "allowed", "team_archived", created, true, false, true, REASON]);
-
-  const refusals: Array<[string, string, unknown, number, string]> = [
-    ["POST", `${team(created)}/archive`, { reason: REASON }, 409, "TEAM_ARCHIVED"],
-    ["PATCH", team(created), { name: "Back again", reason: REASON }, 409, "TEAM_ARCHIVED"],
-    ["POST", `${team(created)}/members`, { userId: a.members.viewer.userId, reason: REASON }, 409, "TEAM_ARCHIVED"],
-    ["POST", `${team(teams.bNorth)}/archive`, { reason: REASON }, 404, "TEAM_NOT_FOUND"],
-    ["POST", `${team(teams.aWest)}/archive`, {}, 400, "INVALID_REASON"],
-  ];
-  for (const [method, path, body, status, code] of refusals) {
-    const refused = await asStaff(method, path, body);
-    assert.deepEqual([refused.status, refused.body.code], [status, code], `${method} ${path}: ${refused.text}`);
-    assert.deepEqual([(await lastStaffEvent()).decision, (await lastStaffEvent()).reason], ["denied", code.toLowerCase()]);
-  }
-  assert.equal((await teamDoc(teams.bNorth))!.archived, false);
-  assert.equal((await teamDoc(teams.aWest))!.archived, false);
-  assert.equal(JSON.stringify(await Proposal.collection.findOne({ _id: proposal._id })), proposalBefore);
-  await Proposal.collection.deleteOne({ _id: proposal._id });
-  await noNewCustomerRows("archive");
+  assert.equal(await snapshot(aId), beforeA, "no team, team member, member, proposal or session of A changed");
+  assert.deepEqual(await teamRows(aId), [[String(teams.aWest), "West", false, a.members.owner.userId], [String(teams.aOld), "Old", true, a.members.owner.userId]].sort());
+  assert.deepEqual(await teamMemberRows(aId), [[String(teams.aWest), planner, false], [String(teams.aOld), planner, false]].sort());
+  assert.equal((await membership(aId, planner)).version, 1);
+  assert.equal(await eventCount(dxg.org), staffRowsBefore, "nothing was recorded in the staff organization");
+  await noNewCustomerRows("removed routes");
+  // The read beside them still answers (the teams and members lists: staff-organization-content.test.ts).
+  assert.equal((await asStaff("GET", team(teams.aWest))).status, 200);
 });
 
 test("RFPilot's own organization and a legacy holding tenant are refused (409), an unknown organization is 404; none is changed", async () => {
@@ -474,17 +274,8 @@ test("RFPilot's own organization and a legacy holding tenant are refused (409), 
     [oid(), teams.aWest, oid(a.members.planner.userId), 404, "ORGANIZATION_NOT_FOUND", null],
   ];
   const before = JSON.stringify([await teamRows(dxg.org), await teamRows(holding.org), await teamMemberRows(dxg.org), await teamMemberRows(holding.org)]);
-  for (const [organization, teamId, user, status, code, standing] of cases) {
-    const requests: Array<[string, string, unknown]> = [
-      ["GET", `${BASE}/${organization}/teams/${teamId}`, undefined],
-      ["POST", `${BASE}/${organization}/teams`, { name: "Not here", reason: REASON }],
-      ["PATCH", `${BASE}/${organization}/teams/${teamId}`, { name: "Not here", reason: REASON }],
-      ["POST", `${BASE}/${organization}/teams/${teamId}/archive`, { reason: REASON }],
-      ["POST", `${BASE}/${organization}/teams/${teamId}/members`, { userId: String(user), reason: REASON }],
-      ["PATCH", `${BASE}/${organization}/teams/${teamId}/members/${user}`, { isManager: false, reason: REASON }],
-      ["DELETE", `${BASE}/${organization}/teams/${teamId}/members/${user}`, { reason: REASON }],
-      ["PUT", `${BASE}/${organization}/members/${user}/teams`, { teamIds: [String(teamId)], version: 1, reason: REASON }],
-    ];
+  for (const [organization, teamId, , status, code, standing] of cases) {
+    const requests: Array<[string, string, unknown]> = [["GET", `${BASE}/${organization}/teams/${teamId}`, undefined]];
     for (const [method, path, body] of requests) {
       const res = await asStaff(method, path, body);
       assert.deepEqual([res.status, res.body.code], [status, code], `${method} ${path}: ${res.text}`);
@@ -497,60 +288,6 @@ test("RFPilot's own organization and a legacy holding tenant are refused (409), 
   await noNewCustomerRows("refused organizations");
 });
 
-test("the change and its audit event commit together: when the event cannot be written, nothing is applied", async () => {
-  // An event the audit collection refuses (no action), handed to each store write.
-  const audit = { organizationId: String(dxg.org), actorUserId: String(dxg.staff[0]), action: "", targetType: "team", targetId: String(teams.aWest), reason: "x", correlationId: randomMongoId(), metadata: { agentAccountType: "admin", organizationId: a.organizationId } };
-  const organizationId = a.organizationId;
-  const west = String(teams.aWest);
-  const planner = a.members.planner.userId;
-  const manager = a.members.team_manager.userId;
-  const staffBefore = await eventCount(dxg.org);
-  const beforeA = await snapshot(aId);
-  await assert.rejects(mongoTeamRepository.create({ organizationId, name: `Never ${tag}`, createdBy: null, audit }), /action/);
-  await assert.rejects(mongoTeamRepository.rename({ organizationId, teamId: west, name: `Never renamed ${tag}`, audit }), /action/);
-  await assert.rejects(mongoTeamRepository.archive({ organizationId, teamId: west, at: new Date(), audit }), /action/);
-  await assert.rejects(mongoTeamRepository.addMember({ organizationId, teamId: west, userId: manager, isManager: true, audit }), /action/);
-  await assert.rejects(mongoTeamRepository.setManager({ organizationId, teamId: west, userId: planner, isManager: false, audit }), /action/);
-  await assert.rejects(mongoTeamRepository.removeMember({ organizationId, teamId: west, userId: planner, audit }), /action/);
-  await assert.rejects(mongoStaffMemberTeams.setMemberTeams({ organizationId, userId: planner, teamIds: [], expectedVersion: 5, audit: { ...audit, targetType: "organization_membership", targetId: planner } }), /action/);
-  assert.equal(await snapshot(aId), beforeA, "no team, no team member and no version changed");
-  assert.equal(await eventCount(dxg.org), staffBefore);
-  // And with a writable event, the store puts it in the event's organization, not the team's.
-  const written = await mongoTeamRepository.rename({ organizationId, teamId: west, name: "West", audit: { ...audit, action: STAFF_TEAM_AUDIT.renamed, reason: "team_renamed" } });
-  assert.ok(written && written !== "duplicate");
-  staffRequests += 1; // one more staff-side event, written by this direct store call
-  assert.equal(await eventCount(dxg.org), staffBefore + 1);
-  const event = await lastStaffEvent();
-  assert.deepEqual([String(event.organizationId), event.metadata.before, event.metadata.changed], [String(dxg.org), { name: "West" }, false]);
-  // A store write without an event (the member path) writes no event anywhere.
-  assert.equal(await mongoTeamRepository.setManager({ organizationId, teamId: west, userId: planner, isManager: false }), true);
-  assert.equal(await eventCount(dxg.org), staffBefore + 1);
-  // A write that names another organization's team or member changes nothing and records nothing, with or without an event.
-  const live = { ...audit, action: STAFF_TEAM_AUDIT.renamed, reason: "team_renamed" };
-  const beforeForeign = await snapshot(aId);
-  assert.equal(await mongoTeamRepository.rename({ organizationId, teamId: String(teams.bNorth), name: "Taken over", audit: live }), null);
-  assert.equal(await mongoTeamRepository.archive({ organizationId, teamId: String(teams.bNorth), at: new Date(), audit: live }), false);
-  assert.equal(await mongoTeamRepository.removeMember({ organizationId, teamId: String(teams.bNorth), userId: b.members.planner.userId, audit: live }), false);
-  // The member path matches no row (false). The staff path checks the team in its transaction first: not this organization's.
-  assert.equal(await mongoTeamRepository.setManager({ organizationId, teamId: String(teams.bNorth), userId: b.members.planner.userId, isManager: true }), false);
-  assert.equal(await mongoTeamRepository.setManager({ organizationId, teamId: String(teams.bNorth), userId: b.members.team_manager.userId, isManager: true, audit: live }), "team_not_found");
-  assert.equal(await mongoTeamRepository.setManager({ organizationId, teamId: String(teams.bNorth), userId: b.members.team_manager.userId, isManager: false, audit: live }), "team_not_found");
-  // B's Team Manager, on A's team: not a member of A. A's own Team Manager, on B's team: not A's team.
-  assert.equal(await mongoTeamRepository.setManager({ organizationId, teamId: west, userId: b.members.team_manager.userId, isManager: true, audit: live }), "member_not_found");
-  assert.equal(await mongoTeamRepository.addMember({ organizationId, teamId: String(teams.bNorth), userId: manager, isManager: true, audit: live }), "team_not_found");
-  assert.equal(await mongoTeamRepository.addMember({ organizationId, teamId: String(teams.bNorth), userId: b.members.viewer.userId, isManager: false, audit: live }), "team_not_found");
-  assert.equal(await mongoTeamRepository.addMember({ organizationId, teamId: west, userId: b.members.team_manager.userId, isManager: true, audit: live }), "member_not_found");
-  assert.equal(await mongoTeamRepository.addMember({ organizationId, teamId: west, userId: b.members.viewer.userId, isManager: false, audit: live }), "member_not_found");
-  assert.equal(await TeamMembership.countDocuments({ teamId: teams.aWest, userId: { $in: [oid(b.members.team_manager.userId), oid(b.members.viewer.userId)] } }), 0);
-  assert.equal(await TeamMembership.countDocuments({ teamId: teams.bNorth, organizationId: aId }), 0);
-  assert.equal(await TeamMembership.countDocuments({ teamId: teams.bNorth, userId: { $in: [oid(manager), oid(b.members.viewer.userId)] } }), 0);
-  assert.deepEqual(await mongoStaffMemberTeams.setMemberTeams({ organizationId, userId: planner, teamIds: [String(teams.bNorth)], expectedVersion: 5, audit: live }), { unknownTeamIds: [String(teams.bNorth)] });
-  assert.equal(await mongoStaffMemberTeams.setMemberTeams({ organizationId, userId: b.members.planner.userId, teamIds: [], expectedVersion: 1, audit: live }), "stale");
-  assert.equal(await eventCount(dxg.org), staffBefore + 1);
-  assert.equal(await snapshot(aId), beforeForeign);
-  await noNewCustomerRows("atomic audit");
-});
-
 test("audit: one event per staff request, all in the staff organization; A and B gained no row; no staff account was written into a customer organization", async () => {
   const events = await staffEvents();
   assert.equal(events.length, staffRequests, "exactly one event per request");
@@ -558,14 +295,16 @@ test("audit: one event per staff request, all in the staff organization; A and B
   for (const event of events) {
     assert.equal(String(event.organizationId), String(dxg.org));
     assert.ok(staffIds().includes(String(event.actorUserId)));
-    assert.match(event.action, /^platform\.organization_(team\.[a-z_]+|member\.teams_changed)$/);
+    assert.equal(event.action, STAFF_TEAM_AUDIT.read, "the read is the only staff team action written");
     assert.ok(["allowed", "denied"].includes(event.decision));
-    assert.equal(event.targetType, event.action === STAFF_TEAM_AUDIT.memberTeamsChanged ? "organization_membership" : "team");
+    assert.equal(event.targetType, "team");
     assert.equal(event.metadata.agentAccountType, "admin");
     assert.equal(typeof event.metadata.organizationId, "string");
-    if (event.metadata.staffReason !== undefined) assert.equal(event.metadata.staffReason, REASON);
+    assert.equal(event.metadata.staffReason, undefined);
   }
-  for (const action of STAFF_ACTIONS) assert.ok(events.some((event) => event.action === action && event.decision === "allowed"), `${action} allowed`);
+  assert.ok(events.some((event) => event.decision === "allowed"), "a read that returned a team");
+  assert.ok(events.some((event) => event.decision === "denied"), "a refused read");
+  assert.equal(JSON.stringify(events).includes(REASON), false, "the body of a removed route was never read");
   await noNewCustomerRows("the whole run");
   assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: { $nin: [dxg.org] }, action: { $in: STAFF_ACTIONS } }), 0, "no staff team event outside the staff organization");
   assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: { $in: [aId, bId] }, actorUserId: { $in: dxg.staff } }), 0);
@@ -599,7 +338,7 @@ test("A's customer audit endpoints (list, filters, CSV) show none of the staff a
       const res = await call(admin, "GET", `${AUDIT_LOG}?action=${action}`);
       assert.deepEqual([res.status, res.body.code], [400, "AUDIT_FILTER_INVALID"], action);
     }
-    // The customer's own team actions can be asked for, and there are none: staff changes wrote none.
+    // The customer's own team actions can be asked for, and there are none: nobody changed A's teams.
     for (const action of CUSTOMER_TEAM_ACTIONS) {
       const res = await call(admin, "GET", `${AUDIT_LOG}?action=${action}`);
       assert.deepEqual([res.status, res.body.data.events], [200, []], action);
@@ -644,59 +383,6 @@ const teamAuditView = async (token: string) => {
   assert.equal(csv.status, 200, csv.text.slice(0, 200));
   return { ids: (list.body.data.events as Array<Record<string, any>>).map((event) => event.id).sort(), byAction, text: list.text, csv: csv.text, csvLines: csv.text.trim().split("\n").length };
 };
-const NO_TEAM_ROWS = Object.fromEntries(CUSTOMER_TEAM_ACTIONS.map((action) => [action, 0]));
-
-test("side effects: a staff change of a team manager and a staff archive move the Team Manager's reach over the team's proposals exactly as the customer's would, and the member's own later requests leave no row", async () => {
-  const c = await seedOrganization(`C Reach ${tag}`);
-  const cId = oid(c.organizationId);
-  const base = `${BASE}/${c.organizationId}`;
-  const manager = c.members.team_manager;
-  try {
-    const before = await teamAuditView(c.members.owner.accessToken);
-    const rowsBefore = await eventCount(cId);
-    assert.deepEqual(before.byAction, NO_TEAM_ROWS);
-    const made = await asStaff("POST", `${base}/teams`, { name: "Conferences", reason: REASON });
-    assert.equal(made.status, 201, made.text);
-    const teamId = made.body.data.team.id as string;
-    const proposal = await Proposal.create({ organizationId: cId, userId: c.members.planner.userId, event: { eventName: `Reach proposal ${tag}` } });
-    await Proposal.collection.updateOne({ _id: proposal._id }, { $set: { teamId: oid(teamId) } });
-    const proposalBefore = JSON.stringify(await Proposal.collection.findOne({ _id: proposal._id }));
-    const read = async () => (await call(manager.accessToken, "GET", `/api/proposals/${proposal._id}`)).status;
-
-    assert.equal(await read(), 403, "not on the team yet");
-    assert.equal((await asStaff("POST", `${base}/teams/${teamId}/members`, { userId: manager.userId, isManager: true, reason: REASON })).status, 201);
-    assert.equal(await read(), 200, "a manager of the team reaches its proposals on the next request");
-    assert.equal((await asStaff("PATCH", `${base}/teams/${teamId}/members/${manager.userId}`, { isManager: false, reason: REASON })).status, 200);
-    assert.equal(await read(), 403, "no longer a manager");
-    assert.equal((await asStaff("PATCH", `${base}/teams/${teamId}/members/${manager.userId}`, { isManager: true, reason: REASON })).status, 200);
-    assert.equal(await read(), 200);
-    assert.equal((await asStaff("POST", `${base}/teams/${teamId}/archive`, { reason: REASON })).status, 200);
-    assert.equal(await read(), 403, "an archived team gives its managers no reach");
-    // The Owner and the proposal's owner still reach it, and the proposal is what it was.
-    assert.equal((await call(c.members.owner.accessToken, "GET", `/api/proposals/${proposal._id}`)).status, 200);
-    assert.equal((await call(c.members.planner.accessToken, "GET", `/api/proposals/${proposal._id}`)).status, 200);
-    assert.equal(JSON.stringify(await Proposal.collection.findOne({ _id: proposal._id })), proposalBefore);
-    // The manager's session and membership were never touched: no sign-out, nothing pending.
-    const row = await membership(cId, manager.userId);
-    assert.deepEqual([row.version, row.sessionRevocationPending ?? false], [1, false]);
-    assert.equal((await RefreshSession.findOne({ sessionId: manager.sessionId }).lean())?.status, "active");
-
-    // The customer organization: not one new row of any action, from the staff changes or from the members' own requests after them.
-    assert.equal(await eventCount(cId), rowsBefore);
-    assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: cId, actorUserId: { $in: dxg.staff } }), 0);
-    const after = await teamAuditView(c.members.owner.accessToken);
-    assert.deepEqual(after.ids, before.ids);
-    assert.deepEqual(after.byAction, NO_TEAM_ROWS);
-    assert.equal(after.csvLines, before.csvLines);
-    for (const hidden of ["platform.", "organization_team.", REASON, ...staffIds(), "Conferences"]) {
-      assert.equal(after.text.includes(hidden), false, `list: ${hidden}`);
-      assert.equal(after.csv.includes(hidden), false, `CSV: ${hidden}`);
-    }
-    await Proposal.collection.deleteOne({ _id: proposal._id });
-  } finally {
-    await SecurityAuditEvent.collection.deleteMany({ organizationId: cId });
-  }
-});
 
 test("control: the same changes made by the organization's Admin through the customer routes still write the usual rows, and nothing on the staff side", async () => {
   const d = await seedOrganization(`D Control ${tag}`);
@@ -718,7 +404,7 @@ test("control: the same changes made by the organization's Admin through the cus
     const changed = await call(admin.accessToken, "PUT", `/api/organization/members/${planner}/teams`, { teamIds: [teamId], version: 1 });
     assert.equal(changed.status, 200, changed.text);
     assert.equal((await membership(dId, planner)).version, 2);
-    // The customer's refusals are the ones staff got above.
+    // The customer's own refusals.
     const refusals: Array<[string, string, unknown, number, string]> = [
       ["POST", "/api/v1/teams", { name: "conferences west" }, 409, "TEAM_NAME_TAKEN"],
       ["POST", `/api/v1/teams/${teamId}/members`, { userId: planner }, 409, "TEAM_MEMBER_EXISTS"],
@@ -747,128 +433,6 @@ test("control: the same changes made by the organization's Admin through the cus
     assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: dId, action: /^platform\./ }), 0);
   } finally {
     await SecurityAuditEvent.collection.deleteMany({ organizationId: dId });
-  }
-});
-
-test("staff addMember and setManager check again inside the transaction: a team archived, or a member deactivated or demoted to Viewer, after the service's check leaves nothing applied and no event", async () => {
-  const e = await seedOrganization(`E Race ${tag}`);
-  const eId = oid(e.organizationId);
-  const organizationId = e.organizationId;
-  const manager = e.members.team_manager.userId;
-  const managerId = oid(manager);
-  // `onTeam` holds the Team Manager (not yet its manager); `empty` holds nobody.
-  const onTeam = oid();
-  const empty = oid();
-  const now = new Date("2026-11-01T00:00:00Z");
-  const event = (action: string, reason: string, teamId: mongoose.Types.ObjectId) => ({
-    organizationId: String(dxg.org), actorUserId: String(dxg.staff[0]), action, targetType: "team", targetId: String(teamId), reason, correlationId: randomMongoId(),
-    metadata: { agentAccountType: "admin", organizationId, teamId: String(teamId), memberUserId: manager, staffReason: REASON },
-  });
-  const add = (isManager: boolean, teamId = empty, userId = manager) =>
-    mongoTeamRepository.addMember({ organizationId, teamId: String(teamId), userId, isManager, audit: event(STAFF_TEAM_AUDIT.memberAdded, "team_member_added", teamId) });
-  const set = (isManager: boolean, teamId = onTeam, userId = manager) =>
-    mongoTeamRepository.setManager({ organizationId, teamId: String(teamId), userId, isManager, audit: event(STAFF_TEAM_AUDIT.managerChanged, "team_manager_changed", teamId) });
-  const setTeams = (fields: Record<string, unknown>) => Team.collection.updateMany({ _id: { $in: [onTeam, empty] } }, { $set: fields });
-  const setMembership = (fields: Record<string, unknown>) => OrganizationMembership.collection.updateOne({ organizationId: eId, userId: managerId }, { $set: fields });
-  try {
-    await Team.collection.insertMany([
-      { _id: onTeam, organizationId: eId, name: "On team", archived: false, archivedAt: null, createdBy: null, createdAt: now, updatedAt: now },
-      { _id: empty, organizationId: eId, name: "Empty", archived: false, archivedAt: null, createdBy: null, createdAt: now, updatedAt: now },
-    ]);
-    await TeamMembership.collection.insertOne({ organizationId: eId, teamId: onTeam, userId: managerId, isManager: false, createdAt: now, updatedAt: now });
-    const staffBefore = await eventCount(dxg.org);
-    const customerBefore = await eventCount(eId);
-    const bRows = JSON.stringify(await teamMemberRows(bId));
-
-    // Each case: the document is changed directly (as a concurrent request would, after the
-    // service's own check passed), the staff write is refused, and nothing at all is different
-    // afterwards: no team row, no manager flag, not even the team's timestamp, and no event.
-    type Write = [string, () => Promise<unknown>, unknown];
-    const cases: Array<[string, () => Promise<unknown>, () => Promise<unknown>, Write[]]> = [
-      ["the team was archived", () => setTeams({ archived: true, archivedAt: now }), () => setTeams({ archived: false, archivedAt: null }),
-        [["addMember as manager", () => add(true), "team_archived"], ["addMember", () => add(false), "team_archived"], ["setManager(true)", () => set(true), "team_archived"], ["setManager(false)", () => set(false), "team_archived"]]],
-      ["the member was suspended", () => setMembership({ status: "suspended" }), () => setMembership({ status: "active" }),
-        [["addMember as manager", () => add(true), "member_not_found"], ["addMember", () => add(false), "member_not_found"], ["setManager(true)", () => set(true), "member_not_found"]]],
-      ["the member was removed", () => setMembership({ status: "removed" }), () => setMembership({ status: "active" }),
-        [["addMember as manager", () => add(true), "member_not_found"], ["addMember", () => add(false), "member_not_found"], ["setManager(true)", () => set(true), "member_not_found"]]],
-      ["the member was demoted to Viewer", () => setMembership({ roles: ["viewer"] }), () => setMembership({ roles: ["team_manager"] }),
-        [["addMember as manager", () => add(true), "manager_role_required"], ["setManager(true)", () => set(true), "manager_role_required"]]],
-      ["nothing changed, but the team or the member is not this organization's, or does not exist", async () => undefined, async () => undefined,
-        [
-          ["addMember to B's team", () => add(true, teams.bNorth), "team_not_found"], ["setManager on B's team", () => set(true, teams.bNorth, b.members.team_manager.userId), "team_not_found"],
-          ["addMember to a team that does not exist", () => add(false, oid()), "team_not_found"], ["setManager on a team that does not exist", () => set(false, oid()), "team_not_found"],
-          ["addMember of B's Team Manager", () => add(true, empty, b.members.team_manager.userId), "member_not_found"], ["addMember of nobody", () => add(false, empty, String(oid())), "member_not_found"],
-          ["setManager(true) for B's Team Manager", () => set(true, onTeam, b.members.team_manager.userId), "member_not_found"],
-          // An active Team Manager who is not on the team: the customer's "not on the team" (false), and the check's own write is rolled back.
-          ["setManager(true) for someone not on the team", () => set(true, empty), false], ["setManager(false) for someone not on the team", () => set(false, empty), false],
-        ]],
-    ];
-    for (const [label, change, restore, writes] of cases) {
-      await change();
-      try {
-        const before = await snapshot(eId);
-        for (const [name, write, expected] of writes) {
-          assert.equal(await write(), expected, `${label}: ${name}`);
-          assert.equal(await snapshot(eId), before, `${label}: ${name} applied nothing`);
-          assert.equal(await eventCount(dxg.org), staffBefore, `${label}: ${name} wrote no event`);
-        }
-      } finally {
-        await restore();
-      }
-    }
-    assert.equal(await eventCount(eId), customerBefore, "and nothing was recorded in the customer organization");
-    assert.equal(JSON.stringify(await teamMemberRows(bId)), bRows);
-
-    // Control: with the team active and the member an active Team Manager, the same two writes apply, one event each.
-    assert.equal(await add(true), "added");
-    assert.equal(await set(true), true);
-    assert.deepEqual((await teamMemberRows(eId)).sort(), [[String(onTeam), manager, true], [String(empty), manager, true]].sort());
-    assert.equal(await eventCount(dxg.org), staffBefore + 2);
-    // Unsetting a manager asks nothing of the member, as on the customer route: a suspended member can be unset.
-    await setMembership({ status: "suspended" });
-    assert.equal(await set(false), true);
-    assert.deepEqual((await teamMemberRows(eId)).find(([teamId]) => teamId === String(onTeam)), [String(onTeam), manager, false]);
-    assert.equal(await eventCount(eId), customerBefore);
-  } finally {
-    await SecurityAuditEvent.collection.deleteMany({ organizationId: eId });
-  }
-});
-
-test("a suspended or removed member already on the team can't be made its manager: staff get the customer's refusal, the row is unchanged and the customer organization gains no row", async () => {
-  const f = await seedOrganization(`F Inactive ${tag}`);
-  const fId = oid(f.organizationId);
-  const manager = f.members.team_manager.userId;
-  const teamId = oid();
-  const now = new Date("2026-11-01T00:00:00Z");
-  const path = `${BASE}/${f.organizationId}/teams/${teamId}/members/${manager}`;
-  try {
-    await Team.collection.insertOne({ _id: teamId, organizationId: fId, name: "Inactive", archived: false, archivedAt: null, createdBy: null, createdAt: now, updatedAt: now });
-    await TeamMembership.collection.insertOne({ organizationId: fId, teamId, userId: oid(manager), isManager: false, createdAt: now, updatedAt: now });
-    for (const status of ["suspended", "removed"]) {
-      await OrganizationMembership.collection.updateOne({ organizationId: fId, userId: oid(manager) }, { $set: { status } });
-      const before = await snapshot(fId);
-      const rowsBefore = await eventCount(fId);
-      const res = await asStaff("PATCH", path, { isManager: true, reason: REASON });
-      assert.deepEqual([res.status, res.body.code], [404, "MEMBER_NOT_FOUND"], `${status}: ${res.text}`);
-      const event = await lastStaffEvent();
-      assert.deepEqual([String(event.organizationId), event.action, event.decision, event.reason, event.metadata.organizationId], [String(dxg.org), STAFF_TEAM_AUDIT.managerChanged, "denied", "member_not_found", f.organizationId]);
-      // The store itself refuses too, in its transaction.
-      const audit = { organizationId: String(dxg.org), actorUserId: String(dxg.staff[0]), action: STAFF_TEAM_AUDIT.managerChanged, targetType: "team", targetId: String(teamId), reason: "team_manager_changed", correlationId: randomMongoId(), metadata: { agentAccountType: "admin", organizationId: f.organizationId } };
-      const staffRows = await eventCount(dxg.org);
-      assert.equal(await mongoTeamRepository.setManager({ organizationId: f.organizationId, teamId: String(teamId), userId: manager, isManager: true, audit }), "member_not_found", status);
-      assert.equal(await eventCount(dxg.org), staffRows);
-      assert.equal(await snapshot(fId), before, `${status}: nothing applied`);
-      assert.deepEqual(await teamMemberRows(fId, teamId), [[String(teamId), manager, false]]);
-      assert.equal(await eventCount(fId), rowsBefore, `${status}: no row in the customer organization`);
-      // The organization's own Admin gets the same refusal.
-      const customer = await call(f.members.organization_admin.accessToken, "PATCH", `/api/v1/teams/${teamId}/members/${manager}`, { isManager: true });
-      assert.deepEqual([customer.status, customer.body.code, customer.body.message], [res.status, res.body.code, res.body.message], status);
-      assert.deepEqual(await teamMemberRows(fId, teamId), [[String(teamId), manager, false]]);
-    }
-    assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: fId, actorUserId: { $in: dxg.staff } }), 0);
-    assert.equal(await SecurityAuditEvent.countDocuments({ organizationId: fId, action: { $in: [...STAFF_ACTIONS, ...CUSTOMER_TEAM_ACTIONS] } }), 0);
-  } finally {
-    await SecurityAuditEvent.collection.deleteMany({ organizationId: fId });
   }
 });
 

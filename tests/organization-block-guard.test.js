@@ -213,9 +213,9 @@ const PUBLIC_ROUTES = {
 const GUARD_CHAINS = {
   "routes/adminOrganizationBlockRoute.ts": ["write"],
   "routes/adminOrganizationContentRoute.ts": ["staff"],
-  "routes/adminOrganizationMembersRoute.ts": ["staff", "write"],
+  "routes/adminOrganizationMembersRoute.ts": ["staff"],
   "routes/adminOrganizationPlansRoute.ts": ["staff"],
-  "routes/adminOrganizationTeamsRoute.ts": ["staff", "write"],
+  "routes/adminOrganizationTeamsRoute.ts": ["staff"],
   "routes/adminUserRoute.ts": ["adminGuard", "superAdminGuard"],
   "routes/allClientsRoute.ts": ["adminGuard", "superAdminGuard"],
   "routes/auditLogRoute.ts": ["read"],
