@@ -17,6 +17,7 @@ const createDependencies = (overrides = {}) => ({
     }),
     archiveOwnedById: async () => true,
     restoreOwnedById: async () => true,
+    markOwnedArchivedPurgeStartedById: async () => true,
     findOwnedArchivedPurgeTargetById: async ({ proposalId }) => ({
       proposalMongoId: proposalId,
       organizationMongoId: "org-001",
@@ -158,6 +159,7 @@ test("archive, restore, and permanent delete preserve owner context", async () =
       calls.push({ action: "restore", input });
       return true;
     },
+    markOwnedArchivedPurgeStartedById: async () => true,
     findOwnedArchivedPurgeTargetById: async (input) => {
       calls.push({ action: "find-purge-target", input });
       return { proposalMongoId: input.proposalId, organizationMongoId: "org-001" };
@@ -198,6 +200,7 @@ test("permanent delete purges cross-store artifacts before removing the proposal
   // Postgres rows with nothing left pointing at them.
   const order = [];
   const proposals = {
+    markOwnedArchivedPurgeStartedById: async () => true,
     findOwnedArchivedPurgeTargetById: async () => ({
       proposalMongoId: "proposal-001",
       organizationMongoId: "org-001",
@@ -227,6 +230,7 @@ test("permanent delete purges cross-store artifacts before removing the proposal
 test("a proposal that is not archived is neither purged nor deleted", async () => {
   let touched = false;
   const proposals = {
+    markOwnedArchivedPurgeStartedById: async () => true,
     findOwnedArchivedPurgeTargetById: async () => null,
     permanentlyDeleteOwnedArchivedById: async () => {
       touched = true;
@@ -246,6 +250,7 @@ test("a proposal with no organization is still deleted, with nothing to purge", 
   // skipped rather than failing the delete — matching the archive sweep.
   const purgeCalls = [];
   const proposals = {
+    markOwnedArchivedPurgeStartedById: async () => true,
     findOwnedArchivedPurgeTargetById: async () => ({
       proposalMongoId: "proposal-001",
       organizationMongoId: "",
@@ -258,4 +263,99 @@ test("a proposal with no organization is still deleted, with nothing to purge", 
 
   assert.equal(result.kind, "deleted");
   assert.deepEqual(purgeCalls, [[]]);
+});
+
+test("permanent delete still removes the proposal when the purge did not finish, and says so", async () => {
+  // A storage failure is not the planner's to retry: the proposal goes, the
+  // response stays a success, and the unfinished purge is visible to a caller.
+  const proposals = {
+    markOwnedArchivedPurgeStartedById: async () => true,
+    findOwnedArchivedPurgeTargetById: async () => ({
+      proposalMongoId: "proposal-001",
+      organizationMongoId: "org-001",
+    }),
+    permanentlyDeleteOwnedArchivedById: async () => true,
+  };
+  const input = { proposalId: "proposal-001", ownerUserId: "user-001" };
+
+  const unfinished = await createPermanentlyDeleteOwnedProposal(proposals, async () => [{ complete: false }])(input);
+  assert.deepEqual(unfinished, { kind: "deleted", artifactsPurged: false });
+
+  const finished = await createPermanentlyDeleteOwnedProposal(proposals, async () => [{ complete: true }])(input);
+  assert.deepEqual(finished, { kind: "deleted", artifactsPurged: true });
+});
+
+test("permanent delete marks the proposal before anything is purged, and stops if it is no longer archived", async () => {
+  // Marking source documents for deletion cannot be undone, so the proposal is
+  // marked first; restore and edit refuse it from then on.
+  const order = [];
+  const proposals = (marked) => ({
+    findOwnedArchivedPurgeTargetById: async () => ({ proposalMongoId: "proposal-001", organizationMongoId: "org-001" }),
+    markOwnedArchivedPurgeStartedById: async (input) => {
+      order.push(`mark:${input.proposalId}:${input.ownerUserId}`);
+      return marked;
+    },
+    permanentlyDeleteOwnedArchivedById: async () => {
+      order.push("delete");
+      return true;
+    },
+  });
+  const purge = async () => {
+    order.push("purge");
+    return [{ complete: true }];
+  };
+  const input = { proposalId: "proposal-001", ownerUserId: "user-001" };
+
+  assert.deepEqual(await createPermanentlyDeleteOwnedProposal(proposals(true), purge)(input), { kind: "deleted", artifactsPurged: true });
+  assert.deepEqual(order, ["mark:proposal-001:user-001", "purge", "delete"]);
+
+  // A restore won the race: nothing is archived any more, so nothing is purged or deleted.
+  order.length = 0;
+  assert.deepEqual(await createPermanentlyDeleteOwnedProposal(proposals(false), purge)(input), { kind: "not_found" });
+  assert.deepEqual(order, ["mark:proposal-001:user-001"]);
+});
+
+test("restore refuses a proposal whose permanent delete has started", async () => {
+  const recorded = [];
+  const lifecycle = { recordChange: async (change) => recorded.push(change) };
+  const input = { proposalId: "proposal-001", ownerUserId: "user-001" };
+
+  const refused = await createRestoreOwnedProposal({ restoreOwnedById: async () => "being_deleted" }, lifecycle)(input);
+  assert.deepEqual(refused, { kind: "being_deleted" });
+  assert.deepEqual(recorded, [], "nothing is recorded as restored");
+
+  assert.deepEqual(await createRestoreOwnedProposal({ restoreOwnedById: async () => false }, lifecycle)(input), { kind: "not_found" });
+  assert.deepEqual(await createRestoreOwnedProposal({ restoreOwnedById: async () => true }, lifecycle)(input), { kind: "restored" });
+  assert.equal(recorded.length, 1);
+});
+
+test("the marker is written and read where the access policy scopes it, and never copied", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const read = (file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");
+  const repository = read("src/modules/proposals/infrastructure/mongo/mongoProposalWriteRepository.ts");
+  const method = (name, next) => repository.slice(repository.indexOf(`async ${name}(`), repository.indexOf(`async ${next}(`));
+
+  // Set under the same policy action as the delete itself, on an archived proposal only.
+  const mark = method("markOwnedArchivedPurgeStartedById", "permanentlyDeleteOwnedArchivedById");
+  assert.match(mark, /scoped\(ownerUserId, "delete", \{ _id: proposalId, isArchived: true, purgeStarted: \{ \$ne: true \} \}\)/);
+  assert.match(mark, /\$set: \{ purgeStarted: true, purgeStartedAt: new Date\(\) \}/);
+  // Restore and edit both carry the condition in the same atomic update as their write.
+  const restore = method("restoreOwnedById", "findOwnedArchivedPurgeTargetById");
+  assert.match(restore, /Proposal\.findOneAndUpdate\(\s+scoped\(ownerUserId, "archive", \{ _id: proposalId, isArchived: true, purgeStarted: \{ \$ne: true \} \}\)/);
+  assert.match(restore, /return "being_deleted";/);
+  const update = method("updateOwnedById", "incrementOwnedViews");
+  assert.match(update, /Proposal\.findOneAndUpdate\(\s+scoped\(ownerUserId, "edit", \{ _id: proposalId, purgeStarted: \{ \$ne: true \} \}\)/);
+  // Nothing else in the application sets it, and nothing clears it.
+  assert.equal((repository.match(/purgeStarted: true, purgeStartedAt: new Date\(\)/g) ?? []).length, 1);
+  assert.doesNotMatch(repository, /purgeStarted: false|\$unset: \{[^}]*purgeStarted/);
+  // A copy and a client payload cannot carry it.
+  const author = read("src/modules/proposals/application/authorOwnedProposal.ts");
+  assert.match(author, /delete proposal\.purgeStarted;/);
+  assert.match(author, /delete proposal\.purgeStartedAt;/);
+  // The archive list still shows the proposal: no read filters on the marker.
+  assert.doesNotMatch(read("src/modules/proposals/infrastructure/mongo/mongoProposalReadRepository.ts"), /purgeStarted/);
+  // The refusal the planner sees.
+  const controller = read("controller/proposalsController.ts");
+  assert.match(controller, /res\.status\(409\)\.json\(\{\s+success: false,\s+code: "PROPOSAL_BEING_DELETED",\s+message: "This Proposal is being permanently deleted and can no longer be restored\.",/);
 });

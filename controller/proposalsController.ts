@@ -571,6 +571,14 @@ export const restoreProposal = async (
       res.status(404).json({ success: false, message: "Archived proposal not found" });
       return;
     }
+    if (result.kind === "being_deleted") {
+      res.status(409).json({
+        success: false,
+        code: "PROPOSAL_BEING_DELETED",
+        message: "This Proposal is being permanently deleted and can no longer be restored.",
+      });
+      return;
+    }
 
     res.status(200).json({
       success: true,

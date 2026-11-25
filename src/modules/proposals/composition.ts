@@ -63,9 +63,9 @@ export const restoreOwnedProposal =
 export const permanentlyDeleteOwnedProposal = createPermanentlyDeleteOwnedProposal(
   mongoProposalWriteRepository,
   async (targets) => {
-    if (!targets.length) return;
+    if (!targets.length) return [];
     const { purgeProposalArtifacts } = await import("../dataFoundation/purgeProposalArtifacts");
-    await purgeProposalArtifacts(targets);
+    return purgeProposalArtifacts(targets);
   },
 );
 export const createOwnedProposal = createCreateOwnedProposal(mutationDependencies);

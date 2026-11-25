@@ -78,4 +78,8 @@ Conventions all of these follow — keep them for new scripts:
 - Idempotent under re-runs.
 - `--help` exits fast (it's wired into `npm run migration:check`).
 
-Atlas-side backups are Atlas-managed (continuous, M10+).
+**MongoDB has no backup (as of 2026-11-24).** Production runs on the Atlas
+free tier, which has no managed backups: continuous backup is an M10+ feature
+and is not available to this cluster. The only backup today is a `mongodump`
+that an operator runs by hand. Nothing takes one on a schedule, so take one
+before any script that writes to or deletes from MongoDB.

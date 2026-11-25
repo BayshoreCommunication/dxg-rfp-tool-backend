@@ -43,7 +43,7 @@ test("every top-level field of the Proposal model is classified, and nothing els
 test("the classification is the one this change was reviewed with", () => {
   assert.deepEqual(SERVER_OWNED.sort(), [
     "__v", "_id", "archivedAt", "candidateApplicationIds", "createdAt", "isArchived", "isCopy",
-    "lifecycle", "organizationId", "updatedAt", "userId", "version", "viewsCount",
+    "lifecycle", "organizationId", "purgeStarted", "purgeStartedAt", "updatedAt", "userId", "version", "viewsCount",
   ]);
   assert.deepEqual(CLIENT_FLAGS.sort(), ["isAccepted", "isActive", "isDraft", "isFavorite", "isOpen", "status", "teamId"]);
   assert.deepEqual(CONTENT.sort(), [
