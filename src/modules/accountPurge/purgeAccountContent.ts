@@ -158,22 +158,18 @@ export const contentRefusals = (input: {
   return refused;
 };
 
-// A private source document of a proposal, still live in Postgres (not tombstoned).
-export type LiveSource = { proposalId: string; status: string; count: number };
+// A proposal's private source documents that are still live in Postgres (not tombstoned), and how
+// many of them the product's artifact purge will not touch: `held` is under legal hold or
+// unexpired retention, `expired` is in the one status with no way to `deleted`.
+export type LiveSources = { proposalId: string; live: number; held: number; expired: number };
 
-// The only status the product's artifact purge can tombstone. purgeProposalArtifacts sets
-// status='deleted' in one step, and the database (rfpilot.enforce_document_source_transition,
-// migration 003) allows 'deleted' only from 'deletion_pending'. For a source in any other status,
-// 'ready' included, the update raises, the purge swallows it, and what is left is a stored file
-// already deleted with a row that still says it exists, no audit event and a live conversation.
-// So such a proposal refuses the run until the product's purge is fixed.
-// tests/purge-accounts-with-content.test.js fails when either side of this changes.
-export const TOMBSTONABLE_SOURCE_STATUSES: readonly string[] = ["deletion_pending"];
-
-export const sourceRefusals = (sources: LiveSource[]): string[] =>
-  sources
-    .filter((source) => !TOMBSTONABLE_SOURCE_STATUSES.includes(source.status))
-    .map((source) => `proposal ${source.proposalId}: ${source.count} private source document(s) in status ${source.status}; the product's artifact purge cannot tombstone them (it would delete the stored file and leave the row), so the proposal cannot be purged completely`);
+// purgeProposalArtifacts leaves a held or expired source alone and reports the purge incomplete,
+// while the product's permanent delete removes the proposal from MongoDB regardless. So a
+// proposal with such a source is refused before anything is deleted.
+export const sourceRefusals = (sources: LiveSources[]): string[] => sources.flatMap((source) => [
+  ...(source.held > 0 ? [`proposal ${source.proposalId}: ${source.held} private source document(s) under legal hold or unexpired retention; the product does not delete them, so the proposal cannot be purged completely`] : []),
+  ...(source.expired > 0 ? [`proposal ${source.proposalId}: ${source.expired} private source document(s) in status expired, which has no way to deleted; the product does not delete them, so the proposal cannot be purged completely`] : []),
+]);
 
 export type AccountContent = {
   userId: string;
@@ -243,8 +239,13 @@ export type ContentPurgePorts = {
   proposalState(proposalId: string): Promise<{ ownerUserId: string | null; organizationId: string | null; archived: boolean } | null>;
   // The product's own functions, run as the owner.
   archive(target: ProposalTarget): Promise<{ kind: string }>;
-  permanentlyDelete(target: ProposalTarget): Promise<{ kind: string }>;
-  // Private source documents of the proposal that the product's artifact purge left live.
+  // artifactsPurged is the product's own verdict on its artifact purge; purge carries the
+  // purge's result (error code, source counts) when the caller recorded it.
+  permanentlyDelete(target: ProposalTarget): Promise<{
+    kind: string; artifactsPurged?: boolean;
+    purge?: { errorCode?: string; skipped?: string; sources?: { tombstoned: number; pending: number; notDeletable: number } };
+  }>;
+  // Private source documents of the proposal still live (not tombstoned) after the delete.
   liveSourceDocuments(target: ProposalTarget): Promise<number>;
   deleteProposalDependents(proposalId: string): Promise<Record<string, number>>;
   deleteStoredObject(objectKey: string): Promise<void>;
@@ -258,9 +259,15 @@ const reasonOf = (error: unknown) => (error instanceof Error ? error.message : S
 // when this returns.
 //
 // Per proposal: archive (the product's precondition for a permanent delete), remove what hangs
-// off it, permanently delete, then check the artifact purge left no live source document. The
-// dependents go before the proposal so a run that stops half way can simply be run again: the
-// proposal is still there, still owned by the account, and is found by the next plan.
+// off it, permanently delete, then judge the delete by the product's own result. The dependents
+// go before the permanent delete so a run that stops between the two can simply be run again:
+// the proposal is still there, archived, still owned by the account, and found by the next plan.
+// Nothing here edits or restores a proposal, so the product's purge marker (set inside the
+// permanent delete, after which edit and restore are refused) never gets in the way.
+//
+// The product deletes the proposal from MongoDB even when its artifact purge did not finish
+// (the sources stay `deletion_pending` and the product's daily reconciler finishes them). This
+// run still stops there, so the operator sees it before any account goes.
 export const runContentPurge = async (plan: ContentPlan, ports: ContentPurgePorts): Promise<Record<string, number>> => {
   const deleted: Record<string, number> = {};
   const count = (counts: Record<string, number>) => {
@@ -287,8 +294,16 @@ export const runContentPurge = async (plan: ContentPlan, ports: ContentPurgePort
       const result = await attempt("permanent delete", () => ports.permanentlyDelete(target));
       if (result.kind !== "deleted") throw fail("permanent delete", `the product answered ${result.kind}`, proposal.id);
       count({ proposals: 1 });
+      if (result.artifactsPurged !== true) {
+        const sources = result.purge?.sources;
+        throw fail("artifact purge", [
+          `the proposal was deleted but its artifact purge did not finish (errorCode ${result.purge?.errorCode ?? "UNKNOWN"})`,
+          sources ? `sources tombstoned ${sources.tombstoned}, still deletion_pending ${sources.pending}, not deletable ${sources.notDeletable}` : "source counts unknown",
+          "the product's daily reconciler retries the pending ones",
+        ].join("; "), proposal.id);
+      }
       const live = await attempt("artifact purge check", () => ports.liveSourceDocuments(target));
-      if (live > 0) throw fail("artifact purge", `${live} private source document(s) of the deleted proposal were not purged; see proposal_artifacts_purge_failed in the log`, proposal.id);
+      if (live > 0) throw fail("artifact purge", `the product reported the purge complete but ${live} private source document(s) of the deleted proposal are still live`, proposal.id);
     }
     // Stored files first: a row whose file could not be deleted stays, so the file is not lost track of.
     for (const objectKey of account.storedObjectKeys) {

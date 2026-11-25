@@ -153,7 +153,8 @@ const purgeWithContent = async () => {
   const p = await plan(going.map((id) => new mongoose.Types.ObjectId(id)));
   // The proposals' private source documents, read from Postgres in a READ ONLY transaction with
   // the tenant settings the product's artifact purge uses (so the app role reads under RLS).
-  const liveSources: Array<{ proposalId: string; status: string; count: number }> = [];
+  const liveSources: Array<{ proposalId: string; live: number; held: number; expired: number }> = [];
+  const unreachable: string[] = [];
   if (going.length && postgresEnabled() && contentPlan.refused.length === 0) {
     const { postgresPool } = await import("../config/postgres");
     const client = await postgresPool().connect();
@@ -163,14 +164,21 @@ const purgeWithContent = async () => {
       for (const account of contentPlan.accounts) for (const proposal of account.proposals) byOrganization.set(String(proposal.organizationId), [...(byOrganization.get(String(proposal.organizationId)) ?? []), proposal.id]);
       for (const [organizationId, proposalIds] of byOrganization) {
         await client.query("SELECT set_config('app.organization_mongo_id',$1,true)", [organizationId]);
-        const org = await client.query<{ id: string }>("SELECT id FROM rfpilot.organizations WHERE external_mongo_id=$1", [organizationId]);
-        if (!org.rows[0]) continue;
+        const org = await client.query<{ id: string; status: string }>("SELECT id, status FROM rfpilot.organizations WHERE external_mongo_id=$1", [organizationId]);
+        if (!org.rows[0]) continue; // nothing of this organization is in Postgres: nothing to purge
+        // The product's purge will not enter an organization that is not active in Postgres.
+        if (org.rows[0].status !== "active") { unreachable.push(`organization ${organizationId}: ${org.rows[0].status} in PostgreSQL, so the product cannot purge its proposals' source documents`); continue; }
         await client.query("SELECT set_config('app.organization_id',$1,true)", [org.rows[0].id]);
-        const rows = await client.query<{ proposal_id: string; status: string; n: string }>(
-          "SELECT p.external_mongo_id AS proposal_id, s.status, count(*) AS n FROM rfpilot.document_sources s JOIN rfpilot.proposal_references p ON p.id = s.proposal_reference_id WHERE p.external_mongo_id = ANY($1) AND s.deleted_at IS NULL GROUP BY 1, 2 ORDER BY 1, 2",
-          [proposalIds],
+        // Held and expired are what purgeProposalArtifacts counts as not deletable.
+        const rows = await client.query<{ proposal_id: string; live: number; held: number; expired: number }>(
+          `SELECT p.external_mongo_id AS proposal_id, count(*)::int AS live,
+                  count(*) FILTER (WHERE s.legal_hold OR coalesce(s.retention_until > now(), false))::int AS held,
+                  count(*) FILTER (WHERE s.status = 'expired' AND NOT (s.legal_hold OR coalesce(s.retention_until > now(), false)))::int AS expired
+             FROM rfpilot.document_sources s JOIN rfpilot.proposal_references p ON p.id = s.proposal_reference_id
+            WHERE p.organization_id = $2 AND p.external_mongo_id = ANY($1) AND s.deleted_at IS NULL GROUP BY 1 ORDER BY 1`,
+          [proposalIds, org.rows[0].id],
         );
-        for (const row of rows.rows) liveSources.push({ proposalId: row.proposal_id, status: row.status, count: Number(row.n) });
+        for (const row of rows.rows) liveSources.push({ proposalId: row.proposal_id, live: row.live, held: row.held, expired: row.expired });
       }
       await client.query("ROLLBACK");
     } finally {
@@ -178,12 +186,12 @@ const purgeWithContent = async () => {
       await closePostgres();
     }
   }
-  const refused = [...p.refused, ...contentPlan.refused, ...content.sourceRefusals(liveSources)];
+  const refused = [...p.refused, ...contentPlan.refused, ...unreachable, ...content.sourceRefusals(liveSources)];
   const contentCounts = content.contentTotals(contentPlan);
   const summary = {
     database: DATABASE_NAME, withContent: true, users: p.users, withoutAccount: p.withoutAccount, organizationsRemoved: p.organizations, refused,
     accounts: content.describeAccounts(contentPlan),
-    privateSourceDocuments: liveSources.reduce((sum, row) => sum + row.count, 0),
+    privateSourceDocuments: liveSources.reduce((sum, row) => sum + row.live, 0),
   };
   const footer = { removedBeyondTheProductPath: content.BEYOND_PRODUCT_PATH, stays: content.RETAINED };
   const total = [...Object.values(p.counts), ...Object.values(contentCounts)].reduce((a, b) => a + b, 0);
@@ -197,7 +205,20 @@ const purgeWithContent = async () => {
 
   // Everything below writes. The product modules and storage are loaded only here, so a dry run
   // cannot reach S3 at all, and the only Postgres statements it runs are the read above.
-  const { archiveOwnedProposal, permanentlyDeleteOwnedProposal } = await import("../src/modules/proposals/composition");
+  const { archiveOwnedProposal } = await import("../src/modules/proposals/composition");
+  // The product's permanent delete, wired exactly as src/modules/proposals/composition.ts wires
+  // it for the route (same application function, same repository, same artifact purge), except
+  // that the purge's result is kept: the route's function reports only whether it finished.
+  const { createPermanentlyDeleteOwnedProposal } = await import("../src/modules/proposals/application/mutateOwnedProposal");
+  const { mongoProposalWriteRepository } = await import("../src/modules/proposals/infrastructure/mongo/mongoProposalWriteRepository");
+  const { purgeProposalArtifacts } = await import("../src/modules/dataFoundation/purgeProposalArtifacts");
+  type PurgeResult = Awaited<ReturnType<typeof purgeProposalArtifacts>>[number];
+  const purgeResults = new Map<string, PurgeResult>();
+  const permanentlyDeleteOwnedProposal = createPermanentlyDeleteOwnedProposal(mongoProposalWriteRepository, async (purgeTargets) => {
+    const results = purgeTargets.length ? await purgeProposalArtifacts(purgeTargets) : [];
+    for (const result of results) purgeResults.set(result.proposalMongoId, result);
+    return results;
+  });
   const { runWithTenant } = await import("../src/modules/shared/tenancy/tenantContext");
   const { s3PrivateDocumentStorage } = await import("../src/modules/documentIngestion/s3PrivateDocumentStorage");
   const { findOrphanedProposals } = await import("../src/modules/tenancy/migrationVerification");
@@ -219,16 +240,21 @@ const purgeWithContent = async () => {
       contentDeleted = await content.runContentPurge(contentPlan, {
         ...content.mongoContentPurgePorts,
         archive: (target) => asOwner(target, () => archiveOwnedProposal({ proposalId: target.proposalId, ownerUserId: target.ownerUserId })),
-        permanentlyDelete: (target) => asOwner(target, () => permanentlyDeleteOwnedProposal({ proposalId: target.proposalId, ownerUserId: target.ownerUserId })),
+        permanentlyDelete: async (target) => {
+          const result = await asOwner(target, () => permanentlyDeleteOwnedProposal({ proposalId: target.proposalId, ownerUserId: target.ownerUserId }));
+          const purge = purgeResults.get(target.proposalId);
+          return { ...result, purge: purge && { errorCode: purge.errorCode, skipped: purge.skipped, sources: purge.sources } };
+        },
         // The same tenant settings the product's artifact purge uses, so the app role can read under RLS.
         liveSourceDocuments: (target) => withPostgresTransaction(async (c) => {
           await c.query("SELECT set_config('app.organization_mongo_id',$1,true)", [target.organizationId]);
           const org = await c.query<{ id: string }>("SELECT id FROM rfpilot.organizations WHERE external_mongo_id=$1", [target.organizationId]);
           if (!org.rows[0]) return 0;
           await c.query("SELECT set_config('app.organization_id',$1,true)", [org.rows[0].id]);
+          // Live as the product counts it: any source not tombstoned, deletion_pending included.
           const live = await c.query<{ n: string }>(
-            "SELECT count(*) AS n FROM rfpilot.document_sources s JOIN rfpilot.proposal_references p ON p.id = s.proposal_reference_id WHERE p.external_mongo_id=$1 AND s.deleted_at IS NULL",
-            [target.proposalId],
+            "SELECT count(*) AS n FROM rfpilot.document_sources s JOIN rfpilot.proposal_references p ON p.id = s.proposal_reference_id WHERE p.organization_id=$2 AND p.external_mongo_id=$1 AND s.deleted_at IS NULL",
+            [target.proposalId, org.rows[0].id],
           );
           return Number(live.rows[0]?.n ?? 0);
         }),
@@ -237,7 +263,7 @@ const purgeWithContent = async () => {
     } catch (error) {
       if (!(error instanceof content.ContentPurgeError)) throw error;
       process.exitCode = 1;
-      return print({ mode: "failed", ...summary, failed: error.detail, accountsRemoved: [], deleted: { content: error.deletedSoFar, accounts: {} }, next: "No account was removed. Fix the cause and run the same command again: what is already gone is skipped." });
+      return print({ mode: "failed", ...summary, failed: error.detail, accountsRemoved: [], deleted: { content: error.deletedSoFar, accounts: {} }, next: "No account was removed. Fix the cause and run the same command again: what is already gone is skipped. Source documents a failed artifact purge left deletion_pending are finished by the product's daily reconciler, not by this tool." });
     }
     const stillOwned = await content.proposalsStillOwnedBy(p.userIds);
     // Planned again now that the content is gone; the first plan's counts are stale.
