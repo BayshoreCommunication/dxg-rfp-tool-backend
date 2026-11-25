@@ -32,6 +32,10 @@ export const PROPOSAL_FIELD_OWNERSHIP: ReadonlyMap<string, ProposalFieldOwner> =
   // Archive state: set by archive and restore, read by the 30-day purge.
   ["isArchived", "server"],
   ["archivedAt", "server"],
+  // The permanent-delete marker: set once, before a proposal's source documents are marked for
+  // deletion (markOwnedArchivedPurgeStartedById, the archive sweep), and never cleared.
+  ["purgeStarted", "server"],
+  ["purgeStartedAt", "server"],
   // Derived or counted by the server.
   ["lifecycle", "server"],
   ["isCopy", "server"],

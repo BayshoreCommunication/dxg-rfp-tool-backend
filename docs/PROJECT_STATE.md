@@ -240,6 +240,52 @@ proposal-summary read exposes the exact owned response IDs for each paginated
 group, allowing the main inbox to select proposal groups without restoring a
 global delete-all operation.
 
+### Permanent delete tombstones source documents (2026-11-24)
+
+Permanently deleting a proposal (and the 30-day sweep of archived proposals)
+now really tombstones its source documents: each source is marked
+`deletion_pending`, its object is deleted from private storage, and the row is
+then marked `deleted`. Until this fix the purge deleted the object and then
+wrote `deleted` directly, which the transition trigger rejects, so the row
+stayed `ready`, the conversation stayed active and no audit event was written.
+Details and failure states: `docs/architecture/PRIVATE_DOCUMENT_INGESTION.md`.
+
+- A proposal is marked (`purgeStarted`) before its first document is
+  touched. A marked proposal cannot be restored (409
+  `PROPOSAL_BEING_DELETED`) or edited; it stays visible in the archive until
+  it is deleted. The dashboard does not yet hide Restore for it: the planner
+  sees the refusal message.
+- The 30-day sweep keeps a proposal whose documents could not all be removed
+  and retries it the next day, so an archived proposal can outlive 30 days.
+- The daily archive job also finishes purges whose proposal MongoDB no longer
+  has (a planner's delete whose storage step failed).
+
+Open after this change:
+
+- Proposals permanently deleted before the fix have source rows still marked
+  `ready` whose objects are already gone. A one-off repair has not been done.
+- The same direct write of `deleted` is still in two other places, found by
+  reading the code and not yet fixed: the planner's vendor-response deletion
+  (`purgeVendorResponseArtifacts`, so the "registered document sources are
+  tombstoned" statement above does not hold for a source that is not already
+  `deletion_pending`) and the retention sweep (`retentionSweeper`, which only
+  acts with `RETENTION_SWEEP_APPLY=true`).
+- A single-document delete whose storage step failed is not retried by
+  anything; an upload link issued earlier can put an object back after the
+  tombstone; object versions are not removed on a versioned bucket.
+- **Do not run `scripts/purgeOldProposals.ts` until the follow-up lands.** It
+  marks every matched proposal, including ones that are not archived; when a
+  purge does not complete the proposal is kept live but marked, so its owner
+  can no longer edit it and nothing clears the mark.
+- Follow-up PR, from the second review: that script marker; the daily pass can
+  be starved by a batch of proposals that keep failing; lock strength on the
+  proposal reference; further spellings the status-write guard does not read.
+- A permanent delete still leaves the proposal's other MongoDB documents
+  (vendor responses, public access grants, email campaigns, status
+  transitions).
+- MongoDB production has no backup: Atlas free tier, operator-run `mongodump`
+  only (`docs/operations/database-migrations.md`).
+
 ### The DXG pricing engine (client workbook)
 
 The founder supplied `RFPilot_AV_Pricing_Engine` (baseline v3): 433 line items
