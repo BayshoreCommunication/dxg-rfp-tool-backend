@@ -7,7 +7,7 @@ import TeamMembership from "../../../../modal/teamMembershipModel";
 import User from "../../../../modal/userModel";
 import type { StaffManagedOrganization, StaffMemberDirectory, StaffMemberView } from "../domain";
 
-/* Reads behind staff member management (owner decision, 2026-11-18). Only RFPilot staff reach
+/* Reads behind the staff member read, team read and organization block. Only RFPilot staff reach
    this, through routes/adminOrganizationMembersRoute.ts. Every query on customer data names the
    organization the request's path gave AND, for a member, that member's user id: a member of
    another organization is not found. The person's name and email are read from `users` by the id

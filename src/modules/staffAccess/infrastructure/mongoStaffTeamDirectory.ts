@@ -4,7 +4,7 @@ import TeamMembership from "../../../../modal/teamMembershipModel";
 import type { StaffMemberDirectory, StaffTeamDetail, StaffTeamDirectory } from "../domain";
 import { mongoStaffMemberDirectory } from "./mongoStaffMemberDirectory";
 
-/* The read behind staff team management (owner decision, 2026-11-18). Only RFPilot staff reach
+/* The read behind the staff team read. Only RFPilot staff reach
    this, through routes/adminOrganizationTeamsRoute.ts. Every query names the organization the
    request's path gave AND the team: a team of another organization is not found, and only that
    organization's own team rows are listed. Each member is read through the staff member

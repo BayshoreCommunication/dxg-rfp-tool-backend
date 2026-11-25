@@ -13,15 +13,6 @@ export type MemberStatus = "invited" | "active" | "suspended" | "removed";
 
 export type MemberFacts = { userId: string; roles: readonly string[]; status: MemberStatus };
 export type ManagerFacts = { userId: string; roles: readonly string[] };
-// RFPilot staff managing a customer organization's members (owner decision, 2026-11-18;
-// docs/DECISIONS.md). Staff are not members: they have no user id and no role in the
-// organization, so they are never compared with a member and never treated as its Owner or
-// Admin. The staff guard (an `admins` account with an admin role) is checked before any
-// decision here is asked for.
-export type StaffManager = { staff: true };
-export const STAFF_MANAGER: StaffManager = { staff: true };
-export type Manager = ManagerFacts | StaffManager;
-export const isStaffManager = (actor: Manager): actor is StaffManager => "staff" in actor && actor.staff === true;
 
 export type Refusal = {
   ok: false;
@@ -70,7 +61,7 @@ export const decideManage = (actor: ManagerFacts): Decision =>
   canManageMembers(actor.roles) ? allow : refuse(403, "FORBIDDEN", "Only Owners and Admins can manage members.");
 
 export const decideRoleChange = (input: {
-  actor: Manager;
+  actor: ManagerFacts;
   target: MemberFacts;
   role: CustomerRole;
   ownedRfpCount: number;
@@ -79,8 +70,6 @@ export const decideRoleChange = (input: {
   if (target.status === "removed") return refuse(409, "MEMBER_REMOVED", "This member has been removed.");
   const touchesOwner = role === "owner" || isOwner(target.roles);
   if (touchesOwner) {
-    // Staff never set a role to or from Owner: the Owner role only moves by ownership transfer.
-    if (isStaffManager(actor)) return refuse(409, "OWNERSHIP_TRANSFER_REQUIRED", "The Owner role only changes through an ownership transfer.");
     if (!isOwner(actor.roles)) return ownerOnly();
     if (target.userId === actor.userId) return role === "owner" ? allow : lastOwner();
     return refuse(409, "OWNERSHIP_TRANSFER_REQUIRED", "Use ownership transfer to make another member the Owner.");
@@ -90,11 +79,10 @@ export const decideRoleChange = (input: {
   return allow;
 };
 
-export const decideDeactivation = (input: { actor: Manager; target: MemberFacts; ownedRfpCount: number }): Decision => {
+export const decideDeactivation = (input: { actor: ManagerFacts; target: MemberFacts; ownedRfpCount: number }): Decision => {
   const { actor, target } = input;
   if (target.status === "removed") return refuse(409, "MEMBER_REMOVED", "This member has been removed.");
-  // Staff never deactivate the Owner either: transfer ownership first.
-  if (isOwner(target.roles)) return isStaffManager(actor) || isOwner(actor.roles) ? lastOwner() : ownerOnly();
+  if (isOwner(target.roles)) return isOwner(actor.roles) ? lastOwner() : ownerOnly();
   if (input.ownedRfpCount > 0) return ownerHasRfps(input.ownedRfpCount);
   return allow;
 };
@@ -104,15 +92,10 @@ export const decideReactivation = (input: { target: MemberFacts }): Decision =>
     ? allow
     : refuse(409, "MEMBER_NOT_DEACTIVATED", "Only a deactivated member can be reactivated.");
 
-// A member transfers their own ownership. Staff transfer the current Owner's, whoever that is,
-// so the staff path has no "actor is the Owner" check; the rest is the same rule.
-export const decideOwnershipTransfer = (input: { actor: Manager; target: MemberFacts | null }): Decision => {
-  const { actor } = input;
-  if (!isStaffManager(actor) && !isOwner(actor.roles)) return refuse(403, "OWNER_ONLY", "Only the Owner can transfer ownership.");
+export const decideOwnershipTransfer = (input: { actor: ManagerFacts; target: MemberFacts | null }): Decision => {
+  if (!isOwner(input.actor.roles)) return refuse(403, "OWNER_ONLY", "Only the Owner can transfer ownership.");
   if (!input.target) return refuse(404, "MEMBER_NOT_FOUND", "Member not found.");
-  if (isStaffManager(actor)) {
-    if (isOwner(input.target.roles)) return refuse(400, "ALREADY_OWNER", "This member is already the Owner.");
-  } else if (input.target.userId === actor.userId) return refuse(400, "ALREADY_OWNER", "You are already the Owner.");
+  if (input.target.userId === input.actor.userId) return refuse(400, "ALREADY_OWNER", "You are already the Owner.");
   if (input.target.status !== "active") return refuse(409, "MEMBER_INACTIVE", "Ownership can only go to an active member.");
   return allow;
 };
@@ -131,23 +114,6 @@ export const decideReassignment = (input: { from: MemberFacts | null; to: Member
   }
   return allow;
 };
-
-// ORG-206 "change a member's teams": the selection and its refusals. One rule for the
-// organization's own route (manageMembers.ts) and the RFPilot staff route
-// (staffAccess/application/manageOrganizationTeams.ts).
-export const MAX_MEMBER_TEAMS = 100;
-export const invalidTeams = () => refuse(400, "INVALID_TEAMS", `teamIds must be a list of up to ${MAX_MEMBER_TEAMS} team ids.`);
-export const parseTeamSelection = (value: unknown): { ok: true; teamIds: string[] } | Refusal => {
-  if (!Array.isArray(value) || value.length > MAX_MEMBER_TEAMS || !value.every((id) => typeof id === "string" && /^[a-f0-9]{24}$/i.test(id))) {
-    return invalidTeams();
-  }
-  return { ok: true, teamIds: [...new Set(value as string[])] };
-};
-export const decideTeamsChange = (input: { target: MemberFacts }): Decision =>
-  input.target.status === "removed" ? refuse(409, "MEMBER_REMOVED", "This member has been removed.") : allow;
-export const teamsUnavailable = () => refuse(503, "TEAMS_UNAVAILABLE", "Teams aren't available yet.");
-export const unknownTeams = (unknownTeamIds: string[]) =>
-  refuse(400, "UNKNOWN_TEAMS", "Some teams aren't active teams of this organization.", { unknownTeamIds });
 
 // API status names: a suspended membership is shown as deactivated.
 export const publicStatus = (status: MemberStatus) => (status === "suspended" ? "deactivated" : status);
