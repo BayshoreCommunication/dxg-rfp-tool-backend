@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   ACCOUNT_CONTENT, BEYOND_PRODUCT_PATH, COLLECTION_DECISIONS, ContentPurgeError, PROPOSAL_DEPENDENTS,
-  TOMBSTONABLE_SOURCE_STATUSES, contentRefusals, contentTotals, describeAccounts, doomedProposalIds, ownerOnlyActor, ownershipViolations, runContentPurge, sourceRefusals,
+  contentRefusals, contentTotals, describeAccounts, doomedProposalIds, ownerOnlyActor, ownershipViolations, runContentPurge, sourceRefusals,
 } = require("../src/modules/accountPurge/purgeAccountContent");
 const { MOVABLE_COLLECTIONS } = require("../src/modules/tenancy/mongoTenantMove");
 const { canAccessRfp, rfpListScope } = require("../src/modules/identity/domain/rfpAccessPolicy");
@@ -109,30 +109,26 @@ test("the run is refused when the artifact purge would be skipped", () => {
   assert.deepEqual(contentRefusals({ ...input, proposals: [] }), [], "an account with no proposal needs no artifact purge");
 });
 
-test("a proposal whose source documents the product cannot tombstone refuses the run", () => {
+test("a proposal with a source document the product will not delete refuses the run", () => {
   assert.deepEqual(sourceRefusals([]), []);
-  assert.deepEqual(sourceRefusals([{ proposalId: "p1", status: "deletion_pending", count: 2 }]), []);
-  const refused = sourceRefusals([{ proposalId: "p1", status: "ready", count: 3 }, { proposalId: "p2", status: "uploaded", count: 1 }, { proposalId: "p2", status: "deletion_pending", count: 1 }]);
-  assert.equal(refused.length, 2);
-  assert.match(refused[0], /^proposal p1: 3 private source document\(s\) in status ready; the product's artifact purge cannot tombstone them/);
-  assert.match(refused[1], /^proposal p2: 1 private source document\(s\) in status uploaded/);
+  // Ordinary documents, whatever their status, are the product's to tombstone.
+  assert.deepEqual(sourceRefusals([{ proposalId: "p1", live: 4, held: 0, expired: 0 }]), []);
+  const refused = sourceRefusals([{ proposalId: "p1", live: 3, held: 2, expired: 0 }, { proposalId: "p2", live: 2, held: 1, expired: 1 }, { proposalId: "p3", live: 1, held: 0, expired: 0 }]);
+  assert.equal(refused.length, 3);
+  assert.match(refused[0], /^proposal p1: 2 private source document\(s\) under legal hold or unexpired retention/);
+  assert.match(refused[1], /^proposal p2: 1 private source document\(s\) under legal hold or unexpired retention/);
+  assert.match(refused[2], /^proposal p2: 1 private source document\(s\) in status expired/);
 });
 
-// The refusal above mirrors two facts about the product. When either changes (the purge learns
-// to go through deletion_pending, or a migration relaxes the trigger), this fails: update
-// TOMBSTONABLE_SOURCE_STATUSES, or drop the refusal, to match.
-test("the product's artifact purge still sets 'deleted' in one step, which the database allows only from deletion_pending", () => {
+// What the script refuses up front is what the product's purge counts as not deletable.
+test("the up-front source check reads what the product's purge leaves alone, and writes no source status", () => {
   const purge = fs.readFileSync(path.join(root, "src/modules/dataFoundation/purgeProposalArtifacts.ts"), "utf8");
-  assert.match(purge, /UPDATE rfpilot\.document_sources SET deleted_at=now\(\),status='deleted',updated_at=now\(\) WHERE id=\$1/);
-  assert.doesNotMatch(purge, /deletion_pending/);
-  const migrations = fs.readdirSync(path.join(root, "migrations/postgres")).filter((file) => file.endsWith(".up.sql"))
-    .map((file) => [file, fs.readFileSync(path.join(root, "migrations/postgres", file), "utf8")]);
-  const defining = migrations.filter(([, sql]) => /FUNCTION rfpilot\.enforce_document_source_transition/.test(sql)).map(([file]) => file);
-  assert.deepEqual(defining, ["003_private_document_ingestion.up.sql"], "the transition rule was redefined: re-read it");
-  const rule = migrations.find(([file]) => file === defining[0])[1];
-  const intoDeleted = [...rule.matchAll(/OLD\.status (?:= '([a-z_]+)'|IN \(([^)]*)\)) AND NEW\.status (?:= 'deleted'|IN \([^)]*'deleted'[^)]*\))/g)]
-    .flatMap((match) => (match[1] ? [match[1]] : match[2].split(",").map((status) => status.trim().replace(/'/g, ""))));
-  assert.deepEqual(intoDeleted, [...TOMBSTONABLE_SOURCE_STATUSES]);
+  assert.ok(purge.includes("(s.legal_hold OR coalesce(s.retention_until > now(), false)) AS protected"));
+  assert.ok(scriptSource.includes("count(*) FILTER (WHERE s.legal_hold OR coalesce(s.retention_until > now(), false))::int AS held"));
+  assert.ok(scriptSource.includes("count(*) FILTER (WHERE s.status = 'expired' AND NOT (s.legal_hold OR coalesce(s.retention_until > now(), false)))::int AS expired"));
+  const helper = fs.readFileSync(path.join(root, "src/modules/documentIngestion/sourceDeletionTransitions.ts"), "utf8");
+  assert.match(helper, /const DIRECTLY_DELETABLE = \["pending_upload", "uploaded", "scan_failed", "ready", "blocked"\];/, "the statuses with a way to deleted changed: re-read the script's expired check");
+  for (const source of [scriptSource, moduleSource]) assert.doesNotMatch(source, /UPDATE\s+rfpilot\.document_sources|INSERT INTO rfpilot|DELETE FROM rfpilot/i);
 });
 
 // ---- the actor the product path is given -------------------------------------------------------
@@ -172,7 +168,7 @@ const ports = (overrides = {}) => {
   const base = {
     proposalState: async (id) => { calls.push(`state ${id}`); return state.has(id) ? state.get(id) : { ownerUserId: `id-${id.split(":")[0]}`, organizationId: "org1", archived: false }; },
     archive: async (t) => { calls.push(`archive ${t.proposalId}`); return { kind: "archived" }; },
-    permanentlyDelete: async (t) => { calls.push(`delete ${t.proposalId}`); return { kind: "deleted" }; },
+    permanentlyDelete: async (t) => { calls.push(`delete ${t.proposalId}`); return { kind: "deleted", artifactsPurged: true }; },
     liveSourceDocuments: async (t) => { calls.push(`check ${t.proposalId}`); return 0; },
     deleteProposalDependents: async (id) => { calls.push(`dependents ${id}`); return { vendorresponses: 2 }; },
     deleteStoredObject: async (key) => { calls.push(`object ${key}`); },
@@ -197,7 +193,7 @@ test("a proposal is archived, stripped of its dependents, deleted by the product
 
 test("the product is called as the proposal's owner in the proposal's organization", async () => {
   const seen = [];
-  const { ports: p } = ports({ permanentlyDelete: async (t) => { seen.push(t); return { kind: "deleted" }; } });
+  const { ports: p } = ports({ permanentlyDelete: async (t) => { seen.push(t); return { kind: "deleted", artifactsPurged: true }; } });
   await runContentPurge(plan(account("ana", ["ana:1"])), p);
   assert.deepEqual(seen, [{ proposalId: "ana:1", organizationId: "org1", ownerUserId: "id-ana" }]);
 });
@@ -236,8 +232,25 @@ test("a product refusal or error stops the run at that proposal, before anything
   await stopsAt({ permanentlyDelete: async () => { throw new Error("mongo is down"); } }, { step: "permanent delete", proposalId: "ana:1", reason: "mongo is down" });
 });
 
-test("an artifact purge the product swallowed stops the run", async () => {
-  await stopsAt({ liveSourceDocuments: async () => 3 }, { step: "artifact purge", proposalId: "ana:1" });
+test("a permanent delete whose artifact purge did not finish stops the run and reports the purge's result", async () => {
+  const purge = { errorCode: "AccessDenied", sources: { tombstoned: 1, pending: 2, notDeletable: 0 } };
+  const calls = await stopsAt({ permanentlyDelete: async () => ({ kind: "deleted", artifactsPurged: false, purge }) }, {
+    step: "artifact purge", proposalId: "ana:1",
+    reason: "the proposal was deleted but its artifact purge did not finish (errorCode AccessDenied); sources tombstoned 1, still deletion_pending 2, not deletable 0; the product's daily reconciler retries the pending ones",
+  });
+  assert.deepEqual(calls, ["state ana:1", "archive ana:1", "dependents ana:1"]);
+  // No verdict at all is not a pass.
+  await stopsAt({ permanentlyDelete: async () => ({ kind: "deleted" }) }, { step: "artifact purge", proposalId: "ana:1" });
+  // The product said complete, but a source is still live.
+  await stopsAt({ liveSourceDocuments: async () => 3 }, { step: "artifact purge", proposalId: "ana:1", reason: "the product reported the purge complete but 3 private source document(s) of the deleted proposal are still live" });
+});
+
+test("a failed artifact purge still counts the proposal the product deleted", async () => {
+  const harness = ports({ permanentlyDelete: async () => ({ kind: "deleted", artifactsPurged: false }) });
+  await assert.rejects(() => runContentPurge(plan(account("ana", ["ana:1"])), harness.ports), (error) => {
+    assert.deepEqual(error.deletedSoFar, { vendorresponses: 2, proposals: 1 });
+    return true;
+  });
 });
 
 test("a proposal that changed owner or organization since the plan is not handed to the product", async () => {
@@ -257,7 +270,7 @@ test("a stored file that cannot be deleted keeps its ticket and stops the run", 
 });
 
 test("a failure reports what was already deleted", async () => {
-  const harness = ports({ permanentlyDelete: async (t) => (t.proposalId === "ana:2" ? { kind: "not_found" } : { kind: "deleted" }) });
+  const harness = ports({ permanentlyDelete: async (t) => (t.proposalId === "ana:2" ? { kind: "not_found" } : { kind: "deleted", artifactsPurged: true }) });
   await assert.rejects(() => runContentPurge(plan(account("ana", ["ana:1", "ana:2"])), harness.ports), (error) => {
     assert.deepEqual(error.deletedSoFar, { vendorresponses: 4, proposals: 1 });
     assert.equal(error.detail.proposalId, "ana:2");
@@ -300,25 +313,35 @@ test("without --with-content the script takes none of the new code", () => {
   assert.ok(main.includes('print({ mode: "applied", ...summary, deleted: await p.run() });'));
   // The content module, the product, storage and Postgres are loaded inside the branch only.
   const top = scriptSource.slice(0, scriptSource.indexOf("const purgeWithContent"));
-  assert.doesNotMatch(top, /accountPurge|proposals\/composition|s3PrivateDocumentStorage|config\/postgres/);
+  assert.doesNotMatch(top, /accountPurge|proposals\/composition|s3PrivateDocumentStorage|config\/postgres|purgeProposalArtifacts|mongoProposalWriteRepository/);
 });
 
 test("a dry run returns before the product or storage are even loaded, and reads Postgres in a read-only transaction", () => {
   const branch = scriptSource.slice(scriptSource.indexOf("const purgeWithContent"), scriptSource.indexOf("const main = async () => {"));
   const dryRunReturn = branch.indexOf('if (!apply) return print({ mode: "dry-run"');
   assert.ok(dryRunReturn > 0);
-  for (const loaded of ["proposals/composition", "s3PrivateDocumentStorage", "migrationVerification", "withPostgresTransaction(async", "runContentPurge(", ".run()"]) {
+  for (const loaded of ["proposals/composition", "mongoProposalWriteRepository", "dataFoundation/purgeProposalArtifacts", "s3PrivateDocumentStorage", "migrationVerification", "withPostgresTransaction(async", "runContentPurge(", ".run()"]) {
     assert.ok(branch.indexOf(loaded, 0) > dryRunReturn || (loaded === "withPostgresTransaction(async" && branch.indexOf(loaded) > dryRunReturn), `${loaded} is reachable in a dry run`);
   }
   // The one Postgres read before that point cannot write.
   const beforeDryRun = branch.slice(0, dryRunReturn);
   assert.equal([...beforeDryRun.matchAll(/\.query(<[^(]*>)?\(/g)].length, 6);
+  // In particular it cannot set the product's purge marker: that is written by the permanent delete only.
+  assert.doesNotMatch(scriptSource + moduleSource, /purgeStarted/);
   assert.ok(beforeDryRun.indexOf('client.query("BEGIN READ ONLY")') > 0);
   assert.ok(beforeDryRun.indexOf('client.query("BEGIN READ ONLY")') < beforeDryRun.indexOf("set_config"));
   assert.doesNotMatch(beforeDryRun, /INSERT|UPDATE|DELETE|COMMIT|withPostgresTransaction\(/);
   // Refusal and nothing-found return even earlier.
   assert.ok(branch.indexOf('mode: "refused"') < dryRunReturn);
   assert.ok(branch.indexOf('mode: "nothing-found"') < dryRunReturn);
+});
+
+test("the permanent delete is the product's own function, repository and purge", () => {
+  const composition = fs.readFileSync(path.join(root, "src/modules/proposals/composition.ts"), "utf8");
+  assert.match(composition, /export const permanentlyDeleteOwnedProposal = createPermanentlyDeleteOwnedProposal\(\s*mongoProposalWriteRepository,/);
+  assert.match(composition, /return purgeProposalArtifacts\(targets\);/);
+  assert.match(scriptSource, /const permanentlyDeleteOwnedProposal = createPermanentlyDeleteOwnedProposal\(mongoProposalWriteRepository, async \(purgeTargets\) => \{\n\s+const results = purgeTargets\.length \? await purgeProposalArtifacts\(purgeTargets\) : \[\];/);
+  assert.match(scriptSource, /archive: \(target\) => asOwner\(target, \(\) => archiveOwnedProposal\(/);
 });
 
 test("accounts are removed only after the content, and only when they own no proposal", () => {
