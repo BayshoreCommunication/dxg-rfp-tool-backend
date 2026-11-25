@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   ACCOUNT_CONTENT, BEYOND_PRODUCT_PATH, COLLECTION_DECISIONS, ContentPurgeError, PROPOSAL_DEPENDENTS,
-  contentRefusals, contentTotals, describeAccounts, doomedProposalIds, ownerOnlyActor, ownershipViolations, runContentPurge, sourceRefusals,
+  contentRefusals, contentTotals, describeAccounts, doomedProposalIds, organizationKindOf, ownerOnlyActor, ownershipViolations, runContentPurge, sourceRefusals,
 } = require("../src/modules/accountPurge/purgeAccountContent");
 const { MOVABLE_COLLECTIONS } = require("../src/modules/tenancy/mongoTenantMove");
 const { canAccessRfp, rfpListScope } = require("../src/modules/identity/domain/rfpAccessPolicy");
@@ -354,4 +354,57 @@ test("accounts are removed only after the content, and only when they own no pro
   assert.equal([...branch.matchAll(/\.run\(\)/g)].length, 1, "one place removes accounts");
   assert.match(branch, /if \(stillOwned\.length \|\| accounts\.refused\.length\) \{\n\s+process\.exitCode = 1;/);
   assert.match(branch, /if \(!\(error instanceof content\.ContentPurgeError\)\) throw error;\n\s+process\.exitCode = 1;/);
+});
+
+// ---- an organization stored without `kind` ------------------------------------------------------
+
+test("an organization with no stored kind is a customer, as the schema default says", () => {
+  assert.equal(organizationKindOf({ name: "DXG" }), "customer");
+  assert.equal(organizationKindOf({ kind: undefined }), "customer");
+  assert.equal(organizationKindOf({ kind: null }), "customer");
+  assert.equal(organizationKindOf({ kind: "customer" }), "customer");
+  assert.equal(organizationKindOf({ kind: "legacy_holding" }), "legacy_holding");
+  assert.equal(organizationKindOf({ kind: "something_else" }), "something_else");
+  assert.equal(organizationKindOf({ kind: "" }), "", "an explicit value is never read as the default");
+  // The script and the content module share the one helper.
+  assert.equal(organizationKindOf, require("../src/modules/tenancy/organizationKind").organizationKindOf);
+});
+
+test("an organization document without kind does not refuse the run; an explicit other kind still does", () => {
+  const input = (organizations) => ({ proposals: [proposal("p1", "ana")], targetedUserIds: new Set(["ana"]), organizations, postgresEnabled: true });
+  assert.deepEqual(contentRefusals(input([{ id: "org1", name: "DXG" }])), []);
+  assert.deepEqual(contentRefusals(input([{ id: "org1", name: "DXG", kind: null }])), []);
+  assert.match(contentRefusals(input([{ id: "h1", name: "Ana (legacy)", kind: "legacy_holding" }]))[0], /^Ana \(legacy\) \(h1\): kind legacy_holding holds a customer waiting to be placed/);
+  assert.match(contentRefusals(input([{ id: "x1", name: "Odd", kind: "something_else" }]))[0], /^Odd \(x1\): kind something_else /);
+  const described = describeAccounts({ accounts: [{ userId: "ana", email: "ana@example.test", organizations: [{ id: "org1", name: "DXG", roles: ["planner"], status: "active" }], proposals: [], documents: {}, storedObjectKeys: [] }], refused: [], organizationIds: ["org1"] });
+  assert.equal(described[0].organizations[0].organization, "DXG (customer)");
+});
+
+test("no read of an organization's kind in the purge bypasses the helper, and none filters on it", () => {
+  for (const [file, source] of [["scripts/purgeTestAccounts.ts", scriptSource], ["src/modules/accountPurge/purgeAccountContent.ts", moduleSource]]) {
+    assert.doesNotMatch(source, /\b(org|o|organization)\??\.kind\b/, `${file} reads an organization's kind directly`);
+    assert.doesNotMatch(source, /kind:\s*["'`{]/, `${file} filters on a stored kind`);
+  }
+  assert.match(scriptSource, /const kind = organizationKindOf\(org\);\n\s+if \(kind !== "customer"\) \{ refused\.push\(`\$\{label\}: kind \$\{kind\} is never removed`\); continue; \}/);
+});
+
+test("an unknown command-line argument is refused with the usage, before anything is read", () => {
+  const { spawnSync } = require("node:child_process");
+  const run = (...argv) => spawnSync(process.execPath, ["--require", "ts-node/register/transpile-only", path.join(root, "scripts/purgeTestAccounts.ts"), ...argv], {
+    // cwd holds no .env file; with no MONGODB_URL the script could only fail if it got as far as connecting.
+    cwd: __dirname, encoding: "utf8", timeout: 120_000,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", NODE_ENV: "test", RFPILOT_ENV_FILE: "" },
+  });
+  const mistyped = run("--emails=a@example.test", "--with-contnet", "--apply");
+  assert.equal(mistyped.status, 1, mistyped.stderr);
+  assert.match(mistyped.stderr, /^Unknown argument\(s\): --with-contnet\. Nothing was read or changed\.$/m);
+  assert.match(mistyped.stdout, /^Usage:/m);
+  assert.doesNotMatch(mistyped.stdout, /"mode"/);
+  assert.doesNotMatch(mistyped.stderr, /MONGODB_URL/, "refused before the database is even looked for");
+  for (const argv of [["--emails=a@example.test", "extra"], ["--with-content=yes", "-apply"], ["--help"]]) assert.equal(run(...argv).status, 1, argv.join(" "));
+  // Known flags get past the check: with no database configured the next stop is MONGODB_URL.
+  const known = run("--emails=a@example.test", "--with-content", "--apply", "--domain=example.test");
+  assert.equal(known.status, 1);
+  assert.match(known.stderr, /MONGODB_URL is required/);
+  assert.doesNotMatch(known.stderr, /Unknown argument/);
 });

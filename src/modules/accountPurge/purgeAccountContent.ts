@@ -19,6 +19,7 @@ import VendorSubmissionDraft from "../../../modal/vendorSubmissionDraftModel";
 import VendorSubmission from "../../../modal/vendorSubmissionModel";
 import VendorSubmissionVersion from "../../../modal/vendorSubmissionVersionModel";
 import type { RfpActor } from "../identity/domain/rfpAccessPolicy";
+import { organizationKindOf } from "../tenancy/organizationKind";
 
 // The content half of `scripts/purgeTestAccounts.ts --with-content`: what a test account owns
 // beyond the account itself. Proposals go through the product's own archive and permanent-delete
@@ -122,7 +123,11 @@ export const ACCOUNT_CONTENT: Array<{ name: string; model: AnyModel }> = [
 // Pure rules.
 // ---------------------------------------------------------------------------------------------
 
-export type OrganizationFact = { id: string; name: string; kind: string } | { id: string; missing: true };
+// Every read of an organization's `kind` in the purge goes through organizationKindOf, here and
+// in the script, so a document with no stored `kind` is a customer on both paths.
+export { organizationKindOf };
+
+export type OrganizationFact = { id: string; name: string; kind?: string | null } | { id: string; missing: true };
 export type ProposalFact = { id: string; organizationId: string | null; ownerUserId: string | null; archived: boolean; titled: boolean };
 
 // The only identity the product path is given: the proposal's owner as a plain Planner, with no
@@ -147,7 +152,7 @@ export const contentRefusals = (input: {
   const refused = ownershipViolations(input.proposals, input.targetedUserIds);
   for (const organization of input.organizations) {
     if ("missing" in organization) refused.push(`organization ${organization.id}: not found, so its content cannot be attributed`);
-    else if (organization.kind !== "customer") refused.push(`${organization.name} (${organization.id}): kind ${organization.kind} holds a customer waiting to be placed; its content is never purged`);
+    else if (organizationKindOf(organization) !== "customer") refused.push(`${organization.name} (${organization.id}): kind ${organizationKindOf(organization)} holds a customer waiting to be placed; its content is never purged`);
   }
   for (const proposal of input.proposals) {
     if (!proposal.organizationId) refused.push(`proposal ${proposal.id}: has no organization, so the product cannot delete it or purge its stored documents`);
@@ -174,7 +179,7 @@ export const sourceRefusals = (sources: LiveSources[]): string[] => sources.flat
 export type AccountContent = {
   userId: string;
   email: string;
-  organizations: Array<{ id: string; name: string; kind: string; roles: string[]; status: string }>;
+  organizations: Array<{ id: string; name: string; kind?: string | null; roles: string[]; status: string }>;
   proposals: ProposalFact[];
   // Per collection, the _ids that would go (as strings). Dependents of a proposal are listed
   // under the proposal's owner; a campaign this account sent for someone else's proposal is here.
@@ -206,7 +211,7 @@ export const contentTotals = (plan: ContentPlan): Record<string, number> => {
 // The per-account part of the report: ids and counts, never content.
 export const describeAccounts = (plan: ContentPlan) => plan.accounts.map((account) => ({
   email: account.email,
-  organizations: account.organizations.map((o) => ({ organization: `${o.name} (${o.kind})`, id: o.id, roles: o.roles, status: o.status })),
+  organizations: account.organizations.map((o) => ({ organization: `${o.name} (${organizationKindOf(o)})`, id: o.id, roles: o.roles, status: o.status })),
   proposals: { count: account.proposals.length, withTitle: account.proposals.filter((p) => p.titled).length, alreadyArchived: account.proposals.filter((p) => p.archived).length, ids: account.proposals.map((p) => p.id) },
   wouldDelete: {
     ...(account.proposals.length ? { proposals: account.proposals.length } : {}),
@@ -384,7 +389,7 @@ export const planAccountContent = async (input: { emails: string[]; postgresEnab
 
   const found = await Organization.collection
     .find({ _id: { $in: [...organizationIds].map(oid) } }, { projection: { _id: 1, name: 1, kind: 1 } }).toArray();
-  const byId = new Map(found.map((o) => [String(o._id), { id: String(o._id), name: String(o.name ?? ""), kind: String(o.kind ?? "customer") }]));
+  const byId = new Map(found.map((o) => [String(o._id), { id: String(o._id), name: String(o.name ?? ""), kind: organizationKindOf(o) }]));
   const organizations: OrganizationFact[] = [...organizationIds].sort().map((id) => byId.get(id) ?? { id, missing: true as const });
 
   // Read every proposal about to go once more by id alone, and judge its owner from that read.
@@ -399,7 +404,7 @@ export const planAccountContent = async (input: { emails: string[]; postgresEnab
       ...draft,
       organizations: memberships.map((m) => {
         const organization = byId.get(m.organizationId);
-        return { id: m.organizationId, name: organization?.name ?? "(not found)", kind: organization?.kind ?? "unknown", roles: m.roles, status: m.status };
+        return { id: m.organizationId, name: organization?.name ?? "(not found)", kind: organization ? organizationKindOf(organization) : "unknown", roles: m.roles, status: m.status };
       }),
     })),
     refused: contentRefusals({ proposals: reread, targetedUserIds: targeted, organizations, postgresEnabled: input.postgresEnabled }),

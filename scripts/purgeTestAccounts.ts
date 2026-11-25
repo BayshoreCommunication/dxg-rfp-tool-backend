@@ -21,6 +21,7 @@ import TeamMembership from "../modal/teamMembershipModel";
 import TwoFactorChallenge from "../modal/twoFactorChallengeModel";
 import User from "../modal/userModel";
 import UserTwoFactor from "../modal/userTwoFactorModel";
+import { organizationKindOf } from "../src/modules/tenancy/organizationKind";
 
 // Removes test sign-ups so the same people can sign up again from scratch. Dry run unless --apply.
 // Deletes the accounts and, when every member of an organization is being removed, that
@@ -43,6 +44,10 @@ const withContent = args.get("--with-content") === "true";
 const emails = (args.get("--emails") ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
 const domain = args.get("--domain")?.trim().toLowerCase();
 const mongoUri = process.env.MONGODB_URL || process.env.MONGO_URL;
+// Anything else on the command line is refused, so a mistyped --with-content cannot fall through
+// to the accounts-only path.
+const KNOWN_FLAGS = ["--apply", "--with-content", "--emails", "--domain"];
+const unknownArguments = [...args.keys()].filter((key) => !KNOWN_FLAGS.includes(key));
 
 const print = (value: unknown) => process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -61,7 +66,7 @@ const listDomain = async (onDomain: string) => {
   for (const user of users) {
     const memberships = await OrganizationMembership.find({ userId: user._id }).select("organizationId roles status").lean();
     const orgs = await Organization.find({ _id: { $in: memberships.map((m) => m.organizationId) } }).select("name kind").lean();
-    const nameOf = new Map(orgs.map((o) => [String(o._id), `${o.name} (${o.kind})`]));
+    const nameOf = new Map(orgs.map((o) => [String(o._id), `${o.name} (${organizationKindOf(o)})`]));
     rows.push({
       email: user.email,
       createdAt: user.createdAt,
@@ -90,7 +95,8 @@ const plan = async (goingProposalIds: Types.ObjectId[] = []): Promise<Plan & { u
     const org = await Organization.findById(id).select("name kind").lean();
     if (!org) continue;
     const label = `${org.name} (${id})`;
-    if (org.kind !== "customer") { refused.push(`${label}: kind ${org.kind} is never removed`); continue; }
+    const kind = organizationKindOf(org);
+    if (kind !== "customer") { refused.push(`${label}: kind ${kind} is never removed`); continue; }
     const members = await OrganizationMembership.find({ organizationId: id, status: { $ne: "removed" } }).select("userId roles").lean();
     const others = members.filter((m) => !targeted.has(String(m.userId)));
     if (others.length === 0) {
@@ -288,6 +294,12 @@ const purgeWithContent = async () => {
 };
 
 const main = async () => {
+  if (unknownArguments.length) {
+    process.stderr.write(`Unknown argument(s): ${unknownArguments.join(" ")}. Nothing was read or changed.\n`);
+    help();
+    process.exitCode = 1;
+    return;
+  }
   if (!mongoUri) throw new Error("MONGODB_URL is required");
   if (!domain && emails.length === 0) return help();
   await mongoose.connect(mongoUri, { dbName: DATABASE_NAME });
