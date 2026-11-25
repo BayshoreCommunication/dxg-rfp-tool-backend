@@ -16,7 +16,8 @@ import { staffMemberWrites } from "./adminOrganizationMembersRoute";
    service an `admins` account holding an admin role), and the staff write limit: 60 writes per
    15 minutes per staff account (`staffMemberWrites`, routes/adminOrganizationMembersRoute.ts). Every request is
    recorded in the staff organization's audit trail; nothing is written to the customer
-   organization's. The staff organization is never blocked, so this guard keeps working. */
+   organization's. The service refuses the caller's own organization, so a staff account cannot
+   block the organization it signs in to. */
 const router = Router();
 
 const write = [authenticate, authorize("admin", "super_admin", "superadmin"), staffMemberWrites];
