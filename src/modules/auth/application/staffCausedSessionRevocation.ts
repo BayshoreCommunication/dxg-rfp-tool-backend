@@ -2,13 +2,15 @@ import { createMembershipSessionHardening } from "./membershipSessionHardening";
 import type { SecurityAuditWriter } from "../domain/ports/sessionPorts";
 
 /* What the access path does for a session revocation caused by a membership change that RFPILOT
-   STAFF made (owner decision, 2026-11-18; docs/DECISIONS.md "Staff member management").
+   STAFF made. Staff no longer change members (owner decision, 2026-11-24; docs/DECISIONS.md), so
+   no new cause is stored; this stays for the memberships that already carry one from the week
+   staff member management existed, which must behave exactly as they did.
    Customers see no staff activity, so such a revocation is not written to the member's
    organization's audit trail. The security outcome is the customer flow's: the same sessions are
    revoked and the member is refused or kept exactly as before. Only where it is recorded differs:
    in the staff organization, under a `platform.` action.
 
-   The cause is data the staff flow stored (a StaffCause on the membership), never a guess. With
+   The cause is data the staff flow stored then (a StaffCause on the membership), never a guess. With
    no stored cause every call goes to the customer flow untouched. */
 
 export type StaffCause = { organizationId?: string | null; actorUserId?: string | null };

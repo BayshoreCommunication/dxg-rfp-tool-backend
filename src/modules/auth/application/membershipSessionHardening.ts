@@ -18,15 +18,13 @@ export type MembershipChange = {
   correlationId: string;
   // True when the member lost rights (a lower role, or a role removed).
   demoted?: boolean;
-  // Set only by RFPilot staff member management: the staff organization that records the change.
-  staffOrganizationId?: string;
 };
 
 type Dependencies = {
   revokeOtherSessions(input: {
     userId: string; organizationId: string; exceptSessionId?: string; reason: string; actorUserId?: string; correlationId: string;
   }): Promise<number>;
-  markRevocationPending(input: { organizationId: string; userId: string; actorUserId?: string; staffOrganizationId?: string }): Promise<void>;
+  markRevocationPending(input: { organizationId: string; userId: string }): Promise<void>;
   // Takes a short lease on the pending flag for one session; false when there's no flag or
   // another request holds a live lease.
   claimRevocationPending(input: { organizationId: string; userId: string; sessionId: string }): Promise<boolean>;

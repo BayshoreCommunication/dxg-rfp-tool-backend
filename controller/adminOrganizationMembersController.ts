@@ -6,8 +6,8 @@ import type { StaffMemberManagement } from "../src/modules/staffAccess/applicati
 import { staffMemberManagement as defaultManagement } from "../src/modules/staffAccess/composition";
 import { StaffAccessError, StaffMemberError } from "../src/modules/staffAccess/domain";
 
-// Staff member management (owner decision, 2026-11-18; docs/DECISIONS.md). Members only: there
-// is no handler here that touches a proposal's content, a template or the vendor list.
+// The staff read of one member. Staff do not change a customer organization's members (owner
+// decision, 2026-11-24; docs/DECISIONS.md): there is no handler here that writes.
 
 // Role and account type come from the stored account (set by authenticate), never the token.
 const staffFrom = (req: AuthRequest): PlanStaff => {
@@ -22,9 +22,6 @@ const staffFrom = (req: AuthRequest): PlanStaff => {
   };
 };
 
-const body = (req: AuthRequest): Record<string, unknown> =>
-  typeof req.body === "object" && req.body !== null && !Array.isArray(req.body) ? (req.body as Record<string, unknown>) : {};
-
 const fail = (res: Response, error: unknown): void => {
   if (error instanceof StaffMemberError) {
     res.status(error.status).json({ success: false, code: error.code, message: error.message, ...(error.details ?? {}) });
@@ -34,8 +31,8 @@ const fail = (res: Response, error: unknown): void => {
     res.status(error.status).json({ success: false, code: error.code, message: error.message });
     return;
   }
-  console.error("Staff member management error:", error instanceof Error ? error.message : error);
-  res.status(500).json({ success: false, code: "STAFF_MEMBERS_INTERNAL_ERROR", message: "The member change could not be completed." });
+  console.error("Staff member read error:", error instanceof Error ? error.message : error);
+  res.status(500).json({ success: false, code: "STAFF_MEMBERS_INTERNAL_ERROR", message: "The member could not be loaded." });
 };
 
 export const createAdminOrganizationMembersController = (management: StaffMemberManagement = defaultManagement) => {
@@ -51,26 +48,6 @@ export const createAdminOrganizationMembersController = (management: StaffMember
   const member = (req: AuthRequest) => String(req.params.userId ?? "");
   return {
     member: handle((req) => management.member(staffFrom(req), organization(req), member(req))),
-    changeRole: handle((req) => {
-      const input = body(req);
-      return management.changeRole(staffFrom(req), organization(req), member(req), { role: input.role, version: input.version, reason: input.reason });
-    }),
-    deactivate: handle((req) => {
-      const input = body(req);
-      return management.deactivate(staffFrom(req), organization(req), member(req), { version: input.version, reason: input.reason });
-    }),
-    reactivate: handle((req) => {
-      const input = body(req);
-      return management.reactivate(staffFrom(req), organization(req), member(req), { version: input.version, reason: input.reason });
-    }),
-    reassignRfps: handle((req) => {
-      const input = body(req);
-      return management.reassignRfps(staffFrom(req), organization(req), member(req), { toUserId: input.toUserId, rfpIds: input.rfpIds, reason: input.reason });
-    }),
-    transferOwnership: handle((req) => {
-      const input = body(req);
-      return management.transferOwnership(staffFrom(req), organization(req), { toUserId: input.toUserId, version: input.version, reason: input.reason });
-    }),
   };
 };
 

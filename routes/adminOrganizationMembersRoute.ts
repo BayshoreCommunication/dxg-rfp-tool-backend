@@ -5,18 +5,21 @@ import { securityRateLimit } from "../middleware/securityRateLimit";
 import { adminOrganizationMembersController as controller } from "../controller/adminOrganizationMembersController";
 import { staffContentReads } from "./adminOrganizationContentRoute";
 
-/* Mounted at /api/v1. RFPilot staff manage a customer organization's members (owner decision,
-   2026-11-18; docs/DECISIONS.md): role, deactivate, reactivate, reassign the member's proposals,
-   transfer ownership. Members only. Nothing here edits or deletes a proposal's content, a
-   template or the vendor list. Staff team management is routes/adminOrganizationTeamsRoute.ts;
-   invitations, two-factor reset and blocking an account are not built.
+/* Mounted at /api/v1. RFPilot staff read ONE member of a customer organization. Staff do not
+   change a customer organization's members (owner decision, 2026-11-24; docs/DECISIONS.md): the
+   role, deactivate, reactivate, reassign-rfps and ownership transfer routes that were here from
+   2026-11-18 are removed, and tests/staff-organization-routes-guard.test.js fails if a write
+   route comes back. The members list is routes/adminOrganizationContentRoute.ts.
 
    Guard: the chain of the staff read routes (authenticate, a staff membership role, and in the
-   service an `admins` account holding an admin role), plus a write limit of its own that is
-   stricter than the read limit. Every request is recorded in the staff organization's audit
-   trail; nothing is written to the customer organization's. */
+   service an `admins` account holding an admin role) and their read limit. The read is recorded
+   in the staff organization's audit trail; nothing is written to the customer organization's. */
 const router = Router();
 
+/* The write limit of the staff organization routes. The one staff write left under
+   /admin/organizations/:organizationId is blocking and reactivating the organization
+   (routes/adminOrganizationBlockRoute.ts), which takes this limiter from here: 60 writes per
+   15 minutes per staff account, stricter than the read limit. */
 export const staffMemberWrites = securityRateLimit({
   name: "organization-member-write",
   limit: 60,
@@ -25,18 +28,8 @@ export const staffMemberWrites = securityRateLimit({
 });
 
 const staff = [authenticate, authorize("admin", "super_admin", "superadmin")];
-const write = [...staff, staffMemberWrites];
 
-// One member with its `version`, which every write below needs and the members list doesn't carry.
+// One member, with the membership's `version` (the members list does not carry it).
 router.get("/admin/organizations/:organizationId/members/:userId", ...staff, staffContentReads, controller.member);
-// Body: { role, version, reason }. Never to or from `owner`.
-router.patch("/admin/organizations/:organizationId/members/:userId/role", ...write, controller.changeRole);
-// Body: { version, reason }.
-router.post("/admin/organizations/:organizationId/members/:userId/deactivate", ...write, controller.deactivate);
-router.post("/admin/organizations/:organizationId/members/:userId/reactivate", ...write, controller.reactivate);
-// Body: { toUserId, rfpIds?, reason } (omit rfpIds, or "all", to move every proposal the member owns).
-router.post("/admin/organizations/:organizationId/members/:userId/reassign-rfps", ...write, controller.reassignRfps);
-// Body: { toUserId, version, reason } where version is the new Owner's current membership version.
-router.post("/admin/organizations/:organizationId/ownership/transfer", ...write, controller.transferOwnership);
 
 export default router;

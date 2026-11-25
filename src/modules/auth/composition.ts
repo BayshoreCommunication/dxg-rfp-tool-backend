@@ -120,14 +120,18 @@ export const authenticateGoogleIdentity = createAuthenticateGoogleIdentity({
   domainOrganizationFor: organizationForEmailDomain,
 });
 
-/* Markers of a membership change made by RFPILOT STAFF (owner decision, 2026-11-18;
-   docs/DECISIONS.md "Staff member management"). Customers see no staff activity, so a session
-   revocation a staff change causes is not written to the member's organization's audit trail.
-   The cause is data the staff flow stores, never a guess:
-   - `suspendedByStaff` on the membership: written in the transaction of a staff deactivation.
-   - `sessionRevocationStaff` on the membership: written with the pending-revocation flag.
-   - revoke reason STAFF_MEMBERSHIP_REVOKE_REASON on every refresh session ended for either.
-   Each names the staff organization and account, which is where the revocation is recorded. */
+/* Markers of a membership change made by RFPILOT STAFF. Staff changed members from 2026-11-18
+   until the owner removed that on 2026-11-24 (docs/DECISIONS.md): NOTHING SETS A MARKER ANY MORE.
+   Rows written in that week may still carry one, and they must behave as they did, so everything
+   that READS a marker stays. Customers see no staff activity, so a session revocation a staff
+   change caused is not written to the member's organization's audit trail:
+   - `suspendedByStaff` on the membership: was written by a staff deactivation. Read here; cleared
+     when the organization's own Owner or Admin reactivates (or deactivates) the member.
+   - `sessionRevocationStaff` on the membership: was written with the pending-revocation flag.
+     Read here; cleared when the flag completes or a member of the organization sets it again.
+   - revoke reason STAFF_MEMBERSHIP_REVOKE_REASON on a refresh session: still given to the
+     sessions that end BECAUSE OF one of the two markers above, and to no other.
+   Each marker names the staff organization and account, which is where the revocation is recorded. */
 const suspendedByStaff = async (member: { organizationId: string; userId: string }): Promise<StaffCause | null> => {
   const row = await OrganizationMembership.findOne({ organizationId: member.organizationId, userId: member.userId, status: "suspended" })
     .select("suspendedByStaff").lean<{ suspendedByStaff?: StaffCause | null } | null>();
@@ -267,8 +271,9 @@ export const membershipSessions = createMembershipSessionHardening({
   ...membershipRevocationFlags,
 });
 
-// Ends sessions for a staff-made change: straight through the repository (the session manager
-// would record it in the member's organization), always for the staff reason.
+// Ends the sessions of a member whose membership still carries a staff marker: straight through
+// the repository (the session manager would record it in the member's organization), always for
+// the staff reason. Reached only from the access path below, never from a route.
 const revokeForStaffChange = (input: { userId: string; organizationId: string; exceptSessionId?: string }) =>
   mongoRefreshSessionRepository.revokeAll({
     userId: input.userId, organizationId: input.organizationId, reason: STAFF_MEMBERSHIP_REVOKE_REASON, now: new Date(), exceptSessionId: input.exceptSessionId,
@@ -291,33 +296,3 @@ export const { revokeOtherSessionsAfterMembershipChange, revokeInactiveMembershi
   audit: mongoSecurityAuditWriter,
   isValidId: (value) => /^[a-f0-9]{24}$/i.test(value),
 });
-
-/* The same ORG-307 rules for a membership change made by RFPILOT STAFF (owner decision,
-   2026-11-18; docs/DECISIONS.md). The member's sessions end exactly as they do when a member of
-   the organization makes the change. The differences: nothing is written to the member's
-   organization's trail (customers see no staff activity; the staff-side event of the change
-   itself is the record), every session it ends carries STAFF_MEMBERSHIP_REVOKE_REASON, and the
-   pending flag it sets carries `sessionRevocationStaff`. A flag a member of the organization
-   already set is left as theirs. Use only from the staff member routes. */
-export const staffMembershipSessions = createMembershipSessionHardening({
-  revokeOtherSessions: (input) => mongoRefreshSessionRepository.revokeAll({
-    userId: input.userId, organizationId: input.organizationId, reason: STAFF_MEMBERSHIP_REVOKE_REASON, now: new Date(), exceptSessionId: input.exceptSessionId,
-  }),
-  markRevocationPending: async ({ organizationId, userId, actorUserId, staffOrganizationId }) => {
-    const filter = membershipFilter(organizationId, userId);
-    await OrganizationMembership.updateOne(
-      { ...filter, $or: [{ sessionRevocationPending: { $ne: true } }, { sessionRevocationStaff: { $ne: null } }] },
-      { $set: { sessionRevocationStaff: { organizationId: staffOrganizationId ?? null, actorUserId: actorUserId ?? null } } },
-    );
-    await OrganizationMembership.updateOne(filter, { $set: { sessionRevocationPending: true, sessionRevocationClaim: null } });
-  },
-  ...revocationClaims(true),
-});
-
-/* The access path, for a request whose organization RFPilot staff blocked (owner decision,
-   2026-11-18; organizationBlock/domain.ts). The block already ended the organization's sessions
-   in its own transaction; this closes one that began while the block committed. Straight through
-   the repository, for the block's reason: the session manager would record it in the member's
-   organization, and customers see no staff activity. The staff-side record is the block's event. */
-export const endSessionsOfBlockedOrganization = (input: { userId: string; organizationId: string }) =>
-  mongoRefreshSessionRepository.revokeAll({ userId: input.userId, organizationId: input.organizationId, reason: ORGANIZATION_BLOCK_REVOKE_REASON, now: new Date() });

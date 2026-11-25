@@ -4,7 +4,8 @@ import type { GrantedRfpListItem, GrantedVendorResponse } from "../supportAccess
    RFPilot staff (an `admins` account holding an admin role) may VIEW everything in every
    organization with no action from that organization: proposals, vendor responses, members,
    teams, templates and the vendor list. Nothing here writes: staff do not edit or delete
-   customer content, and account management is a later ticket.
+   customer content, and do not change an organization's members or teams (owner decision,
+   2026-11-24). The one staff write is blocking and reactivating a whole organization (below).
 
    Every read is recorded on the RFPilot side only: one `platform.organization_content.read`
    event in the STAFF organization's audit trail (`platform.organization_content.denied` for a
@@ -116,14 +117,19 @@ export interface StaffOrganizationReader {
 export type StaffProposalListItem = GrantedRfpListItem;
 export type StaffVendorResponse = GrantedVendorResponse;
 
-/* Staff member management (owner decision, 2026-11-18; docs/DECISIONS.md). RFPilot staff change
-   a member's role, deactivate and reactivate a member, reassign a member's proposals and
-   transfer ownership, in any customer organization, under the same rules its own Owner and
-   Admins work under. Every request that reaches the service as staff leaves exactly one event in
-   the STAFF organization's audit trail (allowed or denied, under the same action name); nothing
-   is written to the customer organization's. `platform.*` is never shown in a customer audit log. */
+/* The staff-side audit actions about a customer organization's members. Every request that
+   reaches the member read as staff leaves exactly one event in the STAFF organization's audit
+   trail (allowed or denied); nothing is written to the customer organization's. `platform.*` is
+   never shown in a customer audit log.
+
+   ONLY `read` IS WRITTEN. Staff changed members from 2026-11-18 until the owner removed that on
+   2026-11-24 (docs/DECISIONS.md), and the staff audit trail keeps the rows of that week. The
+   other names stay here as the catalog of those historical rows, so a staff audit view can still
+   name them; no code writes them, and tests/staff-organization-routes-guard.test.js fails if
+   one is used outside this file. */
 export const STAFF_MEMBER_AUDIT = {
   read: "platform.organization_member.read",
+  // Historical rows only (2026-11-18 to 2026-11-24).
   roleChanged: "platform.organization_member.role_changed",
   deactivated: "platform.organization_member.deactivated",
   reactivated: "platform.organization_member.reactivated",
@@ -131,7 +137,7 @@ export const STAFF_MEMBER_AUDIT = {
   ownershipTransferred: "platform.organization_member.ownership_transferred",
 } as const;
 
-/** A refusal of a staff member request. `details` are sent with the answer, beside code and message. */
+/** A refusal of a staff member, team or block request. `details` are sent with the answer, beside code and message. */
 export class StaffMemberError extends StaffAccessError {
   constructor(code: string, message: string, status: number, readonly details?: Record<string, unknown>) {
     super(code, message, status);
@@ -139,7 +145,7 @@ export class StaffMemberError extends StaffAccessError {
   }
 }
 
-/** What decides whether staff may manage an organization's members. */
+/** What decides whether staff may read one member or team of an organization, or block it. */
 export type StaffManagedOrganization = { id: string; kind: string; staffAccountCount: number };
 
 /* One member of the organization the path names, and that organization's standing. Both
@@ -149,24 +155,24 @@ export interface StaffMemberDirectory {
   member(organizationId: string, userId: string): Promise<{ member: StaffMemberView; version: number } | null>;
 }
 
-/** Why staff can't manage this organization's members or teams (`platform`: RFPilot's own
-    organization, the caller's or any that `admins` accounts belong to; otherwise its kind, such
-    as `legacy_holding`), or null when they can. One rule for the member and the team routes. */
+/** Why the staff member read, team read and block refuse this organization (`platform`:
+    RFPilot's own organization, the caller's or any that `admins` accounts belong to; otherwise
+    its kind, such as `legacy_holding`), or null when they don't. One rule for all three. */
 export const unmanageableStanding = (organization: StaffManagedOrganization, staffOrganizationId: string): string | null => {
   if (organization.id === staffOrganizationId || organization.staffAccountCount > 0) return "platform";
   if (organization.kind !== "customer") return organization.kind;
   return null;
 };
 
-/* Staff team management (owner decision, 2026-11-18; docs/DECISIONS.md). RFPilot staff create,
-   rename and archive a customer organization's teams, add and remove team members, set and unset
-   a team manager, and set which teams a member is on, under the rules its own Owner and Admins
-   work under. As for members: every request that reaches the service as staff leaves exactly one
-   event in the STAFF organization's audit trail (allowed or denied, under the same action name);
-   nothing is written to the customer organization's. `platform.*` is never shown in a customer
-   audit log. `memberTeamsChanged` is a change of a member, so it is named with the member actions. */
+/* The staff-side audit actions about a customer organization's teams. As for members: ONLY
+   `read` IS WRITTEN (one event per request that reaches the team read as staff, in the STAFF
+   organization). The other names are the catalog of the historical rows staff team management
+   wrote between 2026-11-18 and 2026-11-24, when the owner removed it (docs/DECISIONS.md); no
+   code writes them. `memberTeamsChanged` was a change of a member, so it is named with the
+   member actions. */
 export const STAFF_TEAM_AUDIT = {
   read: "platform.organization_team.read",
+  // Historical rows only (2026-11-18 to 2026-11-24).
   created: "platform.organization_team.created",
   renamed: "platform.organization_team.renamed",
   archived: "platform.organization_team.archived",
@@ -189,8 +195,8 @@ export interface StaffTeamDirectory {
 }
 
 /* Staff organization block (owner decision, 2026-11-18; docs/DECISIONS.md). RFPilot staff block a
-   whole customer organization and reactivate it. As for members and teams: the organization
-   comes only from the path, a reason is required, RFPilot's own organization and a legacy
+   whole customer organization and reactivate it: the one staff write on a customer organization.
+   As for the member and team reads: the organization comes only from the path, a reason is required, RFPilot's own organization and a legacy
    holding tenant are refused, and every request that reaches the service as staff leaves exactly
    one event in the STAFF organization's audit trail; nothing is written to the customer
    organization's. What "blocked" means is src/modules/organizationBlock/domain.ts, and nowhere else. */
