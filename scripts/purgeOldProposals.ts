@@ -1,4 +1,10 @@
 /**
+ * DO NOT RUN until the follow-up to PR #156 lands. This script marks every
+ * matched proposal as being permanently deleted (purgeStarted) before it
+ * purges, and it matches proposals that are NOT archived. When a purge does
+ * not complete the proposal is kept, still live and still marked: its owner
+ * can no longer edit it and nothing clears the mark.
+ *
  * Permanently remove proposals and their cross-store artifacts.
  *
  * Dry run by default: it prints exactly what it would delete and changes
@@ -34,6 +40,12 @@ type Options = {
 };
 
 const usage = `
+WARNING: DO NOT RUN THIS SCRIPT until the follow-up to PR #156 lands.
+  It marks every matched proposal as being permanently deleted before it
+  purges, including proposals that are not archived. If a purge does not
+  complete, the proposal is kept live but marked: its owner can no longer
+  edit it, and nothing clears the mark.
+
 Usage: npx ts-node scripts/purgeOldProposals.ts [options]
 
   --dry-run                 Default. Report only; change nothing.
@@ -156,16 +168,35 @@ const statusFilter = (status: Status): Record<string, unknown> => {
 
   // Artifacts first: a failure here leaves the Mongo record in place, so the
   // proposal remains identifiable and the run can simply be repeated.
+  // Marked before anything is removed, and never unmarked: once source documents are marked
+  // for deletion the proposal cannot be restored or edited, and the daily job finishes a
+  // purge that this run leaves incomplete.
+  await Proposal.updateMany(
+    { _id: { $in: matched.map((proposal) => proposal._id) }, purgeStarted: { $ne: true } },
+    { $set: { purgeStarted: true, purgeStartedAt: new Date() } },
+    { timestamps: false },
+  );
   console.log("\nPurging cross-store artifacts…");
-  await purgeProposalArtifacts(
+  const purged = await purgeProposalArtifacts(
     matched
       .map((proposal) => ({ proposalMongoId: String(proposal._id), organizationMongoId: String(proposal.organizationId ?? "") }))
       .filter((row) => row.organizationMongoId),
   );
+  // A proposal whose source documents were not all removed is kept, so the
+  // same command can be run again for it once the cause is fixed.
+  const unfinished = purged.filter((row) => !row.complete);
+  const unfinishedIds = new Set(unfinished.map((row) => row.proposalMongoId));
+  for (const row of unfinished) {
+    console.error(`  ✗ ${row.proposalMongoId}  kept: ${row.sources.pending} source(s) deletion_pending, ${row.sources.notDeletable} not deletable (${row.errorCode ?? "UNKNOWN"})`);
+  }
 
   console.log("Deleting proposals…");
-  const result = await Proposal.deleteMany({ _id: { $in: matched.map((proposal) => proposal._id) } });
+  const result = await Proposal.deleteMany({ _id: { $in: matched.filter((proposal) => !unfinishedIds.has(String(proposal._id))).map((proposal) => proposal._id) } });
   console.log(`\nDeleted ${result.deletedCount} proposal(s).`);
+  if (unfinished.length) {
+    console.error(`Kept ${unfinished.length} proposal(s) whose source documents were not fully removed. Re-run to retry them.`);
+    process.exitCode = 1;
+  }
   console.log("Immutable AI evidence and audit rows are retained until their own retention windows expire.\n");
 
   await mongoose.disconnect();

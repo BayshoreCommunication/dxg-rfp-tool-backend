@@ -1,6 +1,6 @@
 # RFPilot AI — Project State & Handoff
 
-**Last updated:** 2026-11-23 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
+**Last updated:** 2026-11-24 · **Branch:** `main` (`ai-agent` is merged) · **Status:** audit roadmap M1–M6 complete; governed proposal creation, Platform Assistant, structured vendor responses (v9) and the in-app helpdesk shipped; Organization Accounts milestones M1–M3 (tenancy, people, sign-in/SSO/2FA) merged; M4 and M5 are merged to `main` (2026-11-11); in the launch gate the rehearsal (local only), cutover runbook and launch metrics are merged, the docs ticket (ORG-504) is merged and the pen test (ORG-503) is open. The backend was released to production on 2026-11-11 (PR #131) and again on 2026-11-12 (PR #134, `744e81d`: helpdesk across organizations); four dashboard fixes shipped on 2026-11-12, including the wording change that makes "Proposal" the user-facing noun. Signed-in checks on production passed on 11, 12 and 16 Nov. The tenancy cutover has not been run, company single sign-on is untested on production, and ORG-503 is open. See "Organization accounts", "After the release" and "Before launch" below.
 
 This is the single document to read before picking the project up. It records
 what exists, why it is built the way it is, what is deliberately not done, and
@@ -239,6 +239,52 @@ single or selected operation and refreshes counts and lists after success. The
 proposal-summary read exposes the exact owned response IDs for each paginated
 group, allowing the main inbox to select proposal groups without restoring a
 global delete-all operation.
+
+### Permanent delete tombstones source documents (2026-11-24)
+
+Permanently deleting a proposal (and the 30-day sweep of archived proposals)
+now really tombstones its source documents: each source is marked
+`deletion_pending`, its object is deleted from private storage, and the row is
+then marked `deleted`. Until this fix the purge deleted the object and then
+wrote `deleted` directly, which the transition trigger rejects, so the row
+stayed `ready`, the conversation stayed active and no audit event was written.
+Details and failure states: `docs/architecture/PRIVATE_DOCUMENT_INGESTION.md`.
+
+- A proposal is marked (`purgeStarted`) before its first document is
+  touched. A marked proposal cannot be restored (409
+  `PROPOSAL_BEING_DELETED`) or edited; it stays visible in the archive until
+  it is deleted. The dashboard does not yet hide Restore for it: the planner
+  sees the refusal message.
+- The 30-day sweep keeps a proposal whose documents could not all be removed
+  and retries it the next day, so an archived proposal can outlive 30 days.
+- The daily archive job also finishes purges whose proposal MongoDB no longer
+  has (a planner's delete whose storage step failed).
+
+Open after this change:
+
+- Proposals permanently deleted before the fix have source rows still marked
+  `ready` whose objects are already gone. A one-off repair has not been done.
+- The same direct write of `deleted` is still in two other places, found by
+  reading the code and not yet fixed: the planner's vendor-response deletion
+  (`purgeVendorResponseArtifacts`, so the "registered document sources are
+  tombstoned" statement above does not hold for a source that is not already
+  `deletion_pending`) and the retention sweep (`retentionSweeper`, which only
+  acts with `RETENTION_SWEEP_APPLY=true`).
+- A single-document delete whose storage step failed is not retried by
+  anything; an upload link issued earlier can put an object back after the
+  tombstone; object versions are not removed on a versioned bucket.
+- **Do not run `scripts/purgeOldProposals.ts` until the follow-up lands.** It
+  marks every matched proposal, including ones that are not archived; when a
+  purge does not complete the proposal is kept live but marked, so its owner
+  can no longer edit it and nothing clears the mark.
+- Follow-up PR, from the second review: that script marker; the daily pass can
+  be starved by a batch of proposals that keep failing; lock strength on the
+  proposal reference; further spellings the status-write guard does not read.
+- A permanent delete still leaves the proposal's other MongoDB documents
+  (vendor responses, public access grants, email campaigns, status
+  transitions).
+- MongoDB production has no backup: Atlas free tier, operator-run `mongodump`
+  only (`docs/operations/database-migrations.md`).
 
 ### The DXG pricing engine (client workbook)
 
@@ -508,6 +554,17 @@ production or staging copy was available. Results, timings, findings and the ste
 - Open for ORG-502 and the owner: the migration alters every tenant table once per customer
   (dry run included), so it cannot share the database with a serving API, and a suspended
   customer becomes an active Planner in their holding tenant.
+
+### Proposal edit and create no longer accept server-owned fields (2026-11-24, in review)
+
+`PUT /api/proposals/:id` and `POST /api/proposals` wrote any field a client sent, including
+`organizationId`, `isArchived`/`archivedAt` and (through dotted keys) `lifecycle.*`. Client
+payloads now pass an allow-list (`proposalFieldOwnership.ts`; `DECISIONS.md`, 2026-11-24), a
+payload naming another organization is refused with 400 and audited, and the write repository
+refuses such updates whatever its caller passes. Not deployed until this merges and is released.
+Open: whether production was affected has not been checked (read-only queries are in the pull
+request); `PATCH /api/proposals/:id/meta` still accepts `viewsCount`; the settings update route
+has the same body-to-`$set` shape and is not fixed here.
 
 ### Tenancy migration: production-copy rehearsal failed, fix in review (2026-11-23)
 

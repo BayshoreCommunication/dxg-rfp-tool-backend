@@ -129,23 +129,36 @@ export const createArchiveOwnedProposal = (proposals: ProposalWriteRepository, l
 
 export const createRestoreOwnedProposal = (proposals: ProposalWriteRepository, lifecycle?: ProposalLifecycleRecorder) =>
   async (input: { proposalId: string; ownerUserId: string }) => {
-    if (!(await proposals.restoreOwnedById(input))) return { kind: "not_found" as const };
+    const restored = await proposals.restoreOwnedById(input);
+    // Its permanent delete has started: source documents are already marked for
+    // deletion or gone, which cannot be undone, so it must not come back.
+    if (restored === "being_deleted") return { kind: "being_deleted" as const };
+    if (!restored) return { kind: "not_found" as const };
     await lifecycle?.recordChange({ proposalId: input.proposalId, actorUserId: input.ownerUserId, reason: "restored" });
     return { kind: "restored" as const };
   };
 
-/** Removes an archived proposal's private storage objects and Postgres rows. */
+/**
+ * Removes an archived proposal's private storage objects and tombstones its
+ * Postgres source rows. It reports, per proposal, whether that finished; it
+ * does not throw for a storage or database failure.
+ */
 export type PurgeProposalArtifacts = (
   proposals: Array<{ proposalMongoId: string; organizationMongoId: string }>,
-) => Promise<void>;
+) => Promise<Array<{ complete: boolean }> | void>;
 
 /**
  * Permanent deletion has to clear three stores, and only Mongo knows the
- * tenant. Artifacts are purged first: if that step fails the Mongo record
- * survives, so the proposal stays identifiable and the caller can retry. The
- * reverse order strands private S3 objects with nothing left pointing at them,
- * which is what this route did before — `purgeProposalArtifacts` was reachable
- * only from the 30-day archive sweep, so deleting through the product leaked.
+ * tenant, so artifacts are purged first, while the proposal can still be
+ * resolved. The reverse order strands private S3 objects with nothing left
+ * pointing at them, which is what this route did before —
+ * `purgeProposalArtifacts` was reachable only from the 30-day archive sweep,
+ * so deleting through the product leaked.
+ *
+ * The proposal is deleted even when the purge did not finish: the planner
+ * asked for it to go, and a storage failure is not theirs to retry. The purge
+ * logs that failure itself and leaves the affected sources `deletion_pending`;
+ * `artifactsPurged` tells a caller that wants to know.
  */
 export const createPermanentlyDeleteOwnedProposal = (
   proposals: ProposalWriteRepository,
@@ -154,11 +167,18 @@ export const createPermanentlyDeleteOwnedProposal = (
   const target = await proposals.findOwnedArchivedPurgeTargetById(input);
   if (!target) return { kind: "not_found" as const };
 
+  // Before anything irreversible: from this write on, restore and edit refuse
+  // the proposal. A restore that got in first leaves nothing archived to mark.
+  if (!(await proposals.markOwnedArchivedPurgeStartedById(input))) return { kind: "not_found" as const };
+
   // A proposal with no organization cannot resolve the tenant GUC the purge
   // needs, so it is skipped there rather than failing the delete — matching
   // the archive sweep's own filter.
-  await purgeArtifacts(target.organizationMongoId ? [target] : []);
+  const purged = await purgeArtifacts(target.organizationMongoId ? [target] : []);
+  const artifactsPurged = (purged ?? []).every((result) => result.complete);
 
   const deleted = await proposals.permanentlyDeleteOwnedArchivedById(input);
-  return { kind: deleted ? ("deleted" as const) : ("not_found" as const) };
+  return deleted
+    ? { kind: "deleted" as const, artifactsPurged }
+    : { kind: "not_found" as const };
 };
