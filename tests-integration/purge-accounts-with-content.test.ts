@@ -22,16 +22,16 @@ const db = () => mongoose.connection.db!;
 const { EJSON } = mongoose.mongo.BSON;
 
 const org = { shared: oid(), ownerLed: oid(), holding: oid() };
-const user = { ana: oid(), ben: oid(), carol: oid(), staff: oid(), admin: oid(), dora: oid(), eve: oid(), fay: oid(), gil: oid() };
-const proposal = { ana1: oid(), ana2: oid(), ben1: oid(), carol1: oid(), fay1: oid(), gil1: oid() };
+const user = { ana: oid(), ben: oid(), carol: oid(), staff: oid(), admin: oid(), dora: oid(), eve: oid(), fay: oid(), gil: oid(), hal: oid() };
+const proposal = { ana1: oid(), ana2: oid(), ben1: oid(), carol1: oid(), fay1: oid(), gil1: oid(), hal1: oid() };
 const email = {
   // Stored with capitals; the command line passes lower case.
   ana: `Ana.Purge-${tag}@Example.test`, ben: `ben.purge-${tag}@example.test`, carol: `carol.stays-${tag}@example.test`,
-  dora: `dora-${tag}@example.test`, eve: `eve-${tag}@example.test`, fay: `fay-${tag}@example.test`, gil: `gil-${tag}@example.test`,
+  dora: `dora-${tag}@example.test`, eve: `eve-${tag}@example.test`, fay: `fay-${tag}@example.test`, gil: `gil-${tag}@example.test`, hal: `hal-${tag}@example.test`,
   ghost: `nobody-${tag}@example.test`,
 };
 const key = {
-  anaDocument: `org/${tag}/sources/ana-brief.pdf`, carolDocument: `org/${tag}/sources/carol-brief.pdf`, gilDocument: `org/${tag}/sources/gil-brief.pdf`,
+  anaDocument: `org/${tag}/sources/ana-brief.pdf`, carolDocument: `org/${tag}/sources/carol-brief.pdf`, gilDocument: `org/${tag}/sources/gil-brief.pdf`, halDocument: `org/${tag}/sources/hal-brief.pdf`,
   anaAttached: `support/${tag}/ana-attached.png`, anaPending: `support/${tag}/ana-pending.png`, anaStaffReply: `support/${tag}/staff-reply.png`,
   carolAttached: `support/${tag}/carol-attached.png`,
 };
@@ -47,7 +47,8 @@ const insert = async (collection: string, doc: Record<string, unknown>, goes: bo
 
 // ---- storage stand-in ---------------------------------------------------------------------------
 const bucket = `purge-test-${tag}`;
-const storage = { requests: [] as string[], deny: false, server: null as http.Server | null, endpoint: '' };
+// DELETE answers 204, or 403 AccessDenied for a key in `denied`.
+const storage = { requests: [] as string[], denied: new Set<string>(), server: null as http.Server | null, endpoint: '' };
 const deletedKeys = () => storage.requests.filter((r) => r.startsWith('DELETE ')).map((r) => r.slice('DELETE '.length));
 
 // ---- the script ---------------------------------------------------------------------------------
@@ -116,14 +117,14 @@ const assertSameDocuments = (actual: Map<string, string>, expected: Map<string, 
 };
 
 let pgShared = '';
-const pg = { anaSource: crypto.randomUUID(), carolSource: crypto.randomUUID(), gilSource: crypto.randomUUID(), anaConversation: crypto.randomUUID(), carolConversation: crypto.randomUUID(), gilConversation: crypto.randomUUID() };
+const pg = { anaSource: crypto.randomUUID(), carolSource: crypto.randomUUID(), gilSource: crypto.randomUUID(), halSource: crypto.randomUUID(), anaConversation: crypto.randomUUID(), carolConversation: crypto.randomUUID(), gilConversation: crypto.randomUUID(), halConversation: crypto.randomUUID() };
 const postgresSnapshot = async () => {
   const pool = postgresPool();
   const rows = async (sql: string) => JSON.stringify((await pool.query(sql, [pgShared])).rows);
   return {
     users: await rows('SELECT id, external_mongo_id, status FROM rfpilot.users WHERE organization_id=$1 ORDER BY external_mongo_id'),
     references: await rows('SELECT id, external_mongo_id, owner_user_id FROM rfpilot.proposal_references WHERE organization_id=$1 ORDER BY external_mongo_id'),
-    sources: await rows('SELECT id, status, deleted_at IS NOT NULL AS deleted FROM rfpilot.document_sources WHERE organization_id=$1 ORDER BY id'),
+    sources: await rows('SELECT id, status, legal_hold, deleted_at IS NOT NULL AS deleted FROM rfpilot.document_sources WHERE organization_id=$1 ORDER BY id'),
     conversations: await rows('SELECT id, status FROM rfpilot.conversations WHERE organization_id=$1 ORDER BY id'),
     audit: await rows('SELECT action, target_id, actor_external_user_id FROM rfpilot.audit_events WHERE organization_id=$1 ORDER BY occurred_at, id'),
   };
@@ -144,7 +145,7 @@ before(async () => {
     const objectKey = decodeURIComponent(new URL(request.url ?? '/', 'http://storage').pathname).replace(`/${bucket}/`, '');
     storage.requests.push(`${request.method} ${objectKey}`);
     request.resume();
-    if (storage.deny) {
+    if (storage.denied.has(objectKey)) {
       response.writeHead(403, { 'content-type': 'application/xml' });
       response.end('<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>');
     } else {
@@ -191,10 +192,14 @@ before(async () => {
   await insert('proposals', rfp(proposal.ana2, user.ana, 'Ana two', { isArchived: true, archivedAt: now }), true);
   await insert('proposals', rfp(proposal.ben1, user.ben, 'Ben one', { status: 'submitted', isDraft: false }), true);
   await insert('proposals', rfp(proposal.carol1, user.carol, 'Carol one'), false);
-  // Gil is refused: his proposal has a source document the product's purge cannot tombstone.
+  // Gil is refused: his proposal has a source document under legal hold, which the product keeps.
   await insert('users', person(user.gil, 'Gil', email.gil), false);
   await insert('organizationmemberships', member(user.gil, ['planner']), false);
   await insert('proposals', rfp(proposal.gil1, user.gil, 'Gil one'), false);
+  // Hal goes, in two runs: storage refuses his proposal's source document the first time.
+  await insert('users', person(user.hal, 'Hal', email.hal), true);
+  await insert('organizationmemberships', member(user.hal, ['planner']), true);
+  await insert('proposals', rfp(proposal.hal1, user.hal, 'Hal one'), true);
 
   // Every kind of document that hangs off a proposal: once for a proposal that goes, once for Carol's.
   const dependents = async (proposalId: mongoose.Types.ObjectId, owner: mongoose.Types.ObjectId, label: string, goes: boolean) => {
@@ -262,20 +267,20 @@ before(async () => {
   await insert('organizationmemberships', member(user.fay, ['planner'], org.holding), false);
   await insert('proposals', rfp(proposal.fay1, user.fay, 'Fay one', {}, org.holding), false);
 
-  // ---- PostgreSQL: Ana's, Carol's and Gil's proposals have a reference, a private source
-  // document and a conversation. Ana's second proposal and Ben's have no reference at all.
-  // Ana's source is already marked for deletion: the only state the product's purge can tombstone
-  // (see TOMBSTONABLE_SOURCE_STATUSES). Gil's is an ordinary ingested document.
+  // ---- PostgreSQL: Ana's, Carol's, Gil's and Hal's proposals have a reference, an ordinary
+  // ingested source document (ready) with its stored object, and an active conversation. Gil's
+  // document is under legal hold. Ana's second proposal and Ben's have no reference at all.
   const pool = postgresPool();
   pgShared = (await pool.query<{ id: string }>('INSERT INTO rfpilot.organizations(external_mongo_id,name) VALUES($1,$2) RETURNING id', [String(org.shared), `Shared ${tag}`])).rows[0].id;
-  for (const [owner, proposalId, source, objectKey, conversation, status] of [
-    [user.ana, proposal.ana1, pg.anaSource, key.anaDocument, pg.anaConversation, 'deletion_pending'],
-    [user.carol, proposal.carol1, pg.carolSource, key.carolDocument, pg.carolConversation, 'ready'],
-    [user.gil, proposal.gil1, pg.gilSource, key.gilDocument, pg.gilConversation, 'ready'],
+  for (const [owner, proposalId, source, objectKey, conversation, legalHold] of [
+    [user.ana, proposal.ana1, pg.anaSource, key.anaDocument, pg.anaConversation, false],
+    [user.carol, proposal.carol1, pg.carolSource, key.carolDocument, pg.carolConversation, false],
+    [user.gil, proposal.gil1, pg.gilSource, key.gilDocument, pg.gilConversation, true],
+    [user.hal, proposal.hal1, pg.halSource, key.halDocument, pg.halConversation, false],
   ] as const) {
     const pgUser = (await pool.query<{ id: string }>('INSERT INTO rfpilot.users(organization_id,external_mongo_id) VALUES($1,$2) RETURNING id', [pgShared, String(owner)])).rows[0].id;
     const reference = (await pool.query<{ id: string }>('INSERT INTO rfpilot.proposal_references(organization_id,owner_user_id,external_mongo_id) VALUES($1,$2,$3) RETURNING id', [pgShared, pgUser, String(proposalId)])).rows[0].id;
-    await pool.query("INSERT INTO rfpilot.document_sources(id,organization_id,proposal_reference_id,uploader_external_user_id,status) VALUES($1,$2,$3,$4,$5)", [source, pgShared, reference, String(owner), status]);
+    await pool.query("INSERT INTO rfpilot.document_sources(id,organization_id,proposal_reference_id,uploader_external_user_id,status,legal_hold) VALUES($1,$2,$3,$4,'ready',$5::boolean)", [source, pgShared, reference, String(owner), legalHold]);
     await pool.query("INSERT INTO rfpilot.document_objects(id,organization_id,source_id,object_key,original_filename,safe_filename,declared_mime_type,expected_size_bytes) VALUES($1,$2,$3,$4,'brief.pdf','brief.pdf','application/pdf',10)", [crypto.randomUUID(), pgShared, source, objectKey]);
     await pool.query('INSERT INTO rfpilot.conversations(id,organization_id,proposal_reference_id,owner_external_user_id) VALUES($1,$2,$3,$4)', [conversation, pgShared, reference, String(owner)]);
   }
@@ -335,6 +340,7 @@ test('the dry run reports every account and writes nothing to MongoDB, PostgreSQ
   assertSameDocuments(await mongoSnapshot(), beforeEverything, 'the dry run wrote to MongoDB');
   assert.deepEqual(await postgresSnapshot(), postgresBefore, 'the dry run wrote to PostgreSQL');
   assert.deepEqual(storage.requests, [], 'the dry run called storage');
+  assert.equal(await db().collection('proposals').countDocuments({ purgeStarted: true, organizationId: org.shared }), 0, 'the dry run set the purge marker');
 });
 
 test('an Owner who would leave members behind, and a legacy holding organization, refuse the whole run', async () => {
@@ -349,12 +355,12 @@ test('an Owner who would leave members behind, and a legacy holding organization
   assert.equal(holding.report?.mode, 'refused');
   assert.match(holding.report!.refused.join('\n'), /kind legacy_holding/);
 
-  // A source document the product's purge cannot tombstone: refused in the dry run and in apply.
+  // A source document under legal hold, which the product does not delete: refused in the dry run and in apply.
   for (const flags of [[], ['--apply']]) {
     const source = await purge(`--emails=${email.gil},${email.ben}`, '--with-content', ...flags);
     assert.equal(source.status, 1, explain(source));
     assert.equal(source.report?.mode, 'refused');
-    assert.match(source.report!.refused.join('\n'), new RegExp(`proposal ${proposal.gil1}: 1 private source document\\(s\\) in status ready`));
+    assert.match(source.report!.refused.join('\n'), new RegExp(`proposal ${proposal.gil1}: 1 private source document\\(s\\) under legal hold or unexpired retention`));
   }
 
   // Refused means nothing at all was deleted, for the accounts that were fine too.
@@ -363,10 +369,48 @@ test('an Owner who would leave members behind, and a legacy holding organization
   assert.deepEqual(await postgresSnapshot(), postgresBeforeRefusals, 'a refused run wrote to PostgreSQL');
 });
 
-test('when a stored file cannot be deleted the run stops and no account is removed', async () => {
-  storage.deny = true;
+const sourceRow = async (id: string) => (await postgresPool().query('SELECT status, deleted_at FROM rfpilot.document_sources WHERE id=$1', [id])).rows[0];
+const purgeEvents = async (proposalId: mongoose.Types.ObjectId) => Number((await postgresPool().query(
+  "SELECT count(*) FROM rfpilot.audit_events a JOIN rfpilot.proposal_references p ON p.id::text = a.target_id WHERE a.action='proposal_artifacts_purged' AND p.external_mongo_id=$1", [String(proposalId)],
+)).rows[0].count);
+
+test("when storage refuses a proposal's source document the run stops, the account is kept, and a rerun completes", async () => {
+  storage.denied.add(key.halDocument);
+  const stopped = await purge(`--emails=${email.hal}`, '--with-content', '--apply');
+  storage.denied.clear();
+  assert.equal(stopped.status, 1, explain(stopped));
+  assert.equal(stopped.report?.mode, 'failed', explain(stopped));
+  assert.equal(stopped.report!.failed.step, 'artifact purge', explain(stopped));
+  assert.equal(stopped.report!.failed.proposalId, String(proposal.hal1));
+  assert.match(stopped.report!.failed.reason, /errorCode AccessDenied/, explain(stopped));
+  assert.match(stopped.report!.failed.reason, /sources tombstoned 0, still deletion_pending 1, not deletable 0/, explain(stopped));
+  assert.deepEqual(stopped.report!.accountsRemoved, []);
+  // The product deletes the proposal even when its purge did not finish; the account stays.
+  assert.equal(await db().collection('proposals').countDocuments({ _id: proposal.hal1 }), 0);
+  assert.equal(await db().collection('users').countDocuments({ _id: user.hal }), 1);
+  assert.equal(await db().collection('organizationmemberships').countDocuments({ userId: user.hal }), 1);
+  const pending = await sourceRow(pg.halSource);
+  assert.equal(pending.status, 'deletion_pending');
+  assert.equal(pending.deleted_at, null);
+  assert.equal(await purgeEvents(proposal.hal1), 0, 'no purge event for a purge that did not finish');
+  assert.deepEqual(deletedKeys(), [key.halDocument]);
+
+  const rerun = await purge(`--emails=${email.hal}`, '--with-content', '--apply');
+  assert.equal(rerun.status, 0, explain(rerun));
+  assert.equal(rerun.report?.mode, 'applied', explain(rerun));
+  assert.equal(rerun.report!.deleted.accounts.users, 1);
+  assert.equal(await db().collection('users').countDocuments({ _id: user.hal }), 0);
+  assert.deepEqual(rerun.report!.ownerCheck.newlyWithoutActiveOwner, []);
+  // The proposal is gone from MongoDB, so the stranded source is the product's daily reconciler's
+  // to finish (finishStrandedProposalPurges), not this tool's: it is still pending here.
+  assert.equal((await sourceRow(pg.halSource)).status, 'deletion_pending');
+  assert.deepEqual(deletedKeys(), [key.halDocument], 'the rerun made no storage call');
+});
+
+test('when a stored support file cannot be deleted the run stops and no account is removed', async () => {
+  storage.denied.add(key.anaAttached);
   const run = await purge(targets, '--with-content', '--apply');
-  storage.deny = false;
+  storage.denied.clear();
   assert.equal(run.status, 1, explain(run));
   assert.equal(run.report?.mode, 'failed', explain(run));
   assert.equal(run.report!.failed.email, email.ana, explain(run));
@@ -374,6 +418,13 @@ test('when a stored file cannot be deleted the run stops and no account is remov
   assert.deepEqual(run.report!.accountsRemoved, []);
   // Ana's proposals went through the product before the file failed; her account and her ticket did not go.
   assert.equal(await db().collection('proposals').countDocuments({ userId: user.ana }), 0);
+  // An ordinary ready source: tombstoned, its object deleted once, conversation archived, one audit event.
+  const tombstoned = await sourceRow(pg.anaSource);
+  assert.equal(tombstoned.status, 'deleted', explain(run));
+  assert.ok(tombstoned.deleted_at);
+  assert.equal(deletedKeys().filter((k) => k === key.anaDocument).length, 1);
+  assert.equal((await postgresPool().query('SELECT status FROM rfpilot.conversations WHERE id=$1', [pg.anaConversation])).rows[0].status, 'archived');
+  assert.equal(await purgeEvents(proposal.ana1), 1);
   assert.equal(await db().collection('users').countDocuments({ _id: { $in: [user.ana, user.ben] } }), 2);
   assert.equal(await db().collection('organizationmemberships').countDocuments({ userId: { $in: [user.ana, user.ben] } }), 2);
   assert.equal(await db().collection('supporttickets').countDocuments({ requesterUserId: user.ana }), 1);
@@ -435,7 +486,8 @@ test('no proposal in the organization is left without an active owner', async ()
 
 test('storage was asked to delete the purged files and no others', async () => {
   assert.deepEqual(storage.requests.filter((r) => !r.startsWith('DELETE ')), []);
-  assert.deepEqual([...new Set(deletedKeys())].sort(), [key.anaDocument, key.anaAttached, key.anaPending, key.anaStaffReply].sort());
+  assert.deepEqual([...new Set(deletedKeys())].sort(), [key.anaDocument, key.halDocument, key.anaAttached, key.anaPending, key.anaStaffReply].sort());
+  for (const once of [key.anaDocument, key.halDocument]) assert.equal(deletedKeys().filter((k) => k === once).length, 1, once);
 });
 
 test('PostgreSQL keeps its rows: the source is tombstoned, the conversation archived, the rest as it was', async () => {
@@ -445,15 +497,16 @@ test('PostgreSQL keeps its rows: the source is tombstoned, the conversation arch
   assert.ok((await source(pg.anaSource)).deleted_at);
   assert.equal((await source(pg.carolSource)).status, 'ready');
   assert.equal((await source(pg.carolSource)).deleted_at, null);
-  assert.equal((await source(pg.gilSource)).status, 'ready');
+  assert.equal((await source(pg.gilSource)).status, 'ready', 'the held document was not touched');
+  assert.equal((await source(pg.halSource)).status, 'deletion_pending');
   const conversation = async (id: string) => (await pool.query('SELECT status FROM rfpilot.conversations WHERE id=$1', [id])).rows[0].status;
   assert.equal(await conversation(pg.anaConversation), 'archived');
   assert.equal(await conversation(pg.carolConversation), 'active');
-  // The retained rows the report promises: both users and both references are still there.
-  assert.equal(Number((await pool.query('SELECT count(*) FROM rfpilot.users WHERE organization_id=$1', [pgShared])).rows[0].count), 3);
-  assert.equal(Number((await pool.query('SELECT count(*) FROM rfpilot.proposal_references WHERE organization_id=$1', [pgShared])).rows[0].count), 3);
+  // The retained rows the report promises: every user and every reference is still there.
+  assert.equal(Number((await pool.query('SELECT count(*) FROM rfpilot.users WHERE organization_id=$1', [pgShared])).rows[0].count), 4);
+  assert.equal(Number((await pool.query('SELECT count(*) FROM rfpilot.proposal_references WHERE organization_id=$1', [pgShared])).rows[0].count), 4);
   const audit = (await pool.query("SELECT count(*) FROM rfpilot.audit_events WHERE organization_id=$1 AND action='proposal_artifacts_purged'", [pgShared])).rows[0].count;
-  assert.equal(Number(audit), 1, 'one audit event, for the one proposal that had a reference');
+  assert.equal(Number(audit), 1, "one audit event, for Ana's proposal: the only purge that finished");
 });
 
 test('a second apply with the same emails finds nothing', async () => {
